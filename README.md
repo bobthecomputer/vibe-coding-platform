@@ -50,6 +50,22 @@ python -m grant_agent.cli export-openai-request --objective "Build auth" --outpu
 python -m grant_agent.cli evaluate
 ```
 
+## Desktop (Tauri)
+
+This repository now includes a Tauri desktop shell with branded assets:
+
+- `src-tauri/` for desktop packaging
+- `desktop-ui/` for the lightweight launcher UI
+
+Run:
+
+```bash
+npm install
+npm run tauri:dev
+```
+
+The desktop shell provides quick command presets for common `grant_agent.cli` workflows and a copy-to-clipboard helper.
+
 Generated artifacts are written under `.agent_runs/`.
 
 Each completed session writes:

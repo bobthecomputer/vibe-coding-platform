@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibe Coding Platform</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-mark" src="./logo-mark.png" alt="Vibe mark" />
+        <div>
+          <h1>Vibe Coding Platform</h1>
+          <p class="muted">Docs-first coding orchestration desktop shell</p>
+        </div>
+      </div>
+      <img class="brand-logo" src="./logo-main.png" alt="Vibe logo" />
+    </header>
+
+    <main class="grid">
+      <section class="panel">
+        <h2>Quick Commands</h2>
+        <div class="buttons">
+          <button data-cmd="python -m grant_agent.cli bootstrap">Bootstrap</button>
+          <button data-cmd="python -m grant_agent.cli vibe --objective &quot;Build onboarding flow with polished UX&quot; --doc &quot;docs/PRD.md&quot;">Start vibe loop</button>
+          <button data-cmd="python -m grant_agent.cli vibe-status">Vibe status</button>
+          <button data-cmd="python -m grant_agent.cli demo-suite --objective &quot;Evaluate autonomy hardening&quot; --export-zip">Demo suite</button>
+        </div>
+        <p class="muted small">Use the copy button, then paste into your terminal at the project root.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Runbook</h2>
+        <ol>
+          <li>Create Python env and install package: <code>python -m pip install -e .</code></li>
+          <li>Run one of the quick commands.</li>
+          <li>Inspect generated artifacts under <code>.agent_runs/</code>.</li>
+          <li>Use <code>python -m grant_agent.cli proof-dashboard --open</code> for reporting.</li>
+        </ol>
+      </section>
+
+      <section class="panel full">
+        <h2>Selected command</h2>
+        <pre id="selected">Click a quick command above.</pre>
+        <button id="copyBtn" class="secondary">Copy command</button>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
