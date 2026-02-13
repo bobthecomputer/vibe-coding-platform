@@ -1,0 +1,2 @@
+[console_scripts]
+grant-agent = grant_agent.cli:main

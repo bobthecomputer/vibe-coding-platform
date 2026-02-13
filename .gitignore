@@ -1,0 +1,17 @@
+.agent_runs/
+.agent_runs_test/
+.agent_runs_eval/
+.agent_runs_replay/
+.doc_ingestion_test/
+.demo_bundle_test/
+/.demo_bundles/
+.demo_dashboard_test/
+.suite_report_test/
+.checkpoint_test/
+openai_request.json
+.agent_memory.json
+.agent_memory_test.json
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

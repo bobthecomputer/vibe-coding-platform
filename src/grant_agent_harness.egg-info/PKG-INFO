@@ -1,0 +1,56 @@
+Metadata-Version: 2.4
+Name: grant-agent-harness
+Version: 0.1.0
+Summary: Docs-first autonomous coding harness with safe context rollover
+Author: Paul
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+
+# Grant Agent Harness
+
+Grant Agent Harness is a docs-first, safety-aware orchestration layer for long-running coding sessions.
+
+It is built around one core promise: the agent can keep moving when context gets full, but users stay in control through explicit plans, checks, and handoff artifacts.
+
+## What this MVP includes
+
+- Prompt stack assembly with persona profiles.
+- Skill registry with top-k retrieval per objective.
+- Docs-first preflight policy enforcement.
+- Doc evidence ingestion (local files and URLs).
+- Context window tracking with rollover thresholds.
+- Structured handoff packet generation for new sessions.
+- Runtime and handoff budget controls.
+- Timeline and state artifacts for replay/debugging.
+- Verification runner with high-risk command blocking.
+- Public run reporting (`run_report.md`, `tweet_thread.txt`, `public_summary.json`).
+
+## Quickstart
+
+```bash
+python -m pip install -e .
+python -m grant_agent.cli bootstrap
+python -m grant_agent.cli run --objective "Build a login flow" --doc "docs/api.md"
+python -m grant_agent.cli search --query "handoff" --include "src/**/*.py"
+python -m grant_agent.cli replay
+python -m grant_agent.cli story
+python -m grant_agent.cli evaluate
+```
+
+Generated artifacts are written under `.agent_runs/`.
+
+## Why this is useful
+
+- It keeps long tasks coherent by emitting a machine-readable handoff packet before context overflow.
+- It forces a plan and acceptance checks before edits.
+- It gives users visibility into what happened and what to do next.
+- It generates post-run artifacts ready to reuse in public progress updates.
+
+## Layout
+
+- `src/grant_agent/`: engine, policies, planning, context manager.
+- `config/personas.json`: persona presets.
+- `config/skills.json`: typed skill registry for retrieval.
+- `docs/`: constitution, roadmap, handoff schema, PRD, CLI reference.
+- `tests/`: unit tests for rollover and handoff behavior.

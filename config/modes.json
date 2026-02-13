@@ -1,0 +1,26 @@
+{
+  "fast": {
+    "persona": "balanced_builder",
+    "max_tokens": 1400,
+    "max_handoffs": 2,
+    "max_runtime_seconds": 120
+  },
+  "balanced": {
+    "persona": "balanced_builder",
+    "max_tokens": 2400,
+    "max_handoffs": 6,
+    "max_runtime_seconds": 300
+  },
+  "careful": {
+    "persona": "safety_reviewer",
+    "max_tokens": 3200,
+    "max_handoffs": 8,
+    "max_runtime_seconds": 600
+  },
+  "creative": {
+    "persona": "creative_architect",
+    "max_tokens": 2800,
+    "max_handoffs": 6,
+    "max_runtime_seconds": 420
+  }
+}

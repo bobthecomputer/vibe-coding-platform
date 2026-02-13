@@ -1,0 +1,70 @@
+[
+  {
+    "name": "run_verification_suite",
+    "description": "Run lint, typecheck, tests, and build commands after code changes.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["commands"]
+    },
+    "permissions": ["shell"],
+    "examples": ["Run python -m unittest discover -s tests"]
+  },
+  {
+    "name": "generate_handoff_packet",
+    "description": "Create a structured handoff packet when context usage reaches rollover threshold.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" }
+      },
+      "required": ["reason"]
+    },
+    "permissions": ["file_write"],
+    "examples": ["Generate handoff with reason context_rollover"]
+  },
+  {
+    "name": "preview_regression_check",
+    "description": "Capture and compare preview snapshots for UI tasks.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string" }
+      },
+      "required": ["target"]
+    },
+    "permissions": ["browser_preview"],
+    "examples": ["Compare preview before and after login form update"]
+  },
+  {
+    "name": "workspace_search",
+    "description": "Search code and docs quickly to ground planning in project evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" }
+      },
+      "required": ["query"]
+    },
+    "permissions": ["file_read"],
+    "examples": ["Search for TODO|FIXME in src and docs"]
+  },
+  {
+    "name": "generate_public_report",
+    "description": "Create a concise run report and social thread draft from session artifacts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" }
+      },
+      "required": ["session_id"]
+    },
+    "permissions": ["file_write"],
+    "examples": ["Generate report for latest session"]
+  }
+]
