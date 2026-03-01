@@ -1,16 +1,3533 @@
+use std::{
+    collections::{HashMap, HashSet},
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Write},
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant},
+};
+
+use active_win_pos_rs::get_active_window;
+use arboard::Clipboard;
+use axum::{
+    extract::State as AxumState,
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
+use chrono::{Local, Timelike, Utc};
+use futures_util::{SinkExt, StreamExt};
+use memory_stats::memory_stats;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Emitter, Manager, PhysicalPosition, Position,
+};
+use tauri_plugin_global_shortcut::{
+    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
+};
+use tokio::{
+    net::TcpListener,
+    process::Command as TokioCommand,
+    sync::mpsc,
+    time::{sleep, timeout},
+};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use uuid::Uuid;
+
+const MAIN_WINDOW_LABEL: &str = "main";
+const SETTINGS_FILE_NAME: &str = "overlay_settings.json";
+const AUDIT_LOG_FILE_NAME: &str = "audit.log.jsonl";
+
+const TRAY_OPEN_ID: &str = "tray_open_overlay";
+const TRAY_TOGGLE_PIN_ID: &str = "tray_toggle_pin";
+const TRAY_PERF_ID: &str = "tray_perf_snapshot";
+const TRAY_NIGHT_MODE_ID: &str = "tray_night_mode_now";
+const TRAY_QUIT_ID: &str = "tray_quit";
+
+const DEFAULT_LOCALHOST_PORT: u16 = 47635;
+const NIGHT_MODE_LOOP_SECONDS: u64 = 15 * 60;
+const OPENCLAW_KEYRING_SERVICE: &str = "vibe-coding-platform";
+const OPENCLAW_KEYRING_USER: &str = "openclaw-gateway-token";
+const LOCALHOST_API_KEYRING_USER: &str = "localhost-api-token";
+const PROVIDER_KEYRING_USER_PREFIX: &str = "provider-secret:";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+struct OverlaySettings {
+    pinned: bool,
+    hotkey: String,
+    mode_id: String,
+    localhost_api_enabled: bool,
+    localhost_api_port: u16,
+}
+
+impl Default for OverlaySettings {
+    fn default() -> Self {
+        Self {
+            pinned: true,
+            hotkey: "Space".to_string(),
+            mode_id: "coding".to_string(),
+            localhost_api_enabled: true,
+            localhost_api_port: DEFAULT_LOCALHOST_PORT,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PerformanceSnapshot {
+    cold_start_ms: Option<u64>,
+    last_hotkey_latency_ms: Option<u64>,
+    average_hotkey_latency_ms: Option<f64>,
+    hotkey_samples: u64,
+    idle_ram_mb: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayStateSnapshot {
+    settings: OverlaySettings,
+    performance: PerformanceSnapshot,
+    current_mode: Option<ModeDefinition>,
+    openclaw_status: OpenClawStatus,
+    localhost_status: LocalhostStatus,
+    night_mode: NightModeConfig,
+}
+
+struct PerformanceState {
+    startup_instant: Instant,
+    cold_start_ms: Option<u64>,
+    pending_hotkey_open_started_at: Option<Instant>,
+    last_hotkey_latency_ms: Option<u64>,
+    hotkey_latency_total_ms: u128,
+    hotkey_samples: u64,
+    idle_ram_mb: Option<f64>,
+}
+
+impl PerformanceState {
+    fn new() -> Self {
+        Self {
+            startup_instant: Instant::now(),
+            cold_start_ms: None,
+            pending_hotkey_open_started_at: None,
+            last_hotkey_latency_ms: None,
+            hotkey_latency_total_ms: 0,
+            hotkey_samples: 0,
+            idle_ram_mb: None,
+        }
+    }
+
+    fn mark_cold_start(&mut self) {
+        if self.cold_start_ms.is_none() {
+            self.cold_start_ms = Some(self.startup_instant.elapsed().as_millis() as u64);
+        }
+    }
+
+    fn begin_hotkey_open(&mut self) {
+        self.pending_hotkey_open_started_at = Some(Instant::now());
+    }
+
+    fn finish_hotkey_open(&mut self) {
+        let Some(started_at) = self.pending_hotkey_open_started_at.take() else {
+            return;
+        };
+
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        self.last_hotkey_latency_ms = Some(elapsed_ms);
+        self.hotkey_samples += 1;
+        self.hotkey_latency_total_ms += elapsed_ms as u128;
+    }
+
+    fn sample_idle_memory(&mut self) {
+        self.idle_ram_mb = sample_process_memory_mb();
+    }
+
+    fn snapshot(&self) -> PerformanceSnapshot {
+        let average = if self.hotkey_samples == 0 {
+            None
+        } else {
+            Some(self.hotkey_latency_total_ms as f64 / self.hotkey_samples as f64)
+        };
+
+        PerformanceSnapshot {
+            cold_start_ms: self.cold_start_ms,
+            last_hotkey_latency_ms: self.last_hotkey_latency_ms,
+            average_hotkey_latency_ms: average,
+            hotkey_samples: self.hotkey_samples,
+            idle_ram_mb: self.idle_ram_mb,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextCaptureRequest {
+    clipboard: bool,
+    active_window: bool,
+    screenshot: bool,
+}
+
+impl Default for ContextCaptureRequest {
+    fn default() -> Self {
+        Self {
+            clipboard: false,
+            active_window: false,
+            screenshot: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveWindowMetadata {
+    title: String,
+    app_name: String,
+    process_id: u64,
+    process_path: String,
+    window_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextCaptureResult {
+    captured_at: String,
+    clipboard_text: Option<String>,
+    active_window: Option<ActiveWindowMetadata>,
+    screenshot_path: Option<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModeDefinition {
+    id: String,
+    label: String,
+    description: String,
+    context_recipe: ContextCaptureRequest,
+    allowed_tools: Vec<String>,
+}
+
+struct ModeState {
+    current_mode_id: String,
+    modes: HashMap<String, ModeDefinition>,
+}
+
+impl ModeState {
+    fn new(default_mode: &str) -> Self {
+        let modes = default_modes();
+        let current_mode_id = if modes.contains_key(default_mode) {
+            default_mode.to_string()
+        } else {
+            "coding".to_string()
+        };
+
+        Self {
+            current_mode_id,
+            modes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionChoice {
+    choice_id: String,
+    label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum QuestionStatus {
+    Pending,
+    Answered,
+    Dismissed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionBubble {
+    question_id: String,
+    question: String,
+    choices: Vec<QuestionChoice>,
+    status: QuestionStatus,
+    selected_choice_id: Option<String>,
+    custom_answer: Option<String>,
+    source: String,
+    created_at: String,
+    answered_at: Option<String>,
+    approval_id: Option<String>,
+}
+
+struct QuestionState {
+    pending: HashMap<String, QuestionBubble>,
+    history: Vec<QuestionBubble>,
+}
+
+impl QuestionState {
+    fn new() -> Self {
+        Self {
+            pending: HashMap::new(),
+            history: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Denied,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionRequestPayload {
+    #[serde(default)]
+    request_id: Option<String>,
+    tool_id: String,
+    #[serde(default)]
+    args: Value,
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionApprovalRecord {
+    approval_id: String,
+    request_id: String,
+    gateway_request_id: Option<String>,
+    tool_id: String,
+    args: Value,
+    status: ApprovalStatus,
+    reason: Option<String>,
+    question_id: Option<String>,
+    output: Option<Value>,
+    source: String,
+    requested_at: String,
+    resolved_at: Option<String>,
+}
+
+struct ApprovalState {
+    pending: HashMap<String, ActionApprovalRecord>,
+    history: Vec<ActionApprovalRecord>,
+}
+
+impl ApprovalState {
+    fn new() -> Self {
+        Self {
+            pending: HashMap::new(),
+            history: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionRequestOutcome {
+    request_id: String,
+    gateway_request_id: Option<String>,
+    status: ApprovalStatus,
+    approval_id: Option<String>,
+    question_id: Option<String>,
+    output: Option<Value>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DictationStrategy {
+    LocalFirst,
+    OsOnly,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationConfig {
+    strategy: DictationStrategy,
+    local_stt_command: Option<String>,
+    local_stt_args: Vec<String>,
+    local_stt_timeout_seconds: u64,
+    os_fallback_hint: String,
+}
+
+impl Default for DictationConfig {
+    fn default() -> Self {
+        Self {
+            strategy: DictationStrategy::LocalFirst,
+            local_stt_command: None,
+            local_stt_args: vec!["-f".to_string(), "{audio}".to_string()],
+            local_stt_timeout_seconds: 30,
+            os_fallback_hint:
+                "Local STT is not configured. Use your OS dictation shortcut as fallback."
+                    .to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DictationOutcomeStatus {
+    Listening,
+    Transcribed,
+    NeedsOsFallback,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationSession {
+    session_id: String,
+    status: DictationOutcomeStatus,
+    started_at: String,
+    finished_at: Option<String>,
+    engine: String,
+    audio_path: Option<String>,
+    transcript: Option<String>,
+    message: Option<String>,
+}
+
+struct DictationState {
+    config: DictationConfig,
+    active_session: Option<DictationSession>,
+    history: Vec<DictationSession>,
+}
+
+impl DictationState {
+    fn new() -> Self {
+        Self {
+            config: DictationConfig::default(),
+            active_session: None,
+            history: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawConfig {
+    gateway_url: String,
+    allowlisted_node_commands: Vec<String>,
+    connect_timeout_seconds: u64,
+}
+
+impl Default for OpenClawConfig {
+    fn default() -> Self {
+        Self {
+            gateway_url: "ws://127.0.0.1:8765".to_string(),
+            allowlisted_node_commands: vec![
+                "node".to_string(),
+                "npm".to_string(),
+                "npx".to_string(),
+                "pnpm".to_string(),
+                "yarn".to_string(),
+            ],
+            connect_timeout_seconds: 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawStatus {
+    connected: bool,
+    gateway_url: Option<String>,
+    last_error: Option<String>,
+    last_event_at: Option<String>,
+    last_connected_at: Option<String>,
+    reconnect_attempt: u32,
+}
+
+impl Default for OpenClawStatus {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            gateway_url: None,
+            last_error: None,
+            last_event_at: None,
+            last_connected_at: None,
+            reconnect_attempt: 0,
+        }
+    }
+}
+
+struct OpenClawState {
+    config: OpenClawConfig,
+    status: OpenClawStatus,
+    outbound_tx: Option<mpsc::UnboundedSender<String>>,
+}
+
+impl OpenClawState {
+    fn new() -> Self {
+        Self {
+            config: OpenClawConfig::default(),
+            status: OpenClawStatus::default(),
+            outbound_tx: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NightModeConfig {
+    enabled: bool,
+    start_hour: u8,
+    end_hour: u8,
+    autopilot_enabled: bool,
+}
+
+impl Default for NightModeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            start_hour: 1,
+            end_hour: 6,
+            autopilot_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NightModeReport {
+    run_id: String,
+    source: String,
+    ran_at: String,
+    safe_tasks: Vec<String>,
+    proposals: Vec<String>,
+}
+
+struct NightModeState {
+    config: NightModeConfig,
+    last_report: Option<NightModeReport>,
+}
+
+impl NightModeState {
+    fn new() -> Self {
+        Self {
+            config: NightModeConfig::default(),
+            last_report: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalhostStatus {
+    enabled: bool,
+    port: u16,
+    running: bool,
+    last_error: Option<String>,
+}
+
+impl LocalhostStatus {
+    fn new(enabled: bool, port: u16) -> Self {
+        Self {
+            enabled,
+            port,
+            running: false,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditEntry {
+    timestamp: String,
+    category: String,
+    details: Value,
+}
+
+struct OverlayAppState {
+    settings_path: PathBuf,
+    audit_log_path: PathBuf,
+    settings: Mutex<OverlaySettings>,
+    performance: Mutex<PerformanceState>,
+    mode_state: Mutex<ModeState>,
+    question_state: Mutex<QuestionState>,
+    approval_state: Mutex<ApprovalState>,
+    dictation_state: Mutex<DictationState>,
+    openclaw_state: Mutex<OpenClawState>,
+    night_mode_state: Mutex<NightModeState>,
+    localhost_status: Mutex<LocalhostStatus>,
+    audit_lock: Mutex<()>,
+    space_is_held: AtomicBool,
+    localhost_started: AtomicBool,
+    night_mode_started: AtomicBool,
+}
+
+impl OverlayAppState {
+    fn new(settings_path: PathBuf, settings: OverlaySettings, audit_log_path: PathBuf) -> Self {
+        let localhost_status =
+            LocalhostStatus::new(settings.localhost_api_enabled, settings.localhost_api_port);
+        Self {
+            mode_state: Mutex::new(ModeState::new(&settings.mode_id)),
+            settings_path,
+            audit_log_path,
+            settings: Mutex::new(settings),
+            performance: Mutex::new(PerformanceState::new()),
+            question_state: Mutex::new(QuestionState::new()),
+            approval_state: Mutex::new(ApprovalState::new()),
+            dictation_state: Mutex::new(DictationState::new()),
+            openclaw_state: Mutex::new(OpenClawState::new()),
+            night_mode_state: Mutex::new(NightModeState::new()),
+            localhost_status: Mutex::new(localhost_status),
+            audit_lock: Mutex::new(()),
+            space_is_held: AtomicBool::new(false),
+            localhost_started: AtomicBool::new(false),
+            night_mode_started: AtomicBool::new(false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlaySetModePayload {
+    mode_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayPinPayload {
+    pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UiAskPayload {
+    question_id: Option<String>,
+    question: String,
+    choices: Vec<QuestionChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UiAnswerPayload {
+    question_id: String,
+    choice_id: String,
+    #[serde(default)]
+    custom_answer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "command", content = "payload")]
+enum ControlCommand {
+    #[serde(rename = "overlay.open")]
+    OverlayOpen,
+    #[serde(rename = "overlay.close")]
+    OverlayClose,
+    #[serde(rename = "overlay.pin")]
+    OverlayPin(OverlayPinPayload),
+    #[serde(rename = "overlay.set_mode")]
+    OverlaySetMode(OverlaySetModePayload),
+    #[serde(rename = "context.capture")]
+    ContextCapture(ContextCaptureRequest),
+    #[serde(rename = "ui.ask")]
+    UiAsk(UiAskPayload),
+    #[serde(rename = "ui.answer")]
+    UiAnswer(UiAnswerPayload),
+    #[serde(rename = "action.request")]
+    ActionRequest(ActionRequestPayload),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlCommandResponse {
+    ok: bool,
+    data: Value,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveApprovalPayload {
+    approval_id: String,
+    approved: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeCommandArgs {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    cwd: Option<String>,
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Clone)]
+struct LocalApiState {
+    app: AppHandle,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalGatewayConfigPayload {
+    gateway_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawMessagePayload {
+    message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalhostConfigPayload {
+    enabled: bool,
+    port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationStopPayload {
+    audio_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationTranscribePayload {
+    audio_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum GatewayInboundEvent {
+    #[serde(rename = "clarify")]
+    Clarify {
+        question_id: Option<String>,
+        question: String,
+        choices: Vec<String>,
+    },
+    #[serde(rename = "action.request")]
+    ActionRequest {
+        request_id: Option<String>,
+        tool_id: String,
+        #[serde(default)]
+        args: Value,
+    },
+    #[serde(rename = "agent.message")]
+    AgentMessage { content: String },
+}
+
+fn validate_gateway_event(event: &GatewayInboundEvent) -> Result<(), String> {
+    match event {
+        GatewayInboundEvent::Clarify {
+            question,
+            choices,
+            ..
+        } => {
+            if question.trim().is_empty() {
+                return Err("clarify question is empty".to_string());
+            }
+            if choices.len() < 1 || choices.len() > 8 {
+                return Err("clarify choices must be between 1 and 8".to_string());
+            }
+        }
+        GatewayInboundEvent::ActionRequest { tool_id, .. } => {
+            if tool_id.trim().is_empty() {
+                return Err("action.request tool_id is empty".to_string());
+            }
+            if tool_id.len() > 128 {
+                return Err("action.request tool_id is too long".to_string());
+            }
+        }
+        GatewayInboundEvent::AgentMessage { content } => {
+            if content.trim().is_empty() {
+                return Err("agent.message content is empty".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn now_utc_iso() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn default_modes() -> HashMap<String, ModeDefinition> {
+    let mut map = HashMap::new();
+
+    map.insert(
+        "coding".to_string(),
+        ModeDefinition {
+            id: "coding".to_string(),
+            label: "Coding".to_string(),
+            description: "Code-focused mode with clipboard and active-window context.".to_string(),
+            context_recipe: ContextCaptureRequest {
+                clipboard: true,
+                active_window: true,
+                screenshot: false,
+            },
+            allowed_tools: vec![
+                "tool.safe.echo".to_string(),
+                "tool.safe.now".to_string(),
+                "context.capture".to_string(),
+                "node.command".to_string(),
+                "ui.ask".to_string(),
+                "ui.answer".to_string(),
+            ],
+        },
+    );
+
+    map.insert(
+        "youtube".to_string(),
+        ModeDefinition {
+            id: "youtube".to_string(),
+            label: "YouTube".to_string(),
+            description: "Video-focused mode with optional screenshot context.".to_string(),
+            context_recipe: ContextCaptureRequest {
+                clipboard: false,
+                active_window: true,
+                screenshot: true,
+            },
+            allowed_tools: vec![
+                "tool.safe.echo".to_string(),
+                "tool.safe.now".to_string(),
+                "context.capture".to_string(),
+                "ui.ask".to_string(),
+                "ui.answer".to_string(),
+            ],
+        },
+    );
+
+    map.insert(
+        "writing".to_string(),
+        ModeDefinition {
+            id: "writing".to_string(),
+            label: "Writing".to_string(),
+            description: "Writing mode with clipboard and lightweight automation.".to_string(),
+            context_recipe: ContextCaptureRequest {
+                clipboard: true,
+                active_window: true,
+                screenshot: false,
+            },
+            allowed_tools: vec![
+                "tool.safe.echo".to_string(),
+                "tool.safe.now".to_string(),
+                "context.capture".to_string(),
+                "ui.ask".to_string(),
+                "ui.answer".to_string(),
+            ],
+        },
+    );
+
+    map
+}
+
+fn load_settings(path: &PathBuf) -> OverlaySettings {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return OverlaySettings::default();
+    };
+
+    serde_json::from_str::<OverlaySettings>(&raw).unwrap_or_default()
+}
+
+fn save_settings(path: &PathBuf, settings: &OverlaySettings) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed to create settings directory: {err}"))?;
+    }
+
+    let raw = serde_json::to_string_pretty(settings)
+        .map_err(|err| format!("Failed to serialize settings: {err}"))?;
+
+    fs::write(path, raw).map_err(|err| format!("Failed to persist settings: {err}"))
+}
+
+fn append_audit_entry(app: &AppHandle, category: &str, details: Value) {
+    let state = app.state::<OverlayAppState>();
+    let Ok(_guard) = state.audit_lock.lock() else {
+        return;
+    };
+
+    let entry = AuditEntry {
+        timestamp: now_utc_iso(),
+        category: category.to_string(),
+        details,
+    };
+
+    let Ok(line) = serde_json::to_string(&entry) else {
+        return;
+    };
+
+    if let Some(parent) = state.audit_log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&state.audit_log_path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn get_audit_tail(path: &PathBuf, limit: usize) -> Vec<AuditEntry> {
+    let Ok(file) = OpenOptions::new().read(true).open(path) else {
+        return Vec::new();
+    };
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for line in reader.lines().map_while(Result::ok) {
+        if let Ok(entry) = serde_json::from_str::<AuditEntry>(&line) {
+            entries.push(entry);
+        }
+    }
+
+    if entries.len() > limit {
+        entries.split_off(entries.len() - limit)
+    } else {
+        entries
+    }
+}
+
+fn emit_settings(app: &AppHandle, settings: &OverlaySettings) {
+    let _ = app.emit("overlay://settings", settings);
+}
+
+fn sample_process_memory_mb() -> Option<f64> {
+    memory_stats().map(|usage| usage.physical_mem as f64 / (1024.0 * 1024.0))
+}
+
+fn refresh_performance_snapshot(app: &AppHandle) -> PerformanceSnapshot {
+    let state = app.state::<OverlayAppState>();
+    let mut perf = state
+        .performance
+        .lock()
+        .expect("performance lock should not be poisoned");
+    perf.sample_idle_memory();
+    perf.snapshot()
+}
+
+fn current_mode_definition(app: &AppHandle) -> Option<ModeDefinition> {
+    let state = app.state::<OverlayAppState>();
+    let Ok(mode_state) = state.mode_state.lock() else {
+        return None;
+    };
+    mode_state.modes.get(&mode_state.current_mode_id).cloned()
+}
+
+fn mode_allows_tool(app: &AppHandle, tool_id: &str) -> bool {
+    let Some(mode) = current_mode_definition(app) else {
+        return false;
+    };
+    mode.allowed_tools.iter().any(|tool| tool == tool_id)
+}
+
+fn is_destructive_tool(tool_id: &str) -> bool {
+    matches!(
+        tool_id,
+        "git.commit" | "git.push" | "fs.delete" | "message.send" | "node.command" | "shell.exec"
+    )
+}
+
+fn create_question(
+    app: &AppHandle,
+    question_id: Option<String>,
+    question: String,
+    mut choices: Vec<QuestionChoice>,
+    source: &str,
+    approval_id: Option<String>,
+) -> Result<QuestionBubble, String> {
+    if choices.len() < 2 || choices.len() > 4 {
+        return Err("Question bubbles must contain 2-4 choices".to_string());
+    }
+
+    if choices
+        .iter()
+        .any(|choice| choice.choice_id.trim().is_empty())
+    {
+        return Err("Each question choice must have a non-empty choiceId".to_string());
+    }
+
+    if choices.iter().any(|choice| choice.label.trim().is_empty()) {
+        return Err("Each question choice must have a non-empty label".to_string());
+    }
+
+    let id = question_id.unwrap_or_else(|| format!("q_{}", Uuid::new_v4().simple()));
+    choices.sort_by(|a, b| a.choice_id.cmp(&b.choice_id));
+
+    let bubble = QuestionBubble {
+        question_id: id.clone(),
+        question,
+        choices,
+        status: QuestionStatus::Pending,
+        selected_choice_id: None,
+        custom_answer: None,
+        source: source.to_string(),
+        created_at: now_utc_iso(),
+        answered_at: None,
+        approval_id,
+    };
+
+    {
+        let state = app.state::<OverlayAppState>();
+        let mut question_state = state
+            .question_state
+            .lock()
+            .map_err(|_| "Failed to lock question state".to_string())?;
+        question_state.pending.insert(id, bubble.clone());
+    }
+
+    append_audit_entry(
+        app,
+        "question.created",
+        json!({
+            "questionId": bubble.question_id,
+            "source": source,
+        }),
+    );
+    let _ = app.emit("overlay://question", bubble.clone());
+
+    Ok(bubble)
+}
+
+fn answer_question_inner(
+    app: &AppHandle,
+    payload: UiAnswerPayload,
+) -> Result<QuestionBubble, String> {
+    let custom_answer = payload
+        .custom_answer
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let bubble = {
+        let state = app.state::<OverlayAppState>();
+        let mut question_state = state
+            .question_state
+            .lock()
+            .map_err(|_| "Failed to lock question state".to_string())?;
+
+        let Some(mut bubble) = question_state.pending.remove(&payload.question_id) else {
+            return Err("Question not found or already answered".to_string());
+        };
+
+        let valid_choice = bubble
+            .choices
+            .iter()
+            .any(|choice| choice.choice_id == payload.choice_id);
+        if bubble.approval_id.is_some() && !valid_choice {
+            return Err("Approval questions only accept listed choices".to_string());
+        }
+        if !valid_choice && custom_answer.is_none() {
+            return Err("Invalid choiceId".to_string());
+        }
+
+        bubble.status = QuestionStatus::Answered;
+        bubble.selected_choice_id = if valid_choice {
+            Some(payload.choice_id.clone())
+        } else {
+            Some("custom".to_string())
+        };
+        bubble.custom_answer = custom_answer.clone();
+        bubble.answered_at = Some(now_utc_iso());
+        question_state.history.push(bubble.clone());
+        bubble
+    };
+
+    append_audit_entry(
+        app,
+        "question.answered",
+        json!({
+            "questionId": bubble.question_id.clone(),
+            "choiceId": payload.choice_id,
+            "customAnswer": bubble.custom_answer.clone(),
+            "source": bubble.source.clone(),
+        }),
+    );
+    let _ = app.emit("overlay://question_answered", bubble.clone());
+
+    if bubble.source.starts_with("openclaw") {
+        let outbound = json!({
+            "type": "ui.answer",
+            "questionId": bubble.question_id.clone(),
+            "choiceId": bubble.selected_choice_id.clone(),
+            "customAnswer": bubble.custom_answer.clone(),
+        });
+        if let Err(err) = queue_openclaw_payload(app, outbound) {
+            append_audit_entry(
+                app,
+                "openclaw.ui_answer_send_failed",
+                json!({
+                    "questionId": bubble.question_id.clone(),
+                    "error": err,
+                }),
+            );
+        }
+    }
+
+    if let Some(approval_id) = bubble.approval_id.clone() {
+        let approved = payload.choice_id == "approve"
+            || payload.choice_id == "approve_once"
+            || payload.choice_id == "yes";
+        let resolve_payload = ResolveApprovalPayload {
+            approval_id,
+            approved,
+        };
+        tauri::async_runtime::spawn(resolve_approval_task(app.clone(), resolve_payload));
+    }
+
+    Ok(bubble)
+}
+
+fn load_openclaw_token() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, OPENCLAW_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+
+    match entry.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("Failed to read secure credential: {err}")),
+    }
+}
+
+fn save_openclaw_token(token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, OPENCLAW_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    entry
+        .set_password(token)
+        .map_err(|err| format!("Failed to save secure credential: {err}"))
+}
+
+fn clear_openclaw_token() -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, OPENCLAW_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(format!("Failed to clear secure credential: {err}")),
+    }
+}
+
+fn load_localhost_api_token() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, LOCALHOST_API_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+
+    match entry.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("Failed to read secure credential: {err}")),
+    }
+}
+
+fn save_localhost_api_token(token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, LOCALHOST_API_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    entry
+        .set_password(token)
+        .map_err(|err| format!("Failed to save secure credential: {err}"))
+}
+
+fn clear_localhost_api_token() -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, LOCALHOST_API_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(format!("Failed to clear secure credential: {err}")),
+    }
+}
+
+fn provider_keyring_user(provider_id: &str) -> Result<String, String> {
+    let trimmed = provider_id.trim();
+    if trimmed.is_empty() {
+        return Err("Provider id cannot be empty".to_string());
+    }
+
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return Err(
+            "Provider id must use only letters, numbers, '-', '_' or '.'".to_string(),
+        );
+    }
+
+    Ok(format!(
+        "{PROVIDER_KEYRING_USER_PREFIX}{}",
+        trimmed.to_ascii_lowercase()
+    ))
+}
+
+fn load_provider_secret(provider_id: &str) -> Result<Option<String>, String> {
+    let user = provider_keyring_user(provider_id)?;
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, &user)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("Failed to read secure credential: {err}")),
+    }
+}
+
+fn save_provider_secret(provider_id: &str, secret: &str) -> Result<(), String> {
+    let user = provider_keyring_user(provider_id)?;
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, &user)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    entry
+        .set_password(secret)
+        .map_err(|err| format!("Failed to save secure credential: {err}"))
+}
+
+fn clear_provider_secret(provider_id: &str) -> Result<(), String> {
+    let user = provider_keyring_user(provider_id)?;
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, &user)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(format!("Failed to clear secure credential: {err}")),
+    }
+}
+
+fn parse_bearer_token(header_value: &str) -> Option<&str> {
+    let (scheme, token) = header_value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed)
+}
+
+fn validate_local_api_auth(headers: &HeaderMap) -> Result<bool, String> {
+    let expected_token = load_localhost_api_token()?;
+    let Some(expected_token) = expected_token else {
+        return Ok(true);
+    };
+
+    let provided = headers
+        .get(AUTHORIZATION)
+        .and_then(|raw| raw.to_str().ok())
+        .and_then(parse_bearer_token);
+
+    Ok(matches!(provided, Some(token) if token == expected_token))
+}
+
+fn set_mode_inner(app: &AppHandle, mode_id: &str, source: &str) -> Result<ModeDefinition, String> {
+    let mode = {
+        let state = app.state::<OverlayAppState>();
+        let mut mode_state = state
+            .mode_state
+            .lock()
+            .map_err(|_| "Failed to lock mode state".to_string())?;
+        let Some(mode) = mode_state.modes.get(mode_id).cloned() else {
+            return Err(format!("Unknown mode '{mode_id}'"));
+        };
+        mode_state.current_mode_id = mode_id.to_string();
+        mode
+    };
+
+    {
+        let state = app.state::<OverlayAppState>();
+        let mut settings = state
+            .settings
+            .lock()
+            .map_err(|_| "Failed to write settings".to_string())?;
+        settings.mode_id = mode_id.to_string();
+        save_settings(&state.settings_path, &settings)?;
+        emit_settings(app, &settings);
+    }
+
+    append_audit_entry(
+        app,
+        "mode.changed",
+        json!({
+            "modeId": mode_id,
+            "source": source,
+        }),
+    );
+    let _ = app.emit("overlay://mode", mode.clone());
+    Ok(mode)
+}
+
+fn capture_context_inner(
+    app: &AppHandle,
+    request: ContextCaptureRequest,
+) -> Result<ContextCaptureResult, String> {
+    let mut warnings = Vec::new();
+
+    let clipboard_text = if request.clipboard {
+        match Clipboard::new().and_then(|mut cb| cb.get_text()) {
+            Ok(text) => Some(text),
+            Err(err) => {
+                warnings.push(format!("Clipboard capture failed: {err}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let active_window = if request.active_window {
+        match get_active_window() {
+            Ok(raw) => Some(ActiveWindowMetadata {
+                title: raw.title,
+                app_name: raw.app_name,
+                process_id: raw.process_id,
+                process_path: raw.process_path.to_string_lossy().to_string(),
+                window_id: raw.window_id,
+            }),
+            Err(_) => {
+                warnings.push("Active window metadata is unavailable on this system.".to_string());
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let screenshot_path = if request.screenshot {
+        warnings.push(
+            "Screenshot capture is gated and currently requires explicit UI-provided path."
+                .to_string(),
+        );
+        None
+    } else {
+        None
+    };
+
+    let result = ContextCaptureResult {
+        captured_at: now_utc_iso(),
+        clipboard_text,
+        active_window,
+        screenshot_path,
+        warnings,
+    };
+
+    append_audit_entry(
+        app,
+        "context.captured",
+        json!({
+            "clipboard": request.clipboard,
+            "activeWindow": request.active_window,
+            "screenshot": request.screenshot,
+            "warnings": result.warnings,
+        }),
+    );
+    let _ = app.emit("overlay://context", result.clone());
+
+    Ok(result)
+}
+
+async fn run_local_stt_command(
+    config: &DictationConfig,
+    audio_path: &str,
+) -> Result<String, String> {
+    let Some(command_name) = config.local_stt_command.clone() else {
+        return Err("Local STT command is not configured".to_string());
+    };
+
+    let mut cmd = TokioCommand::new(command_name);
+    let args: Vec<String> = config
+        .local_stt_args
+        .iter()
+        .map(|arg| arg.replace("{audio}", audio_path))
+        .collect();
+    cmd.args(args);
+
+    let output = timeout(
+        Duration::from_secs(config.local_stt_timeout_seconds),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| "Local STT command timed out".to_string())
+    .and_then(|result| result.map_err(|err| format!("Failed to run local STT command: {err}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Local STT command failed: {}", stderr.trim()));
+    }
+
+    let transcript = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if transcript.is_empty() {
+        return Err("Local STT command returned empty transcript".to_string());
+    }
+
+    Ok(transcript)
+}
+
+fn update_openclaw_status(app: &AppHandle, mutator: impl FnOnce(&mut OpenClawStatus)) {
+    let state = app.state::<OverlayAppState>();
+    let mut guard = match state.openclaw_state.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    mutator(&mut guard.status);
+    let _ = app.emit("openclaw://status", guard.status.clone());
+}
+
+fn approval_status_label(status: &ApprovalStatus) -> &'static str {
+    match status {
+        ApprovalStatus::Pending => "pending",
+        ApprovalStatus::Approved => "approved",
+        ApprovalStatus::Rejected => "rejected",
+        ApprovalStatus::Denied => "denied",
+    }
+}
+
+fn queue_openclaw_payload(app: &AppHandle, payload: Value) -> Result<(), String> {
+    let tx = {
+        let state = app.state::<OverlayAppState>();
+        let openclaw = state
+            .openclaw_state
+            .lock()
+            .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
+        openclaw.outbound_tx.clone()
+    };
+
+    let Some(tx) = tx else {
+        return Err("OpenClaw gateway is not connected".to_string());
+    };
+
+    tx.send(payload.to_string())
+        .map_err(|err| format!("Failed to enqueue gateway payload: {err}"))
+}
+
+fn send_openclaw_action_result(
+    app: &AppHandle,
+    outcome: &ActionRequestOutcome,
+    source: &str,
+) {
+    let payload = json!({
+        "type": "action.result",
+        "requestId": outcome.gateway_request_id.clone().unwrap_or_else(|| outcome.request_id.clone()),
+        "localRequestId": outcome.request_id.clone(),
+        "status": approval_status_label(&outcome.status),
+        "approvalId": outcome.approval_id.clone(),
+        "questionId": outcome.question_id.clone(),
+        "reason": outcome.reason.clone(),
+        "output": outcome.output.clone(),
+        "source": source,
+    });
+
+    if let Err(err) = queue_openclaw_payload(app, payload) {
+        append_audit_entry(
+            app,
+            "openclaw.action_result_send_failed",
+            json!({
+                "requestId": outcome.request_id,
+                "gatewayRequestId": outcome.gateway_request_id.clone(),
+                "status": approval_status_label(&outcome.status),
+                "error": err,
+            }),
+        );
+        return;
+    }
+
+    append_audit_entry(
+        app,
+        "openclaw.action_result_sent",
+        json!({
+            "requestId": outcome.request_id,
+            "gatewayRequestId": outcome.gateway_request_id.clone(),
+            "status": approval_status_label(&outcome.status),
+        }),
+    );
+}
+
+fn set_pinned_state(
+    app: &AppHandle,
+    pinned: bool,
+    source: &str,
+) -> Result<OverlaySettings, String> {
+    let state = app.state::<OverlayAppState>();
+
+    let updated_settings = {
+        let mut settings = state
+            .settings
+            .lock()
+            .map_err(|_| "Failed to write settings".to_string())?;
+
+        settings.pinned = pinned;
+        let clone = settings.clone();
+        save_settings(&state.settings_path, &clone)?;
+        clone
+    };
+
+    log::info!(
+        "pin state updated from {source}: {}",
+        updated_settings.pinned
+    );
+    emit_settings(app, &updated_settings);
+
+    if !updated_settings.pinned && !state.space_is_held.load(Ordering::SeqCst) {
+        let _ = hide_overlay(app, "unpinned");
+    }
+
+    append_audit_entry(
+        app,
+        "overlay.pin",
+        json!({
+            "pinned": updated_settings.pinned,
+            "source": source,
+        }),
+    );
+
+    Ok(updated_settings)
+}
+
+fn update_hotkey_name(app: &AppHandle, hotkey_name: &str) {
+    let state = app.state::<OverlayAppState>();
+    let Ok(mut settings) = state.settings.lock() else {
+        return;
+    };
+
+    settings.hotkey = hotkey_name.to_string();
+    let clone = settings.clone();
+    let _ = save_settings(&state.settings_path, &clone);
+    emit_settings(app, &clone);
+}
+
+fn position_overlay_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let current_monitor = window
+        .current_monitor()
+        .map_err(|err| format!("Failed to resolve active monitor: {err}"))?;
+    let fallback_monitor = window
+        .primary_monitor()
+        .map_err(|err| format!("Failed to resolve primary monitor: {err}"))?;
+
+    let Some(monitor) = current_monitor.or(fallback_monitor) else {
+        return Ok(());
+    };
+
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+    let window_size = window
+        .outer_size()
+        .map_err(|err| format!("Failed to read overlay size: {err}"))?;
+
+    let centered_x = monitor_pos.x + ((monitor_size.width as i32 - window_size.width as i32) / 2);
+    let centered_y = monitor_pos.y + ((monitor_size.height as i32 - window_size.height as i32) / 2);
+
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(centered_x, centered_y)))
+        .map_err(|err| format!("Failed to position overlay: {err}"))
+}
+
+fn open_overlay(app: &AppHandle, source: &str) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return Err("Overlay window was not found".to_string());
+    };
+
+    position_overlay_window(&window)?;
+    window
+        .show()
+        .map_err(|err| format!("Failed to show overlay: {err}"))?;
+    let _ = window.unminimize();
+    window
+        .set_focus()
+        .map_err(|err| format!("Failed to focus overlay: {err}"))?;
+
+    {
+        let state = app.state::<OverlayAppState>();
+        let mut perf = state
+            .performance
+            .lock()
+            .map_err(|_| "Failed to update performance stats".to_string())?;
+        perf.finish_hotkey_open();
+    }
+
+    append_audit_entry(app, "overlay.open", json!({ "source": source }));
+    let _ = app.emit(
+        "overlay://visibility",
+        json!({
+            "visible": true,
+            "source": source,
+        }),
+    );
+
+    Ok(())
+}
+
+fn hide_overlay(app: &AppHandle, source: &str) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return Err("Overlay window was not found".to_string());
+    };
+
+    window
+        .hide()
+        .map_err(|err| format!("Failed to hide overlay: {err}"))?;
+    append_audit_entry(app, "overlay.close", json!({ "source": source }));
+    let _ = app.emit(
+        "overlay://visibility",
+        json!({
+            "visible": false,
+            "source": source,
+        }),
+    );
+
+    Ok(())
+}
+
+fn on_hold_shortcut_event(app: &AppHandle, event: ShortcutEvent) {
+    match event.state {
+        ShortcutState::Pressed => {
+            let state = app.state::<OverlayAppState>();
+            if state.space_is_held.swap(true, Ordering::SeqCst) {
+                return;
+            }
+
+            if let Ok(mut perf) = state.performance.lock() {
+                perf.begin_hotkey_open();
+            }
+
+            if let Err(err) = open_overlay(app, "hold-space") {
+                log::error!("failed to open overlay on hold press: {err}");
+            }
+        }
+        ShortcutState::Released => {
+            let state = app.state::<OverlayAppState>();
+            state.space_is_held.store(false, Ordering::SeqCst);
+
+            let is_pinned = state
+                .settings
+                .lock()
+                .map(|settings| settings.pinned)
+                .unwrap_or(false);
+            if !is_pinned {
+                let _ = hide_overlay(app, "space-release");
+            }
+        }
+    }
+}
+
+fn register_hold_shortcut(app: &AppHandle) -> Result<(), String> {
+    let space_shortcut = Shortcut::new(None, Code::Space);
+    let primary_result = app
+        .global_shortcut()
+        .on_shortcut(space_shortcut, |app, _shortcut, event| {
+            on_hold_shortcut_event(app, event)
+        });
+
+    if primary_result.is_ok() {
+        update_hotkey_name(app, "Space");
+        return Ok(());
+    }
+
+    let fallback_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+    app.global_shortcut()
+        .on_shortcut(fallback_shortcut, |app, _shortcut, event| {
+            on_hold_shortcut_event(app, event)
+        })
+        .map_err(|err| format!("Failed to register Space and Ctrl+Space shortcuts: {err}"))?;
+
+    update_hotkey_name(app, "Ctrl+Space (fallback)");
+    Ok(())
+}
+
+fn configure_overlay_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    let _ = position_overlay_window(&window);
+}
+
+fn should_run_night_mode(config: &NightModeConfig) -> bool {
+    if !config.enabled {
+        return false;
+    }
+
+    let hour = Local::now().hour() as u8;
+    if config.start_hour <= config.end_hour {
+        hour >= config.start_hour && hour < config.end_hour
+    } else {
+        hour >= config.start_hour || hour < config.end_hour
+    }
+}
+
+async fn run_night_mode_cycle(app: &AppHandle, source: &str) -> Result<NightModeReport, String> {
+    let pending_approvals = {
+        let state = app.state::<OverlayAppState>();
+        let count = state
+            .approval_state
+            .lock()
+            .map_err(|_| "Failed to lock approval state".to_string())?
+            .pending
+            .len();
+        count
+    };
+
+    let pending_questions = {
+        let state = app.state::<OverlayAppState>();
+        let count = state
+            .question_state
+            .lock()
+            .map_err(|_| "Failed to lock question state".to_string())?
+            .pending
+            .len();
+        count
+    };
+
+    let mut safe_tasks = vec![
+        "index_workspace_metadata".to_string(),
+        "summarize_pending_questions".to_string(),
+        "prepare_patch_plan".to_string(),
+    ];
+
+    let mut proposals = vec![
+        format!("Pending approvals: {pending_approvals}"),
+        format!("Pending question bubbles: {pending_questions}"),
+        "No destructive actions executed. Night mode only proposes safe work.".to_string(),
+    ];
+
+    let mode_id = current_mode_definition(app)
+        .map(|mode| mode.id)
+        .unwrap_or_else(|| "coding".to_string());
+    proposals.push(format!("Current mode snapshot: {mode_id}"));
+
+    let report = NightModeReport {
+        run_id: format!("night_{}", Uuid::new_v4().simple()),
+        source: source.to_string(),
+        ran_at: now_utc_iso(),
+        safe_tasks: std::mem::take(&mut safe_tasks),
+        proposals,
+    };
+
+    {
+        let state = app.state::<OverlayAppState>();
+        let mut night_state = state
+            .night_mode_state
+            .lock()
+            .map_err(|_| "Failed to lock night mode state".to_string())?;
+        night_state.last_report = Some(report.clone());
+    }
+
+    append_audit_entry(
+        app,
+        "night_mode.run",
+        json!({
+            "source": report.source,
+            "runId": report.run_id,
+            "safeTasks": report.safe_tasks,
+        }),
+    );
+    let _ = app.emit("night-mode://report", report.clone());
+
+    Ok(report)
+}
+
+fn start_night_mode_scheduler(app: &AppHandle) {
+    let state = app.state::<OverlayAppState>();
+    if state.night_mode_started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            sleep(Duration::from_secs(NIGHT_MODE_LOOP_SECONDS)).await;
+
+            let config = {
+                let state = app_handle.state::<OverlayAppState>();
+                let config = match state.night_mode_state.lock() {
+                    Ok(guard) => guard.config.clone(),
+                    Err(_) => continue,
+                };
+                config
+            };
+
+            if should_run_night_mode(&config) {
+                let _ = run_night_mode_cycle(&app_handle, "scheduled").await;
+            }
+        }
+    });
+}
+
+async fn execute_node_command(app: &AppHandle, args: NodeCommandArgs) -> Result<Value, String> {
+    let allowlisted = {
+        let state = app.state::<OverlayAppState>();
+        let openclaw = state
+            .openclaw_state
+            .lock()
+            .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
+        openclaw
+            .config
+            .allowlisted_node_commands
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>()
+    };
+
+    if !allowlisted.contains(&args.command) {
+        return Err(format!(
+            "Command '{}' is not allowlisted. Exact match required.",
+            args.command
+        ));
+    }
+
+    let mut command = TokioCommand::new(&args.command);
+    command.args(args.args.clone());
+
+    if let Some(cwd) = args.cwd {
+        command.current_dir(cwd);
+    }
+
+    let timeout_secs = args.timeout_seconds.unwrap_or(20);
+    let output = timeout(Duration::from_secs(timeout_secs), command.output())
+        .await
+        .map_err(|_| "Node command timed out".to_string())
+        .and_then(|result| {
+            result.map_err(|err| format!("Failed to execute node command: {err}"))
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    Ok(json!({
+        "command": args.command,
+        "args": args.args,
+        "success": output.status.success(),
+        "statusCode": output.status.code(),
+        "stdout": stdout,
+        "stderr": stderr,
+    }))
+}
+
+async fn execute_tool_request(
+    app: &AppHandle,
+    request: &ActionRequestPayload,
+) -> Result<Value, String> {
+    match request.tool_id.as_str() {
+        "tool.safe.echo" => Ok(json!({ "echo": request.args })),
+        "tool.safe.now" => Ok(json!({ "now": now_utc_iso() })),
+        "context.capture" => {
+            let request_payload: ContextCaptureRequest =
+                serde_json::from_value(request.args.clone())
+                    .map_err(|err| format!("Invalid context capture args: {err}"))?;
+            let result = capture_context_inner(app, request_payload)?;
+            Ok(serde_json::to_value(result).unwrap_or_else(|_| json!({})))
+        }
+        "node.command" => {
+            let args: NodeCommandArgs = serde_json::from_value(request.args.clone())
+                .map_err(|err| format!("Invalid node command args: {err}"))?;
+            execute_node_command(app, args).await
+        }
+        _ => Err(format!("Unsupported tool '{}'.", request.tool_id)),
+    }
+}
+
+fn create_approval_question(
+    app: &AppHandle,
+    approval_id: &str,
+    tool_id: &str,
+) -> Result<QuestionBubble, String> {
+    create_question(
+        app,
+        None,
+        format!("Approve execution for high-risk tool '{}' ?", tool_id),
+        vec![
+            QuestionChoice {
+                choice_id: "approve".to_string(),
+                label: "Approve once".to_string(),
+            },
+            QuestionChoice {
+                choice_id: "reject".to_string(),
+                label: "Reject".to_string(),
+            },
+            QuestionChoice {
+                choice_id: "ask_later".to_string(),
+                label: "Ask later".to_string(),
+            },
+        ],
+        "approval",
+        Some(approval_id.to_string()),
+    )
+}
+
+async fn request_action_inner(
+    app: &AppHandle,
+    request: ActionRequestPayload,
+) -> Result<ActionRequestOutcome, String> {
+    let gateway_request_id = request.request_id.clone();
+    let request_id = format!("req_{}", Uuid::new_v4().simple());
+    let source = request
+        .source
+        .clone()
+        .unwrap_or_else(|| "agent".to_string());
+
+    if !mode_allows_tool(app, &request.tool_id) {
+        append_audit_entry(
+            app,
+            "action.denied",
+            json!({
+                "requestId": request_id,
+                "gatewayRequestId": gateway_request_id,
+                "toolId": request.tool_id,
+                "source": source,
+                "reason": "Mode tool allowlist denied",
+            }),
+        );
+
+        return Ok(ActionRequestOutcome {
+            request_id,
+            gateway_request_id,
+            status: ApprovalStatus::Denied,
+            approval_id: None,
+            question_id: None,
+            output: None,
+            reason: Some("Current mode does not allow this tool.".to_string()),
+        });
+    }
+
+    if is_destructive_tool(&request.tool_id) {
+        let approval_id = format!("appr_{}", Uuid::new_v4().simple());
+        let question = create_approval_question(app, &approval_id, &request.tool_id)?;
+
+        let record = ActionApprovalRecord {
+            approval_id: approval_id.clone(),
+            request_id: request_id.clone(),
+            gateway_request_id: gateway_request_id.clone(),
+            tool_id: request.tool_id.clone(),
+            args: request.args.clone(),
+            status: ApprovalStatus::Pending,
+            reason: None,
+            question_id: Some(question.question_id.clone()),
+            output: None,
+            source: source.clone(),
+            requested_at: now_utc_iso(),
+            resolved_at: None,
+        };
+
+        {
+            let state = app.state::<OverlayAppState>();
+            let mut approval_state = state
+                .approval_state
+                .lock()
+                .map_err(|_| "Failed to lock approval state".to_string())?;
+            approval_state
+                .pending
+                .insert(approval_id.clone(), record.clone());
+        }
+
+        append_audit_entry(
+            app,
+            "action.pending_approval",
+            json!({
+                "requestId": request_id,
+                "gatewayRequestId": gateway_request_id,
+                "approvalId": approval_id,
+                "toolId": request.tool_id,
+                "source": source,
+            }),
+        );
+
+        return Ok(ActionRequestOutcome {
+            request_id,
+            gateway_request_id,
+            status: ApprovalStatus::Pending,
+            approval_id: Some(approval_id),
+            question_id: Some(question.question_id),
+            output: None,
+            reason: Some("High-risk tool requires explicit approval.".to_string()),
+        });
+    }
+
+    let output = execute_tool_request(app, &request).await?;
+    append_audit_entry(
+        app,
+        "action.executed",
+        json!({
+            "requestId": request_id,
+            "gatewayRequestId": gateway_request_id,
+            "toolId": request.tool_id,
+            "source": source,
+        }),
+    );
+
+    Ok(ActionRequestOutcome {
+        request_id,
+        gateway_request_id,
+        status: ApprovalStatus::Approved,
+        approval_id: None,
+        question_id: None,
+        output: Some(output),
+        reason: None,
+    })
+}
+
+async fn resolve_approval_task(app: AppHandle, payload: ResolveApprovalPayload) {
+    let result = resolve_approval_inner(&app, payload).await;
+    if let Err(err) = result {
+        log::error!("failed to resolve approval from question response: {err}");
+    }
+}
+
+async fn resolve_approval_inner(
+    app: &AppHandle,
+    payload: ResolveApprovalPayload,
+) -> Result<ActionApprovalRecord, String> {
+    let mut record = {
+        let state = app.state::<OverlayAppState>();
+        let mut approval_state = state
+            .approval_state
+            .lock()
+            .map_err(|_| "Failed to lock approval state".to_string())?;
+
+        let Some(record) = approval_state.pending.remove(&payload.approval_id) else {
+            return Err("Approval request not found".to_string());
+        };
+        record
+    };
+
+    if !payload.approved {
+        record.status = ApprovalStatus::Rejected;
+        record.reason = Some("User rejected approval".to_string());
+        record.resolved_at = Some(now_utc_iso());
+    } else {
+        let request = ActionRequestPayload {
+            request_id: record.gateway_request_id.clone(),
+            tool_id: record.tool_id.clone(),
+            args: record.args.clone(),
+            source: Some(record.source.clone()),
+        };
+
+        match execute_tool_request(app, &request).await {
+            Ok(output) => {
+                record.status = ApprovalStatus::Approved;
+                record.output = Some(output);
+                record.resolved_at = Some(now_utc_iso());
+            }
+            Err(err) => {
+                record.status = ApprovalStatus::Denied;
+                record.reason = Some(err);
+                record.resolved_at = Some(now_utc_iso());
+            }
+        }
+    }
+
+    {
+        let state = app.state::<OverlayAppState>();
+        let mut approval_state = state
+            .approval_state
+            .lock()
+            .map_err(|_| "Failed to lock approval state".to_string())?;
+        approval_state.history.push(record.clone());
+    }
+
+    append_audit_entry(
+        app,
+        "action.approval_resolved",
+        json!({
+            "approvalId": record.approval_id,
+            "gatewayRequestId": record.gateway_request_id,
+            "status": format!("{:?}", record.status),
+            "toolId": record.tool_id,
+        }),
+    );
+    let _ = app.emit("overlay://approval", record.clone());
+
+    if record.source.starts_with("openclaw") {
+        let outcome = ActionRequestOutcome {
+            request_id: record.request_id.clone(),
+            gateway_request_id: record.gateway_request_id.clone(),
+            status: record.status.clone(),
+            approval_id: Some(record.approval_id.clone()),
+            question_id: record.question_id.clone(),
+            output: record.output.clone(),
+            reason: record.reason.clone(),
+        };
+        send_openclaw_action_result(app, &outcome, "approval_resolution");
+    }
+
+    Ok(record)
+}
+
+async fn start_localhost_api(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<OverlayAppState>();
+    if state.localhost_started.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let status = {
+        let guard = state
+            .localhost_status
+            .lock()
+            .map_err(|_| "Failed to lock localhost status".to_string())?;
+        guard.clone()
+    };
+
+    if !status.enabled {
+        return Ok(());
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let listener = match TcpListener::bind(("127.0.0.1", status.port)).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                let state = app_handle.state::<OverlayAppState>();
+                if let Ok(mut local_status) = state.localhost_status.lock() {
+                    local_status.running = false;
+                    local_status.last_error = Some(err.to_string());
+                };
+                append_audit_entry(
+                    &app_handle,
+                    "localhost.error",
+                    json!({ "error": err.to_string() }),
+                );
+                return;
+            }
+        };
+
+        {
+            let state = app_handle.state::<OverlayAppState>();
+            if let Ok(mut local_status) = state.localhost_status.lock() {
+                local_status.running = true;
+                local_status.last_error = None;
+            };
+        }
+
+        append_audit_entry(
+            &app_handle,
+            "localhost.started",
+            json!({ "port": status.port }),
+        );
+
+        let router = Router::new()
+            .route("/health", get(local_api_health))
+            .route("/v1/state", get(local_api_state))
+            .route("/v1/command", post(local_api_command))
+            .with_state(LocalApiState {
+                app: app_handle.clone(),
+            });
+
+        let serve_result = axum::serve(listener, router).await;
+        if let Err(err) = serve_result {
+            let state = app_handle.state::<OverlayAppState>();
+            if let Ok(mut local_status) = state.localhost_status.lock() {
+                local_status.running = false;
+                local_status.last_error = Some(err.to_string());
+            };
+            append_audit_entry(
+                &app_handle,
+                "localhost.error",
+                json!({ "error": err.to_string() }),
+            );
+        }
+    });
+
+    Ok(())
+}
+
+async fn local_api_health() -> Json<Value> {
+    Json(json!({ "ok": true }))
+}
+
+async fn local_api_state(
+    headers: HeaderMap,
+    AxumState(state): AxumState<LocalApiState>,
+) -> (StatusCode, Json<Value>) {
+    match validate_local_api_auth(&headers) {
+        Ok(true) => {}
+        Ok(false) => {
+            append_audit_entry(&state.app, "localhost.unauthorized", json!({ "route": "/v1/state" }));
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "ok": false, "error": "Unauthorized" })),
+            );
+        }
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": err })),
+            );
+        }
+    }
+
+    match build_overlay_state_snapshot(&state.app) {
+        Ok(snapshot) => (StatusCode::OK, Json(json!(snapshot))),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!(OverlayStateSnapshot {
+                settings: OverlaySettings::default(),
+                performance: PerformanceSnapshot {
+                    cold_start_ms: None,
+                    last_hotkey_latency_ms: None,
+                    average_hotkey_latency_ms: None,
+                    hotkey_samples: 0,
+                    idle_ram_mb: None,
+                },
+                current_mode: None,
+                openclaw_status: OpenClawStatus::default(),
+                localhost_status: LocalhostStatus::new(false, DEFAULT_LOCALHOST_PORT),
+                night_mode: NightModeConfig::default(),
+            })),
+        ),
+    }
+}
+
+async fn local_api_command(
+    headers: HeaderMap,
+    AxumState(state): AxumState<LocalApiState>,
+    Json(command): Json<ControlCommand>,
+) -> (StatusCode, Json<ControlCommandResponse>) {
+    match validate_local_api_auth(&headers) {
+        Ok(true) => {}
+        Ok(false) => {
+            append_audit_entry(
+                &state.app,
+                "localhost.unauthorized",
+                json!({ "route": "/v1/command" }),
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(ControlCommandResponse {
+                    ok: false,
+                    data: json!({}),
+                    error: Some("Unauthorized".to_string()),
+                }),
+            );
+        }
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ControlCommandResponse {
+                    ok: false,
+                    data: json!({}),
+                    error: Some(err),
+                }),
+            );
+        }
+    }
+
+    let response = execute_control_command_inner(&state.app, command).await;
+    (StatusCode::OK, Json(response))
+}
+
+async fn connect_openclaw_inner(
+    app: &AppHandle,
+    gateway_url: Option<String>,
+) -> Result<OpenClawStatus, String> {
+    let (url, connect_timeout_seconds) = {
+        let state = app.state::<OverlayAppState>();
+        let mut openclaw = state
+            .openclaw_state
+            .lock()
+            .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
+
+        if let Some(url) = gateway_url {
+            openclaw.config.gateway_url = url;
+        }
+
+        if openclaw.outbound_tx.is_some() && openclaw.status.connected {
+            return Ok(openclaw.status.clone());
+        }
+
+        openclaw.status.connected = false;
+        openclaw.status.last_error = None;
+        openclaw.status.gateway_url = Some(openclaw.config.gateway_url.clone());
+        openclaw.status.reconnect_attempt = 0;
+        (
+            openclaw.config.gateway_url.clone(),
+            openclaw.config.connect_timeout_seconds,
+        )
+    };
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    {
+        let state = app.state::<OverlayAppState>();
+        if let Ok(mut openclaw) = state.openclaw_state.lock() {
+            openclaw.outbound_tx = Some(tx.clone());
+        };
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let max_reconnect_attempts = 6_u32;
+        let mut reconnect_attempt = 0_u32;
+        let mut keep_running = true;
+
+        while keep_running {
+            let connect_result =
+                timeout(Duration::from_secs(connect_timeout_seconds), connect_async(url.clone()))
+                    .await;
+
+            let (ws_stream, _) = match connect_result {
+                Ok(Ok(result)) => {
+                    reconnect_attempt = 0;
+                    update_openclaw_status(&app_handle, |status| {
+                        status.connected = true;
+                        status.gateway_url = Some(url.clone());
+                        status.last_error = None;
+                        status.last_event_at = Some(now_utc_iso());
+                        status.last_connected_at = Some(now_utc_iso());
+                        status.reconnect_attempt = 0;
+                    });
+                    append_audit_entry(
+                        &app_handle,
+                        "openclaw.connected",
+                        json!({ "gatewayUrl": url.clone() }),
+                    );
+                    result
+                }
+                Ok(Err(err)) => {
+                    reconnect_attempt += 1;
+                    update_openclaw_status(&app_handle, |status| {
+                        status.connected = false;
+                        status.last_error = Some(err.to_string());
+                        status.gateway_url = Some(url.clone());
+                        status.reconnect_attempt = reconnect_attempt;
+                    });
+                    append_audit_entry(
+                        &app_handle,
+                        "openclaw.connect_error",
+                        json!({
+                            "error": err.to_string(),
+                            "gatewayUrl": url.clone(),
+                            "attempt": reconnect_attempt,
+                        }),
+                    );
+
+                    if reconnect_attempt > max_reconnect_attempts {
+                        append_audit_entry(
+                            &app_handle,
+                            "openclaw.reconnect_exhausted",
+                            json!({
+                                "gatewayUrl": url.clone(),
+                                "attempts": reconnect_attempt,
+                            }),
+                        );
+                        break;
+                    }
+
+                    let backoff_seconds = (1_u64 << reconnect_attempt.min(4)).min(20);
+                    append_audit_entry(
+                        &app_handle,
+                        "openclaw.reconnect_scheduled",
+                        json!({
+                            "gatewayUrl": url.clone(),
+                            "attempt": reconnect_attempt,
+                            "backoffSeconds": backoff_seconds,
+                        }),
+                    );
+                    sleep(Duration::from_secs(backoff_seconds)).await;
+                    continue;
+                }
+                Err(_) => {
+                    reconnect_attempt += 1;
+                    let timeout_error = format!(
+                        "Connection timed out after {}s",
+                        connect_timeout_seconds
+                    );
+                    update_openclaw_status(&app_handle, |status| {
+                        status.connected = false;
+                        status.last_error = Some(timeout_error.clone());
+                        status.gateway_url = Some(url.clone());
+                        status.reconnect_attempt = reconnect_attempt;
+                    });
+                    append_audit_entry(
+                        &app_handle,
+                        "openclaw.connect_timeout",
+                        json!({
+                            "gatewayUrl": url.clone(),
+                            "attempt": reconnect_attempt,
+                            "timeoutSeconds": connect_timeout_seconds,
+                        }),
+                    );
+
+                    if reconnect_attempt > max_reconnect_attempts {
+                        append_audit_entry(
+                            &app_handle,
+                            "openclaw.reconnect_exhausted",
+                            json!({
+                                "gatewayUrl": url.clone(),
+                                "attempts": reconnect_attempt,
+                            }),
+                        );
+                        break;
+                    }
+
+                    let backoff_seconds = (1_u64 << reconnect_attempt.min(4)).min(20);
+                    append_audit_entry(
+                        &app_handle,
+                        "openclaw.reconnect_scheduled",
+                        json!({
+                            "gatewayUrl": url.clone(),
+                            "attempt": reconnect_attempt,
+                            "backoffSeconds": backoff_seconds,
+                        }),
+                    );
+                    sleep(Duration::from_secs(backoff_seconds)).await;
+                    continue;
+                }
+            };
+
+            let (mut writer, mut reader) = ws_stream.split();
+
+            if let Ok(Some(token)) = load_openclaw_token() {
+                let auth = json!({ "type": "auth", "token": token }).to_string();
+                let _ = writer.send(Message::Text(auth.into())).await;
+            }
+
+            let mut reconnect_after_disconnect = false;
+            loop {
+                tokio::select! {
+                    outbound = rx.recv() => {
+                        let Some(outbound) = outbound else {
+                            keep_running = false;
+                            break;
+                        };
+                        if let Err(err) = writer.send(Message::Text(outbound.into())).await {
+                            update_openclaw_status(&app_handle, |status| {
+                                status.connected = false;
+                                status.last_error = Some(err.to_string());
+                            });
+                            reconnect_after_disconnect = true;
+                            break;
+                        }
+                    }
+                    inbound = reader.next() => {
+                        let Some(inbound) = inbound else {
+                            reconnect_after_disconnect = true;
+                            break;
+                        };
+                        match inbound {
+                            Ok(Message::Text(text)) => {
+                                update_openclaw_status(&app_handle, |status| {
+                                    status.last_event_at = Some(now_utc_iso());
+                                });
+
+                                if let Ok(event) = serde_json::from_str::<GatewayInboundEvent>(&text) {
+                                    if let Err(validation_err) = validate_gateway_event(&event) {
+                                        append_audit_entry(
+                                            &app_handle,
+                                            "openclaw.event_rejected",
+                                            json!({ "error": validation_err, "raw": text.to_string() }),
+                                        );
+                                        let _ = app_handle.emit(
+                                            "openclaw://rejected",
+                                            json!({ "error": validation_err, "raw": text.to_string() }),
+                                        );
+                                        continue;
+                                    }
+                                    handle_gateway_event(&app_handle, event).await;
+                                } else {
+                                    append_audit_entry(
+                                        &app_handle,
+                                        "openclaw.event_unparsed",
+                                        json!({ "raw": text.to_string() }),
+                                    );
+                                    let _ = app_handle.emit("openclaw://raw", text.to_string());
+                                }
+                            }
+                            Ok(Message::Close(_)) => {
+                                reconnect_after_disconnect = true;
+                                break;
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                update_openclaw_status(&app_handle, |status| {
+                                    status.connected = false;
+                                    status.last_error = Some(err.to_string());
+                                });
+                                reconnect_after_disconnect = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !keep_running {
+                break;
+            }
+
+            update_openclaw_status(&app_handle, |status| {
+                status.connected = false;
+            });
+
+            if reconnect_after_disconnect {
+                reconnect_attempt += 1;
+                if reconnect_attempt > max_reconnect_attempts {
+                    append_audit_entry(
+                        &app_handle,
+                        "openclaw.reconnect_exhausted",
+                        json!({
+                            "gatewayUrl": url.clone(),
+                            "attempts": reconnect_attempt,
+                        }),
+                    );
+                    break;
+                }
+
+                let backoff_seconds = (1_u64 << reconnect_attempt.min(4)).min(20);
+                update_openclaw_status(&app_handle, |status| {
+                    status.reconnect_attempt = reconnect_attempt;
+                    status.last_error = Some(format!(
+                        "Gateway disconnected, reconnecting in {}s",
+                        backoff_seconds
+                    ));
+                });
+                append_audit_entry(
+                    &app_handle,
+                    "openclaw.reconnect_scheduled",
+                    json!({
+                        "gatewayUrl": url.clone(),
+                        "attempt": reconnect_attempt,
+                        "backoffSeconds": backoff_seconds,
+                    }),
+                );
+                sleep(Duration::from_secs(backoff_seconds)).await;
+            }
+        }
+
+        update_openclaw_status(&app_handle, |status| {
+            status.connected = false;
+        });
+        let state = app_handle.state::<OverlayAppState>();
+        if let Ok(mut openclaw) = state.openclaw_state.lock() {
+            openclaw.outbound_tx = None;
+        };
+    });
+
+    let state = app.state::<OverlayAppState>();
+    let openclaw = state
+        .openclaw_state
+        .lock()
+        .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
+    Ok(openclaw.status.clone())
+}
+
+async fn handle_gateway_event(app: &AppHandle, event: GatewayInboundEvent) {
+    match event {
+        GatewayInboundEvent::Clarify {
+            question_id,
+            question,
+            choices,
+        } => {
+            let mut bubble_choices = choices
+                .into_iter()
+                .take(4)
+                .enumerate()
+                .map(|(idx, label)| QuestionChoice {
+                    choice_id: format!("choice_{}", idx + 1),
+                    label,
+                })
+                .collect::<Vec<_>>();
+
+            if bubble_choices.len() < 2 {
+                bubble_choices.push(QuestionChoice {
+                    choice_id: "choice_more".to_string(),
+                    label: "Need more context".to_string(),
+                });
+            }
+
+            let _ = create_question(
+                app,
+                question_id,
+                question,
+                bubble_choices,
+                "openclaw.clarify",
+                None,
+            );
+        }
+        GatewayInboundEvent::ActionRequest {
+            request_id,
+            tool_id,
+            args,
+        } => {
+            let payload = ActionRequestPayload {
+                request_id: request_id.clone(),
+                tool_id,
+                args,
+                source: Some("openclaw".to_string()),
+            };
+
+            let result = request_action_inner(app, payload).await;
+            if let Ok(ref outcome) = result {
+                send_openclaw_action_result(app, outcome, "gateway_action_request");
+            } else if let Err(err) = &result {
+                let _ = queue_openclaw_payload(
+                    app,
+                    json!({
+                        "type": "action.result",
+                        "requestId": request_id.clone(),
+                        "status": "denied",
+                        "reason": err,
+                        "source": "gateway_action_request",
+                    }),
+                );
+            }
+            let _ = app.emit(
+                "openclaw://action_result",
+                json!({
+                    "requestId": request_id,
+                    "result": result,
+                }),
+            );
+        }
+        GatewayInboundEvent::AgentMessage { content } => {
+            let _ = app.emit("openclaw://message", json!({ "content": content }));
+        }
+    }
+}
+
+async fn disconnect_openclaw_inner(app: &AppHandle) -> Result<OpenClawStatus, String> {
+    let status = {
+        let state = app.state::<OverlayAppState>();
+        let mut openclaw = state
+            .openclaw_state
+            .lock()
+            .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
+
+        openclaw.outbound_tx = None;
+        openclaw.status.connected = false;
+        openclaw.status.reconnect_attempt = 0;
+        openclaw.status.last_error = Some("Disconnected by user".to_string());
+        openclaw.status.clone()
+    };
+
+    append_audit_entry(app, "openclaw.disconnected", json!({}));
+    let _ = app.emit("openclaw://status", status.clone());
+    Ok(status)
+}
+
+async fn execute_control_command_inner(
+    app: &AppHandle,
+    command: ControlCommand,
+) -> ControlCommandResponse {
+    let result = match command {
+        ControlCommand::OverlayOpen => {
+            open_overlay(app, "protocol").map(|_| json!({ "opened": true }))
+        }
+        ControlCommand::OverlayClose => {
+            hide_overlay(app, "protocol").map(|_| json!({ "closed": true }))
+        }
+        ControlCommand::OverlayPin(payload) => set_pinned_state(app, payload.pinned, "protocol")
+            .and_then(|settings| {
+                serde_json::to_value(settings).map_err(|err| format!("Serialization error: {err}"))
+            }),
+        ControlCommand::OverlaySetMode(payload) => {
+            set_mode_inner(app, &payload.mode_id, "protocol").and_then(|mode| {
+                serde_json::to_value(mode).map_err(|err| format!("Serialization error: {err}"))
+            })
+        }
+        ControlCommand::ContextCapture(request) => {
+            capture_context_inner(app, request).and_then(|result| {
+                serde_json::to_value(result).map_err(|err| format!("Serialization error: {err}"))
+            })
+        }
+        ControlCommand::UiAsk(payload) => create_question(
+            app,
+            payload.question_id,
+            payload.question,
+            payload.choices,
+            "protocol.ui.ask",
+            None,
+        )
+        .and_then(|question| {
+            serde_json::to_value(question).map_err(|err| format!("Serialization error: {err}"))
+        }),
+        ControlCommand::UiAnswer(payload) => {
+            answer_question_inner(app, payload).and_then(|question| {
+                serde_json::to_value(question).map_err(|err| format!("Serialization error: {err}"))
+            })
+        }
+        ControlCommand::ActionRequest(payload) => request_action_inner(app, payload)
+            .await
+            .and_then(|outcome| {
+                serde_json::to_value(outcome).map_err(|err| format!("Serialization error: {err}"))
+            }),
+    };
+
+    match result {
+        Ok(data) => ControlCommandResponse {
+            ok: true,
+            data,
+            error: None,
+        },
+        Err(error) => ControlCommandResponse {
+            ok: false,
+            data: json!({}),
+            error: Some(error),
+        },
+    }
+}
+
+fn build_overlay_state_snapshot(app: &AppHandle) -> Result<OverlayStateSnapshot, String> {
+    let state = app.state::<OverlayAppState>();
+
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|_| "Failed to read settings".to_string())?
+        .clone();
+
+    let mut perf = state
+        .performance
+        .lock()
+        .map_err(|_| "Failed to read performance state".to_string())?;
+    perf.sample_idle_memory();
+    let performance = perf.snapshot();
+
+    let current_mode = {
+        let mode_state = state
+            .mode_state
+            .lock()
+            .map_err(|_| "Failed to read mode state".to_string())?;
+        mode_state.modes.get(&mode_state.current_mode_id).cloned()
+    };
+
+    let openclaw_status = state
+        .openclaw_state
+        .lock()
+        .map_err(|_| "Failed to read OpenClaw state".to_string())?
+        .status
+        .clone();
+
+    let localhost_status = state
+        .localhost_status
+        .lock()
+        .map_err(|_| "Failed to read localhost status".to_string())?
+        .clone();
+
+    let night_mode = state
+        .night_mode_state
+        .lock()
+        .map_err(|_| "Failed to read night mode state".to_string())?
+        .config
+        .clone();
+
+    Ok(OverlayStateSnapshot {
+        settings,
+        performance,
+        current_mode,
+        openclaw_status,
+        localhost_status,
+        night_mode,
+    })
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let open_item = MenuItem::with_id(app, TRAY_OPEN_ID, "Open overlay", true, None::<&str>)?;
+
+    let default_pin_text = {
+        let state = app.state::<OverlayAppState>();
+        let pinned = state.settings.lock().map(|s| s.pinned).unwrap_or(false);
+        if pinned {
+            "Unpin overlay"
+        } else {
+            "Pin overlay"
+        }
+    };
+
+    let pin_item = MenuItem::with_id(
+        app,
+        TRAY_TOGGLE_PIN_ID,
+        default_pin_text,
+        true,
+        None::<&str>,
+    )?;
+    let pin_item_for_events = pin_item.clone();
+
+    let perf_item = MenuItem::with_id(
+        app,
+        TRAY_PERF_ID,
+        "Performance snapshot",
+        true,
+        None::<&str>,
+    )?;
+    let night_item = MenuItem::with_id(
+        app,
+        TRAY_NIGHT_MODE_ID,
+        "Run night mode safely",
+        true,
+        None::<&str>,
+    )?;
+    let quit_item = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+
+    let menu = Menu::with_items(
+        app,
+        &[
+            &open_item,
+            &pin_item,
+            &perf_item,
+            &night_item,
+            &separator,
+            &quit_item,
+        ],
+    )?;
+
+    TrayIconBuilder::with_id("vibe-overlay-tray")
+        .menu(&menu)
+        .tooltip("Fluxio")
+        .show_menu_on_left_click(true)
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            TRAY_OPEN_ID => {
+                let _ = open_overlay(app, "tray");
+            }
+            TRAY_TOGGLE_PIN_ID => {
+                let toggled = {
+                    let state = app.state::<OverlayAppState>();
+                    let current = state.settings.lock().map(|s| s.pinned).unwrap_or(false);
+                    set_pinned_state(app, !current, "tray")
+                };
+
+                if let Ok(settings) = toggled {
+                    let label = if settings.pinned {
+                        "Unpin overlay"
+                    } else {
+                        "Pin overlay"
+                    };
+                    let _ = pin_item_for_events.set_text(label);
+                }
+            }
+            TRAY_PERF_ID => {
+                let snapshot = refresh_performance_snapshot(app);
+                log::info!(
+                    "performance snapshot: cold_start={:?}ms hotkey_last={:?}ms hotkey_avg={:?}ms idle_ram={:?}MB",
+                    snapshot.cold_start_ms,
+                    snapshot.last_hotkey_latency_ms,
+                    snapshot.average_hotkey_latency_ms,
+                    snapshot.idle_ram_mb
+                );
+                let _ = app.emit("overlay://perf", snapshot);
+            }
+            TRAY_NIGHT_MODE_ID => {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = run_night_mode_cycle(&app_handle, "tray").await;
+                });
+            }
+            TRAY_QUIT_ID => {
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_overlay_state(app: AppHandle) -> Result<OverlayStateSnapshot, String> {
+    build_overlay_state_snapshot(&app)
+}
+
+#[tauri::command]
+fn set_overlay_pinned(app: AppHandle, pinned: bool) -> Result<OverlaySettings, String> {
+    set_pinned_state(&app, pinned, "ui")
+}
+
+#[tauri::command]
+fn toggle_overlay_pin(app: AppHandle) -> Result<OverlaySettings, String> {
+    let state = app.state::<OverlayAppState>();
+    let pinned = state
+        .settings
+        .lock()
+        .map_err(|_| "Failed to read settings".to_string())?
+        .pinned;
+    set_pinned_state(&app, !pinned, "ui")
+}
+
+#[tauri::command]
+fn get_performance_snapshot(app: AppHandle) -> Result<PerformanceSnapshot, String> {
+    Ok(refresh_performance_snapshot(&app))
+}
+
+#[tauri::command]
+fn submit_prompt(
+    app: AppHandle,
+    prompt: String,
+    provider: Option<String>,
+    model: Option<String>,
+    autonomous_mode: Option<bool>,
+) -> Result<(), String> {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    let autonomous_mode = autonomous_mode.unwrap_or(false);
+    if autonomous_mode {
+        queue_openclaw_payload(
+            &app,
+            json!({
+                "type": "user.message",
+                "content": trimmed,
+                "provider": provider,
+                "model": model,
+                "source": "overlay.autonomous",
+            }),
+        )?;
+
+        append_audit_entry(
+            &app,
+            "prompt.forwarded_openclaw",
+            json!({
+                "length": trimmed.len(),
+                "provider": provider,
+                "model": model,
+            }),
+        );
+    } else {
+        append_audit_entry(
+            &app,
+            "prompt.submitted",
+            json!({
+                "length": trimmed.len(),
+                "mode": current_mode_definition(&app).map(|m| m.id),
+                "provider": provider,
+                "model": model,
+            }),
+        );
+    }
+
+    let state = app.state::<OverlayAppState>();
+    let is_pinned = state
+        .settings
+        .lock()
+        .map_err(|_| "Failed to read settings".to_string())?
+        .pinned;
+
+    if !is_pinned {
+        hide_overlay(&app, "prompt-submitted")?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_modes(app: AppHandle) -> Result<Vec<ModeDefinition>, String> {
+    let state = app.state::<OverlayAppState>();
+    let mode_state = state
+        .mode_state
+        .lock()
+        .map_err(|_| "Failed to read mode state".to_string())?;
+    Ok(mode_state.modes.values().cloned().collect())
+}
+
+#[tauri::command]
+fn set_mode(app: AppHandle, mode_id: String) -> Result<ModeDefinition, String> {
+    set_mode_inner(&app, &mode_id, "ui")
+}
+
+#[tauri::command]
+fn get_current_mode(app: AppHandle) -> Result<ModeDefinition, String> {
+    current_mode_definition(&app).ok_or_else(|| "No active mode".to_string())
+}
+
+#[tauri::command]
+fn context_capture(
+    app: AppHandle,
+    request: Option<ContextCaptureRequest>,
+) -> Result<ContextCaptureResult, String> {
+    let effective_request = if let Some(request) = request {
+        request
+    } else {
+        current_mode_definition(&app)
+            .map(|mode| mode.context_recipe)
+            .unwrap_or_default()
+    };
+
+    capture_context_inner(&app, effective_request)
+}
+
+#[tauri::command]
+fn ui_ask(app: AppHandle, payload: UiAskPayload) -> Result<QuestionBubble, String> {
+    create_question(
+        &app,
+        payload.question_id,
+        payload.question,
+        payload.choices,
+        "ui.ask",
+        None,
+    )
+}
+
+#[tauri::command]
+fn ui_answer(app: AppHandle, payload: UiAnswerPayload) -> Result<QuestionBubble, String> {
+    answer_question_inner(&app, payload)
+}
+
+#[tauri::command]
+fn list_pending_questions(app: AppHandle) -> Result<Vec<QuestionBubble>, String> {
+    let state = app.state::<OverlayAppState>();
+    let question_state = state
+        .question_state
+        .lock()
+        .map_err(|_| "Failed to read question state".to_string())?;
+    Ok(question_state.pending.values().cloned().collect())
+}
+
+#[tauri::command]
+async fn action_request(
+    app: AppHandle,
+    payload: ActionRequestPayload,
+) -> Result<ActionRequestOutcome, String> {
+    request_action_inner(&app, payload).await
+}
+
+#[tauri::command]
+fn list_pending_approvals(app: AppHandle) -> Result<Vec<ActionApprovalRecord>, String> {
+    let state = app.state::<OverlayAppState>();
+    let approval_state = state
+        .approval_state
+        .lock()
+        .map_err(|_| "Failed to read approval state".to_string())?;
+    Ok(approval_state.pending.values().cloned().collect())
+}
+
+#[tauri::command]
+async fn resolve_action_approval(
+    app: AppHandle,
+    payload: ResolveApprovalPayload,
+) -> Result<ActionApprovalRecord, String> {
+    resolve_approval_inner(&app, payload).await
+}
+
+#[tauri::command]
+fn get_dictation_config(app: AppHandle) -> Result<DictationConfig, String> {
+    let state = app.state::<OverlayAppState>();
+    let dictation = state
+        .dictation_state
+        .lock()
+        .map_err(|_| "Failed to read dictation state".to_string())?;
+    Ok(dictation.config.clone())
+}
+
+#[tauri::command]
+fn configure_dictation(app: AppHandle, config: DictationConfig) -> Result<DictationConfig, String> {
+    let state = app.state::<OverlayAppState>();
+    let mut dictation = state
+        .dictation_state
+        .lock()
+        .map_err(|_| "Failed to write dictation state".to_string())?;
+    dictation.config = config.clone();
+
+    append_audit_entry(
+        &app,
+        "dictation.config.updated",
+        json!({
+            "strategy": format!("{:?}", dictation.config.strategy),
+            "hasLocalCommand": dictation.config.local_stt_command.is_some(),
+        }),
+    );
+
+    Ok(config)
+}
+
+#[tauri::command]
+fn start_dictation(app: AppHandle) -> Result<DictationSession, String> {
+    let session = {
+        let state = app.state::<OverlayAppState>();
+        let mut dictation = state
+            .dictation_state
+            .lock()
+            .map_err(|_| "Failed to lock dictation state".to_string())?;
+
+        let session = DictationSession {
+            session_id: format!("dict_{}", Uuid::new_v4().simple()),
+            status: DictationOutcomeStatus::Listening,
+            started_at: now_utc_iso(),
+            finished_at: None,
+            engine: "pending".to_string(),
+            audio_path: None,
+            transcript: None,
+            message: None,
+        };
+
+        dictation.active_session = Some(session.clone());
+        session
+    };
+
+    append_audit_entry(
+        &app,
+        "dictation.started",
+        json!({ "sessionId": session.session_id }),
+    );
+    let _ = app.emit("dictation://started", session.clone());
+
+    Ok(session)
+}
+
+#[tauri::command]
+async fn stop_dictation(
+    app: AppHandle,
+    payload: DictationStopPayload,
+) -> Result<DictationSession, String> {
+    let (mut session, config) = {
+        let state = app.state::<OverlayAppState>();
+        let mut dictation = state
+            .dictation_state
+            .lock()
+            .map_err(|_| "Failed to lock dictation state".to_string())?;
+
+        let Some(session) = dictation.active_session.take() else {
+            return Err("No active dictation session".to_string());
+        };
+
+        (session, dictation.config.clone())
+    };
+
+    session.audio_path = payload.audio_path.clone();
+    session.finished_at = Some(now_utc_iso());
+
+    let outcome = match config.strategy {
+        DictationStrategy::OsOnly => Err(config.os_fallback_hint),
+        DictationStrategy::LocalFirst => {
+            if let Some(path) = payload.audio_path.as_deref() {
+                run_local_stt_command(&config, path).await
+            } else {
+                Err("No audio path provided for local transcription".to_string())
+            }
+        }
+    };
+
+    match outcome {
+        Ok(transcript) => {
+            session.status = DictationOutcomeStatus::Transcribed;
+            session.engine = "local_stt".to_string();
+            session.transcript = Some(transcript);
+            session.message = None;
+        }
+        Err(message) => {
+            session.status = DictationOutcomeStatus::NeedsOsFallback;
+            session.engine = "os_fallback".to_string();
+            session.message = Some(message.clone());
+
+            let _ = create_question(
+                &app,
+                None,
+                "Local STT is unavailable. Continue using OS dictation?".to_string(),
+                vec![
+                    QuestionChoice {
+                        choice_id: "yes".to_string(),
+                        label: "Use OS dictation".to_string(),
+                    },
+                    QuestionChoice {
+                        choice_id: "configure_local".to_string(),
+                        label: "Configure local STT".to_string(),
+                    },
+                    QuestionChoice {
+                        choice_id: "cancel".to_string(),
+                        label: "Cancel".to_string(),
+                    },
+                ],
+                "dictation.fallback",
+                None,
+            );
+        }
+    }
+
+    {
+        let state = app.state::<OverlayAppState>();
+        let mut dictation = state
+            .dictation_state
+            .lock()
+            .map_err(|_| "Failed to lock dictation state".to_string())?;
+        dictation.history.push(session.clone());
+    }
+
+    append_audit_entry(
+        &app,
+        "dictation.stopped",
+        json!({
+            "sessionId": session.session_id,
+            "status": format!("{:?}", session.status),
+            "engine": session.engine,
+        }),
+    );
+    let _ = app.emit("dictation://stopped", session.clone());
+
+    Ok(session)
+}
+
+#[tauri::command]
+async fn transcribe_audio_file(
+    app: AppHandle,
+    payload: DictationTranscribePayload,
+) -> Result<DictationSession, String> {
+    let state = app.state::<OverlayAppState>();
+    let config = state
+        .dictation_state
+        .lock()
+        .map_err(|_| "Failed to lock dictation state".to_string())?
+        .config
+        .clone();
+
+    let transcript = run_local_stt_command(&config, &payload.audio_path).await?;
+    let session = DictationSession {
+        session_id: format!("dict_{}", Uuid::new_v4().simple()),
+        status: DictationOutcomeStatus::Transcribed,
+        started_at: now_utc_iso(),
+        finished_at: Some(now_utc_iso()),
+        engine: "local_stt".to_string(),
+        audio_path: Some(payload.audio_path),
+        transcript: Some(transcript),
+        message: None,
+    };
+
+    append_audit_entry(
+        &app,
+        "dictation.transcribed",
+        json!({ "sessionId": session.session_id }),
+    );
+    Ok(session)
+}
+
+#[tauri::command]
+fn get_dictation_history(app: AppHandle) -> Result<Vec<DictationSession>, String> {
+    let state = app.state::<OverlayAppState>();
+    let dictation = state
+        .dictation_state
+        .lock()
+        .map_err(|_| "Failed to lock dictation state".to_string())?;
+    Ok(dictation.history.clone())
+}
+
+#[tauri::command]
+async fn execute_control_command(
+    app: AppHandle,
+    command: ControlCommand,
+) -> Result<ControlCommandResponse, String> {
+    Ok(execute_control_command_inner(&app, command).await)
+}
+
+#[tauri::command]
+fn get_localhost_status(app: AppHandle) -> Result<LocalhostStatus, String> {
+    let state = app.state::<OverlayAppState>();
+    let status = state
+        .localhost_status
+        .lock()
+        .map_err(|_| "Failed to lock localhost status".to_string())?
+        .clone();
+    Ok(status)
+}
+
+#[tauri::command]
+async fn configure_localhost_api(
+    app: AppHandle,
+    payload: LocalhostConfigPayload,
+) -> Result<LocalhostStatus, String> {
+    {
+        let state = app.state::<OverlayAppState>();
+        {
+            let mut status = state
+                .localhost_status
+                .lock()
+                .map_err(|_| "Failed to lock localhost status".to_string())?;
+            status.enabled = payload.enabled;
+            if let Some(port) = payload.port {
+                status.port = port;
+            }
+        }
+
+        let mut settings = state
+            .settings
+            .lock()
+            .map_err(|_| "Failed to lock settings".to_string())?;
+        settings.localhost_api_enabled = payload.enabled;
+        if let Some(port) = payload.port {
+            settings.localhost_api_port = port;
+        }
+        save_settings(&state.settings_path, &settings)?;
+        emit_settings(&app, &settings);
+    }
+
+    start_localhost_api(&app).await?;
+    get_localhost_status(app)
+}
+
+#[tauri::command]
+fn save_localhost_api_token_command(app: AppHandle, token: String) -> Result<bool, String> {
+    save_localhost_api_token(&token)?;
+    append_audit_entry(&app, "localhost.token_saved", json!({ "saved": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn clear_localhost_api_token_command(app: AppHandle) -> Result<bool, String> {
+    clear_localhost_api_token()?;
+    append_audit_entry(&app, "localhost.token_cleared", json!({ "cleared": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn has_localhost_api_token_command() -> Result<bool, String> {
+    Ok(load_localhost_api_token()?.is_some())
+}
+
+#[tauri::command]
+fn save_provider_secret_command(
+    app: AppHandle,
+    provider_id: String,
+    secret: String,
+) -> Result<bool, String> {
+    if secret.trim().is_empty() {
+        return Err("Provider secret cannot be empty".to_string());
+    }
+    save_provider_secret(&provider_id, &secret)?;
+    append_audit_entry(
+        &app,
+        "provider.secret_saved",
+        json!({ "providerId": provider_id, "saved": true }),
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+fn clear_provider_secret_command(app: AppHandle, provider_id: String) -> Result<bool, String> {
+    clear_provider_secret(&provider_id)?;
+    append_audit_entry(
+        &app,
+        "provider.secret_cleared",
+        json!({ "providerId": provider_id, "cleared": true }),
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+fn has_provider_secret_command(provider_id: String) -> Result<bool, String> {
+    Ok(load_provider_secret(&provider_id)?.is_some())
+}
+
+#[tauri::command]
+fn get_provider_secret_presence_command(
+    provider_ids: Option<Vec<String>>,
+) -> Result<HashMap<String, bool>, String> {
+    let mut output = HashMap::new();
+    for provider_id in provider_ids.unwrap_or_default() {
+        let has_secret = load_provider_secret(&provider_id)?.is_some();
+        output.insert(provider_id, has_secret);
+    }
+    Ok(output)
+}
+
+#[tauri::command]
+fn get_openclaw_status(app: AppHandle) -> Result<OpenClawStatus, String> {
+    let state = app.state::<OverlayAppState>();
+    let status = state
+        .openclaw_state
+        .lock()
+        .map_err(|_| "Failed to lock OpenClaw state".to_string())?
+        .status
+        .clone();
+    Ok(status)
+}
+
+#[tauri::command]
+async fn connect_openclaw_gateway(
+    app: AppHandle,
+    payload: Option<LocalGatewayConfigPayload>,
+) -> Result<OpenClawStatus, String> {
+    let gateway_url = payload.and_then(|value| value.gateway_url);
+    connect_openclaw_inner(&app, gateway_url).await
+}
+
+#[tauri::command]
+async fn disconnect_openclaw_gateway(app: AppHandle) -> Result<OpenClawStatus, String> {
+    disconnect_openclaw_inner(&app).await
+}
+
+#[tauri::command]
+fn save_openclaw_gateway_token(app: AppHandle, token: String) -> Result<bool, String> {
+    save_openclaw_token(&token)?;
+    append_audit_entry(&app, "openclaw.token_saved", json!({ "saved": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn clear_openclaw_gateway_token(app: AppHandle) -> Result<bool, String> {
+    clear_openclaw_token()?;
+    append_audit_entry(&app, "openclaw.token_cleared", json!({ "cleared": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn has_openclaw_gateway_token() -> Result<bool, String> {
+    Ok(load_openclaw_token()?.is_some())
+}
+
+#[tauri::command]
+fn send_openclaw_message(app: AppHandle, payload: OpenClawMessagePayload) -> Result<bool, String> {
+    queue_openclaw_payload(&app, json!({ "type": "user.message", "content": payload.message }))?;
+
+    append_audit_entry(&app, "openclaw.message_sent", json!({ "queued": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn get_night_mode_config(app: AppHandle) -> Result<NightModeConfig, String> {
+    let state = app.state::<OverlayAppState>();
+    let config = state
+        .night_mode_state
+        .lock()
+        .map_err(|_| "Failed to lock night mode state".to_string())?
+        .config
+        .clone();
+    Ok(config)
+}
+
+#[tauri::command]
+fn configure_night_mode(
+    app: AppHandle,
+    config: NightModeConfig,
+) -> Result<NightModeConfig, String> {
+    let state = app.state::<OverlayAppState>();
+    let mut night_mode = state
+        .night_mode_state
+        .lock()
+        .map_err(|_| "Failed to lock night mode state".to_string())?;
+    night_mode.config = config.clone();
+
+    append_audit_entry(
+        &app,
+        "night_mode.config_updated",
+        json!({
+            "enabled": config.enabled,
+            "autopilot": config.autopilot_enabled,
+            "startHour": config.start_hour,
+            "endHour": config.end_hour,
+        }),
+    );
+
+    Ok(config)
+}
+
+#[tauri::command]
+async fn run_night_mode_now(app: AppHandle) -> Result<NightModeReport, String> {
+    run_night_mode_cycle(&app, "manual").await
+}
+
+#[tauri::command]
+fn get_last_night_mode_report(app: AppHandle) -> Result<Option<NightModeReport>, String> {
+    let state = app.state::<OverlayAppState>();
+    let report = state
+        .night_mode_state
+        .lock()
+        .map_err(|_| "Failed to lock night mode state".to_string())?
+        .last_report
+        .clone();
+    Ok(report)
+}
+
+#[tauri::command]
+fn get_audit_log(app: AppHandle, limit: Option<usize>) -> Result<Vec<AuditEntry>, String> {
+    let state = app.state::<OverlayAppState>();
+    let max = limit.unwrap_or(120).clamp(1, 1000);
+    Ok(get_audit_tail(&state.audit_log_path, max))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
-      Ok(())
-    })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    let mut builder =
+        tauri::Builder::default().plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    if cfg!(debug_assertions) {
+        builder = builder.plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .build(),
+        );
+    }
+
+    builder
+        .invoke_handler(tauri::generate_handler![
+            get_overlay_state,
+            set_overlay_pinned,
+            toggle_overlay_pin,
+            get_performance_snapshot,
+            submit_prompt,
+            get_modes,
+            set_mode,
+            get_current_mode,
+            context_capture,
+            ui_ask,
+            ui_answer,
+            list_pending_questions,
+            action_request,
+            list_pending_approvals,
+            resolve_action_approval,
+            get_dictation_config,
+            configure_dictation,
+            start_dictation,
+            stop_dictation,
+            transcribe_audio_file,
+            get_dictation_history,
+            execute_control_command,
+            get_localhost_status,
+            configure_localhost_api,
+            save_localhost_api_token_command,
+            clear_localhost_api_token_command,
+            has_localhost_api_token_command,
+            save_provider_secret_command,
+            clear_provider_secret_command,
+            has_provider_secret_command,
+            get_provider_secret_presence_command,
+            get_openclaw_status,
+            connect_openclaw_gateway,
+            disconnect_openclaw_gateway,
+            save_openclaw_gateway_token,
+            clear_openclaw_gateway_token,
+            has_openclaw_gateway_token,
+            send_openclaw_message,
+            get_night_mode_config,
+            configure_night_mode,
+            run_night_mode_now,
+            get_last_night_mode_report,
+            get_audit_log
+        ])
+        .setup(|app| {
+            let config_dir = app.path().app_config_dir()?;
+            let settings_path = config_dir.join(SETTINGS_FILE_NAME);
+            let audit_log_path = config_dir.join(AUDIT_LOG_FILE_NAME);
+            let settings = load_settings(&settings_path);
+
+            app.manage(OverlayAppState::new(
+                settings_path,
+                settings,
+                audit_log_path,
+            ));
+
+            configure_overlay_window(app.handle());
+            build_tray(app.handle())?;
+
+            if let Err(err) = register_hold_shortcut(app.handle()) {
+                log::error!("failed to register hold-to-open shortcut: {err}");
+            }
+
+            {
+                let state = app.state::<OverlayAppState>();
+                if let Ok(mut perf) = state.performance.lock() {
+                    perf.mark_cold_start();
+                    perf.sample_idle_memory();
+                };
+            }
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = start_localhost_api(&app_handle).await;
+            });
+
+            start_night_mode_scheduler(app.handle());
+            append_audit_entry(
+                app.handle(),
+                "app.started",
+                json!({ "version": "m1-m6-skeleton" }),
+            );
+
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

@@ -1,51 +1,513 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="en" data-theme="default" data-font="default">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vibe Coding Platform</title>
+    <title>Fluxio - Hands-Free AI</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand">
-        <img class="brand-mark" src="./logo-mark.png" alt="Vibe mark" />
-        <div>
-          <h1>Vibe Coding Platform</h1>
-          <p class="muted">Docs-first coding orchestration desktop shell</p>
+    <!-- Splash Screen -->
+    <div class="splash-screen" id="splashScreen">
+      <div class="splash-logo">
+        <img src="./fluxio-logo-main.svg" alt="Fluxio" />
+      </div>
+      <div class="splash-spinner"></div>
+      <p class="splash-text">Starting Fluxio...</p>
+    </div>
+
+    <!-- Main App Container -->
+    <div class="app-container" id="appContainer">
+      <div class="main-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-header">
+            <div class="sidebar-logo">
+              <img src="./fluxio-logo-mark.svg" alt="Fluxio" />
+            </div>
+            <span class="sidebar-title">Fluxio</span>
+            <div class="sidebar-actions">
+              <button class="icon-btn" id="newChatBtn" title="New Chat">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+              </button>
+              <button class="icon-btn" id="settingsBtn" title="Settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="conversation-section">
+            <div class="section-label">
+              <span>Conversations</span>
+            </div>
+            <div class="conversation-list" id="conversationList">
+              <!-- Conversations populated by JS -->
+            </div>
+          </div>
+
+          <div class="folder-section">
+            <div class="section-label">
+              <span>Folders</span>
+              <button class="icon-btn" id="newFolderBtn" title="New Folder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+              </button>
+            </div>
+            <div class="folder-list" id="folderList">
+              <!-- Folders populated by JS -->
+            </div>
+          </div>
+        </aside>
+
+        <!-- Content Area -->
+        <main class="content-area">
+          <header class="content-header">
+            <div class="content-title">
+              <input type="text" id="conversationTitle" placeholder="New Conversation" />
+              <span class="mode-badge" id="modeBadge">coding</span>
+            </div>
+            <div class="header-actions">
+              <button class="icon-btn" id="toggleSidebarBtn" title="Toggle Sidebar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 12h18M3 6h18M3 18h18"/>
+                </svg>
+              </button>
+              <button class="icon-btn" id="menuBtn" title="Menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="1"/>
+                  <circle cx="12" cy="5" r="1"/>
+                  <circle cx="12" cy="19" r="1"/>
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="messages-container" id="messagesContainer">
+            <!-- Messages populated by JS -->
+          </div>
+
+          <!-- Prompt Bar -->
+          <div class="prompt-bar">
+            <div class="prompt-wrapper">
+              <div class="prompt-input-container">
+                <textarea 
+                  id="promptInput" 
+                  placeholder="Type a message... (Press Enter to send, Shift+Enter for new line)"
+                  rows="1"
+                ></textarea>
+              </div>
+              <div class="prompt-actions">
+                <button class="voice-btn" id="voiceBtn" title="Voice Input (Hold to record)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                  </svg>
+                </button>
+                <button class="send-btn" id="sendBtn" title="Send">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"/>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="prompt-shortcuts">
+              <span><kbd>Enter</kbd> Send</span>
+              <span><kbd>Shift+Enter</kbd> New line</span>
+              <span><kbd>Space</kbd> Hold to open</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="settings-overlay" id="settingsOverlay">
+      <div class="settings-panel">
+        <div class="settings-header">
+          <h2 class="settings-title">Settings</h2>
+          <button class="settings-close" id="settingsCloseBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="settings-content">
+          <div class="settings-section">
+            <h3 class="settings-section-title">Personalization</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Profile Preset</p>
+                <p class="setting-desc">Apply a ready-to-use style + agent behavior pack</p>
+              </div>
+              <select class="select-dropdown" id="profilePresetSelector">
+                <option value="hands_free_builder">Hands-Free Builder</option>
+                <option value="minimal_focus">Minimal Focus</option>
+                <option value="research_sprint">Research Sprint</option>
+                <option value="safety_gate">Safety Gate</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div class="profile-preset-actions">
+              <button class="inline-btn" id="applyProfilePresetBtn">Apply Preset</button>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Appearance</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Theme</p>
+                <p class="setting-desc">Choose your preferred color scheme</p>
+              </div>
+              <div class="theme-grid" id="themeSelector">
+                <div class="theme-option active" data-theme="default" data-name="Default"></div>
+                <div class="theme-option" data-theme="light" data-name="Light"></div>
+                <div class="theme-option" data-theme="sunset" data-name="Sunset"></div>
+                <div class="theme-option" data-theme="forest" data-name="Forest"></div>
+                <div class="theme-option" data-theme="midnight" data-name="Midnight"></div>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Font Style</p>
+                <p class="setting-desc">Choose text rendering style</p>
+              </div>
+              <select class="select-dropdown" id="fontSelector">
+                <option value="default">Default</option>
+                <option value="compact">Compact</option>
+                <option value="elegant">Elegant</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Behavior</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Pin Overlay</p>
+                <p class="setting-desc">Keep overlay visible when typing</p>
+              </div>
+              <div class="toggle active" id="pinToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Sound Effects</p>
+                <p class="setting-desc">Play sounds for notifications</p>
+              </div>
+              <div class="toggle active" id="soundToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Show All Notifications</p>
+                <p class="setting-desc">Enable all notification types</p>
+              </div>
+              <div class="toggle active" id="showAllNotificationsToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Notify on Questions</p>
+                <p class="setting-desc">Alert when AI asks a question</p>
+              </div>
+              <div class="toggle active" id="notifyQuestionToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Notify on Messages</p>
+                <p class="setting-desc">Alert on new messages</p>
+              </div>
+              <div class="toggle active" id="notifyMessageToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Notify on Completion</p>
+                <p class="setting-desc">Alert when task completes</p>
+              </div>
+              <div class="toggle active" id="notifyCompletionToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Notify on Errors</p>
+                <p class="setting-desc">Alert on errors or failures</p>
+              </div>
+              <div class="toggle active" id="notifyErrorToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Auto-Import Conversations</p>
+                <p class="setting-desc">Automatically detect and import chats</p>
+              </div>
+              <div class="toggle active" id="autoImportToggle"></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Voice</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Enable Voice Input</p>
+                <p class="setting-desc">Use microphone for dictation</p>
+              </div>
+              <div class="toggle active" id="voiceToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Voice Activation</p>
+                <p class="setting-desc">Push-to-talk or always listening</p>
+              </div>
+              <select class="select-dropdown" id="voiceModeSelector">
+                <option value="push">Push-to-Talk</option>
+                <option value="always">Always Listening</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Agent Studio</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Agent Mode</p>
+                <p class="setting-desc">Default orchestration mode for autonomous runs</p>
+              </div>
+              <select class="select-dropdown" id="agentModeSelector">
+                <option value="profile">From Profile</option>
+                <option value="fast">Fast</option>
+                <option value="balanced">Balanced</option>
+                <option value="careful">Careful</option>
+                <option value="creative">Creative</option>
+                <option value="swarms">Swarms</option>
+                <option value="autopilot">Autopilot</option>
+                <option value="deep_run">Deep Run</option>
+                <option value="swarm_mega">Swarm Mega</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Parallel Agents</p>
+                <p class="setting-desc">How many worker branches to run in parallel</p>
+              </div>
+              <input class="number-input" id="parallelAgentsInput" type="number" min="1" max="8" value="3" />
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Merge Policy</p>
+                <p class="setting-desc">How worker branches are combined</p>
+              </div>
+              <select class="select-dropdown" id="mergePolicySelector">
+                <option value="best_score">Best Score</option>
+                <option value="consensus">Consensus</option>
+                <option value="risk_averse">Risk Averse</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Pause on Verification Failure</p>
+                <p class="setting-desc">Stop autonomous loop when checks fail</p>
+              </div>
+              <div class="toggle active" id="agentPauseOnFailToggle"></div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">OpenClaw Gateway</p>
+                <p class="setting-desc" id="openclawStatusText">OpenClaw is only active in autonomous modes.</p>
+              </div>
+              <div class="gateway-controls">
+                <span class="mode-badge" id="openclawStatusBadge">Inactive</span>
+                <button class="inline-btn" id="openclawToggleBtn" type="button">Connect</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Gateway URL</p>
+                <p class="setting-desc">Used when autonomous mode is active</p>
+              </div>
+              <input class="settings-input" id="openclawGatewayUrlInput" type="text" placeholder="ws://127.0.0.1:8765" />
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Shortcuts</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Open Overlay</p>
+              </div>
+              <span class="mode-badge">Space</span>
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Voice Input</p>
+              </div>
+              <span class="mode-badge">Hold Space</span>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">AI Providers</h3>
+            <div class="providers-list" id="providersList">
+              <!-- Providers populated by JS -->
+            </div>
+            <button class="provider-add-btn" id="addProviderBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              Add Provider
+            </button>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Import Conversations</h3>
+            <p class="setting-desc" style="margin-bottom: 12px;">Import chats from ChatGPT, Claude, or other platforms</p>
+            <div class="import-options">
+              <button class="import-btn" id="importChatGPTBtn">
+                <span class="import-icon">📋</span>
+                <span>Import from ChatGPT</span>
+              </button>
+              <button class="import-btn" id="importClaudeBtn">
+                <span class="import-icon">🧠</span>
+                <span>Import from Claude</span>
+              </button>
+              <button class="import-btn" id="importJsonBtn">
+                <span class="import-icon">📁</span>
+                <span>Import JSON File</span>
+              </button>
+            </div>
+            <input type="file" id="importFileInput" accept=".json,.txt" style="display: none;" />
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Current Model</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Active Provider</p>
+                <p class="setting-desc">Select which AI to use</p>
+              </div>
+              <select class="select-dropdown" id="modelSelector">
+                <option value="">Select provider first</option>
+              </select>
+            </div>
+          </div>
         </div>
       </div>
-      <img class="brand-logo" src="./logo-main.png" alt="Vibe logo" />
-    </header>
+    </div>
 
-    <main class="grid">
-      <section class="panel">
-        <h2>Quick Commands</h2>
-        <div class="buttons">
-          <button data-cmd="python -m grant_agent.cli bootstrap">Bootstrap</button>
-          <button data-cmd="python -m grant_agent.cli vibe --objective &quot;Build onboarding flow with polished UX&quot; --doc &quot;docs/PRD.md&quot;">Start vibe loop</button>
-          <button data-cmd="python -m grant_agent.cli vibe-status">Vibe status</button>
-          <button data-cmd="python -m grant_agent.cli demo-suite --objective &quot;Evaluate autonomy hardening&quot; --export-zip">Demo suite</button>
+    <!-- Provider Config Modal -->
+    <div class="provider-modal-overlay" id="providerModal">
+      <div class="provider-modal">
+        <div class="provider-modal-header">
+          <h3 class="provider-modal-title" id="providerModalTitle">Add AI Provider</h3>
+          <button class="settings-close" id="providerModalClose">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
-        <p class="muted small">Use the copy button, then paste into your terminal at the project root.</p>
-      </section>
+        <div class="provider-modal-content">
+          <div class="provider-type-grid" id="providerTypeGrid">
+            <!-- Provider types populated by JS -->
+          </div>
+          <div class="provider-config" id="providerConfig">
+            <div class="form-group">
+              <label class="form-label">Provider Name</label>
+              <input type="text" class="form-input" id="providerName" placeholder="My OpenAI" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Base URL (optional)</label>
+              <input type="text" class="form-input" id="providerBaseUrl" placeholder="https://api.openai.com/v1" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Authentication Type</label>
+              <select class="form-select" id="providerAuthType">
+                <option value="api_key">API Key</option>
+                <option value="bearer">Bearer Token</option>
+                <option value="basic">Basic Auth</option>
+                <option value="oauth">OAuth 2.0</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Quick Key Paste</label>
+              <input type="password" class="form-input" id="providerQuickKey" placeholder="Paste provider key/token here" />
+              <p class="form-help">Stored securely in your OS keychain. Not saved in plain app storage.</p>
+            </div>
+            <div class="form-group" id="apiKeyGroup">
+              <label class="form-label">API Key</label>
+              <input type="password" class="form-input" id="providerApiKey" placeholder="sk-..." />
+            </div>
+            <div class="form-group hidden" id="bearerGroup">
+              <label class="form-label">Bearer Token</label>
+              <input type="password" class="form-input" id="providerBearerToken" placeholder="Token..." />
+            </div>
+            <div class="form-group hidden" id="basicGroup">
+              <label class="form-label">Username</label>
+              <input type="text" class="form-input" id="providerUsername" placeholder="Username" />
+              <label class="form-label" style="margin-top: 12px;">Password</label>
+              <input type="password" class="form-input" id="providerPassword" placeholder="Password" />
+            </div>
+            <div class="form-group hidden" id="oauthGroup">
+              <label class="form-label">OAuth Client ID</label>
+              <input type="text" class="form-input" id="providerOauthClientId" placeholder="Client ID" />
+              <label class="form-label" style="margin-top: 12px;">OAuth Client Secret</label>
+              <input type="password" class="form-input" id="providerOauthClientSecret" placeholder="Client Secret" />
+              <label class="form-label" style="margin-top: 12px;">Authorization URL</label>
+              <input type="text" class="form-input" id="providerOauthAuthUrl" placeholder="https://provider.com/oauth/authorize" />
+              <label class="form-label" style="margin-top: 12px;">Token URL</label>
+              <input type="text" class="form-input" id="providerOauthTokenUrl" placeholder="https://provider.com/oauth/token" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Default Model</label>
+              <input type="text" class="form-input" id="providerDefaultModel" placeholder="gpt-4" />
+            </div>
+          </div>
+        </div>
+        <div class="provider-modal-footer">
+          <button class="provider-cancel-btn" id="providerCancelBtn">Cancel</button>
+          <button class="provider-save-btn" id="providerSaveBtn">Save Provider</button>
+        </div>
+      </div>
+    </div>
 
-      <section class="panel">
-        <h2>Runbook</h2>
-        <ol>
-          <li>Create Python env and install package: <code>python -m pip install -e .</code></li>
-          <li>Run one of the quick commands.</li>
-          <li>Inspect generated artifacts under <code>.agent_runs/</code>.</li>
-          <li>Use <code>python -m grant_agent.cli proof-dashboard --open</code> for reporting.</li>
-        </ol>
-      </section>
+    <!-- Command Palette -->
+    <div class="command-palette-overlay hidden" id="commandPalette">
+      <div class="command-palette">
+        <div class="command-input-wrapper">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input type="text" class="command-input" id="commandInput" placeholder="Type a command..." />
+        </div>
+        <div class="command-list" id="commandList">
+          <!-- Commands populated by JS -->
+        </div>
+      </div>
+    </div>
 
-      <section class="panel full">
-        <h2>Selected command</h2>
-        <pre id="selected">Click a quick command above.</pre>
-        <button id="copyBtn" class="secondary">Copy command</button>
-      </section>
-    </main>
+    <!-- Tutorial Overlay -->
+    <div class="tutorial-overlay hidden" id="tutorialOverlay">
+      <div class="tutorial-card">
+        <div class="tutorial-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <h3 class="tutorial-title" id="tutorialTitle">Welcome to Fluxio!</h3>
+        <p class="tutorial-text" id="tutorialText">
+          This is your AI assistant. Type a message or hold the microphone button to start speaking.
+        </p>
+        <button class="tutorial-btn" id="tutorialBtn">Get Started</button>
+      </div>
+    </div>
 
     <script type="module" src="./app.js"></script>
   </body>

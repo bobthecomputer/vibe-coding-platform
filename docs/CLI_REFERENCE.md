@@ -8,23 +8,37 @@
 - `python -m grant_agent.cli run --objective ... --doc ...`
   - Runs the autonomous loop with docs-first preflight.
   - Auto-detects a default verification command when `--verify` is omitted.
-  - Supports mode presets via `--mode` (`fast`, `balanced`, `careful`, `creative`).
+  - Supports mode presets via `--mode` (`fast`, `balanced`, `careful`, `creative`, `swarms`, `autopilot`, `deep_run`, `swarm_mega`, `profile`).
   - Key options:
     - `--max-tokens`: context budget.
     - `--max-handoffs`: rollover budget.
     - `--max-runtime-seconds`: runtime budget.
+    - `--parallel-agents`: worker branches per iteration.
+    - `--merge-policy`: branch merge strategy (`best_score`, `consensus`, `risk_averse`).
+    - `--profile`: personalization profile from `config/profiles.json`.
+    - `--pause-on-verification-failure`: pause autopilot when checks fail.
     - `--resume-from`: resume from an existing session id.
     - `--checkpoint-every`: checkpoint cadence.
+  - Note: docs-first preflight requires readable docs; runs can be blocked if no docs are provided.
 
 - `python -m grant_agent.cli vibe --objective ...`
   - Primary hands-free vibe coding loop.
   - Adds checkpoint snapshots and next-step hints by default.
+  - Defaults to profile-aware mode resolution (`--mode profile`) with pause-on-verification-failure enabled.
 
 - `python -m grant_agent.cli vibe-status`
   - Shows latest vibe session objective, autopilot status, checkpoint count, and next suggested actions.
 
 - `python -m grant_agent.cli vibe-continue`
   - Continues the latest vibe session across multiple cycles using latest checkpoints until complete or paused.
+
+- `python -m grant_agent.cli profiles`
+  - Lists configured personalization profiles and workspace/default resolution rules.
+  - Use `--name <profile>` to inspect one resolved profile.
+
+- `python -m grant_agent.cli soak --objective ... --doc ...`
+  - Runs multi-cycle autonomous soak validation with checkpoint + artifact checks each cycle.
+  - Supports `--profile`, `--merge-policy`, `--cycles`, and `--iterations`.
 
 - `python -m grant_agent.cli checkpoints`
   - Lists checkpoints for the latest (or specified) session.
