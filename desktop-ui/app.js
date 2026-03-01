@@ -143,7 +143,8 @@ const appState = {
     lastError: null,
     lastEventAt: null,
     lastConnectedAt: null,
-    reconnectAttempt: 0
+    reconnectAttempt: 0,
+    queuedOutbound: 0
   },
   shortcuts: [...DEFAULT_SHORTCUTS],
   isRecording: false,
@@ -1306,7 +1307,18 @@ function renderOpenclawStatus() {
   const autonomousMode = isAutonomousModeEnabled();
   const status = appState.openclawStatus || {};
   const connected = !!status.connected;
+  const lastError = status.lastError || status.last_error || null;
   const gatewayUrl = status.gatewayUrl || appState.settings.openclawGatewayUrl || 'ws://127.0.0.1:8765';
+  const queuedOutbound = Number.isFinite(status.queuedOutbound)
+    ? status.queuedOutbound
+    : Number.isFinite(status.queued_outbound)
+      ? status.queued_outbound
+      : 0;
+  const reconnectAttempt = Number.isFinite(status.reconnectAttempt)
+    ? status.reconnectAttempt
+    : Number.isFinite(status.reconnect_attempt)
+      ? status.reconnect_attempt
+      : 0;
 
   if (!autonomousMode) {
     elements.openclawStatusBadge.textContent = 'Inactive';
@@ -1324,10 +1336,16 @@ function renderOpenclawStatus() {
 
   if (connected) {
     elements.openclawStatusText.textContent = `OpenClaw connected (${gatewayUrl}).`;
-  } else if (status.lastError) {
-    elements.openclawStatusText.textContent = `OpenClaw offline: ${status.lastError}`;
+  } else if (lastError) {
+    elements.openclawStatusText.textContent = reconnectAttempt > 0
+      ? `OpenClaw offline: ${lastError} (retry #${reconnectAttempt})`
+      : `OpenClaw offline: ${lastError}`;
   } else {
     elements.openclawStatusText.textContent = `OpenClaw offline (${gatewayUrl}).`;
+  }
+
+  if (queuedOutbound > 0) {
+    elements.openclawStatusText.textContent += ` ${queuedOutbound} message(s) queued for replay.`;
   }
 
   if (elements.openclawToggleBtn) {

@@ -52,3 +52,5 @@ If `ok` is `false`, `error` contains a human-readable reason.
 - Rejected/unparsed events are audited and emitted to UI diagnostics (`openclaw://rejected`, `openclaw://raw`).
 - `ui.answer` responses for gateway-origin questions are sent back to OpenClaw (`type: ui.answer`).
 - `action.request` outcomes are sent back to OpenClaw (`type: action.result`) for both immediate and approval-resolved paths.
+- Outbound gateway payloads are queued while offline and replayed on reconnect.
+- Recent event-id history is used to suppress duplicate inbound gateway events.

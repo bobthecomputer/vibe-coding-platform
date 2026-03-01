@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::PathBuf,
@@ -56,6 +56,8 @@ const OPENCLAW_KEYRING_SERVICE: &str = "vibe-coding-platform";
 const OPENCLAW_KEYRING_USER: &str = "openclaw-gateway-token";
 const LOCALHOST_API_KEYRING_USER: &str = "localhost-api-token";
 const PROVIDER_KEYRING_USER_PREFIX: &str = "provider-secret:";
+const OPENCLAW_MAX_PENDING_OUTBOUND: usize = 256;
+const OPENCLAW_MAX_RECENT_EVENT_IDS: usize = 512;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -443,6 +445,7 @@ struct OpenClawStatus {
     last_event_at: Option<String>,
     last_connected_at: Option<String>,
     reconnect_attempt: u32,
+    queued_outbound: usize,
 }
 
 impl Default for OpenClawStatus {
@@ -454,6 +457,7 @@ impl Default for OpenClawStatus {
             last_event_at: None,
             last_connected_at: None,
             reconnect_attempt: 0,
+            queued_outbound: 0,
         }
     }
 }
@@ -462,6 +466,9 @@ struct OpenClawState {
     config: OpenClawConfig,
     status: OpenClawStatus,
     outbound_tx: Option<mpsc::UnboundedSender<String>>,
+    pending_outbound: VecDeque<String>,
+    recent_event_ids: VecDeque<String>,
+    recent_event_lookup: HashSet<String>,
 }
 
 impl OpenClawState {
@@ -470,7 +477,54 @@ impl OpenClawState {
             config: OpenClawConfig::default(),
             status: OpenClawStatus::default(),
             outbound_tx: None,
+            pending_outbound: VecDeque::new(),
+            recent_event_ids: VecDeque::new(),
+            recent_event_lookup: HashSet::new(),
         }
+    }
+
+    fn push_pending_outbound(&mut self, payload: String, front: bool) -> bool {
+        if front {
+            self.pending_outbound.push_front(payload);
+        } else {
+            self.pending_outbound.push_back(payload);
+        }
+
+        let mut dropped = false;
+        while self.pending_outbound.len() > OPENCLAW_MAX_PENDING_OUTBOUND {
+            dropped = true;
+            if front {
+                let _ = self.pending_outbound.pop_back();
+            } else {
+                let _ = self.pending_outbound.pop_front();
+            }
+        }
+
+        self.status.queued_outbound = self.pending_outbound.len();
+        dropped
+    }
+
+    fn take_pending_outbound(&mut self) -> Vec<String> {
+        let drained = self.pending_outbound.drain(..).collect::<Vec<_>>();
+        self.status.queued_outbound = 0;
+        drained
+    }
+
+    fn remember_event_id(&mut self, event_id: &str) -> bool {
+        if self.recent_event_lookup.contains(event_id) {
+            return true;
+        }
+
+        self.recent_event_lookup.insert(event_id.to_string());
+        self.recent_event_ids.push_back(event_id.to_string());
+
+        while self.recent_event_ids.len() > OPENCLAW_MAX_RECENT_EVENT_IDS {
+            if let Some(oldest) = self.recent_event_ids.pop_front() {
+                self.recent_event_lookup.remove(&oldest);
+            }
+        }
+
+        false
     }
 }
 
@@ -704,22 +758,56 @@ struct DictationTranscribePayload {
 enum GatewayInboundEvent {
     #[serde(rename = "clarify")]
     Clarify {
+        #[serde(default, alias = "id")]
+        event_id: Option<String>,
         question_id: Option<String>,
         question: String,
         choices: Vec<String>,
     },
     #[serde(rename = "action.request")]
     ActionRequest {
+        #[serde(default, alias = "id")]
+        event_id: Option<String>,
         request_id: Option<String>,
         tool_id: String,
         #[serde(default)]
         args: Value,
     },
     #[serde(rename = "agent.message")]
-    AgentMessage { content: String },
+    AgentMessage {
+        #[serde(default, alias = "id")]
+        event_id: Option<String>,
+        content: String,
+    },
+}
+
+fn gateway_event_identity(event: &GatewayInboundEvent) -> Option<String> {
+    match event {
+        GatewayInboundEvent::Clarify {
+            event_id,
+            question_id,
+            ..
+        } => event_id.clone().or_else(|| question_id.clone()),
+        GatewayInboundEvent::ActionRequest {
+            event_id,
+            request_id,
+            ..
+        } => event_id.clone().or_else(|| request_id.clone()),
+        GatewayInboundEvent::AgentMessage { event_id, .. } => event_id.clone(),
+    }
 }
 
 fn validate_gateway_event(event: &GatewayInboundEvent) -> Result<(), String> {
+    if let Some(event_id) = gateway_event_identity(event) {
+        let normalized = event_id.trim();
+        if normalized.is_empty() {
+            return Err("gateway event id is empty".to_string());
+        }
+        if normalized.len() > 128 {
+            return Err("gateway event id is too long".to_string());
+        }
+    }
+
     match event {
         GatewayInboundEvent::Clarify {
             question,
@@ -741,7 +829,7 @@ fn validate_gateway_event(event: &GatewayInboundEvent) -> Result<(), String> {
                 return Err("action.request tool_id is too long".to_string());
             }
         }
-        GatewayInboundEvent::AgentMessage { content } => {
+        GatewayInboundEvent::AgentMessage { content, .. } => {
             if content.trim().is_empty() {
                 return Err("agent.message content is empty".to_string());
             }
@@ -1383,22 +1471,91 @@ fn approval_status_label(status: &ApprovalStatus) -> &'static str {
     }
 }
 
-fn queue_openclaw_payload(app: &AppHandle, payload: Value) -> Result<(), String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenClawSendState {
+    Sent,
+    Queued,
+}
+
+fn emit_openclaw_status_snapshot(app: &AppHandle) {
+    let state = app.state::<OverlayAppState>();
+    let status = match state.openclaw_state.lock() {
+        Ok(openclaw) => openclaw.status.clone(),
+        Err(_) => return,
+    };
+    let _ = app.emit("openclaw://status", status);
+}
+
+fn queue_openclaw_payload(app: &AppHandle, payload: Value) -> Result<OpenClawSendState, String> {
+    let payload_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let payload_text = payload.to_string();
+
+    let mut dropped_oldest = false;
+    let mut queued_outbound = 0_usize;
+    let mut queue_reason: Option<&str> = None;
+
     let tx = {
         let state = app.state::<OverlayAppState>();
-        let openclaw = state
+        let mut openclaw = state
             .openclaw_state
             .lock()
             .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
-        openclaw.outbound_tx.clone()
+        match openclaw.outbound_tx.clone() {
+            Some(tx) => Some(tx),
+            None => {
+                dropped_oldest = openclaw.push_pending_outbound(payload_text.clone(), false);
+                queued_outbound = openclaw.status.queued_outbound;
+                queue_reason = Some("disconnected");
+                None
+            }
+        }
     };
 
-    let Some(tx) = tx else {
-        return Err("OpenClaw gateway is not connected".to_string());
-    };
+    if let Some(tx) = tx {
+        if tx.send(payload_text.clone()).is_ok() {
+            return Ok(OpenClawSendState::Sent);
+        }
 
-    tx.send(payload.to_string())
-        .map_err(|err| format!("Failed to enqueue gateway payload: {err}"))
+        let state = app.state::<OverlayAppState>();
+        let mut openclaw = state
+            .openclaw_state
+            .lock()
+            .map_err(|_| "Failed to lock OpenClaw state".to_string())?;
+        dropped_oldest = openclaw.push_pending_outbound(payload_text, false) || dropped_oldest;
+        queued_outbound = openclaw.status.queued_outbound;
+        queue_reason = Some("channel_closed");
+    }
+
+    if let Some(reason) = queue_reason {
+        if dropped_oldest {
+            append_audit_entry(
+                app,
+                "openclaw.queue_overflow",
+                json!({
+                    "maxPendingOutbound": OPENCLAW_MAX_PENDING_OUTBOUND,
+                    "payloadType": payload_type,
+                }),
+            );
+        }
+
+        append_audit_entry(
+            app,
+            "openclaw.payload_queued",
+            json!({
+                "payloadType": payload_type,
+                "reason": reason,
+                "queuedOutbound": queued_outbound,
+            }),
+        );
+        emit_openclaw_status_snapshot(app);
+        return Ok(OpenClawSendState::Queued);
+    }
+
+    Err("Unable to queue OpenClaw payload".to_string())
 }
 
 fn send_openclaw_action_result(
@@ -1418,29 +1575,42 @@ fn send_openclaw_action_result(
         "source": source,
     });
 
-    if let Err(err) = queue_openclaw_payload(app, payload) {
-        append_audit_entry(
-            app,
-            "openclaw.action_result_send_failed",
-            json!({
-                "requestId": outcome.request_id,
-                "gatewayRequestId": outcome.gateway_request_id.clone(),
-                "status": approval_status_label(&outcome.status),
-                "error": err,
-            }),
-        );
-        return;
+    match queue_openclaw_payload(app, payload) {
+        Ok(OpenClawSendState::Sent) => {
+            append_audit_entry(
+                app,
+                "openclaw.action_result_sent",
+                json!({
+                    "requestId": outcome.request_id,
+                    "gatewayRequestId": outcome.gateway_request_id.clone(),
+                    "status": approval_status_label(&outcome.status),
+                }),
+            );
+        }
+        Ok(OpenClawSendState::Queued) => {
+            append_audit_entry(
+                app,
+                "openclaw.action_result_queued",
+                json!({
+                    "requestId": outcome.request_id,
+                    "gatewayRequestId": outcome.gateway_request_id.clone(),
+                    "status": approval_status_label(&outcome.status),
+                }),
+            );
+        }
+        Err(err) => {
+            append_audit_entry(
+                app,
+                "openclaw.action_result_send_failed",
+                json!({
+                    "requestId": outcome.request_id,
+                    "gatewayRequestId": outcome.gateway_request_id.clone(),
+                    "status": approval_status_label(&outcome.status),
+                    "error": err,
+                }),
+            );
+        }
     }
-
-    append_audit_entry(
-        app,
-        "openclaw.action_result_sent",
-        json!({
-            "requestId": outcome.request_id,
-            "gatewayRequestId": outcome.gateway_request_id.clone(),
-            "status": approval_status_label(&outcome.status),
-        }),
-    );
 }
 
 fn set_pinned_state(
@@ -2227,7 +2397,7 @@ async fn connect_openclaw_inner(
             openclaw.config.gateway_url = url;
         }
 
-        if openclaw.outbound_tx.is_some() && openclaw.status.connected {
+        if openclaw.outbound_tx.is_some() {
             return Ok(openclaw.status.clone());
         }
 
@@ -2378,68 +2548,178 @@ async fn connect_openclaw_inner(
             }
 
             let mut reconnect_after_disconnect = false;
-            loop {
-                tokio::select! {
-                    outbound = rx.recv() => {
-                        let Some(outbound) = outbound else {
-                            keep_running = false;
-                            break;
-                        };
-                        if let Err(err) = writer.send(Message::Text(outbound.into())).await {
-                            update_openclaw_status(&app_handle, |status| {
-                                status.connected = false;
-                                status.last_error = Some(err.to_string());
-                            });
-                            reconnect_after_disconnect = true;
-                            break;
-                        }
-                    }
-                    inbound = reader.next() => {
-                        let Some(inbound) = inbound else {
-                            reconnect_after_disconnect = true;
-                            break;
-                        };
-                        match inbound {
-                            Ok(Message::Text(text)) => {
-                                update_openclaw_status(&app_handle, |status| {
-                                    status.last_event_at = Some(now_utc_iso());
-                                });
+            let pending_replay = {
+                let state = app_handle.state::<OverlayAppState>();
+                let lock_result = state.openclaw_state.lock();
+                match lock_result {
+                    Ok(mut openclaw) => openclaw.take_pending_outbound(),
+                    Err(_) => Vec::new(),
+                }
+            };
 
-                                if let Ok(event) = serde_json::from_str::<GatewayInboundEvent>(&text) {
-                                    if let Err(validation_err) = validate_gateway_event(&event) {
-                                        append_audit_entry(
-                                            &app_handle,
-                                            "openclaw.event_rejected",
-                                            json!({ "error": validation_err, "raw": text.to_string() }),
-                                        );
-                                        let _ = app_handle.emit(
-                                            "openclaw://rejected",
-                                            json!({ "error": validation_err, "raw": text.to_string() }),
-                                        );
-                                        continue;
-                                    }
-                                    handle_gateway_event(&app_handle, event).await;
-                                } else {
+            if !pending_replay.is_empty() {
+                append_audit_entry(
+                    &app_handle,
+                    "openclaw.replay_started",
+                    json!({ "count": pending_replay.len() }),
+                );
+
+                let mut replay_iter = pending_replay.into_iter();
+                while let Some(outbound) = replay_iter.next() {
+                    if let Err(err) = writer.send(Message::Text(outbound.clone().into())).await {
+                        let mut restore = vec![outbound];
+                        restore.extend(replay_iter);
+                        let mut dropped_oldest = false;
+                        {
+                            let state = app_handle.state::<OverlayAppState>();
+                            let lock_result = state.openclaw_state.lock();
+                            if let Ok(mut openclaw) = lock_result {
+                                for item in restore.into_iter().rev() {
+                                    dropped_oldest =
+                                        openclaw.push_pending_outbound(item, true)
+                                            || dropped_oldest;
+                                }
+                                openclaw.status.connected = false;
+                                openclaw.status.last_error = Some(err.to_string());
+                            };
+                        }
+                        if dropped_oldest {
+                            append_audit_entry(
+                                &app_handle,
+                                "openclaw.queue_overflow",
+                                json!({ "maxPendingOutbound": OPENCLAW_MAX_PENDING_OUTBOUND }),
+                            );
+                        }
+                        append_audit_entry(
+                            &app_handle,
+                            "openclaw.replay_failed",
+                            json!({ "error": err.to_string() }),
+                        );
+                        emit_openclaw_status_snapshot(&app_handle);
+                        reconnect_after_disconnect = true;
+                        break;
+                    }
+                }
+
+                if !reconnect_after_disconnect {
+                    append_audit_entry(&app_handle, "openclaw.replay_flushed", json!({}));
+                    emit_openclaw_status_snapshot(&app_handle);
+                }
+            }
+
+            if !reconnect_after_disconnect {
+                loop {
+                    tokio::select! {
+                        outbound = rx.recv() => {
+                            let Some(outbound) = outbound else {
+                                keep_running = false;
+                                break;
+                            };
+                            if let Err(err) = writer.send(Message::Text(outbound.clone().into())).await {
+                                let mut dropped_oldest = false;
+                                let mut queued_outbound = 0_usize;
+                                {
+                                    let state = app_handle.state::<OverlayAppState>();
+                                    let lock_result = state.openclaw_state.lock();
+                                    if let Ok(mut openclaw) = lock_result {
+                                        dropped_oldest = openclaw.push_pending_outbound(outbound, true);
+                                        queued_outbound = openclaw.status.queued_outbound;
+                                        openclaw.status.connected = false;
+                                        openclaw.status.last_error = Some(err.to_string());
+                                    };
+                                }
+                                if dropped_oldest {
                                     append_audit_entry(
                                         &app_handle,
-                                        "openclaw.event_unparsed",
-                                        json!({ "raw": text.to_string() }),
+                                        "openclaw.queue_overflow",
+                                        json!({ "maxPendingOutbound": OPENCLAW_MAX_PENDING_OUTBOUND }),
                                     );
-                                    let _ = app_handle.emit("openclaw://raw", text.to_string());
                                 }
-                            }
-                            Ok(Message::Close(_)) => {
+                                append_audit_entry(
+                                    &app_handle,
+                                    "openclaw.payload_requeued",
+                                    json!({
+                                        "reason": "writer_send_failed",
+                                        "queuedOutbound": queued_outbound,
+                                        "error": err.to_string(),
+                                    }),
+                                );
+                                emit_openclaw_status_snapshot(&app_handle);
                                 reconnect_after_disconnect = true;
                                 break;
                             }
-                            Ok(_) => {}
-                            Err(err) => {
-                                update_openclaw_status(&app_handle, |status| {
-                                    status.connected = false;
-                                    status.last_error = Some(err.to_string());
-                                });
+                        }
+                        inbound = reader.next() => {
+                            let Some(inbound) = inbound else {
                                 reconnect_after_disconnect = true;
                                 break;
+                            };
+                            match inbound {
+                                Ok(Message::Text(text)) => {
+                                    update_openclaw_status(&app_handle, |status| {
+                                        status.last_event_at = Some(now_utc_iso());
+                                    });
+
+                                    if let Ok(event) = serde_json::from_str::<GatewayInboundEvent>(&text) {
+                                        if let Err(validation_err) = validate_gateway_event(&event) {
+                                            append_audit_entry(
+                                                &app_handle,
+                                                "openclaw.event_rejected",
+                                                json!({ "error": validation_err, "raw": text.to_string() }),
+                                            );
+                                            let _ = app_handle.emit(
+                                                "openclaw://rejected",
+                                                json!({ "error": validation_err, "raw": text.to_string() }),
+                                            );
+                                            continue;
+                                        }
+
+                                        if let Some(event_id) = gateway_event_identity(&event)
+                                            .map(|value| value.trim().to_string())
+                                            .filter(|value| !value.is_empty())
+                                        {
+                                            let duplicate = {
+                                                let state = app_handle.state::<OverlayAppState>();
+                                                let lock_result = state.openclaw_state.lock();
+                                                match lock_result {
+                                                    Ok(mut openclaw) => openclaw.remember_event_id(&event_id),
+                                                    Err(_) => false,
+                                                }
+                                            };
+
+                                            if duplicate {
+                                                append_audit_entry(
+                                                    &app_handle,
+                                                    "openclaw.event_duplicate",
+                                                    json!({ "eventId": event_id }),
+                                                );
+                                                continue;
+                                            }
+                                        }
+
+                                        handle_gateway_event(&app_handle, event).await;
+                                    } else {
+                                        append_audit_entry(
+                                            &app_handle,
+                                            "openclaw.event_unparsed",
+                                            json!({ "raw": text.to_string() }),
+                                        );
+                                        let _ = app_handle.emit("openclaw://raw", text.to_string());
+                                    }
+                                }
+                                Ok(Message::Close(_)) => {
+                                    reconnect_after_disconnect = true;
+                                    break;
+                                }
+                                Ok(_) => {}
+                                Err(err) => {
+                                    update_openclaw_status(&app_handle, |status| {
+                                        status.connected = false;
+                                        status.last_error = Some(err.to_string());
+                                    });
+                                    reconnect_after_disconnect = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2495,7 +2775,9 @@ async fn connect_openclaw_inner(
         let state = app_handle.state::<OverlayAppState>();
         if let Ok(mut openclaw) = state.openclaw_state.lock() {
             openclaw.outbound_tx = None;
+            openclaw.status.queued_outbound = openclaw.pending_outbound.len();
         };
+        emit_openclaw_status_snapshot(&app_handle);
     });
 
     let state = app.state::<OverlayAppState>();
@@ -2512,6 +2794,7 @@ async fn handle_gateway_event(app: &AppHandle, event: GatewayInboundEvent) {
             question_id,
             question,
             choices,
+            ..
         } => {
             let mut bubble_choices = choices
                 .into_iter()
@@ -2543,6 +2826,7 @@ async fn handle_gateway_event(app: &AppHandle, event: GatewayInboundEvent) {
             request_id,
             tool_id,
             args,
+            ..
         } => {
             let payload = ActionRequestPayload {
                 request_id: request_id.clone(),
@@ -2574,7 +2858,7 @@ async fn handle_gateway_event(app: &AppHandle, event: GatewayInboundEvent) {
                 }),
             );
         }
-        GatewayInboundEvent::AgentMessage { content } => {
+        GatewayInboundEvent::AgentMessage { content, .. } => {
             let _ = app.emit("openclaw://message", json!({ "content": content }));
         }
     }
@@ -2859,7 +3143,7 @@ fn submit_prompt(
 
     let autonomous_mode = autonomous_mode.unwrap_or(false);
     if autonomous_mode {
-        queue_openclaw_payload(
+        let send_state = queue_openclaw_payload(
             &app,
             json!({
                 "type": "user.message",
@@ -2877,6 +3161,7 @@ fn submit_prompt(
                 "length": trimmed.len(),
                 "provider": provider,
                 "model": model,
+                "queued": send_state == OpenClawSendState::Queued,
             }),
         );
     } else {
@@ -3360,9 +3645,16 @@ fn has_openclaw_gateway_token() -> Result<bool, String> {
 
 #[tauri::command]
 fn send_openclaw_message(app: AppHandle, payload: OpenClawMessagePayload) -> Result<bool, String> {
-    queue_openclaw_payload(&app, json!({ "type": "user.message", "content": payload.message }))?;
+    let send_state =
+        queue_openclaw_payload(&app, json!({ "type": "user.message", "content": payload.message }))?;
 
-    append_audit_entry(&app, "openclaw.message_sent", json!({ "queued": true }));
+    append_audit_entry(
+        &app,
+        "openclaw.message_sent",
+        json!({
+            "queued": send_state == OpenClawSendState::Queued,
+        }),
+    );
     Ok(true)
 }
 
@@ -3426,6 +3718,80 @@ fn get_audit_log(app: AppHandle, limit: Option<usize>) -> Result<Vec<AuditEntry>
     let state = app.state::<OverlayAppState>();
     let max = limit.unwrap_or(120).clamp(1, 1000);
     Ok(get_audit_tail(&state.audit_log_path, max))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_queue_caps_and_tracks_length() {
+        let mut state = OpenClawState::new();
+        for index in 0..(OPENCLAW_MAX_PENDING_OUTBOUND + 12) {
+            state.push_pending_outbound(format!("msg_{index}"), false);
+        }
+
+        assert_eq!(state.pending_outbound.len(), OPENCLAW_MAX_PENDING_OUTBOUND);
+        assert_eq!(state.status.queued_outbound, OPENCLAW_MAX_PENDING_OUTBOUND);
+        assert_eq!(
+            state.pending_outbound.front().cloned(),
+            Some("msg_12".to_string())
+        );
+    }
+
+    #[test]
+    fn take_pending_outbound_clears_queue_and_status() {
+        let mut state = OpenClawState::new();
+        state.push_pending_outbound("a".to_string(), false);
+        state.push_pending_outbound("b".to_string(), false);
+
+        let drained = state.take_pending_outbound();
+        assert_eq!(drained, vec!["a".to_string(), "b".to_string()]);
+        assert!(state.pending_outbound.is_empty());
+        assert_eq!(state.status.queued_outbound, 0);
+    }
+
+    #[test]
+    fn remember_event_id_detects_duplicates_and_evicts_oldest() {
+        let mut state = OpenClawState::new();
+        for index in 0..OPENCLAW_MAX_RECENT_EVENT_IDS {
+            assert!(!state.remember_event_id(&format!("evt_{index}")));
+        }
+
+        assert!(state.remember_event_id("evt_2"));
+        assert!(!state.remember_event_id(&format!("evt_{OPENCLAW_MAX_RECENT_EVENT_IDS}")));
+        assert!(!state.remember_event_id("evt_0"));
+    }
+
+    #[test]
+    fn gateway_identity_prefers_event_id_then_fallback() {
+        let event = GatewayInboundEvent::Clarify {
+            event_id: Some("evt_123".to_string()),
+            question_id: Some("q_1".to_string()),
+            question: "Q?".to_string(),
+            choices: vec!["A".to_string()],
+        };
+        assert_eq!(gateway_event_identity(&event), Some("evt_123".to_string()));
+
+        let fallback = GatewayInboundEvent::ActionRequest {
+            event_id: None,
+            request_id: Some("req_1".to_string()),
+            tool_id: "tool.safe.echo".to_string(),
+            args: json!({}),
+        };
+        assert_eq!(gateway_event_identity(&fallback), Some("req_1".to_string()));
+    }
+
+    #[test]
+    fn gateway_validation_rejects_empty_event_id() {
+        let event = GatewayInboundEvent::AgentMessage {
+            event_id: Some("   ".to_string()),
+            content: "hello".to_string(),
+        };
+
+        let result = validate_gateway_event(&event);
+        assert!(result.is_err());
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -85,6 +85,8 @@ Implemented backend features:
 - OpenClaw reconnect/backoff hardening with rejected-event audit logging.
 - OpenClaw action/clarify roundtrip continuity (`ui.answer` + `action.result` relay back to gateway).
 - Autonomous-mode gateway activation: OpenClaw routing is enabled in autonomous agent modes and disabled outside them.
+- OpenClaw offline queue + replay for outbound payload continuity after reconnect.
+- OpenClaw duplicate-event suppression via recent gateway event id tracking.
 - Night mode scheduler for safe maintenance tasks only.
 - Append-only audit log and keychain-backed gateway credential storage.
 - Key-first provider setup: provider secrets are stored in OS keychain (not local storage).

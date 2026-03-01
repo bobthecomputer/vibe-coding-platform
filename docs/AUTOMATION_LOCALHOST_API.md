@@ -50,6 +50,8 @@ curl -X POST "http://127.0.0.1:47635/v1/command" \
 - `has_openclaw_gateway_token`
 - `send_openclaw_message` with payload `{ message: string }`
 
+`get_openclaw_status` includes connection telemetry such as `connected`, `lastError`, `reconnectAttempt`, and `queuedOutbound` (messages waiting for replay).
+
 ## Provider secret management (keychain-backed)
 
 - `save_provider_secret_command` with payload `{ provider_id: string, secret: string }`
