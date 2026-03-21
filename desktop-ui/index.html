@@ -45,6 +45,9 @@
             <div class="section-label">
               <span>Conversations</span>
             </div>
+            <div class="conversation-search">
+              <input type="text" id="conversationSearchInput" placeholder="Search sessions..." />
+            </div>
             <div class="conversation-list" id="conversationList">
               <!-- Conversations populated by JS -->
             </div>
@@ -73,6 +76,18 @@
               <span class="mode-badge" id="modeBadge">coding</span>
             </div>
             <div class="header-actions">
+              <button class="icon-btn" id="forkConversationBtn" title="Fork Conversation">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 3v12a4 4 0 0 0 4 4h8"/>
+                  <path d="M14 3h7v7"/>
+                  <path d="M21 3l-8 8"/>
+                </svg>
+              </button>
+              <button class="icon-btn" id="runLiveBtn" title="Run Live (npm run dev:live)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+              </button>
               <button class="icon-btn" id="toggleSidebarBtn" title="Toggle Sidebar">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M3 12h18M3 6h18M3 18h18"/>
@@ -87,6 +102,79 @@
               </button>
             </div>
           </header>
+
+          <section class="autonomy-dashboard" id="autonomyDashboard">
+            <div class="autonomy-dashboard-top">
+              <h3 class="autonomy-title">Autonomous Run Dashboard</h3>
+              <span class="autonomy-updated" id="autonomyUpdatedValue">No run data yet</span>
+            </div>
+            <div class="autonomy-grid">
+              <div class="autonomy-card">
+                <p class="autonomy-label">Latest Session</p>
+                <p class="autonomy-value" id="autonomySessionValue">—</p>
+              </div>
+              <div class="autonomy-card">
+                <p class="autonomy-label">Autopilot Status</p>
+                <p class="autonomy-value" id="autonomyStatusValue">—</p>
+              </div>
+              <div class="autonomy-card">
+                <p class="autonomy-label">Merge Policy</p>
+                <p class="autonomy-value" id="autonomyMergeValue">—</p>
+              </div>
+              <div class="autonomy-card">
+                <p class="autonomy-label">Checkpoints</p>
+                <p class="autonomy-value" id="autonomyCheckpointsValue">0</p>
+              </div>
+              <div class="autonomy-card">
+                <p class="autonomy-label">Remaining Steps</p>
+                <p class="autonomy-value" id="autonomyRemainingValue">0</p>
+              </div>
+              <div class="autonomy-card">
+                <p class="autonomy-label">Pending Approvals</p>
+                <p class="autonomy-value" id="autonomyApprovalsValue">0</p>
+              </div>
+            </div>
+            <div class="autonomy-config-row">
+              <span class="autonomy-config-label">Cycles</span>
+              <div class="autonomy-number-group">
+                <input class="number-input" id="autonomyCyclesInput" type="number" min="1" max="20" value="2" />
+              </div>
+              <span class="autonomy-config-label" style="margin-left: 16px;">Iterations</span>
+              <div class="autonomy-number-group">
+                <input class="number-input" id="autonomyIterationsInput" type="number" min="1" max="24" value="4" />
+              </div>
+            </div>
+            <div class="autonomy-actions">
+              <button class="autonomy-btn secondary" id="autonomyRefreshBtn">Refresh</button>
+              <button class="autonomy-btn secondary" id="autonomyVibeStatusBtn">Vibe Status</button>
+              <button class="autonomy-btn secondary" id="autonomyContinueBtn">Continue</button>
+              <button class="autonomy-btn secondary" id="autonomySoakBtn">Soak</button>
+              <button class="autonomy-btn primary" id="autonomyRunLiveBtn">Run Live</button>
+            </div>
+            <div class="autonomy-output" id="autonomyOutput">Run output will appear here.</div>
+          </section>
+
+          <section class="insight-board" id="insightBoard">
+            <div class="insight-board-header">
+              <h3 class="insight-title">Mission Control</h3>
+              <div class="insight-tabs" id="insightTabs">
+                <button class="insight-tab active" data-panel="lineage">Lineage</button>
+                <button class="insight-tab" data-panel="risk">Risk</button>
+                <button class="insight-tab" data-panel="integrations">Integrations</button>
+              </div>
+            </div>
+            <div class="insight-panels">
+              <div class="insight-panel active" id="insightLineagePanel">
+                <div class="insight-content" id="lineageOutput">Lineage insight will appear here.</div>
+              </div>
+              <div class="insight-panel" id="insightRiskPanel">
+                <div class="insight-content" id="riskOutput">Risk insight will appear here.</div>
+              </div>
+              <div class="insight-panel" id="insightIntegrationsPanel">
+                <div class="insight-content" id="integrationOutput">Integration insight will appear here.</div>
+              </div>
+            </div>
+          </section>
 
           <div class="messages-container" id="messagesContainer">
             <!-- Messages populated by JS -->
@@ -308,6 +396,13 @@
                 <option value="risk_averse">Risk Averse</option>
               </select>
             </div>
+            <div class="setting-row setting-row-stack">
+              <div>
+                <p class="setting-label">Task Model Routing</p>
+                <p class="setting-desc">Assign provider/model by task type (for example: MiniMax frontend, Codex backend + verification)</p>
+              </div>
+            </div>
+            <div class="model-routing-grid" id="modelRoutingGrid"></div>
             <div class="setting-row">
               <div>
                 <p class="setting-label">Pause on Verification Failure</p>
@@ -331,6 +426,52 @@
                 <p class="setting-desc">Used when autonomous mode is active</p>
               </div>
               <input class="settings-input" id="openclawGatewayUrlInput" type="text" placeholder="ws://127.0.0.1:8765" />
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Permission Matrix</h3>
+            <p class="setting-desc" style="margin-bottom: 10px;">Control whether each capability is automatically allowed, asks for approval, or denied.</p>
+            <div class="permission-grid" id="permissionGrid"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Integrations</h3>
+            <div class="integration-block">
+              <div class="integration-block-header">
+                <p class="setting-label">MCP Servers</p>
+                <button class="inline-btn" id="addMcpServerBtn" type="button">Add MCP Server</button>
+              </div>
+              <div class="integration-list" id="mcpServersList"></div>
+            </div>
+            <div class="integration-block">
+              <p class="setting-label">Plugins</p>
+              <div class="integration-list" id="pluginsList"></div>
+            </div>
+            <div class="integration-block">
+              <p class="setting-label">Skills</p>
+              <div class="integration-list" id="skillsList"></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">Run Live</h3>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Run command</p>
+                <p class="setting-desc">Executed with approval gate through `node.command`.</p>
+              </div>
+              <input class="settings-input" id="runLiveCommandInput" type="text" placeholder="npm run dev:live" />
+            </div>
+            <div class="setting-row">
+              <div>
+                <p class="setting-label">Working directory (optional)</p>
+                <p class="setting-desc">Leave empty to use the app's default directory.</p>
+              </div>
+              <input class="settings-input" id="runLiveCwdInput" type="text" placeholder="C:\\Users\\paul\\Projects\\vibe-coding-platform" />
+            </div>
+            <div class="profile-preset-actions">
+              <button class="inline-btn" id="runLiveFromSettingsBtn" type="button">Run Live Now</button>
             </div>
           </div>
 
@@ -436,7 +577,7 @@
             <div class="form-group">
               <label class="form-label">Quick Key Paste</label>
               <input type="password" class="form-input" id="providerQuickKey" placeholder="Paste provider key/token here" />
-              <p class="form-help">Stored securely in your OS keychain. Not saved in plain app storage.</p>
+              <p class="form-help" id="providerAuthHelp">Stored securely in your OS keychain. Not saved in plain app storage.</p>
             </div>
             <div class="form-group" id="apiKeyGroup">
               <label class="form-label">API Key</label>

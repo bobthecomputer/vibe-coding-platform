@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -40,6 +41,115 @@ class AutonomousEngine:
         self.skill_registry = skill_registry
         self.memory_store = memory_store
 
+    @staticmethod
+    def _score_worker_branch(
+        worker_id: int,
+        iteration: int,
+        step: str,
+        objective: str,
+        branch_type: str,
+    ) -> dict:
+        started = time.monotonic()
+        step_terms = set(step.lower().split())
+        objective_terms = set(objective.lower().split())
+        overlap = len(step_terms.intersection(objective_terms))
+
+        base_confidence = 0.58 + (0.06 * min(overlap, 4))
+        exploration_bonus = 0.05 if branch_type == "explore" else 0.0
+        worker_variance = ((worker_id + iteration) % 5) * 0.02
+        confidence = min(0.99, base_confidence + exploration_bonus + worker_variance)
+
+        risk_penalty = 0.04 if "verification" in step.lower() else 0.0
+        score = round(max(0.0, confidence - risk_penalty), 3)
+
+        return {
+            "worker_id": worker_id,
+            "iteration": iteration,
+            "step": step,
+            "branch_type": branch_type,
+            "objective_overlap": overlap,
+            "confidence": round(confidence, 3),
+            "risk_penalty": risk_penalty,
+            "score": score,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        }
+
+    @staticmethod
+    def _merge_worker_branches(
+        worker_results: list[dict], merge_policy: str
+    ) -> tuple[list[dict], dict, list[str]]:
+        if not worker_results:
+            return [], {}, []
+
+        normalized_policy = (
+            merge_policy
+            if merge_policy in {"best_score", "consensus", "risk_averse"}
+            else "best_score"
+        )
+        ranked = sorted(
+            worker_results,
+            key=lambda item: (item["score"], item["objective_overlap"]),
+            reverse=True,
+        )
+
+        if normalized_policy == "best_score":
+            winner = ranked[0]
+            merged_steps = list(dict.fromkeys(item["step"] for item in ranked))
+            return ranked, winner, merged_steps
+
+        if normalized_policy == "risk_averse":
+            ranked_risk = sorted(
+                worker_results,
+                key=lambda item: (
+                    item["risk_penalty"],
+                    -item["score"],
+                    -item["objective_overlap"],
+                ),
+            )
+            winner = ranked_risk[0]
+            min_penalty = winner["risk_penalty"]
+            merged_steps = list(
+                dict.fromkeys(
+                    item["step"]
+                    for item in ranked_risk
+                    if item["risk_penalty"] <= min_penalty + 0.0001
+                )
+            )
+            return ranked_risk, winner, merged_steps
+
+        # consensus
+        step_aggregate: dict[str, dict[str, float]] = {}
+        for item in worker_results:
+            aggregate = step_aggregate.setdefault(
+                item["step"], {"count": 0.0, "score_total": 0.0}
+            )
+            aggregate["count"] += 1
+            aggregate["score_total"] += float(item["score"])
+
+        consensus_candidates = sorted(
+            step_aggregate.items(),
+            key=lambda kv: (
+                kv[1]["count"],
+                (kv[1]["score_total"] / kv[1]["count"]) if kv[1]["count"] else 0.0,
+            ),
+            reverse=True,
+        )
+        top_step = consensus_candidates[0][0]
+        same_step_ranked = sorted(
+            [item for item in worker_results if item["step"] == top_step],
+            key=lambda item: item["score"],
+            reverse=True,
+        )
+        winner = same_step_ranked[0]
+        merged_steps = [top_step]
+        for item in ranked:
+            if item["step"] != top_step and item["score"] >= max(
+                0.5, winner["score"] - 0.08
+            ):
+                merged_steps.append(item["step"])
+        merged_steps = list(dict.fromkeys(merged_steps))
+        return ranked, winner, merged_steps
+
     def run(
         self,
         objective: str,
@@ -51,6 +161,8 @@ class AutonomousEngine:
         project_profile: str,
         max_handoffs: int,
         max_runtime_seconds: int,
+        parallel_agents: int = 1,
+        merge_policy: str = "best_score",
         resume_from_session_id: str | None = None,
         checkpoint_every: int = 1,
         resume_from_checkpoint_path: str | None = None,
@@ -58,6 +170,12 @@ class AutonomousEngine:
         suggest_vibe_next_steps: bool = True,
     ) -> dict:
         started_at = time.monotonic()
+        parallel_agents = max(1, int(parallel_agents))
+        merge_policy = (
+            merge_policy
+            if merge_policy in {"best_score", "consensus", "risk_averse"}
+            else "best_score"
+        )
         guardrails = autopilot_guardrails or {
             "pause_on_handoff": True,
             "pause_on_verification_failure": True,
@@ -70,7 +188,9 @@ class AutonomousEngine:
             previous_path = self.session_store.get_session_path(resume_from_session_id)
             if previous_path and (previous_path / "state.json").exists():
                 resumed_state = self.session_store.read_state(previous_path)
-                resumed_lineage = resumed_state.get("session_lineage", [resume_from_session_id])
+                resumed_lineage = resumed_state.get(
+                    "session_lineage", [resume_from_session_id]
+                )
                 if not docs:
                     docs = [
                         record.get("source", "")
@@ -80,7 +200,8 @@ class AutonomousEngine:
         if resume_from_checkpoint_path:
             checkpoint_payload = CheckpointStore.load(Path(resume_from_checkpoint_path))
             resumed_state = checkpoint_payload.get("state", resumed_state)
-            resumed_lineage = resumed_state.get("session_lineage", resumed_lineage)
+            if resumed_state:
+                resumed_lineage = resumed_state.get("session_lineage", resumed_lineage)
             if not docs:
                 docs = checkpoint_payload.get("doc_sources", docs)
 
@@ -97,7 +218,9 @@ class AutonomousEngine:
         session_lineage.append(session_id)
         checkpoint_store = CheckpointStore(session_path)
 
-        docs_evidence = ingest_docs(docs=docs, repo_path=repo_path, session_path=session_path)
+        docs_evidence = ingest_docs(
+            docs=docs, repo_path=repo_path, session_path=session_path
+        )
         readable_docs = len([item for item in docs_evidence if item.status == "ok"])
 
         failures = self.constitution.policy.validate(
@@ -136,12 +259,18 @@ class AutonomousEngine:
             objective=objective,
             plan_steps=plan_bundle.plan_steps,
             acceptance_checks=plan_bundle.acceptance_checks,
-            completed_steps=resumed_state.get("completed_steps", []) if resumed_state else [],
+            completed_steps=resumed_state.get("completed_steps", [])
+            if resumed_state
+            else [],
             decisions=(resumed_state.get("decisions", []) if resumed_state else [])
             + ["Applied docs-first planning policy before implementation."],
-            changed_files=resumed_state.get("changed_files", []) if resumed_state else [],
+            changed_files=resumed_state.get("changed_files", [])
+            if resumed_state
+            else [],
             risks=resumed_state.get("risks", []) if resumed_state else [],
-            next_actions=(resumed_state.get("next_actions", []) if resumed_state else [])
+            next_actions=(
+                resumed_state.get("next_actions", []) if resumed_state else []
+            )
             or ["Execute the first remaining plan step."],
             retrieved_skills=[skill.name for skill in retrieved_skills],
             notes=[
@@ -158,14 +287,29 @@ class AutonomousEngine:
         if resumed_state:
             state.decisions.append(f"Resumed from session '{resume_from_session_id}'.")
             state.acceptance_checks = list(
-                dict.fromkeys(state.acceptance_checks + resumed_state.get("acceptance_checks", []))
+                dict.fromkeys(
+                    state.acceptance_checks + resumed_state.get("acceptance_checks", [])
+                )
             )
         if resume_from_checkpoint_path:
-            state.decisions.append(f"Resumed from checkpoint '{resume_from_checkpoint_path}'.")
+            state.decisions.append(
+                f"Resumed from checkpoint '{resume_from_checkpoint_path}'."
+            )
+        state.notes.append(
+            f"Parallel orchestration: {parallel_agents} worker(s), merge policy '{merge_policy}'."
+        )
 
         self.session_store.append_timeline(
             session_path,
-            TimelineEvent(kind="preflight", message="Preflight checks passed.", metadata={"docs": docs}),
+            TimelineEvent(
+                kind="preflight",
+                message="Preflight checks passed.",
+                metadata={
+                    "docs": docs,
+                    "parallel_agents": parallel_agents,
+                    "merge_policy": merge_policy,
+                },
+            ),
         )
         if retrieved_skills:
             self.session_store.append_timeline(
@@ -182,7 +326,10 @@ class AutonomousEngine:
                 TimelineEvent(
                     kind="memory",
                     message="Loaded relevant memory hints.",
-                    metadata={"memory_count": len(memory_hits), "memory_ids": [item.id for item in memory_hits]},
+                    metadata={
+                        "memory_count": len(memory_hits),
+                        "memory_ids": [item.id for item in memory_hits],
+                    },
                 ),
             )
         self.context_manager.record("user", objective)
@@ -190,6 +337,7 @@ class AutonomousEngine:
 
         handoff_paths: list[str] = []
         checkpoint_paths: list[str] = []
+        worker_merge_events: list[dict] = []
         handoff_count = 0
         autopilot_pause_reason = ""
 
@@ -206,16 +354,115 @@ class AutonomousEngine:
                     TimelineEvent(
                         kind="budget_stop",
                         message="Stopped due to runtime budget.",
-                        metadata={"elapsed_seconds": int(elapsed), "max_runtime_seconds": max_runtime_seconds},
+                        metadata={
+                            "elapsed_seconds": int(elapsed),
+                            "max_runtime_seconds": max_runtime_seconds,
+                        },
                     ),
                 )
                 break
 
-            remaining_now = [step for step in state.plan_steps if step not in state.completed_steps]
-            step = remaining_now[0] if remaining_now else state.plan_steps[index % len(state.plan_steps)]
-            if step not in state.completed_steps:
-                state.completed_steps.append(step)
-            state.decisions.append(f"Iteration {index + 1}: advanced step '{step}'.")
+            remaining_now = [
+                step for step in state.plan_steps if step not in state.completed_steps
+            ]
+            if state.plan_steps and remaining_now:
+                step_pool = remaining_now[
+                    : max(1, min(len(remaining_now), parallel_agents))
+                ]
+            elif state.plan_steps:
+                step_pool = [state.plan_steps[index % len(state.plan_steps)]]
+            else:
+                step_pool = [f"Refine objective decomposition for '{objective}'."]
+
+            worker_inputs: list[tuple[int, str, str]] = []
+            for worker_idx in range(parallel_agents):
+                step = step_pool[worker_idx % len(step_pool)]
+                branch_type = "primary" if worker_idx < len(step_pool) else "explore"
+                worker_inputs.append((worker_idx + 1, step, branch_type))
+
+            worker_results: list[dict] = []
+            with ThreadPoolExecutor(max_workers=parallel_agents) as pool:
+                futures = [
+                    pool.submit(
+                        self._score_worker_branch,
+                        worker_id,
+                        index + 1,
+                        step,
+                        objective,
+                        branch_type,
+                    )
+                    for worker_id, step, branch_type in worker_inputs
+                ]
+                for finished in as_completed(futures):
+                    worker_results.append(finished.result())
+
+            worker_results_by_id = sorted(
+                worker_results, key=lambda item: item["worker_id"]
+            )
+            merge_ranked, merge_winner, merged_steps = self._merge_worker_branches(
+                worker_results=worker_results,
+                merge_policy=merge_policy,
+            )
+
+            for worker_result in worker_results_by_id:
+                state.decisions.append(
+                    "Iteration "
+                    f"{index + 1} worker {worker_result['worker_id']}/{parallel_agents}: "
+                    f"step '{worker_result['step']}' score={worker_result['score']}."
+                )
+                self.session_store.append_timeline(
+                    session_path,
+                    TimelineEvent(
+                        kind="worker_iteration",
+                        message=(
+                            f"Worker {worker_result['worker_id']} proposed branch "
+                            f"for step '{worker_result['step']}'."
+                        ),
+                        metadata=worker_result,
+                    ),
+                )
+
+            for step in merged_steps:
+                if step not in state.completed_steps:
+                    state.completed_steps.append(step)
+
+            merge_event = {
+                "iteration": index + 1,
+                "winner": {
+                    "worker_id": merge_winner["worker_id"],
+                    "step": merge_winner["step"],
+                    "score": merge_winner["score"],
+                },
+                "merge_policy": merge_policy,
+                "scoreboard": [
+                    {
+                        "worker_id": item["worker_id"],
+                        "step": item["step"],
+                        "score": item["score"],
+                        "branch_type": item["branch_type"],
+                    }
+                    for item in merge_ranked
+                ],
+                "merged_steps": merged_steps,
+            }
+            worker_merge_events.append(merge_event)
+            state.notes.append(
+                "Iteration "
+                f"{index + 1} merge winner: worker {merge_winner['worker_id']} "
+                f"on '{merge_winner['step']}' (score={merge_winner['score']})."
+            )
+            self.session_store.append_timeline(
+                session_path,
+                TimelineEvent(
+                    kind="worker_merge",
+                    message=(
+                        f"Merged worker branches at iteration {index + 1} "
+                        f"using worker {merge_winner['worker_id']} as anchor."
+                    ),
+                    metadata=merge_event,
+                ),
+            )
+
             state.next_actions = [
                 next_step
                 for next_step in state.plan_steps
@@ -223,11 +470,24 @@ class AutonomousEngine:
             ]
             status = self.context_manager.record(
                 "assistant",
-                f"Iteration {index + 1}: {step}. Objective: {objective}",
+                (
+                    f"Iteration {index + 1}: parallel_agents={parallel_agents}; "
+                    f"winner={merge_winner['worker_id']} '{merge_winner['step']}' "
+                    f"score={merge_winner['score']}; merged_steps={' | '.join(merged_steps)}. "
+                    f"Objective: {objective}"
+                ),
             )
             self.session_store.append_timeline(
                 session_path,
-                TimelineEvent(kind="iteration", message=f"Completed iteration {index + 1}", metadata={"step": step}),
+                TimelineEvent(
+                    kind="iteration",
+                    message=f"Completed iteration {index + 1}",
+                    metadata={
+                        "steps": merged_steps,
+                        "parallel_agents": parallel_agents,
+                        "merge_winner": merge_winner["worker_id"],
+                    },
+                ),
             )
 
             if checkpoint_every > 0 and (index + 1) % checkpoint_every == 0:
@@ -265,7 +525,10 @@ class AutonomousEngine:
                         TimelineEvent(
                             kind="budget_stop",
                             message="Stopped due to handoff budget.",
-                            metadata={"handoff_count": handoff_count, "max_handoffs": max_handoffs},
+                            metadata={
+                                "handoff_count": handoff_count,
+                                "max_handoffs": max_handoffs,
+                            },
                         ),
                     )
                     break
@@ -329,11 +592,15 @@ class AutonomousEngine:
                 )
 
                 if handoff_count >= max_handoffs:
-                    state.next_actions.append("Increase handoff budget to continue autonomous progression.")
+                    state.next_actions.append(
+                        "Increase handoff budget to continue autonomous progression."
+                    )
                     break
 
         if verify_commands:
-            verification_results = self.verification_runner.run(commands=verify_commands, workdir=repo_path)
+            verification_results = self.verification_runner.run(
+                commands=verify_commands, workdir=repo_path
+            )
             state.verification_results.extend(verification_results)
             if guardrails.get("pause_on_verification_failure", True):
                 if any(item.return_code != 0 for item in verification_results):
@@ -346,7 +613,11 @@ class AutonomousEngine:
                     message="Verification commands completed.",
                     metadata={
                         "commands": verify_commands,
-                        "failures": [r.command for r in verification_results if r.return_code != 0],
+                        "failures": [
+                            r.command
+                            for r in verification_results
+                            if r.return_code != 0
+                        ],
                     },
                 ),
             )
@@ -367,6 +638,9 @@ class AutonomousEngine:
 
         persisted_state["autopilot_status"] = autopilot_status
         persisted_state["autopilot_pause_reason"] = autopilot_pause_reason
+        persisted_state["parallel_agents"] = parallel_agents
+        persisted_state["merge_policy"] = merge_policy
+        persisted_state["worker_merge_events"] = worker_merge_events
         self.session_store.save_state(session_path=session_path, state=persisted_state)
         memory_ids = ingest_state_into_memory(
             memory=self.memory_store,
@@ -409,10 +683,15 @@ class AutonomousEngine:
             "memory_items_written": memory_ids,
             "autopilot_status": autopilot_status,
             "autopilot_pause_reason": autopilot_pause_reason,
+            "parallel_agents": parallel_agents,
+            "merge_policy": merge_policy,
+            "worker_merge_events": worker_merge_events,
             "vibe_next_steps": vibe_next_steps,
             **report_paths,
             "verification_failures": [
-                result.command for result in state.verification_results if result.return_code != 0
+                result.command
+                for result in state.verification_results
+                if result.return_code != 0
             ],
             "remaining_steps": state.next_actions,
         }

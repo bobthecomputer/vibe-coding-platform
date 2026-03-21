@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import shutil
 import sys
@@ -195,7 +196,102 @@ class EngineTests(unittest.TestCase):
             max_runtime_seconds=60,
         )
         self.assertEqual(result["status"], "ok")
-        self.assertIn(result.get("autopilot_pause_reason", ""), {"context_rollover", "context_hard_stop"})
+        self.assertIn(
+            result.get("autopilot_pause_reason", ""),
+            {"context_rollover", "context_hard_stop"},
+        )
+
+    def test_engine_parallel_agents_complete_multiple_steps_per_iteration(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        runs = root / ".agent_runs_test"
+        if runs.exists():
+            shutil.rmtree(runs)
+
+        engine = AutonomousEngine(
+            constitution=AgentConstitution.load(root / "config" / "constitution.json"),
+            persona_registry=PersonaRegistry(root / "config" / "personas.json"),
+            context_manager=ContextWindowManager(max_tokens=500),
+            session_store=SessionStore(runs),
+            verification_runner=VerificationRunner(),
+            skill_registry=SkillRegistry(root / "config" / "skills.json"),
+            memory_store=MemoryStore(root / ".agent_memory_test.json"),
+        )
+        result = engine.run(
+            objective="Parallel execution objective",
+            docs=["README.md"],
+            persona="balanced_builder",
+            iterations=1,
+            repo_path=root,
+            verify_commands=[],
+            project_profile="test profile",
+            max_handoffs=3,
+            max_runtime_seconds=60,
+            parallel_agents=3,
+            merge_policy="consensus",
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result.get("parallel_agents"), 3)
+        self.assertEqual(result.get("merge_policy"), "consensus")
+
+        session_path = pathlib.Path(result["session_path"])
+        state_payload = json.loads(
+            (session_path / "state.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(state_payload.get("parallel_agents"), 3)
+        self.assertEqual(state_payload.get("merge_policy"), "consensus")
+        self.assertGreaterEqual(len(state_payload.get("completed_steps", [])), 3)
+        self.assertGreaterEqual(len(state_payload.get("worker_merge_events", [])), 1)
+
+        timeline_events = [
+            json.loads(line)
+            for line in (session_path / "timeline.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        kinds = {event.get("kind") for event in timeline_events}
+        self.assertIn("worker_iteration", kinds)
+        self.assertIn("worker_merge", kinds)
+        merge_event = next(
+            event for event in timeline_events if event.get("kind") == "worker_merge"
+        )
+        self.assertGreaterEqual(
+            len(merge_event.get("metadata", {}).get("scoreboard", [])), 3
+        )
+
+    def test_engine_risk_averse_merge_avoids_verification_winner(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        runs = root / ".agent_runs_test"
+        if runs.exists():
+            shutil.rmtree(runs)
+
+        engine = AutonomousEngine(
+            constitution=AgentConstitution.load(root / "config" / "constitution.json"),
+            persona_registry=PersonaRegistry(root / "config" / "personas.json"),
+            context_manager=ContextWindowManager(max_tokens=600),
+            session_store=SessionStore(runs),
+            verification_runner=VerificationRunner(),
+            skill_registry=SkillRegistry(root / "config" / "skills.json"),
+            memory_store=MemoryStore(root / ".agent_memory_test.json"),
+        )
+        result = engine.run(
+            objective="Risk-averse merge objective",
+            docs=["README.md"],
+            persona="balanced_builder",
+            iterations=1,
+            repo_path=root,
+            verify_commands=[],
+            project_profile="test profile",
+            max_handoffs=3,
+            max_runtime_seconds=60,
+            parallel_agents=4,
+            merge_policy="risk_averse",
+        )
+
+        self.assertEqual(result["status"], "ok")
+        winner = result.get("worker_merge_events", [])[0].get("winner", {})
+        self.assertNotIn("verification", winner.get("step", "").lower())
 
 
 if __name__ == "__main__":

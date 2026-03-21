@@ -49,8 +49,12 @@ If `ok` is `false`, `error` contains a human-readable reason.
 ## OpenClaw gateway bridge
 
 - Inbound gateway events are validated before execution (`clarify`, `action.request`, `agent.message`).
+- Inbound gateway events are validated before execution (`clarify`, `action.request`, `agent.message`, `ack`).
 - Rejected/unparsed events are audited and emitted to UI diagnostics (`openclaw://rejected`, `openclaw://raw`).
 - `ui.answer` responses for gateway-origin questions are sent back to OpenClaw (`type: ui.answer`).
 - `action.request` outcomes are sent back to OpenClaw (`type: action.result`) for both immediate and approval-resolved paths.
 - Outbound gateway payloads are queued while offline and replayed on reconnect.
 - Recent event-id history is used to suppress duplicate inbound gateway events.
+- Outbound gateway payloads include `messageId`, `nonce`, `sentAt`, and `integrity` fields.
+- Ack-tracked outbound messages stay pending until a matching `ack` event clears them.
+- Prompt forwarding includes task-routing hints (`taskType`, `taskRouting`, `verification`) so the gateway can pick different models per workload.

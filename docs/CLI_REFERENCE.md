@@ -31,6 +31,7 @@
 
 - `python -m grant_agent.cli vibe-continue`
   - Continues the latest vibe session across multiple cycles using latest checkpoints until complete or paused.
+  - Also callable from Fluxio desktop Autonomous Run Dashboard.
 
 - `python -m grant_agent.cli profiles`
   - Lists configured personalization profiles and workspace/default resolution rules.
@@ -40,6 +41,7 @@
   - Runs multi-cycle autonomous soak validation with checkpoint + artifact checks each cycle.
   - Supports `--profile`, `--merge-policy`, `--cycles`, and `--iterations`.
   - When `--doc` is omitted, soak falls back to default docs (and `README.md` when available).
+  - Also callable from Fluxio desktop Autonomous Run Dashboard.
 
 - `python -m grant_agent.cli checkpoints`
   - Lists checkpoints for the latest (or specified) session.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import webbrowser
+from dataclasses import asdict
 from pathlib import Path
 
 from .checkpoints import CheckpointStore
@@ -27,6 +28,7 @@ from .memory import MemoryStore
 from .modes import ModeRegistry
 from .openai_adapter import build_responses_request, tools_from_skills
 from .persona import PersonaRegistry
+from .profiles import ProfileRegistry
 from .replay import build_lineage_timeline
 from .research import search_workspace
 from .session_store import SessionStore
@@ -40,6 +42,7 @@ def bootstrap_project(root: Path) -> None:
     personas_path = root / "config" / "personas.json"
     skills_path = root / "config" / "skills.json"
     modes_path = root / "config" / "modes.json"
+    profiles_path = root / "config" / "profiles.json"
     challenge_presets_path = root / "config" / "challenge_presets.json"
 
     constitution = AgentConstitution()
@@ -119,7 +122,9 @@ def bootstrap_project(root: Path) -> None:
                             "required": ["target"],
                         },
                         "permissions": ["browser_preview"],
-                        "examples": ["Compare preview before and after login form update"],
+                        "examples": [
+                            "Compare preview before and after login form update"
+                        ],
                     },
                     {
                         "name": "workspace_search",
@@ -158,24 +163,72 @@ def bootstrap_project(root: Path) -> None:
                         "max_tokens": 1400,
                         "max_handoffs": 2,
                         "max_runtime_seconds": 120,
+                        "description": "Quick tasks - 2 minutes",
+                        "parallel_agents": 1,
+                        "merge_policy": "risk_averse",
                     },
                     "balanced": {
                         "persona": "balanced_builder",
                         "max_tokens": 2400,
                         "max_handoffs": 6,
                         "max_runtime_seconds": 300,
+                        "description": "Standard sessions - 5 minutes",
+                        "parallel_agents": 1,
+                        "merge_policy": "best_score",
                     },
                     "careful": {
                         "persona": "safety_reviewer",
                         "max_tokens": 3200,
                         "max_handoffs": 8,
                         "max_runtime_seconds": 600,
+                        "description": "Safety-first - 10 minutes",
+                        "parallel_agents": 1,
+                        "merge_policy": "risk_averse",
                     },
                     "creative": {
                         "persona": "creative_architect",
                         "max_tokens": 2800,
                         "max_handoffs": 6,
                         "max_runtime_seconds": 420,
+                        "description": "Exploration mode - 7 minutes",
+                        "parallel_agents": 1,
+                        "merge_policy": "best_score",
+                    },
+                    "swarms": {
+                        "persona": "balanced_builder",
+                        "max_tokens": 2400,
+                        "max_handoffs": 20,
+                        "max_runtime_seconds": 3600,
+                        "description": "3 agents in parallel - collaborative problem solving",
+                        "parallel_agents": 3,
+                        "merge_policy": "consensus",
+                    },
+                    "autopilot": {
+                        "persona": "balanced_builder",
+                        "max_tokens": 2400,
+                        "max_handoffs": 50,
+                        "max_runtime_seconds": 43200,
+                        "description": "Long-running agent - 12 hours",
+                        "parallel_agents": 1,
+                        "merge_policy": "best_score",
+                    },
+                    "deep_run": {
+                        "persona": "balanced_builder",
+                        "max_tokens": 2400,
+                        "max_handoffs": 100,
+                        "max_runtime_seconds": 86400,
+                        "description": "Extended agent - 24 hours",
+                        "parallel_agents": 1,
+                        "merge_policy": "best_score",
+                    },
+                    "swarm_mega": {
+                        "persona": "balanced_builder",
+                        "max_tokens": 2400,
+                        "max_handoffs": 50,
+                        "max_runtime_seconds": 14400,
+                        "description": "5 agents in parallel - high-throughput execution",
+                        "parallel_agents": 5,
+                        "merge_policy": "consensus",
                     },
                 },
                 indent=2,
@@ -193,7 +246,13 @@ def bootstrap_project(root: Path) -> None:
                         "navigator_mode": "careful",
                         "baseline_mode": "fast",
                         "tuned_mode": "careful",
-                        "selector_keywords": ["system prompt", "leak", "secret", "hierarchy", "refusal"],
+                        "selector_keywords": [
+                            "system prompt",
+                            "leak",
+                            "secret",
+                            "hierarchy",
+                            "refusal",
+                        ],
                         "attempt_strategies": [
                             {
                                 "name": "roleplay_escalation",
@@ -238,30 +297,137 @@ def bootstrap_project(root: Path) -> None:
             encoding="utf-8",
         )
 
+    if not profiles_path.exists():
+        profiles_path.write_text(
+            json.dumps(
+                {
+                    "default_profile": "hands_free_builder",
+                    "workspace_profiles": [
+                        {"pattern": "*", "profile": "hands_free_builder"}
+                    ],
+                    "profiles": {
+                        "minimal_focus": {
+                            "description": "Low-noise profile for deep focus and short task bursts.",
+                            "ui": {
+                                "theme": "default",
+                                "font": "compact",
+                                "density": "compact",
+                                "motion": "reduced",
+                                "voice_mode": "push",
+                                "notifications": "important_only",
+                            },
+                            "agent": {
+                                "mode": "fast",
+                                "persona": "balanced_builder",
+                                "parallel_agents": 1,
+                                "merge_policy": "risk_averse",
+                                "pause_on_verification_failure": True,
+                                "max_tokens": 1800,
+                                "max_handoffs": 3,
+                                "max_runtime_seconds": 240,
+                            },
+                        },
+                        "hands_free_builder": {
+                            "description": "Default profile for voice-first coding with autonomous continuity.",
+                            "ui": {
+                                "theme": "default",
+                                "font": "default",
+                                "density": "comfortable",
+                                "motion": "standard",
+                                "voice_mode": "always",
+                                "notifications": "all",
+                            },
+                            "agent": {
+                                "mode": "autopilot",
+                                "persona": "balanced_builder",
+                                "parallel_agents": 3,
+                                "merge_policy": "consensus",
+                                "pause_on_verification_failure": True,
+                                "max_tokens": 2600,
+                                "max_handoffs": 50,
+                                "max_runtime_seconds": 43200,
+                            },
+                        },
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Grant Agent Harness CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    bootstrap = subparsers.add_parser("bootstrap", help="Create default constitution and persona configs")
+    bootstrap = subparsers.add_parser(
+        "bootstrap", help="Create default constitution and persona configs"
+    )
     bootstrap.add_argument("--root", default=".", help="Project root path")
 
     run = subparsers.add_parser("run", help="Run autonomous planning and rollover loop")
     run.add_argument("--root", default=".", help="Project root path")
     run.add_argument("--objective", required=True, help="Main objective")
-    run.add_argument("--doc", action="append", default=[], help="Relevant doc paths or URLs")
-    run.add_argument("--mode", default="balanced", help="Execution mode preset (fast|balanced|careful|creative)")
+    run.add_argument(
+        "--doc", action="append", default=[], help="Relevant doc paths or URLs"
+    )
+    run.add_argument(
+        "--mode",
+        default="profile",
+        help="Execution mode preset (fast|balanced|careful|creative|swarms|autopilot|deep_run|swarm_mega)",
+    )
     run.add_argument("--persona", default=None, help="Persona profile name override")
-    run.add_argument("--iterations", type=int, default=8, help="Number of orchestration iterations")
-    run.add_argument("--max-tokens", type=int, default=None, help="Context token budget override")
-    run.add_argument("--max-handoffs", type=int, default=None, help="Maximum automatic handoff count override")
-    run.add_argument("--max-runtime-seconds", type=int, default=None, help="Maximum runtime budget override")
-    run.add_argument("--verify", action="append", default=[], help="Verification command")
-    run.add_argument("--checkpoint-every", type=int, default=1, help="Create checkpoint every N iterations")
-    run.add_argument("--resume-checkpoint", default=None, help="Checkpoint file path to resume from")
+    run.add_argument(
+        "--iterations", type=int, default=8, help="Number of orchestration iterations"
+    )
+    run.add_argument(
+        "--max-tokens", type=int, default=None, help="Context token budget override"
+    )
+    run.add_argument(
+        "--max-handoffs",
+        type=int,
+        default=None,
+        help="Maximum automatic handoff count override",
+    )
+    run.add_argument(
+        "--max-runtime-seconds",
+        type=int,
+        default=None,
+        help="Maximum runtime budget override",
+    )
+    run.add_argument(
+        "--parallel-agents",
+        type=int,
+        default=None,
+        help="Parallel worker count override (defaults to selected mode)",
+    )
+    run.add_argument(
+        "--merge-policy",
+        default=None,
+        choices=["best_score", "consensus", "risk_averse"],
+        help="Worker branch merge policy override",
+    )
+    run.add_argument(
+        "--profile",
+        default=None,
+        help="Personalization profile name (from config/profiles.json)",
+    )
+    run.add_argument(
+        "--verify", action="append", default=[], help="Verification command"
+    )
+    run.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        help="Create checkpoint every N iterations",
+    )
+    run.add_argument(
+        "--resume-checkpoint", default=None, help="Checkpoint file path to resume from"
+    )
     run.add_argument(
         "--pause-on-verification-failure",
         action="store_true",
+        default=None,
         help="Pause autopilot when verification fails",
     )
     run.add_argument(
@@ -277,60 +443,123 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_cmd = subparsers.add_parser("evaluate", help="Compute run quality metrics")
     evaluate_cmd.add_argument("--root", default=".", help="Project root path")
 
-    search_cmd = subparsers.add_parser("search", help="Search workspace content for planning/research")
+    search_cmd = subparsers.add_parser(
+        "search", help="Search workspace content for planning/research"
+    )
     search_cmd.add_argument("--root", default=".", help="Project root path")
     search_cmd.add_argument("--query", required=True, help="Regex query")
     search_cmd.add_argument("--include", default="**/*", help="Glob pattern to scan")
-    search_cmd.add_argument("--max-results", type=int, default=25, help="Maximum results")
-    search_cmd.add_argument("--case-sensitive", action="store_true", help="Use case-sensitive matching")
+    search_cmd.add_argument(
+        "--max-results", type=int, default=25, help="Maximum results"
+    )
+    search_cmd.add_argument(
+        "--case-sensitive", action="store_true", help="Use case-sensitive matching"
+    )
 
-    story_cmd = subparsers.add_parser("story", help="Print latest public summary and tweet draft")
+    story_cmd = subparsers.add_parser(
+        "story", help="Print latest public summary and tweet draft"
+    )
     story_cmd.add_argument("--root", default=".", help="Project root path")
 
-    replay_cmd = subparsers.add_parser("replay", help="Replay timeline events across latest lineage")
+    replay_cmd = subparsers.add_parser(
+        "replay", help="Replay timeline events across latest lineage"
+    )
     replay_cmd.add_argument("--root", default=".", help="Project root path")
-    replay_cmd.add_argument("--limit", type=int, default=50, help="Maximum events to output")
+    replay_cmd.add_argument(
+        "--limit", type=int, default=50, help="Maximum events to output"
+    )
 
-    export_cmd = subparsers.add_parser("export-openai-request", help="Export a ready-to-send OpenAI Responses payload")
+    export_cmd = subparsers.add_parser(
+        "export-openai-request", help="Export a ready-to-send OpenAI Responses payload"
+    )
     export_cmd.add_argument("--root", default=".", help="Project root path")
-    export_cmd.add_argument("--objective", required=True, help="Objective text for the request")
+    export_cmd.add_argument(
+        "--objective", required=True, help="Objective text for the request"
+    )
     export_cmd.add_argument("--model", default="gpt-5", help="Target model")
-    export_cmd.add_argument("--output", default="openai_request.json", help="Output file path")
-    export_cmd.add_argument("--top-k-skills", type=int, default=3, help="Number of skills to include")
+    export_cmd.add_argument(
+        "--output", default="openai_request.json", help="Output file path"
+    )
+    export_cmd.add_argument(
+        "--top-k-skills", type=int, default=3, help="Number of skills to include"
+    )
 
-    memory_cmd = subparsers.add_parser("memory", help="Inspect or search persistent memory")
+    memory_cmd = subparsers.add_parser(
+        "memory", help="Inspect or search persistent memory"
+    )
     memory_cmd.add_argument("--root", default=".", help="Project root path")
     memory_cmd.add_argument("--query", default="", help="Memory query")
     memory_cmd.add_argument("--limit", type=int, default=8, help="Maximum memory items")
 
-    resume_cmd = subparsers.add_parser("resume", help="Resume a previous session automatically")
+    resume_cmd = subparsers.add_parser(
+        "resume", help="Resume a previous session automatically"
+    )
     resume_cmd.add_argument("--root", default=".", help="Project root path")
-    resume_cmd.add_argument("--session-id", default=None, help="Session ID to resume (defaults to latest)")
-    resume_cmd.add_argument("--mode", default="balanced", help="Execution mode preset")
-    resume_cmd.add_argument("--iterations", type=int, default=6, help="Iterations for resumed run")
+    resume_cmd.add_argument(
+        "--session-id", default=None, help="Session ID to resume (defaults to latest)"
+    )
+    resume_cmd.add_argument("--mode", default="profile", help="Execution mode preset")
+    resume_cmd.add_argument(
+        "--profile",
+        default=None,
+        help="Personalization profile name",
+    )
+    resume_cmd.add_argument(
+        "--iterations", type=int, default=6, help="Iterations for resumed run"
+    )
     resume_cmd.add_argument(
         "--project-profile",
         default="Resume autonomous chain with persistent memory.",
         help="Project context summary",
     )
 
-    vibe_cmd = subparsers.add_parser("vibe", help="Hands-free vibe coding loop with checkpoints and next-step hints")
+    vibe_cmd = subparsers.add_parser(
+        "vibe", help="Hands-free vibe coding loop with checkpoints and next-step hints"
+    )
     vibe_cmd.add_argument("--root", default=".", help="Project root path")
-    vibe_cmd.add_argument("--objective", required=True, help="Main vibe coding objective")
+    vibe_cmd.add_argument(
+        "--objective", required=True, help="Main vibe coding objective"
+    )
     vibe_cmd.add_argument("--doc", action="append", default=[], help="Relevant docs")
-    vibe_cmd.add_argument("--mode", default="balanced", help="Execution mode preset")
-    vibe_cmd.add_argument("--iterations", type=int, default=12, help="Autopilot iterations")
-    vibe_cmd.add_argument("--checkpoint-every", type=int, default=1, help="Create checkpoint every N iterations")
-    vibe_cmd.add_argument("--resume-from", default=None, help="Session ID to resume from")
-    vibe_cmd.add_argument("--resume-checkpoint", default=None, help="Checkpoint file path to resume from")
-    vibe_cmd.add_argument("--verify", action="append", default=[], help="Verification command override")
+    vibe_cmd.add_argument("--mode", default="profile", help="Execution mode preset")
+    vibe_cmd.add_argument(
+        "--profile",
+        default=None,
+        help="Personalization profile name",
+    )
+    vibe_cmd.add_argument(
+        "--iterations", type=int, default=12, help="Autopilot iterations"
+    )
+    vibe_cmd.add_argument(
+        "--merge-policy",
+        default=None,
+        choices=["best_score", "consensus", "risk_averse"],
+        help="Worker branch merge policy override",
+    )
+    vibe_cmd.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        help="Create checkpoint every N iterations",
+    )
+    vibe_cmd.add_argument(
+        "--resume-from", default=None, help="Session ID to resume from"
+    )
+    vibe_cmd.add_argument(
+        "--resume-checkpoint", default=None, help="Checkpoint file path to resume from"
+    )
+    vibe_cmd.add_argument(
+        "--verify", action="append", default=[], help="Verification command override"
+    )
     vibe_cmd.add_argument(
         "--project-profile",
         default="Vibe coding workflow with autonomous checkpoints and fast feedback.",
         help="Project context summary",
     )
 
-    vibe_status_cmd = subparsers.add_parser("vibe-status", help="Show latest vibe session status and next actions")
+    vibe_status_cmd = subparsers.add_parser(
+        "vibe-status", help="Show latest vibe session status and next actions"
+    )
     vibe_status_cmd.add_argument("--root", default=".", help="Project root path")
 
     vibe_continue_cmd = subparsers.add_parser(
@@ -338,41 +567,116 @@ def build_parser() -> argparse.ArgumentParser:
         help="Automatically continue latest vibe session until complete or paused",
     )
     vibe_continue_cmd.add_argument("--root", default=".", help="Project root path")
-    vibe_continue_cmd.add_argument("--mode", default="balanced", help="Execution mode preset")
-    vibe_continue_cmd.add_argument("--cycles", type=int, default=3, help="Maximum continuation cycles")
-    vibe_continue_cmd.add_argument("--iterations", type=int, default=4, help="Iterations per cycle")
+    vibe_continue_cmd.add_argument(
+        "--mode", default="profile", help="Execution mode preset"
+    )
+    vibe_continue_cmd.add_argument(
+        "--profile",
+        default=None,
+        help="Personalization profile name",
+    )
+    vibe_continue_cmd.add_argument(
+        "--cycles", type=int, default=3, help="Maximum continuation cycles"
+    )
+    vibe_continue_cmd.add_argument(
+        "--iterations", type=int, default=4, help="Iterations per cycle"
+    )
+    vibe_continue_cmd.add_argument(
+        "--merge-policy",
+        default=None,
+        choices=["best_score", "consensus", "risk_averse"],
+        help="Worker branch merge policy override",
+    )
     vibe_continue_cmd.add_argument(
         "--project-profile",
         default="Continue vibe coding loop with checkpoint-aware resume.",
         help="Project context summary",
     )
 
-    checkpoints_cmd = subparsers.add_parser("checkpoints", help="List checkpoints for a session")
+    checkpoints_cmd = subparsers.add_parser(
+        "checkpoints", help="List checkpoints for a session"
+    )
     checkpoints_cmd.add_argument("--root", default=".", help="Project root path")
-    checkpoints_cmd.add_argument("--session-id", default=None, help="Session ID (defaults to latest)")
-    checkpoints_cmd.add_argument("--limit", type=int, default=20, help="Maximum checkpoints to print")
+    checkpoints_cmd.add_argument(
+        "--session-id", default=None, help="Session ID (defaults to latest)"
+    )
+    checkpoints_cmd.add_argument(
+        "--limit", type=int, default=20, help="Maximum checkpoints to print"
+    )
 
     resume_checkpoint_cmd = subparsers.add_parser(
         "resume-checkpoint",
         help="Resume from a specific checkpoint and continue the vibe loop",
     )
     resume_checkpoint_cmd.add_argument("--root", default=".", help="Project root path")
-    resume_checkpoint_cmd.add_argument("--checkpoint", default=None, help="Checkpoint file path")
-    resume_checkpoint_cmd.add_argument("--mode", default="balanced", help="Execution mode preset")
-    resume_checkpoint_cmd.add_argument("--iterations", type=int, default=6, help="Iterations for resumed run")
+    resume_checkpoint_cmd.add_argument(
+        "--checkpoint", default=None, help="Checkpoint file path"
+    )
+    resume_checkpoint_cmd.add_argument(
+        "--mode", default="profile", help="Execution mode preset"
+    )
+    resume_checkpoint_cmd.add_argument(
+        "--profile",
+        default=None,
+        help="Personalization profile name",
+    )
+    resume_checkpoint_cmd.add_argument(
+        "--iterations", type=int, default=6, help="Iterations for resumed run"
+    )
     resume_checkpoint_cmd.add_argument(
         "--project-profile",
         default="Resume from checkpoint for vibe coding continuity.",
         help="Project context summary",
     )
 
-    suggest_cmd = subparsers.add_parser("suggest-features", help="Suggest features from pasted paper text")
+    profiles_cmd = subparsers.add_parser(
+        "profiles", help="List personalization profiles and defaults"
+    )
+    profiles_cmd.add_argument("--root", default=".", help="Project root path")
+    profiles_cmd.add_argument(
+        "--name", default=None, help="Optional profile name to inspect"
+    )
+
+    soak_cmd = subparsers.add_parser(
+        "soak",
+        help="Run autonomous soak cycles with checkpoints and resume validation",
+    )
+    soak_cmd.add_argument("--root", default=".", help="Project root path")
+    soak_cmd.add_argument("--objective", required=True, help="Soak objective")
+    soak_cmd.add_argument("--doc", action="append", default=[], help="Relevant docs")
+    soak_cmd.add_argument("--mode", default="autopilot", help="Execution mode preset")
+    soak_cmd.add_argument(
+        "--profile", default=None, help="Personalization profile name"
+    )
+    soak_cmd.add_argument(
+        "--merge-policy",
+        default=None,
+        choices=["best_score", "consensus", "risk_averse"],
+        help="Worker branch merge policy override",
+    )
+    soak_cmd.add_argument("--cycles", type=int, default=6, help="Number of soak cycles")
+    soak_cmd.add_argument(
+        "--iterations", type=int, default=4, help="Iterations per cycle"
+    )
+    soak_cmd.add_argument(
+        "--project-profile",
+        default="Soak validation for long-running autonomous sessions.",
+        help="Project context summary",
+    )
+
+    suggest_cmd = subparsers.add_parser(
+        "suggest-features", help="Suggest features from pasted paper text"
+    )
     suggest_cmd.add_argument("--root", default=".", help="Project root path")
-    suggest_cmd.add_argument("--paper-file", default=None, help="Path to text/markdown paper file")
+    suggest_cmd.add_argument(
+        "--paper-file", default=None, help="Path to text/markdown paper file"
+    )
     suggest_cmd.add_argument("--paper-text", default=None, help="Inline paper text")
     suggest_cmd.add_argument("--top-k", type=int, default=6, help="Maximum suggestions")
 
-    presets_cmd = subparsers.add_parser("list-presets", help="List available challenge presets")
+    presets_cmd = subparsers.add_parser(
+        "list-presets", help="List available challenge presets"
+    )
     presets_cmd.add_argument("--root", default=".", help="Project root path")
 
     demo_cmd = subparsers.add_parser(
@@ -383,37 +687,73 @@ def build_parser() -> argparse.ArgumentParser:
     demo_cmd.add_argument("--preset", default="gandalf", help="Challenge preset name")
     demo_cmd.add_argument("--objective", required=True, help="Primary demo objective")
     demo_cmd.add_argument("--doc", action="append", default=[], help="Relevant docs")
-    demo_cmd.add_argument("--iterations", type=int, default=3, help="Navigator iteration count")
-    demo_cmd.add_argument("--bundle-dir", default=".demo_bundles", help="Bundle output directory")
-    demo_cmd.add_argument("--export-zip", action="store_true", help="Also export zipped bundle")
+    demo_cmd.add_argument(
+        "--iterations", type=int, default=3, help="Navigator iteration count"
+    )
+    demo_cmd.add_argument(
+        "--bundle-dir", default=".demo_bundles", help="Bundle output directory"
+    )
+    demo_cmd.add_argument(
+        "--export-zip", action="store_true", help="Also export zipped bundle"
+    )
 
     demo_suite_cmd = subparsers.add_parser(
         "demo-suite",
         help="Run demo pipeline across multiple presets and export a consolidated suite report",
     )
     demo_suite_cmd.add_argument("--root", default=".", help="Project root path")
-    demo_suite_cmd.add_argument("--objective", required=True, help="Primary demo objective")
-    demo_suite_cmd.add_argument("--preset", action="append", default=[], help="Preset to include (repeatable)")
-    demo_suite_cmd.add_argument("--doc", action="append", default=[], help="Relevant docs")
-    demo_suite_cmd.add_argument("--iterations", type=int, default=2, help="Iteration count per preset")
-    demo_suite_cmd.add_argument("--bundle-dir", default=".demo_bundles", help="Bundle output directory")
-    demo_suite_cmd.add_argument("--export-zip", action="store_true", help="Also export zipped bundles")
+    demo_suite_cmd.add_argument(
+        "--objective", required=True, help="Primary demo objective"
+    )
+    demo_suite_cmd.add_argument(
+        "--preset", action="append", default=[], help="Preset to include (repeatable)"
+    )
+    demo_suite_cmd.add_argument(
+        "--doc", action="append", default=[], help="Relevant docs"
+    )
+    demo_suite_cmd.add_argument(
+        "--iterations", type=int, default=2, help="Iteration count per preset"
+    )
+    demo_suite_cmd.add_argument(
+        "--bundle-dir", default=".demo_bundles", help="Bundle output directory"
+    )
+    demo_suite_cmd.add_argument(
+        "--export-zip", action="store_true", help="Also export zipped bundles"
+    )
 
-    button_cmd = subparsers.add_parser("demo-button", help="Launch one-click demo GUI button")
+    button_cmd = subparsers.add_parser(
+        "demo-button", help="Launch one-click demo GUI button"
+    )
     button_cmd.add_argument("--root", default=".", help="Project root path")
     button_cmd.add_argument("--preset", default="gandalf", help="Challenge preset name")
-    button_cmd.add_argument("--objective", default="Demonstrate autonomous hardening workflow")
+    button_cmd.add_argument(
+        "--objective", default="Demonstrate autonomous hardening workflow"
+    )
 
-    dashboard_cmd = subparsers.add_parser("proof-dashboard", help="Build proof dashboard from report bundles")
+    dashboard_cmd = subparsers.add_parser(
+        "proof-dashboard", help="Build proof dashboard from report bundles"
+    )
     dashboard_cmd.add_argument("--root", default=".", help="Project root path")
-    dashboard_cmd.add_argument("--bundle-dir", default=".demo_bundles", help="Bundle directory")
-    dashboard_cmd.add_argument("--output", default="proof_dashboard.html", help="Dashboard file name")
-    dashboard_cmd.add_argument("--open", action="store_true", help="Open dashboard in default browser")
+    dashboard_cmd.add_argument(
+        "--bundle-dir", default=".demo_bundles", help="Bundle directory"
+    )
+    dashboard_cmd.add_argument(
+        "--output", default="proof_dashboard.html", help="Dashboard file name"
+    )
+    dashboard_cmd.add_argument(
+        "--open", action="store_true", help="Open dashboard in default browser"
+    )
 
-    next_cmd = subparsers.add_parser("next-features", help="Recommend next high-impact improvements")
+    next_cmd = subparsers.add_parser(
+        "next-features", help="Recommend next high-impact improvements"
+    )
     next_cmd.add_argument("--root", default=".", help="Project root path")
-    next_cmd.add_argument("--bundle-dir", default=".demo_bundles", help="Bundle directory")
-    next_cmd.add_argument("--top-k", type=int, default=6, help="Maximum recommendations")
+    next_cmd.add_argument(
+        "--bundle-dir", default=".demo_bundles", help="Bundle directory"
+    )
+    next_cmd.add_argument(
+        "--top-k", type=int, default=6, help="Maximum recommendations"
+    )
     return parser
 
 
@@ -426,20 +766,33 @@ def _default_demo_docs(root: Path) -> list[str]:
     return [str(path.relative_to(root)) for path in candidates if path.exists()]
 
 
-def _mode_values(modes: ModeRegistry, mode_name: str, overrides: dict | None = None) -> dict:
+def _mode_values(
+    modes: ModeRegistry, mode_name: str, overrides: dict | None = None
+) -> dict:
     mode = modes.get(mode_name)
     overrides = overrides or {}
     return {
         "persona": overrides.get("persona") or mode.persona,
-        "max_tokens": overrides.get("max_tokens") if overrides.get("max_tokens") is not None else mode.max_tokens,
+        "max_tokens": overrides.get("max_tokens")
+        if overrides.get("max_tokens") is not None
+        else mode.max_tokens,
         "max_handoffs": (
-            overrides.get("max_handoffs") if overrides.get("max_handoffs") is not None else mode.max_handoffs
+            overrides.get("max_handoffs")
+            if overrides.get("max_handoffs") is not None
+            else mode.max_handoffs
         ),
         "max_runtime_seconds": (
             overrides.get("max_runtime_seconds")
             if overrides.get("max_runtime_seconds") is not None
             else mode.max_runtime_seconds
         ),
+        "parallel_agents": (
+            overrides.get("parallel_agents")
+            if overrides.get("parallel_agents") is not None
+            else mode.parallel_agents
+        ),
+        "merge_policy": overrides.get("merge_policy") or mode.merge_policy,
+        "description": mode.description,
     }
 
 
@@ -448,6 +801,7 @@ def _invoke_engine(
     objective: str,
     docs: list[str],
     mode_name: str,
+    profile_name: str | None,
     persona_override: str | None,
     iterations: int,
     verify_commands: list[str],
@@ -455,19 +809,88 @@ def _invoke_engine(
     resume_from: str | None,
     resume_checkpoint: str | None,
     checkpoint_every: int,
-    pause_on_verification_failure: bool,
+    pause_on_verification_failure: bool | None,
     max_tokens_override: int | None = None,
     max_handoffs_override: int | None = None,
     max_runtime_override: int | None = None,
+    parallel_agents_override: int | None = None,
+    merge_policy_override: str | None = None,
 ) -> dict:
     constitution = AgentConstitution.load(root / "config" / "constitution.json")
     modes = ModeRegistry(root / "config" / "modes.json")
-    mode = modes.get(mode_name)
+    profiles = ProfileRegistry(root / "config" / "profiles.json")
+    resolved_profile = profiles.resolve(profile_name, root)
 
-    resolved_persona = persona_override or mode.persona
-    resolved_max_tokens = max_tokens_override if max_tokens_override is not None else mode.max_tokens
-    resolved_max_handoffs = max_handoffs_override if max_handoffs_override is not None else mode.max_handoffs
-    resolved_max_runtime = max_runtime_override if max_runtime_override is not None else mode.max_runtime_seconds
+    selected_mode_name = mode_name
+    if mode_name == "profile" and resolved_profile and resolved_profile.agent.mode:
+        selected_mode_name = resolved_profile.agent.mode
+    elif mode_name == "profile":
+        selected_mode_name = "balanced"
+
+    mode = modes.get(selected_mode_name)
+
+    profile_agent = resolved_profile.agent if resolved_profile else None
+
+    resolved_persona = (
+        persona_override
+        or (profile_agent.persona if profile_agent and profile_agent.persona else None)
+        or mode.persona
+    )
+    resolved_max_tokens = (
+        max_tokens_override
+        if max_tokens_override is not None
+        else (
+            profile_agent.max_tokens
+            if profile_agent and profile_agent.max_tokens is not None
+            else mode.max_tokens
+        )
+    )
+    resolved_max_handoffs = (
+        max_handoffs_override
+        if max_handoffs_override is not None
+        else (
+            profile_agent.max_handoffs
+            if profile_agent and profile_agent.max_handoffs is not None
+            else mode.max_handoffs
+        )
+    )
+    resolved_max_runtime = (
+        max_runtime_override
+        if max_runtime_override is not None
+        else (
+            profile_agent.max_runtime_seconds
+            if profile_agent and profile_agent.max_runtime_seconds is not None
+            else mode.max_runtime_seconds
+        )
+    )
+    resolved_parallel_agents = (
+        parallel_agents_override
+        if parallel_agents_override is not None
+        else (
+            profile_agent.parallel_agents
+            if profile_agent and profile_agent.parallel_agents is not None
+            else mode.parallel_agents
+        )
+    )
+    resolved_parallel_agents = max(1, int(resolved_parallel_agents))
+    resolved_merge_policy = (
+        merge_policy_override
+        or (
+            profile_agent.merge_policy
+            if profile_agent and profile_agent.merge_policy
+            else None
+        )
+        or mode.merge_policy
+    )
+    resolved_pause_on_verification_failure = (
+        pause_on_verification_failure
+        if pause_on_verification_failure is not None
+        else (
+            profile_agent.pause_on_verification_failure
+            if profile_agent and profile_agent.pause_on_verification_failure is not None
+            else False
+        )
+    )
 
     personas = PersonaRegistry(root / "config" / "personas.json")
     context = ContextWindowManager(max_tokens=resolved_max_tokens)
@@ -486,7 +909,9 @@ def _invoke_engine(
         memory_store=memory,
     )
 
-    effective_verify_commands = verify_commands or detect_default_verification_commands(root)
+    effective_verify_commands = verify_commands or detect_default_verification_commands(
+        root
+    )
 
     result = engine.run(
         objective=objective,
@@ -498,20 +923,29 @@ def _invoke_engine(
         project_profile=project_profile,
         max_handoffs=resolved_max_handoffs,
         max_runtime_seconds=resolved_max_runtime,
+        parallel_agents=resolved_parallel_agents,
+        merge_policy=resolved_merge_policy,
         resume_from_session_id=resume_from,
         checkpoint_every=checkpoint_every,
         resume_from_checkpoint_path=resume_checkpoint,
         autopilot_guardrails={
             "pause_on_handoff": True,
-            "pause_on_verification_failure": pause_on_verification_failure,
+            "pause_on_verification_failure": resolved_pause_on_verification_failure,
         },
     )
     result["effective_verify_commands"] = effective_verify_commands
-    result["mode"] = mode_name
+    result["mode"] = selected_mode_name
     result["effective_persona"] = resolved_persona
     result["effective_max_tokens"] = resolved_max_tokens
     result["effective_max_handoffs"] = resolved_max_handoffs
     result["effective_max_runtime_seconds"] = resolved_max_runtime
+    result["effective_parallel_agents"] = resolved_parallel_agents
+    result["effective_merge_policy"] = resolved_merge_policy
+    result["effective_pause_on_verification_failure"] = (
+        resolved_pause_on_verification_failure
+    )
+    result["mode_description"] = mode.description
+    result["profile"] = resolved_profile.name if resolved_profile else None
     return result
 
 
@@ -522,6 +956,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         objective=args.objective,
         docs=args.doc,
         mode_name=args.mode,
+        profile_name=getattr(args, "profile", None),
         persona_override=args.persona,
         iterations=args.iterations,
         verify_commands=args.verify,
@@ -529,10 +964,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         resume_from=args.resume_from,
         resume_checkpoint=getattr(args, "resume_checkpoint", None),
         checkpoint_every=getattr(args, "checkpoint_every", 1),
-        pause_on_verification_failure=getattr(args, "pause_on_verification_failure", False),
+        pause_on_verification_failure=getattr(
+            args, "pause_on_verification_failure", None
+        ),
         max_tokens_override=args.max_tokens,
         max_handoffs_override=args.max_handoffs,
         max_runtime_override=args.max_runtime_seconds,
+        parallel_agents_override=getattr(args, "parallel_agents", None),
+        merge_policy_override=getattr(args, "merge_policy", None),
     )
     print(json.dumps(result, indent=2))
     return 0 if result.get("status") == "ok" else 2
@@ -558,7 +997,9 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         "context": payload.get("context", {}),
         "completed_steps": payload.get("completed_steps", []),
         "remaining_steps": [
-            step for step in payload.get("plan_steps", []) if step not in payload.get("completed_steps", [])
+            step
+            for step in payload.get("plan_steps", [])
+            if step not in payload.get("completed_steps", [])
         ],
     }
     print(json.dumps(summary, indent=2))
@@ -630,7 +1071,12 @@ def cmd_replay(args: argparse.Namespace) -> int:
     lineage = payload.get("session_lineage", [latest.name])
     events = build_lineage_timeline(store.base_dir, lineage)
     limited = events[: args.limit]
-    print(json.dumps({"lineage": lineage, "event_count": len(events), "events": limited}, indent=2))
+    print(
+        json.dumps(
+            {"lineage": lineage, "event_count": len(events), "events": limited},
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -661,7 +1107,11 @@ def cmd_export_openai_request(args: argparse.Namespace) -> int:
 def cmd_memory(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     memory = MemoryStore(root / ".agent_memory.json")
-    items = memory.search(args.query, limit=args.limit) if args.query else memory.recent(limit=args.limit)
+    items = (
+        memory.search(args.query, limit=args.limit)
+        if args.query
+        else memory.recent(limit=args.limit)
+    )
     payload = {
         "count": len(items),
         "items": [
@@ -694,7 +1144,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
     previous_path = store.get_session_path(target_session)
     if not previous_path or not (previous_path / "state.json").exists():
-        print(json.dumps({"error": f"Session not found or missing state: {target_session}"}, indent=2))
+        print(
+            json.dumps(
+                {"error": f"Session not found or missing state: {target_session}"},
+                indent=2,
+            )
+        )
         return 1
 
     previous_state = store.read_state(previous_path)
@@ -710,11 +1165,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
         objective=objective,
         doc=docs,
         mode=args.mode,
+        profile=args.profile,
         persona=None,
         iterations=args.iterations,
         max_tokens=None,
         max_handoffs=None,
         max_runtime_seconds=None,
+        parallel_agents=None,
+        merge_policy=None,
         verify=[],
         project_profile=args.project_profile,
         resume_from=target_session,
@@ -728,11 +1186,14 @@ def cmd_vibe(args: argparse.Namespace) -> int:
         objective=args.objective,
         doc=args.doc,
         mode=args.mode,
+        profile=args.profile,
         persona=None,
         iterations=args.iterations,
         max_tokens=None,
         max_handoffs=None,
         max_runtime_seconds=None,
+        parallel_agents=None,
+        merge_policy=args.merge_policy,
         verify=args.verify,
         project_profile=args.project_profile,
         resume_from=args.resume_from,
@@ -760,12 +1221,17 @@ def cmd_vibe_status(args: argparse.Namespace) -> int:
     checkpoints = CheckpointStore.list(latest)
     derived_status = state.get("autopilot_status")
     if not derived_status:
-        derived_status = "completed" if not state.get("next_actions", []) else "incomplete"
+        derived_status = (
+            "completed" if not state.get("next_actions", []) else "incomplete"
+        )
     payload = {
         "session": latest.name,
         "objective": state.get("objective"),
         "autopilot_status": derived_status,
         "autopilot_pause_reason": state.get("autopilot_pause_reason", ""),
+        "profile": state.get("profile"),
+        "parallel_agents": state.get("parallel_agents", 1),
+        "merge_policy": state.get("merge_policy", "best_score"),
         "remaining_steps": state.get("next_actions", []),
         "vibe_next_steps": state.get("vibe_next_steps", []),
         "checkpoint_count": len(checkpoints),
@@ -815,6 +1281,7 @@ def cmd_vibe_continue(args: argparse.Namespace) -> int:
             objective=objective,
             docs=docs,
             mode_name=args.mode,
+            profile_name=args.profile,
             persona_override=None,
             iterations=args.iterations,
             verify_commands=[],
@@ -823,6 +1290,8 @@ def cmd_vibe_continue(args: argparse.Namespace) -> int:
             resume_checkpoint=str(latest_ckpt) if latest_ckpt else None,
             checkpoint_every=1,
             pause_on_verification_failure=True,
+            parallel_agents_override=None,
+            merge_policy_override=args.merge_policy,
         )
         history.append(
             {
@@ -847,7 +1316,11 @@ def cmd_vibe_continue(args: argparse.Namespace) -> int:
             print(json.dumps(payload, indent=2))
             return 0
 
-    final_state = store.read_state(current_session) if (current_session / "state.json").exists() else {}
+    final_state = (
+        store.read_state(current_session)
+        if (current_session / "state.json").exists()
+        else {}
+    )
     payload = {
         "status": "incomplete",
         "cycles_used": args.cycles,
@@ -908,9 +1381,15 @@ def cmd_resume_checkpoint(args: argparse.Namespace) -> int:
     checkpoint_path: Path | None = None
     if args.checkpoint:
         candidate = Path(args.checkpoint)
-        checkpoint_path = candidate if candidate.is_absolute() else (root / args.checkpoint).resolve()
+        checkpoint_path = (
+            candidate if candidate.is_absolute() else (root / args.checkpoint).resolve()
+        )
         if checkpoint_path is None or not checkpoint_path.exists():
-            print(json.dumps({"error": f"Checkpoint not found: {checkpoint_path}"}, indent=2))
+            print(
+                json.dumps(
+                    {"error": f"Checkpoint not found: {checkpoint_path}"}, indent=2
+                )
+            )
             return 1
     else:
         latest = store.latest_session()
@@ -919,7 +1398,12 @@ def cmd_resume_checkpoint(args: argparse.Namespace) -> int:
             return 1
         checkpoint_path = CheckpointStore.latest(latest)
         if not checkpoint_path:
-            print(json.dumps({"error": f"No checkpoints found in session {latest.name}"}, indent=2))
+            print(
+                json.dumps(
+                    {"error": f"No checkpoints found in session {latest.name}"},
+                    indent=2,
+                )
+            )
             return 1
 
     if checkpoint_path is None:
@@ -936,11 +1420,14 @@ def cmd_resume_checkpoint(args: argparse.Namespace) -> int:
         objective=objective,
         doc=docs,
         mode=args.mode,
+        profile=args.profile,
         persona=None,
         iterations=args.iterations,
         max_tokens=None,
         max_handoffs=None,
         max_runtime_seconds=None,
+        parallel_agents=None,
+        merge_policy=None,
         verify=[],
         project_profile=args.project_profile,
         resume_from=session_id,
@@ -969,6 +1456,145 @@ def cmd_suggest_features(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profiles(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    registry = ProfileRegistry(root / "config" / "profiles.json")
+
+    if args.name:
+        profile = registry.resolve(args.name, root)
+        if not profile:
+            print(
+                json.dumps(
+                    {
+                        "error": f"Profile '{args.name}' not found",
+                        "available": registry.list_names(),
+                    },
+                    indent=2,
+                )
+            )
+            return 1
+        payload = {
+            "default_profile": registry.default_profile,
+            "requested": args.name,
+            "resolved": profile.name,
+            "profile": {
+                "name": profile.name,
+                "description": profile.description,
+                "ui": profile.ui,
+                "agent": asdict(profile.agent),
+            },
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    payload = {
+        "default_profile": registry.default_profile,
+        "profiles": registry.list_names(),
+        "workspace_profiles": registry.workspace_profiles,
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_soak(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = SessionStore(root / ".agent_runs")
+    docs = args.doc or _default_demo_docs(root)
+    if not docs and (root / "README.md").exists():
+        docs = ["README.md"]
+
+    history: list[dict] = []
+    latest_session_id: str | None = None
+    latest_checkpoint: str | None = None
+    total_runtime = 0
+
+    for cycle in range(1, args.cycles + 1):
+        result = _invoke_engine(
+            root=root,
+            objective=args.objective,
+            docs=docs,
+            mode_name=args.mode,
+            profile_name=args.profile,
+            persona_override=None,
+            iterations=args.iterations,
+            verify_commands=[],
+            project_profile=args.project_profile,
+            resume_from=latest_session_id,
+            resume_checkpoint=latest_checkpoint,
+            checkpoint_every=1,
+            pause_on_verification_failure=True,
+            parallel_agents_override=None,
+            merge_policy_override=args.merge_policy,
+        )
+
+        if result.get("status") != "ok":
+            print(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "cycle": cycle,
+                        "error": "engine_returned_non_ok",
+                        "result": result,
+                        "history": history,
+                    },
+                    indent=2,
+                )
+            )
+            return 2
+
+        session_path = Path(result["session_path"])
+        latest_session_id = session_path.name
+        latest_checkpoint_path = CheckpointStore.latest(session_path)
+        latest_checkpoint = (
+            str(latest_checkpoint_path) if latest_checkpoint_path else None
+        )
+        checkpoint_count = len(CheckpointStore.list(session_path))
+        state_exists = (session_path / "state.json").exists()
+        timeline_exists = (session_path / "timeline.jsonl").exists()
+        total_runtime += int(result.get("runtime_seconds", 0))
+
+        cycle_item = {
+            "cycle": cycle,
+            "session": latest_session_id,
+            "runtime_seconds": result.get("runtime_seconds", 0),
+            "autopilot_status": result.get("autopilot_status"),
+            "autopilot_pause_reason": result.get("autopilot_pause_reason"),
+            "parallel_agents": result.get("parallel_agents"),
+            "merge_policy": result.get("merge_policy"),
+            "checkpoint_count": checkpoint_count,
+            "state_exists": state_exists,
+            "timeline_exists": timeline_exists,
+        }
+        history.append(cycle_item)
+
+        if not state_exists or not timeline_exists:
+            print(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "cycle": cycle,
+                        "error": "missing_session_artifacts",
+                        "history": history,
+                    },
+                    indent=2,
+                )
+            )
+            return 2
+
+    payload = {
+        "status": "ok",
+        "cycles": args.cycles,
+        "iterations_per_cycle": args.iterations,
+        "docs": docs,
+        "total_runtime_seconds": total_runtime,
+        "latest_session": latest_session_id,
+        "latest_checkpoint": latest_checkpoint,
+        "history": history,
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def cmd_list_presets(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     registry = ChallengePresetRegistry(root / "config" / "challenge_presets.json")
@@ -993,7 +1619,9 @@ def _run_demo_workflow(
     store = SessionStore(root / ".agent_runs")
     verification = VerificationRunner()
     modes = ModeRegistry(root / "config" / "modes.json")
-    preset_registry = ChallengePresetRegistry(root / "config" / "challenge_presets.json")
+    preset_registry = ChallengePresetRegistry(
+        root / "config" / "challenge_presets.json"
+    )
     preset = preset_registry.get(preset_name)
 
     docs = docs or _default_demo_docs(root)
@@ -1023,18 +1651,30 @@ def _run_demo_workflow(
             project_profile="Demo workflow for stakeholder proof bundle.",
             max_handoffs=mode_values["max_handoffs"],
             max_runtime_seconds=mode_values["max_runtime_seconds"],
+            parallel_agents=mode_values["parallel_agents"],
+            merge_policy=mode_values["merge_policy"],
         )
         summary = summarize_run(label=mode_name, mode=mode_name, result=result)
         return result, summary
 
     selectors = preset.pick_selectors(objective, top_k=3)
-    navigator_objective = f"Navigator: {objective}. Focus selectors: {', '.join(selectors)}"
+    navigator_objective = (
+        f"Navigator: {objective}. Focus selectors: {', '.join(selectors)}"
+    )
     baseline_objective = f"Training baseline: {objective}."
-    tuned_objective = f"Training tuned: {objective}. Apply selectors: {', '.join(selectors)}"
+    tuned_objective = (
+        f"Training tuned: {objective}. Apply selectors: {', '.join(selectors)}"
+    )
 
-    navigator_raw, navigator_summary = execute(preset.navigator_mode, navigator_objective, max(1, iterations))
-    baseline_raw, before_summary = execute(preset.baseline_mode, baseline_objective, max(1, iterations - 1))
-    tuned_raw, after_summary = execute(preset.tuned_mode, tuned_objective, max(1, iterations - 1))
+    navigator_raw, navigator_summary = execute(
+        preset.navigator_mode, navigator_objective, max(1, iterations)
+    )
+    baseline_raw, before_summary = execute(
+        preset.baseline_mode, baseline_objective, max(1, iterations - 1)
+    )
+    tuned_raw, after_summary = execute(
+        preset.tuned_mode, tuned_objective, max(1, iterations - 1)
+    )
 
     comparison = compare_training(before_summary, after_summary)
     probe = run_adversarial_probe(preset, objective)
@@ -1103,7 +1743,9 @@ def cmd_demo_run(args: argparse.Namespace) -> int:
 
 def cmd_demo_suite(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
-    preset_registry = ChallengePresetRegistry(root / "config" / "challenge_presets.json")
+    preset_registry = ChallengePresetRegistry(
+        root / "config" / "challenge_presets.json"
+    )
     preset_names = args.preset or preset_registry.list_names()
     docs = args.doc or _default_demo_docs(root)
 
@@ -1165,7 +1807,9 @@ def cmd_next_features(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     metrics = summarize_runs(root / ".agent_runs")
     bundles = load_proof_bundles(root / args.bundle_dir)
-    recommendations = recommend_improvements(metrics=metrics, bundles=bundles, top_k=args.top_k)
+    recommendations = recommend_improvements(
+        metrics=metrics, bundles=bundles, top_k=args.top_k
+    )
     payload = {
         "metrics": metrics,
         "bundle_count": len(bundles),
@@ -1228,6 +1872,12 @@ def main() -> int:
 
     if args.command == "suggest-features":
         return cmd_suggest_features(args)
+
+    if args.command == "profiles":
+        return cmd_profiles(args)
+
+    if args.command == "soak":
+        return cmd_soak(args)
 
     if args.command == "list-presets":
         return cmd_list_presets(args)

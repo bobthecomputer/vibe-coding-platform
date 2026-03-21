@@ -2,12 +2,12 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use active_win_pos_rs::get_active_window;
@@ -23,6 +23,7 @@ use futures_util::{SinkExt, StreamExt};
 use memory_stats::memory_stats;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -58,6 +59,7 @@ const LOCALHOST_API_KEYRING_USER: &str = "localhost-api-token";
 const PROVIDER_KEYRING_USER_PREFIX: &str = "provider-secret:";
 const OPENCLAW_MAX_PENDING_OUTBOUND: usize = 256;
 const OPENCLAW_MAX_RECENT_EVENT_IDS: usize = 512;
+const OPENCLAW_MAX_PENDING_ACKS: usize = 512;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -446,6 +448,8 @@ struct OpenClawStatus {
     last_connected_at: Option<String>,
     reconnect_attempt: u32,
     queued_outbound: usize,
+    pending_ack_count: usize,
+    last_acked_message_id: Option<String>,
 }
 
 impl Default for OpenClawStatus {
@@ -458,8 +462,17 @@ impl Default for OpenClawStatus {
             last_connected_at: None,
             reconnect_attempt: 0,
             queued_outbound: 0,
+            pending_ack_count: 0,
+            last_acked_message_id: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct PendingAckRecord {
+    payload: String,
+    attempts: u32,
+    last_sent_at: String,
 }
 
 struct OpenClawState {
@@ -467,6 +480,8 @@ struct OpenClawState {
     status: OpenClawStatus,
     outbound_tx: Option<mpsc::UnboundedSender<String>>,
     pending_outbound: VecDeque<String>,
+    pending_acks: HashMap<String, PendingAckRecord>,
+    pending_ack_order: VecDeque<String>,
     recent_event_ids: VecDeque<String>,
     recent_event_lookup: HashSet<String>,
 }
@@ -478,6 +493,8 @@ impl OpenClawState {
             status: OpenClawStatus::default(),
             outbound_tx: None,
             pending_outbound: VecDeque::new(),
+            pending_acks: HashMap::new(),
+            pending_ack_order: VecDeque::new(),
             recent_event_ids: VecDeque::new(),
             recent_event_lookup: HashSet::new(),
         }
@@ -508,6 +525,57 @@ impl OpenClawState {
         let drained = self.pending_outbound.drain(..).collect::<Vec<_>>();
         self.status.queued_outbound = 0;
         drained
+    }
+
+    fn pending_ack_payloads(&self) -> Vec<String> {
+        self.pending_ack_order
+            .iter()
+            .filter_map(|message_id| self.pending_acks.get(message_id))
+            .map(|record| record.payload.clone())
+            .collect()
+    }
+
+    fn register_pending_ack(&mut self, message_id: String, payload: String) -> bool {
+        let now = now_utc_iso();
+        if let Some(record) = self.pending_acks.get_mut(&message_id) {
+            record.payload = payload;
+            record.attempts += 1;
+            record.last_sent_at = now;
+            self.status.pending_ack_count = self.pending_acks.len();
+            return false;
+        }
+
+        self.pending_acks.insert(
+            message_id.clone(),
+            PendingAckRecord {
+                payload,
+                attempts: 1,
+                last_sent_at: now,
+            },
+        );
+        self.pending_ack_order.push_back(message_id.clone());
+
+        let mut dropped = false;
+        while self.pending_ack_order.len() > OPENCLAW_MAX_PENDING_ACKS {
+            dropped = true;
+            if let Some(oldest) = self.pending_ack_order.pop_front() {
+                self.pending_acks.remove(&oldest);
+            }
+        }
+
+        self.status.pending_ack_count = self.pending_acks.len();
+        dropped
+    }
+
+    fn acknowledge_pending_ack(&mut self, message_id: &str) -> bool {
+        if self.pending_acks.remove(message_id).is_none() {
+            return false;
+        }
+
+        self.pending_ack_order.retain(|item| item != message_id);
+        self.status.pending_ack_count = self.pending_acks.len();
+        self.status.last_acked_message_id = Some(message_id.to_string());
+        true
     }
 
     fn remember_event_id(&mut self, event_id: &str) -> bool {
@@ -728,6 +796,55 @@ struct LocalGatewayConfigPayload {
     gateway_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentLoopPayload {
+    root: Option<String>,
+    cycles: Option<u32>,
+    iterations: Option<u32>,
+    mode: Option<String>,
+    profile: Option<String>,
+    merge_policy: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentSoakPayload {
+    root: Option<String>,
+    objective: String,
+    docs: Option<Vec<String>>,
+    cycles: Option<u32>,
+    iterations: Option<u32>,
+    mode: Option<String>,
+    profile: Option<String>,
+    merge_policy: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutonomyDashboardPayload {
+    root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutonomyDashboardSnapshot {
+    workspace_root: String,
+    openclaw_status: OpenClawStatus,
+    pending_questions: usize,
+    pending_approvals: usize,
+    latest_session_id: Option<String>,
+    objective: Option<String>,
+    autopilot_status: Option<String>,
+    autopilot_pause_reason: Option<String>,
+    merge_policy: Option<String>,
+    parallel_agents: Option<u64>,
+    checkpoint_count: usize,
+    remaining_steps: usize,
+    verification_failures: usize,
+    updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenClawMessagePayload {
@@ -779,6 +896,15 @@ enum GatewayInboundEvent {
         event_id: Option<String>,
         content: String,
     },
+    #[serde(rename = "ack")]
+    Ack {
+        #[serde(default, alias = "id")]
+        event_id: Option<String>,
+        #[serde(alias = "messageId")]
+        message_id: String,
+        #[serde(default)]
+        status: Option<String>,
+    },
 }
 
 fn gateway_event_identity(event: &GatewayInboundEvent) -> Option<String> {
@@ -794,6 +920,11 @@ fn gateway_event_identity(event: &GatewayInboundEvent) -> Option<String> {
             ..
         } => event_id.clone().or_else(|| request_id.clone()),
         GatewayInboundEvent::AgentMessage { event_id, .. } => event_id.clone(),
+        GatewayInboundEvent::Ack {
+            event_id,
+            message_id,
+            ..
+        } => event_id.clone().or_else(|| Some(message_id.clone())),
     }
 }
 
@@ -834,12 +965,321 @@ fn validate_gateway_event(event: &GatewayInboundEvent) -> Result<(), String> {
                 return Err("agent.message content is empty".to_string());
             }
         }
+        GatewayInboundEvent::Ack { message_id, .. } => {
+            if message_id.trim().is_empty() {
+                return Err("ack message_id is empty".to_string());
+            }
+            if message_id.len() > 128 {
+                return Err("ack message_id is too long".to_string());
+            }
+        }
     }
     Ok(())
 }
 
 fn now_utc_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn workspace_has_agent_cli(root: &Path) -> bool {
+    root.join("src").join("grant_agent").join("cli.py").exists()
+        || root.join("pyproject.toml").exists()
+}
+
+fn resolve_workspace_root(root_override: Option<String>) -> Result<PathBuf, String> {
+    let candidate = if let Some(raw) = root_override {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            std::env::current_dir().map_err(|err| format!("Failed to resolve cwd: {err}"))?
+        } else {
+            PathBuf::from(trimmed)
+        }
+    } else {
+        std::env::current_dir().map_err(|err| format!("Failed to resolve cwd: {err}"))?
+    };
+
+    if !candidate.exists() {
+        return Err(format!(
+            "Workspace root does not exist: {}",
+            candidate.display()
+        ));
+    }
+    if !candidate.is_dir() {
+        return Err(format!(
+            "Workspace root is not a directory: {}",
+            candidate.display()
+        ));
+    }
+
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|err| format!("Failed to canonicalize workspace root: {err}"))?;
+
+    if workspace_has_agent_cli(&canonical) {
+        return Ok(canonical);
+    }
+
+    let mut cursor = canonical.clone();
+    while let Some(parent) = cursor.parent() {
+        if workspace_has_agent_cli(parent) {
+            return Ok(parent.to_path_buf());
+        }
+        cursor = parent.to_path_buf();
+    }
+
+    Ok(canonical)
+}
+
+fn latest_session_path(runs_root: &Path) -> Result<Option<PathBuf>, String> {
+    if !runs_root.exists() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<(SystemTime, PathBuf)> = None;
+    for entry in fs::read_dir(runs_root).map_err(|err| format!("Failed to read runs dir: {err}"))? {
+        let entry = entry.map_err(|err| format!("Failed to read runs entry: {err}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("Failed to read entry type: {err}"))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !file_name.starts_with("session_") {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let path = entry.path();
+
+        match &latest {
+            Some((last_modified, _)) if modified <= *last_modified => {}
+            _ => latest = Some((modified, path)),
+        }
+    }
+
+    Ok(latest.map(|(_, path)| path))
+}
+
+fn parse_agent_cli_stdout(stdout: &str) -> Result<Value, String> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok(json!({}));
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(value);
+    }
+
+    let start = trimmed.find('{');
+    let end = trimmed.rfind('}');
+    if let (Some(start), Some(end)) = (start, end) {
+        if start < end {
+            if let Ok(value) = serde_json::from_str::<Value>(&trimmed[start..=end]) {
+                return Ok(value);
+            }
+        }
+    }
+
+    Err("Failed to parse JSON output from grant_agent.cli".to_string())
+}
+
+fn value_string(payload: &Value, snake_key: &str, camel_key: &str) -> Option<String> {
+    payload
+        .get(camel_key)
+        .and_then(Value::as_str)
+        .or_else(|| payload.get(snake_key).and_then(Value::as_str))
+        .map(|value| value.to_string())
+}
+
+fn value_u64(payload: &Value, snake_key: &str, camel_key: &str) -> Option<u64> {
+    payload
+        .get(camel_key)
+        .and_then(Value::as_u64)
+        .or_else(|| payload.get(snake_key).and_then(Value::as_u64))
+}
+
+fn value_array_len(payload: &Value, snake_key: &str, camel_key: &str) -> usize {
+    payload
+        .get(camel_key)
+        .and_then(Value::as_array)
+        .or_else(|| payload.get(snake_key).and_then(Value::as_array))
+        .map(|items| items.len())
+        .unwrap_or(0)
+}
+
+fn build_autonomy_dashboard_snapshot(
+    app: &AppHandle,
+    root_override: Option<String>,
+) -> Result<AutonomyDashboardSnapshot, String> {
+    let workspace_root = resolve_workspace_root(root_override)?;
+
+    let (openclaw_status, pending_questions, pending_approvals) = {
+        let state = app.state::<OverlayAppState>();
+        let openclaw_status = state
+            .openclaw_state
+            .lock()
+            .map_err(|_| "Failed to lock OpenClaw state".to_string())?
+            .status
+            .clone();
+        let pending_questions = state
+            .question_state
+            .lock()
+            .map_err(|_| "Failed to lock question state".to_string())?
+            .pending
+            .len();
+        let pending_approvals = state
+            .approval_state
+            .lock()
+            .map_err(|_| "Failed to lock approval state".to_string())?
+            .pending
+            .len();
+        (openclaw_status, pending_questions, pending_approvals)
+    };
+
+    let runs_root = workspace_root.join(".agent_runs");
+    let latest_session = latest_session_path(&runs_root)?;
+
+    let mut snapshot = AutonomyDashboardSnapshot {
+        workspace_root: workspace_root.to_string_lossy().to_string(),
+        openclaw_status,
+        pending_questions,
+        pending_approvals,
+        latest_session_id: None,
+        objective: None,
+        autopilot_status: None,
+        autopilot_pause_reason: None,
+        merge_policy: None,
+        parallel_agents: None,
+        checkpoint_count: 0,
+        remaining_steps: 0,
+        verification_failures: 0,
+        updated_at: None,
+    };
+
+    let Some(session_path) = latest_session else {
+        return Ok(snapshot);
+    };
+
+    snapshot.latest_session_id = session_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string());
+
+    let state_path = session_path.join("state.json");
+    if state_path.exists() {
+        if let Ok(raw_state) = fs::read_to_string(&state_path) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&raw_state) {
+                snapshot.objective = value_string(&parsed, "objective", "objective");
+                snapshot.autopilot_status =
+                    value_string(&parsed, "autopilot_status", "autopilotStatus");
+                snapshot.autopilot_pause_reason =
+                    value_string(&parsed, "autopilot_pause_reason", "autopilotPauseReason");
+                snapshot.merge_policy = value_string(&parsed, "merge_policy", "mergePolicy");
+                snapshot.parallel_agents = value_u64(&parsed, "parallel_agents", "parallelAgents");
+                snapshot.remaining_steps = value_array_len(&parsed, "next_actions", "nextActions");
+                snapshot.verification_failures =
+                    value_array_len(&parsed, "verification_failures", "verificationFailures");
+            }
+        }
+
+        if let Ok(metadata) = fs::metadata(&state_path) {
+            if let Ok(modified) = metadata.modified() {
+                snapshot.updated_at = Some(chrono::DateTime::<Utc>::from(modified).to_rfc3339());
+            }
+        }
+    }
+
+    let checkpoints_path = session_path.join("checkpoints");
+    if checkpoints_path.exists() {
+        let mut count = 0usize;
+        if let Ok(entries) = fs::read_dir(checkpoints_path) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    count += 1;
+                }
+            }
+        }
+        snapshot.checkpoint_count = count;
+    }
+
+    Ok(snapshot)
+}
+
+async fn run_agent_cli_json(
+    app: &AppHandle,
+    root_override: Option<String>,
+    subcommand: &str,
+    extra_args: Vec<String>,
+    timeout_seconds: u64,
+) -> Result<Value, String> {
+    let workspace_root = resolve_workspace_root(root_override)?;
+    let workspace_root_text = workspace_root.to_string_lossy().to_string();
+
+    let mut command = TokioCommand::new("python");
+    command.arg("-m").arg("grant_agent.cli").arg(subcommand);
+    command.arg("--root").arg(&workspace_root_text);
+    for arg in extra_args {
+        command.arg(arg);
+    }
+
+    append_audit_entry(
+        app,
+        "agent.cli_invoked",
+        json!({
+            "subcommand": subcommand,
+            "workspaceRoot": workspace_root_text,
+        }),
+    );
+
+    let started = Instant::now();
+    let output = timeout(Duration::from_secs(timeout_seconds), command.output())
+        .await
+        .map_err(|_| {
+            format!(
+                "grant_agent.cli {} timed out after {}s",
+                subcommand, timeout_seconds
+            )
+        })?
+        .map_err(|err| format!("Failed to run grant_agent.cli {}: {err}", subcommand))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() {
+        append_audit_entry(
+            app,
+            "agent.cli_failed",
+            json!({
+                "subcommand": subcommand,
+                "durationMs": started.elapsed().as_millis() as u64,
+                "stderr": stderr,
+            }),
+        );
+        return Err(format!(
+            "grant_agent.cli {} failed: {}",
+            subcommand,
+            if stderr.is_empty() {
+                stdout
+            } else {
+                stderr
+            }
+        ));
+    }
+
+    let parsed = parse_agent_cli_stdout(&stdout)?;
+    append_audit_entry(
+        app,
+        "agent.cli_succeeded",
+        json!({
+            "subcommand": subcommand,
+            "durationMs": started.elapsed().as_millis() as u64,
+        }),
+    );
+    Ok(parsed)
 }
 
 fn default_modes() -> HashMap<String, ModeDefinition> {
@@ -1486,7 +1926,118 @@ fn emit_openclaw_status_snapshot(app: &AppHandle) {
     let _ = app.emit("openclaw://status", status);
 }
 
+fn sha256_hex(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn with_openclaw_envelope(payload: Value) -> Value {
+    let Value::Object(mut object) = payload else {
+        return payload;
+    };
+
+    let payload_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    if payload_type == "ack" {
+        return Value::Object(object);
+    }
+
+    object
+        .entry("messageId")
+        .or_insert_with(|| Value::String(format!("msg_{}", Uuid::new_v4().simple())));
+    object
+        .entry("nonce")
+        .or_insert_with(|| Value::String(format!("nonce_{}", Uuid::new_v4().simple())));
+    object
+        .entry("sentAt")
+        .or_insert_with(|| Value::String(now_utc_iso()));
+    object
+        .entry("ackRequested")
+        .or_insert_with(|| Value::Bool(true));
+
+    let mut integrity_payload = object.clone();
+    integrity_payload.remove("integrity");
+    let integrity = sha256_hex(&Value::Object(integrity_payload).to_string());
+    object.insert("integrity".to_string(), Value::String(integrity));
+    Value::Object(object)
+}
+
+fn parse_outbound_ack_fields(payload_text: &str) -> Option<(String, bool)> {
+    let parsed = serde_json::from_str::<Value>(payload_text).ok()?;
+    let payload_type = parsed
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if payload_type == "auth" || payload_type == "ack" {
+        return None;
+    }
+
+    let message_id = parsed
+        .get("messageId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let ack_requested = parsed
+        .get("ackRequested")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    Some((message_id, ack_requested))
+}
+
+fn register_pending_ack_from_payload(app: &AppHandle, payload_text: &str) {
+    let Some((message_id, ack_requested)) = parse_outbound_ack_fields(payload_text) else {
+        return;
+    };
+    if !ack_requested {
+        return;
+    }
+
+    let dropped = {
+        let state = app.state::<OverlayAppState>();
+        let mut openclaw = match state.openclaw_state.lock() {
+            Ok(openclaw) => openclaw,
+            Err(_) => return,
+        };
+        openclaw.register_pending_ack(message_id.clone(), payload_text.to_string())
+    };
+
+    if dropped {
+        append_audit_entry(
+            app,
+            "openclaw.pending_ack_overflow",
+            json!({
+                "maxPendingAcks": OPENCLAW_MAX_PENDING_ACKS,
+            }),
+        );
+    }
+    emit_openclaw_status_snapshot(app);
+}
+
+fn acknowledge_pending_ack(app: &AppHandle, message_id: &str) -> bool {
+    let acknowledged = {
+        let state = app.state::<OverlayAppState>();
+        let mut openclaw = match state.openclaw_state.lock() {
+            Ok(openclaw) => openclaw,
+            Err(_) => return false,
+        };
+        openclaw.acknowledge_pending_ack(message_id)
+    };
+
+    if acknowledged {
+        emit_openclaw_status_snapshot(app);
+    }
+    acknowledged
+}
+
 fn queue_openclaw_payload(app: &AppHandle, payload: Value) -> Result<OpenClawSendState, String> {
+    let payload = with_openclaw_envelope(payload);
     let payload_type = payload
         .get("type")
         .and_then(Value::as_str)
@@ -2552,7 +3103,22 @@ async fn connect_openclaw_inner(
                 let state = app_handle.state::<OverlayAppState>();
                 let lock_result = state.openclaw_state.lock();
                 match lock_result {
-                    Ok(mut openclaw) => openclaw.take_pending_outbound(),
+                    Ok(mut openclaw) => {
+                        let mut combined = openclaw.pending_ack_payloads();
+                        combined.extend(openclaw.take_pending_outbound());
+
+                        let mut deduped = Vec::new();
+                        let mut seen_message_ids = HashSet::new();
+                        for payload in combined {
+                            if let Some((message_id, _)) = parse_outbound_ack_fields(&payload) {
+                                if !seen_message_ids.insert(message_id) {
+                                    continue;
+                                }
+                            }
+                            deduped.push(payload);
+                        }
+                        deduped
+                    }
                     Err(_) => Vec::new(),
                 }
             };
@@ -2599,6 +3165,7 @@ async fn connect_openclaw_inner(
                         reconnect_after_disconnect = true;
                         break;
                     }
+                    register_pending_ack_from_payload(&app_handle, &outbound);
                 }
 
                 if !reconnect_after_disconnect {
@@ -2648,6 +3215,7 @@ async fn connect_openclaw_inner(
                                 reconnect_after_disconnect = true;
                                 break;
                             }
+                            register_pending_ack_from_payload(&app_handle, &outbound);
                         }
                         inbound = reader.next() => {
                             let Some(inbound) = inbound else {
@@ -2860,6 +3428,30 @@ async fn handle_gateway_event(app: &AppHandle, event: GatewayInboundEvent) {
         }
         GatewayInboundEvent::AgentMessage { content, .. } => {
             let _ = app.emit("openclaw://message", json!({ "content": content }));
+        }
+        GatewayInboundEvent::Ack {
+            message_id,
+            status,
+            ..
+        } => {
+            let acknowledged = acknowledge_pending_ack(app, &message_id);
+            append_audit_entry(
+                app,
+                "openclaw.ack_received",
+                json!({
+                    "messageId": message_id,
+                    "status": status,
+                    "acknowledged": acknowledged,
+                }),
+            );
+            let _ = app.emit(
+                "openclaw://ack",
+                json!({
+                    "messageId": message_id,
+                    "status": status,
+                    "acknowledged": acknowledged,
+                }),
+            );
         }
     }
 }
@@ -3135,6 +3727,10 @@ fn submit_prompt(
     provider: Option<String>,
     model: Option<String>,
     autonomous_mode: Option<bool>,
+    task_type: Option<String>,
+    task_routing: Option<Value>,
+    verification_provider: Option<String>,
+    verification_model: Option<String>,
 ) -> Result<(), String> {
     let trimmed = prompt.trim();
     if trimmed.is_empty() {
@@ -3151,6 +3747,12 @@ fn submit_prompt(
                 "provider": provider,
                 "model": model,
                 "source": "overlay.autonomous",
+                "taskType": task_type,
+                "taskRouting": task_routing,
+                "verification": {
+                    "provider": verification_provider,
+                    "model": verification_model,
+                },
             }),
         )?;
 
@@ -3161,6 +3763,9 @@ fn submit_prompt(
                 "length": trimmed.len(),
                 "provider": provider,
                 "model": model,
+                "taskType": task_type,
+                "verificationProvider": verification_provider,
+                "verificationModel": verification_model,
                 "queued": send_state == OpenClawSendState::Queued,
             }),
         );
@@ -3173,6 +3778,9 @@ fn submit_prompt(
                 "mode": current_mode_definition(&app).map(|m| m.id),
                 "provider": provider,
                 "model": model,
+                "taskType": task_type,
+                "verificationProvider": verification_provider,
+                "verificationModel": verification_model,
             }),
         );
     }
@@ -3720,6 +4328,98 @@ fn get_audit_log(app: AppHandle, limit: Option<usize>) -> Result<Vec<AuditEntry>
     Ok(get_audit_tail(&state.audit_log_path, max))
 }
 
+#[tauri::command]
+fn get_autonomy_dashboard_snapshot(
+    app: AppHandle,
+    payload: Option<AutonomyDashboardPayload>,
+) -> Result<AutonomyDashboardSnapshot, String> {
+    build_autonomy_dashboard_snapshot(&app, payload.and_then(|item| item.root))
+}
+
+#[tauri::command]
+async fn run_agent_vibe_status_command(
+    app: AppHandle,
+    payload: Option<AutonomyDashboardPayload>,
+) -> Result<Value, String> {
+    run_agent_cli_json(&app, payload.and_then(|item| item.root), "vibe-status", vec![], 120).await
+}
+
+#[tauri::command]
+async fn run_agent_vibe_continue_command(
+    app: AppHandle,
+    payload: AgentLoopPayload,
+) -> Result<Value, String> {
+    let cycles = payload.cycles.unwrap_or(2).clamp(1, 20);
+    let iterations = payload.iterations.unwrap_or(4).clamp(1, 24);
+
+    let mut args = vec![
+        "--cycles".to_string(),
+        cycles.to_string(),
+        "--iterations".to_string(),
+        iterations.to_string(),
+    ];
+    if let Some(mode) = payload.mode.filter(|value| !value.trim().is_empty()) {
+        args.push("--mode".to_string());
+        args.push(mode);
+    }
+    if let Some(profile) = payload.profile.filter(|value| !value.trim().is_empty()) {
+        args.push("--profile".to_string());
+        args.push(profile);
+    }
+    if let Some(merge_policy) = payload
+        .merge_policy
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--merge-policy".to_string());
+        args.push(merge_policy);
+    }
+
+    run_agent_cli_json(&app, payload.root, "vibe-continue", args, 600).await
+}
+
+#[tauri::command]
+async fn run_agent_soak_command(app: AppHandle, payload: AgentSoakPayload) -> Result<Value, String> {
+    let objective = payload.objective.trim().to_string();
+    if objective.is_empty() {
+        return Err("Soak objective cannot be empty".to_string());
+    }
+
+    let cycles = payload.cycles.unwrap_or(2).clamp(1, 20);
+    let iterations = payload.iterations.unwrap_or(2).clamp(1, 24);
+
+    let mut args = vec![
+        "--objective".to_string(),
+        objective,
+        "--cycles".to_string(),
+        cycles.to_string(),
+        "--iterations".to_string(),
+        iterations.to_string(),
+    ];
+    if let Some(mode) = payload.mode.filter(|value| !value.trim().is_empty()) {
+        args.push("--mode".to_string());
+        args.push(mode);
+    }
+    if let Some(profile) = payload.profile.filter(|value| !value.trim().is_empty()) {
+        args.push("--profile".to_string());
+        args.push(profile);
+    }
+    if let Some(merge_policy) = payload
+        .merge_policy
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--merge-policy".to_string());
+        args.push(merge_policy);
+    }
+    for doc in payload.docs.unwrap_or_default() {
+        if !doc.trim().is_empty() {
+            args.push("--doc".to_string());
+            args.push(doc);
+        }
+    }
+
+    run_agent_cli_json(&app, payload.root, "soak", args, 900).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3792,6 +4492,31 @@ mod tests {
         let result = validate_gateway_event(&event);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn pending_ack_register_and_acknowledge_updates_status() {
+        let mut state = OpenClawState::new();
+        state.register_pending_ack("msg_1".to_string(), "{\"messageId\":\"msg_1\"}".to_string());
+        state.register_pending_ack("msg_2".to_string(), "{\"messageId\":\"msg_2\"}".to_string());
+
+        assert_eq!(state.status.pending_ack_count, 2);
+        assert!(state.acknowledge_pending_ack("msg_1"));
+        assert_eq!(state.status.pending_ack_count, 1);
+        assert_eq!(state.status.last_acked_message_id, Some("msg_1".to_string()));
+    }
+
+    #[test]
+    fn outbound_envelope_adds_message_metadata() {
+        let payload = json!({ "type": "user.message", "content": "hello" });
+        let wrapped = with_openclaw_envelope(payload);
+        let obj = wrapped.as_object().expect("payload should be object");
+
+        assert_eq!(obj.get("type").and_then(Value::as_str), Some("user.message"));
+        assert!(obj.get("messageId").and_then(Value::as_str).is_some());
+        assert!(obj.get("nonce").and_then(Value::as_str).is_some());
+        assert_eq!(obj.get("ackRequested").and_then(Value::as_bool), Some(true));
+        assert!(obj.get("integrity").and_then(Value::as_str).is_some());
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3851,7 +4576,11 @@ pub fn run() {
             configure_night_mode,
             run_night_mode_now,
             get_last_night_mode_report,
-            get_audit_log
+            get_audit_log,
+            get_autonomy_dashboard_snapshot,
+            run_agent_vibe_status_command,
+            run_agent_vibe_continue_command,
+            run_agent_soak_command
         ])
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;

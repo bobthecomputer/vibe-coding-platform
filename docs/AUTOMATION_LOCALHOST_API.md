@@ -50,7 +50,16 @@ curl -X POST "http://127.0.0.1:47635/v1/command" \
 - `has_openclaw_gateway_token`
 - `send_openclaw_message` with payload `{ message: string }`
 
-`get_openclaw_status` includes connection telemetry such as `connected`, `lastError`, `reconnectAttempt`, and `queuedOutbound` (messages waiting for replay).
+`get_openclaw_status` includes connection telemetry such as `connected`, `lastError`, `reconnectAttempt`, `queuedOutbound` (messages waiting for replay), and `pendingAckCount`.
+
+## Desktop autonomous dashboard commands (Tauri invoke)
+
+- `get_autonomy_dashboard_snapshot` with payload `{ payload?: { root?: string } }`
+- `run_agent_vibe_status_command` with payload `{ payload?: { root?: string } }`
+- `run_agent_vibe_continue_command` with payload `{ payload: { root?: string, cycles?: number, iterations?: number, mode?: string, profile?: string, mergePolicy?: string } }`
+- `run_agent_soak_command` with payload `{ payload: { root?: string, objective: string, docs?: string[], cycles?: number, iterations?: number, mode?: string, profile?: string, mergePolicy?: string } }`
+
+Desktop task-model routing lets users define provider/model preferences per task class (frontend/backend/verification/research/general); those preferences are forwarded to OpenClaw in prompt metadata.
 
 ## Provider secret management (keychain-backed)
 

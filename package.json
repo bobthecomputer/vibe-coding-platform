@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "dev": "tauri dev",
+    "dev:live": "powershell -NoProfile -Command \"Get-Process vibe-coding-platform,cargo -ErrorAction SilentlyContinue | Stop-Process -Force\"; tauri dev",
+    "build": "tauri build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

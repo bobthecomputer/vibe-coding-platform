@@ -12,6 +12,9 @@ class ModePreset:
     max_tokens: int
     max_handoffs: int
     max_runtime_seconds: int
+    parallel_agents: int = 1
+    merge_policy: str = "best_score"
+    description: str = ""
 
 
 class ModeRegistry:
@@ -32,6 +35,9 @@ class ModeRegistry:
                 max_tokens=int(value["max_tokens"]),
                 max_handoffs=int(value["max_handoffs"]),
                 max_runtime_seconds=int(value["max_runtime_seconds"]),
+                parallel_agents=int(value.get("parallel_agents", 1)),
+                merge_policy=str(value.get("merge_policy", "best_score")),
+                description=value.get("description", ""),
             )
         return out
 
@@ -46,4 +52,10 @@ class ModeRegistry:
             max_tokens=2400,
             max_handoffs=6,
             max_runtime_seconds=300,
+            parallel_agents=1,
+            merge_policy="best_score",
+            description="Default fallback mode",
         )
+
+    def get_parallel_agents(self, name: str) -> int:
+        return self.get(name).parallel_agents

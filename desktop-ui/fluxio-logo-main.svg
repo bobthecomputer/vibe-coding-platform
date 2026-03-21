@@ -1,0 +1,33 @@
+<svg width="860" height="220" viewBox="0 0 860 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="word" x1="250" y1="60" x2="700" y2="160" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F4FBFF"/>
+      <stop offset="1" stop-color="#CDE2F5"/>
+    </linearGradient>
+    <filter id="softGlow" x="0" y="0" width="860" height="220" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g transform="translate(18,18)">
+    <rect x="0" y="0" width="184" height="184" rx="40" fill="#0D1D33"/>
+    <rect x="0" y="0" width="184" height="184" rx="40" stroke="#1B3557" stroke-width="3"/>
+
+    <path d="M32 110C36 77 56 58 95 58C119 58 141 66 165 80" stroke="#2A496B" stroke-width="7" stroke-linecap="round"/>
+    <path d="M36 103C39 77 60 61 95 61C118 61 140 68 163 81" stroke="#8DE95A" stroke-width="7" stroke-linecap="round" filter="url(#softGlow)"/>
+
+    <path d="M59 145V67L92 100" stroke="#EEF5FF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M125 145V67L93 100" stroke="#EEF5FF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M77 146L93 98L110 146" stroke="#7E95AD" stroke-width="7" stroke-linecap="round"/>
+
+    <circle cx="93" cy="100" r="9" fill="#90F85F"/>
+    <circle cx="93" cy="100" r="15" fill="#90F85F" fill-opacity="0.2"/>
+    <circle cx="160" cy="81" r="4" fill="#ECFFA4"/>
+  </g>
+
+  <text x="236" y="136" fill="url(#word)" font-size="108" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="700" letter-spacing="1.8">Fluxio</text>
+</svg>

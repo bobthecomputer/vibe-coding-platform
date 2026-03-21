@@ -40,6 +40,7 @@ All tools/skills/plugins are treated as untrusted by default.
    - Mitigation: append-only JSONL audit log for key actions and decisions
    - Mitigation: structured events emitted for UI visibility
    - Mitigation: OpenClaw reconnect/error/rejection events are audited for post-incident analysis
+   - Mitigation: OpenClaw ack telemetry tracks pending/unacked outbound messages
 
 5. **Over-capture of user context**
    - Mitigation: context capture is trigger-based only (never continuous)
@@ -49,11 +50,11 @@ All tools/skills/plugins are treated as untrusted by default.
 
 - If no localhost API token is configured, local processes on the same machine can call the API.
 - Allowlisted external commands may still run harmful subcommands if the allowlist is too broad.
-- OpenClaw schema validation is now stricter, but replay protection and per-event quotas are still limited.
+- OpenClaw replay protection now includes event-id dedupe, nonce/integrity envelope fields, and ack-tracked outbound replay.
 
 ## Recommended hardening next
 
 - Rotate localhost API token periodically and scope token distribution.
 - Add stricter per-tool arg validation and command timeout/output quotas.
-- Add gateway message signing/replay resistance for stronger local IPC trust.
+- Upgrade integrity checksum to shared-secret/HMAC verification between desktop and gateway.
 - Add encrypted transcript-at-rest option.

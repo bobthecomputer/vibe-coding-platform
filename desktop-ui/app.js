@@ -12,6 +12,52 @@ const STORAGE_KEYS = {
   SHORTCUTS: 'vibe_shortcuts'
 };
 
+const TASK_ROUTE_TYPES = [
+  { id: 'frontend', label: 'Frontend' },
+  { id: 'backend', label: 'Backend' },
+  { id: 'verification', label: 'Verification' },
+  { id: 'research', label: 'Research' },
+  { id: 'general', label: 'General' }
+];
+
+const DEFAULT_TASK_MODEL_ROUTING = {
+  frontend: { providerId: 'minimax', model: 'abab6.5s-chat' },
+  backend: { providerId: 'codex', model: 'gpt-5-codex' },
+  verification: { providerId: 'codex', model: 'gpt-5-codex' },
+  research: { providerId: 'anthropic', model: 'claude-3-5-sonnet-20241022' },
+  general: { providerId: 'openai', model: 'gpt-4o' }
+};
+
+const PERMISSION_CAPABILITIES = [
+  { id: 'node.command', label: 'Node Command' },
+  { id: 'shell.exec', label: 'Shell Exec' },
+  { id: 'git.commit', label: 'Git Commit' },
+  { id: 'git.push', label: 'Git Push' },
+  { id: 'fs.delete', label: 'Delete Files' },
+  { id: 'message.send', label: 'Message Send' },
+  { id: 'context.capture', label: 'Context Capture' }
+];
+
+const DEFAULT_PERMISSION_MATRIX = {
+  'node.command': 'ask',
+  'shell.exec': 'ask',
+  'git.commit': 'ask',
+  'git.push': 'ask',
+  'fs.delete': 'deny',
+  'message.send': 'allow',
+  'context.capture': 'allow'
+};
+
+const DEFAULT_PLUGINS = [
+  { id: 'proof-panel', name: 'Proof Panel', enabled: true },
+  { id: 'audit-timeline', name: 'Audit Timeline', enabled: true }
+];
+
+const DEFAULT_SKILLS = [
+  { id: 'repo-scan', name: 'Repo Scan', enabled: true },
+  { id: 'release-checklist', name: 'Release Checklist', enabled: false }
+];
+
 const DEFAULT_SETTINGS = {
   theme: 'default',
   font: 'default',
@@ -31,7 +77,14 @@ const DEFAULT_SETTINGS = {
   parallelAgents: 3,
   mergePolicy: 'consensus',
   pauseOnVerificationFailure: true,
-  openclawGatewayUrl: 'ws://127.0.0.1:8765'
+  openclawGatewayUrl: 'ws://127.0.0.1:8765',
+  taskModelRouting: DEFAULT_TASK_MODEL_ROUTING,
+  permissionMatrix: DEFAULT_PERMISSION_MATRIX,
+  mcpServers: [],
+  plugins: DEFAULT_PLUGINS,
+  skills: DEFAULT_SKILLS,
+  runLiveCommand: 'npm run dev:live',
+  runLiveCwd: ''
 };
 
 const PROFILE_PRESETS = {
@@ -97,10 +150,10 @@ const DEFAULT_PROVIDERS = [
   { id: 'mistral', name: 'Mistral Large', icon: '🌫️', baseUrl: 'https://api.mistral.ai/v1', authType: 'api_key', defaultModel: 'mistral-large-latest' },
   { id: 'cohere', name: 'Cohere Command R+', icon: '🌊', baseUrl: 'https://api.cohere.ai/v1', authType: 'api_key', defaultModel: 'command-r-plus' },
   { id: 'deepseek', name: 'DeepSeek Chat', icon: '🔍', baseUrl: 'https://api.deepseek.com/v1', authType: 'api_key', defaultModel: 'deepseek-chat' },
-  { id: 'minimax', name: 'MiniMax', icon: '🔮', baseUrl: 'https://api.minimax.chat/v1', authType: 'api_key', defaultModel: 'abab6.5s-chat' },
+  { id: 'minimax', name: 'MiniMax', icon: '🔮', baseUrl: 'https://api.minimax.chat/v1', authType: 'bearer', defaultModel: 'abab6.5s-chat' },
   
   // Code Specialization
-  { id: 'codex', name: 'OpenAI Codex', icon: '💻', baseUrl: 'https://api.openai.com/v1', authType: 'api_key', defaultModel: 'code-davinci-002' },
+  { id: 'codex', name: 'OpenAI Codex', icon: '💻', baseUrl: 'https://api.openai.com/v1', authType: 'api_key', defaultModel: 'gpt-5-codex' },
   
   // Cloud & Enterprise
   { id: 'azure', name: 'Azure OpenAI', icon: '☁️', baseUrl: 'https://YOUR_RESOURCE.openai.azure.com/openai/v1', authType: 'api_key', defaultModel: 'gpt-4' },
@@ -116,7 +169,10 @@ const DEFAULT_SHORTCUTS = [
   { id: 'settings', name: 'Settings', desc: 'Open settings', keys: 'Ctrl+,', action: 'openSettings' },
   { id: 'command_palette', name: 'Command Palette', desc: 'Quick actions', keys: 'Ctrl+K', action: 'openCommandPalette' },
   { id: 'voice', name: 'Voice Input', desc: 'Start voice recording', keys: 'Ctrl+Shift+V', action: 'voiceRecord' },
-  { id: 'toggle_sidebar', name: 'Toggle Sidebar', desc: 'Show/hide sidebar', keys: 'Ctrl+B', action: 'toggleSidebar' }
+  { id: 'toggle_sidebar', name: 'Toggle Sidebar', desc: 'Show/hide sidebar', keys: 'Ctrl+B', action: 'toggleSidebar' },
+  { id: 'vibe_status', name: 'Vibe Status', desc: 'Fetch latest autonomous status', keys: '', action: 'vibeStatus' },
+  { id: 'vibe_continue', name: 'Vibe Continue', desc: 'Continue autonomous run cycle', keys: '', action: 'continueAutonomy' },
+  { id: 'run_soak', name: 'Run Soak', desc: 'Start a soak validation cycle', keys: '', action: 'runSoak' }
 ];
 
 const DEFAULT_MODES = ['coding', 'youtube', 'writing'];
@@ -133,7 +189,7 @@ const appState = {
   conversations: [],
   folders: [],
   activeConversationId: null,
-  settings: { ...DEFAULT_SETTINGS },
+  settings: normalizeSettings(DEFAULT_SETTINGS),
   providers: [...DEFAULT_PROVIDERS],
   activeProvider: null,
   providerSecretPresence: {},
@@ -144,12 +200,19 @@ const appState = {
     lastEventAt: null,
     lastConnectedAt: null,
     reconnectAttempt: 0,
-    queuedOutbound: 0
+    queuedOutbound: 0,
+    pendingAckCount: 0
   },
+  autonomySnapshot: null,
+  lastAutonomyOutput: 'Run output will appear here.',
   shortcuts: [...DEFAULT_SHORTCUTS],
   isRecording: false,
   tutorialComplete: false,
-  editingProviderId: null
+  editingProviderId: null,
+  selectedProviderTemplateId: null,
+  conversationSearchQuery: '',
+  activeInsightPanel: 'lineage',
+  runLiveInFlight: false
 };
 
 // DOM Elements
@@ -192,6 +255,20 @@ const elements = {
   modelSelector: document.getElementById('modelSelector'),
   commandInput: document.getElementById('commandInput'),
   commandList: document.getElementById('commandList'),
+  autonomyUpdatedValue: document.getElementById('autonomyUpdatedValue'),
+  autonomySessionValue: document.getElementById('autonomySessionValue'),
+  autonomyStatusValue: document.getElementById('autonomyStatusValue'),
+  autonomyMergeValue: document.getElementById('autonomyMergeValue'),
+  autonomyCheckpointsValue: document.getElementById('autonomyCheckpointsValue'),
+  autonomyRemainingValue: document.getElementById('autonomyRemainingValue'),
+  autonomyApprovalsValue: document.getElementById('autonomyApprovalsValue'),
+  autonomyRefreshBtn: document.getElementById('autonomyRefreshBtn'),
+  autonomyVibeStatusBtn: document.getElementById('autonomyVibeStatusBtn'),
+  autonomyCyclesInput: document.getElementById('autonomyCyclesInput'),
+  autonomyIterationsInput: document.getElementById('autonomyIterationsInput'),
+  autonomyContinueBtn: document.getElementById('autonomyContinueBtn'),
+  autonomySoakBtn: document.getElementById('autonomySoakBtn'),
+  autonomyOutput: document.getElementById('autonomyOutput'),
   tutorialTitle: document.getElementById('tutorialTitle'),
   tutorialText: document.getElementById('tutorialText'),
   tutorialBtn: document.getElementById('tutorialBtn'),
@@ -207,15 +284,36 @@ const elements = {
   parallelAgentsInput: document.getElementById('parallelAgentsInput'),
   mergePolicySelector: document.getElementById('mergePolicySelector'),
   agentPauseOnFailToggle: document.getElementById('agentPauseOnFailToggle'),
+  modelRoutingGrid: document.getElementById('modelRoutingGrid'),
   openclawStatusBadge: document.getElementById('openclawStatusBadge'),
   openclawStatusText: document.getElementById('openclawStatusText'),
   openclawToggleBtn: document.getElementById('openclawToggleBtn'),
   openclawGatewayUrlInput: document.getElementById('openclawGatewayUrlInput'),
+  conversationSearchInput: document.getElementById('conversationSearchInput'),
+  forkConversationBtn: document.getElementById('forkConversationBtn'),
+  runLiveBtn: document.getElementById('runLiveBtn'),
+  autonomyRunLiveBtn: document.getElementById('autonomyRunLiveBtn'),
+  runLiveFromSettingsBtn: document.getElementById('runLiveFromSettingsBtn'),
+  runLiveCommandInput: document.getElementById('runLiveCommandInput'),
+  runLiveCwdInput: document.getElementById('runLiveCwdInput'),
+  permissionGrid: document.getElementById('permissionGrid'),
+  addMcpServerBtn: document.getElementById('addMcpServerBtn'),
+  mcpServersList: document.getElementById('mcpServersList'),
+  pluginsList: document.getElementById('pluginsList'),
+  skillsList: document.getElementById('skillsList'),
+  insightTabs: document.getElementById('insightTabs'),
+  insightLineagePanel: document.getElementById('insightLineagePanel'),
+  insightRiskPanel: document.getElementById('insightRiskPanel'),
+  insightIntegrationsPanel: document.getElementById('insightIntegrationsPanel'),
+  lineageOutput: document.getElementById('lineageOutput'),
+  riskOutput: document.getElementById('riskOutput'),
+  integrationOutput: document.getElementById('integrationOutput'),
   importChatGPTBtn: document.getElementById('importChatGPTBtn'),
   importClaudeBtn: document.getElementById('importClaudeBtn'),
   importJsonBtn: document.getElementById('importJsonBtn'),
   importFileInput: document.getElementById('importFileInput'),
-  providerQuickKey: document.getElementById('providerQuickKey')
+  providerQuickKey: document.getElementById('providerQuickKey'),
+  providerAuthHelp: document.getElementById('providerAuthHelp')
 };
 
 // Tauri API
@@ -243,6 +341,139 @@ function saveToStorage(key, value) {
   }
 }
 
+function cloneTaskModelRouting(source = DEFAULT_TASK_MODEL_ROUTING) {
+  const output = {};
+  TASK_ROUTE_TYPES.forEach(route => {
+    const fallback = DEFAULT_TASK_MODEL_ROUTING[route.id] || { providerId: 'openai', model: '' };
+    const current = source?.[route.id] || fallback;
+    output[route.id] = {
+      providerId: typeof current.providerId === 'string' ? current.providerId : fallback.providerId,
+      model: typeof current.model === 'string' ? current.model : fallback.model
+    };
+  });
+  return output;
+}
+
+function normalizeTaskModelRouting(rawRouting) {
+  return cloneTaskModelRouting(rawRouting || DEFAULT_TASK_MODEL_ROUTING);
+}
+
+function normalizePermissionMatrix(rawMatrix) {
+  const matrix = { ...DEFAULT_PERMISSION_MATRIX };
+  const source = rawMatrix && typeof rawMatrix === 'object' ? rawMatrix : {};
+  PERMISSION_CAPABILITIES.forEach(capability => {
+    const value = source[capability.id];
+    matrix[capability.id] = ['allow', 'ask', 'deny'].includes(value) ? value : matrix[capability.id];
+  });
+  return matrix;
+}
+
+function normalizeIntegrationList(rawList, fallbackList) {
+  const list = Array.isArray(rawList) ? rawList : fallbackList;
+  return list
+    .map((item, index) => {
+      const id = String(item?.id || item?.name || `item_${index + 1}`).trim().toLowerCase().replace(/\s+/g, '-');
+      const name = String(item?.name || item?.id || `Item ${index + 1}`).trim();
+      if (!name) {
+        return null;
+      }
+      return {
+        id,
+        name,
+        enabled: item?.enabled !== false
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeMcpServers(rawList) {
+  const list = Array.isArray(rawList) ? rawList : [];
+  return list
+    .map((item, index) => {
+      const name = String(item?.name || `MCP Server ${index + 1}`).trim();
+      const command = String(item?.command || '').trim();
+      const args = Array.isArray(item?.args)
+        ? item.args.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+      if (!name) {
+        return null;
+      }
+      return {
+        id: String(item?.id || `${name.toLowerCase().replace(/\s+/g, '-')}-${index + 1}`),
+        name,
+        command,
+        args,
+        enabled: item?.enabled !== false
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeProviderRecord(provider, index) {
+  const normalized = {
+    id: provider?.id || `provider_${index + 1}`,
+    name: provider?.name || `Provider ${index + 1}`,
+    icon: provider?.icon || '🔑',
+    baseUrl: provider?.baseUrl || '',
+    authType: provider?.authType || 'api_key',
+    defaultModel: provider?.defaultModel || '',
+    secretStored: !!provider?.secretStored
+  };
+
+  if (normalized.id === 'codex') {
+    normalized.authType = 'api_key';
+    if (!normalized.baseUrl || normalized.baseUrl.includes('YOUR_RESOURCE')) {
+      normalized.baseUrl = 'https://api.openai.com/v1';
+    }
+    if (!normalized.defaultModel || normalized.defaultModel === 'code-davinci-002') {
+      normalized.defaultModel = 'gpt-5-codex';
+    }
+  }
+
+  if (normalized.id === 'minimax') {
+    normalized.authType = 'bearer';
+    if (!normalized.baseUrl || normalized.baseUrl.includes('YOUR_RESOURCE')) {
+      normalized.baseUrl = 'https://api.minimax.chat/v1';
+    }
+    if (!normalized.defaultModel) {
+      normalized.defaultModel = 'abab6.5s-chat';
+    }
+  }
+
+  return normalized;
+}
+
+function ensureCoreProviders(providers) {
+  const output = [...providers];
+  ['minimax', 'codex'].forEach(coreId => {
+    if (output.some(provider => provider.id === coreId)) {
+      return;
+    }
+    const template = DEFAULT_PROVIDERS.find(provider => provider.id === coreId);
+    if (template) {
+      output.push(normalizeProviderRecord(template, output.length));
+    }
+  });
+  return output;
+}
+
+function normalizeSettings(rawSettings) {
+  const merged = {
+    ...DEFAULT_SETTINGS,
+    ...(rawSettings || {})
+  };
+  merged.taskModelRouting = normalizeTaskModelRouting(rawSettings?.taskModelRouting || merged.taskModelRouting);
+  merged.permissionMatrix = normalizePermissionMatrix(rawSettings?.permissionMatrix || merged.permissionMatrix);
+  merged.mcpServers = normalizeMcpServers(rawSettings?.mcpServers || merged.mcpServers);
+  merged.plugins = normalizeIntegrationList(rawSettings?.plugins, DEFAULT_PLUGINS);
+  merged.skills = normalizeIntegrationList(rawSettings?.skills, DEFAULT_SKILLS);
+  merged.runLiveCommand = typeof merged.runLiveCommand === 'string' && merged.runLiveCommand.trim()
+    ? merged.runLiveCommand.trim()
+    : DEFAULT_SETTINGS.runLiveCommand;
+  merged.runLiveCwd = typeof merged.runLiveCwd === 'string' ? merged.runLiveCwd.trim() : '';
+  return merged;
+}
+
 function loadConversations() {
   return loadFromStorage(STORAGE_KEYS.CONVERSATIONS, []);
 }
@@ -266,10 +497,7 @@ function saveFolders() {
 
 function loadSettings() {
   const stored = loadFromStorage(STORAGE_KEYS.SETTINGS, {});
-  return {
-    ...DEFAULT_SETTINGS,
-    ...(stored || {})
-  };
+  return normalizeSettings(stored || {});
 }
 
 function saveSettings() {
@@ -279,17 +507,13 @@ function saveSettings() {
 function loadProviders() {
   const stored = loadFromStorage(STORAGE_KEYS.PROVIDERS, null);
   if (stored && stored.length > 0) {
-    return stored.map((provider, index) => ({
-      id: provider.id || `provider_${index + 1}`,
-      name: provider.name || `Provider ${index + 1}`,
-      icon: provider.icon || '🔑',
-      baseUrl: provider.baseUrl || '',
-      authType: provider.authType || 'api_key',
-      defaultModel: provider.defaultModel || '',
-      secretStored: !!provider.secretStored
-    }));
+    return ensureCoreProviders(
+      stored.map((provider, index) => normalizeProviderRecord(provider, index))
+    );
   }
-  return [...DEFAULT_PROVIDERS];
+  return ensureCoreProviders(
+    DEFAULT_PROVIDERS.map((provider, index) => normalizeProviderRecord(provider, index))
+  );
 }
 
 function saveProviders() {
@@ -335,6 +559,7 @@ function createConversation(title = 'New Conversation') {
     mode: 'coding',
     folderId: 'default',
     providerId: appState.activeProvider,
+    parentId: null,
     messages: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -376,6 +601,7 @@ function setActiveConversation(id) {
   saveActiveConversation(id);
   renderActiveConversation();
   renderConversationList();
+  void refreshMissionControl();
 }
 
 function addMessage(content, role = 'user') {
@@ -396,6 +622,7 @@ function addMessage(content, role = 'user') {
   
   conversation.messages.push(message);
   updateConversation(conversation.id, { messages: conversation.messages });
+  void refreshMissionControl();
   
   return message;
 }
@@ -451,12 +678,18 @@ function renderProvidersList() {
     const hasSecret = appState.providerSecretPresence[provider.id] ?? provider.secretStored ?? false;
     const isConnected = provider.authType === 'none' || hasSecret;
     provider.secretStored = isConnected;
+    const authHint = provider.authType === 'bearer'
+      ? 'Bearer token'
+      : provider.authType === 'api_key'
+        ? 'API key'
+        : provider.authType;
+    const connectionText = isConnected ? `Connected (${authHint})` : `Add ${authHint}`;
     
     item.innerHTML = `
       <div class="provider-icon">${provider.icon}</div>
       <div class="provider-info">
         <div class="provider-name">${escapeHtml(provider.name)}</div>
-        <div class="provider-status ${isConnected ? 'connected' : ''}">${isConnected ? 'Connected' : 'Paste key to connect'}</div>
+        <div class="provider-status ${isConnected ? 'connected' : ''}">${escapeHtml(connectionText)}</div>
       </div>
       <div class="provider-actions">
         <button class="icon-btn provider-edit-btn" title="Edit">
@@ -494,6 +727,7 @@ function renderProvidersList() {
   });
   
   updateModelSelector();
+  renderTaskModelRoutingControls();
 }
 
 function setActiveProvider(providerId) {
@@ -512,6 +746,7 @@ function editProvider(providerId) {
   if (!provider) return;
   
   appState.editingProviderId = providerId;
+  appState.selectedProviderTemplateId = null;
   elements.providerModalTitle.textContent = `Edit ${provider.name}`;
   
   document.getElementById('providerName').value = provider.name;
@@ -551,7 +786,10 @@ async function saveProviderConfig() {
     return;
   }
 
-  const providerId = appState.editingProviderId || generateId();
+  let providerId = appState.editingProviderId || appState.selectedProviderTemplateId || generateId();
+  if (!appState.editingProviderId && appState.providers.some(provider => provider.id === providerId)) {
+    providerId = generateId();
+  }
 
   let secret = document.getElementById('providerQuickKey').value.trim();
   if (!secret) {
@@ -597,14 +835,25 @@ async function saveProviderConfig() {
   if (appState.editingProviderId) {
     const provider = appState.providers.find(p => p.id === appState.editingProviderId);
     if (provider) {
-      provider.name = name;
-      provider.baseUrl = baseUrl;
-      provider.authType = authType;
-      provider.defaultModel = defaultModel;
+      const normalized = normalizeProviderRecord(
+        {
+          ...provider,
+          name,
+          baseUrl,
+          authType,
+          defaultModel,
+          secretStored
+        },
+        0
+      );
+      provider.name = normalized.name;
+      provider.baseUrl = normalized.baseUrl;
+      provider.authType = normalized.authType;
+      provider.defaultModel = normalized.defaultModel;
       provider.secretStored = secretStored;
     }
   } else {
-    const newProvider = {
+    const newProvider = normalizeProviderRecord({
       id: providerId,
       name,
       icon: '🔑',
@@ -612,7 +861,7 @@ async function saveProviderConfig() {
       authType,
       defaultModel,
       secretStored
-    };
+    }, appState.providers.length);
     appState.providers.push(newProvider);
 
     if (!appState.activeProvider) {
@@ -630,11 +879,13 @@ async function saveProviderConfig() {
 
 function openProviderModal() {
   elements.providerModal.classList.add('open');
+  updateProviderAuthHelp();
 }
 
 function closeProviderModal() {
   elements.providerModal.classList.remove('open');
   appState.editingProviderId = null;
+  appState.selectedProviderTemplateId = null;
   document.getElementById('providerName').value = '';
   document.getElementById('providerBaseUrl').value = '';
   document.getElementById('providerAuthType').value = 'api_key';
@@ -648,6 +899,7 @@ function closeProviderModal() {
   document.getElementById('providerOauthAuthUrl').value = '';
   document.getElementById('providerOauthTokenUrl').value = '';
   document.getElementById('providerQuickKey').value = '';
+  updateProviderAuthHelp();
 }
 
 function updateAuthFieldsVisibility() {
@@ -657,6 +909,38 @@ function updateAuthFieldsVisibility() {
   document.getElementById('bearerGroup').classList.toggle('hidden', authType !== 'bearer');
   document.getElementById('basicGroup').classList.toggle('hidden', authType !== 'basic');
   document.getElementById('oauthGroup').classList.toggle('hidden', authType !== 'oauth');
+  updateProviderAuthHelp();
+}
+
+function updateProviderAuthHelp() {
+  if (!elements.providerAuthHelp) {
+    return;
+  }
+
+  const authType = document.getElementById('providerAuthType').value;
+  const providerName = (document.getElementById('providerName').value || '').toLowerCase();
+  const baseHelp = 'Stored securely in your OS keychain. Not saved in plain app storage.';
+
+  if (providerName.includes('codex') || providerName.includes('openai')) {
+    elements.providerAuthHelp.textContent = `Codex/OpenAI should use API key auth. ${baseHelp}`;
+    return;
+  }
+
+  if (providerName.includes('minimax')) {
+    elements.providerAuthHelp.textContent = `MiniMax should use bearer token auth. ${baseHelp}`;
+    return;
+  }
+
+  if (authType === 'bearer') {
+    elements.providerAuthHelp.textContent = `Use bearer token format for this provider. ${baseHelp}`;
+    return;
+  }
+  if (authType === 'api_key') {
+    elements.providerAuthHelp.textContent = `Use API key format for this provider. ${baseHelp}`;
+    return;
+  }
+
+  elements.providerAuthHelp.textContent = baseHelp;
 }
 
 function updateModelSelector() {
@@ -669,6 +953,195 @@ function updateModelSelector() {
     option.textContent = `${provider.name} (${provider.defaultModel || 'default'})`;
     option.selected = provider.id === appState.activeProvider;
     selector.appendChild(option);
+  });
+}
+
+function getProviderById(providerId) {
+  return appState.providers.find(provider => provider.id === providerId) || null;
+}
+
+function providerHasCredential(providerId) {
+  const provider = getProviderById(providerId);
+  if (!provider) {
+    return false;
+  }
+  if (provider.authType === 'none') {
+    return true;
+  }
+  return !!(appState.providerSecretPresence[provider.id] ?? provider.secretStored);
+}
+
+function getTaskRouteConfig(taskType) {
+  const fallback = DEFAULT_TASK_MODEL_ROUTING[taskType] || DEFAULT_TASK_MODEL_ROUTING.general;
+  const current = appState.settings.taskModelRouting?.[taskType] || fallback;
+  return {
+    providerId: typeof current.providerId === 'string' ? current.providerId : fallback.providerId,
+    model: typeof current.model === 'string' ? current.model : fallback.model
+  };
+}
+
+function resolveTaskRoute(taskType) {
+  const config = getTaskRouteConfig(taskType);
+  const fallback = DEFAULT_TASK_MODEL_ROUTING[taskType] || DEFAULT_TASK_MODEL_ROUTING.general;
+  const provider = getProviderById(config.providerId)
+    || getProviderById(fallback.providerId)
+    || getProviderById(appState.activeProvider)
+    || appState.providers[0]
+    || null;
+
+  const model = (config.model || '').trim() || provider?.defaultModel || '';
+  return {
+    taskType,
+    providerId: provider?.id || config.providerId || fallback.providerId,
+    providerName: provider?.name || config.providerId || 'Unknown provider',
+    authType: provider?.authType || 'api_key',
+    model
+  };
+}
+
+function buildResolvedTaskRoutingMap() {
+  const output = {};
+  TASK_ROUTE_TYPES.forEach(route => {
+    const resolved = resolveTaskRoute(route.id);
+    output[route.id] = {
+      providerId: resolved.providerId,
+      model: resolved.model
+    };
+  });
+  return output;
+}
+
+function inferTaskTypeFromPrompt(text, mode) {
+  const source = `${mode || ''} ${text || ''}`.toLowerCase();
+
+  const verificationHints = [
+    'verify', 'verification', 'review', 'test', 'tests', 'lint', 'qa', 'regression', 'assert', 'failing test'
+  ];
+  if (verificationHints.some(hint => source.includes(hint))) {
+    return 'verification';
+  }
+
+  const frontendHints = [
+    'frontend', 'ui', 'ux', 'css', 'html', 'react', 'vue', 'svelte', 'tailwind', 'component', 'responsive', 'layout'
+  ];
+  if (frontendHints.some(hint => source.includes(hint))) {
+    return 'frontend';
+  }
+
+  const backendHints = [
+    'backend', 'api', 'server', 'database', 'endpoint', 'service', 'migration', 'schema', 'auth', 'jwt', 'orm'
+  ];
+  if (backendHints.some(hint => source.includes(hint))) {
+    return 'backend';
+  }
+
+  const researchHints = [
+    'research', 'investigate', 'explore', 'compare', 'benchmark', 'analyze', 'spike', 'read docs'
+  ];
+  if (researchHints.some(hint => source.includes(hint))) {
+    return 'research';
+  }
+
+  if ((mode || '').toLowerCase() === 'writing') {
+    return 'research';
+  }
+
+  return 'general';
+}
+
+function computePromptRouting(text) {
+  const conversation = appState.conversations.find(conv => conv.id === appState.activeConversationId);
+  const taskType = inferTaskTypeFromPrompt(text, conversation?.mode);
+  const primaryRoute = resolveTaskRoute(taskType);
+  const verificationRoute = resolveTaskRoute('verification');
+  const routingMap = buildResolvedTaskRoutingMap();
+
+  return {
+    taskType,
+    primaryRoute,
+    verificationRoute,
+    routingMap
+  };
+}
+
+function renderTaskModelRoutingControls() {
+  const container = elements.modelRoutingGrid;
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  TASK_ROUTE_TYPES.forEach(route => {
+    const config = getTaskRouteConfig(route.id);
+    const resolved = resolveTaskRoute(route.id);
+
+    const row = document.createElement('div');
+    row.className = 'model-route-row';
+    row.innerHTML = `
+      <div class="model-route-header">
+        <span class="model-route-label">${escapeHtml(route.label)}</span>
+        <span class="model-route-status ${providerHasCredential(resolved.providerId) ? 'ready' : 'needs-key'}">
+          ${providerHasCredential(resolved.providerId) ? 'Credential ready' : 'Credential missing'}
+        </span>
+      </div>
+      <div class="model-route-controls">
+        <select class="select-dropdown model-route-provider"></select>
+        <input class="settings-input model-route-model" type="text" placeholder="Model name" />
+      </div>
+      <p class="model-route-hint">${escapeHtml(resolved.providerName)} via ${escapeHtml(resolved.authType)} auth</p>
+    `;
+
+    const providerSelect = row.querySelector('.model-route-provider');
+    appState.providers.forEach(provider => {
+      const option = document.createElement('option');
+      option.value = provider.id;
+      option.textContent = provider.name;
+      providerSelect.appendChild(option);
+    });
+
+    if (!getProviderById(config.providerId) && config.providerId) {
+      const customOption = document.createElement('option');
+      customOption.value = config.providerId;
+      customOption.textContent = `${config.providerId} (missing provider)`;
+      providerSelect.appendChild(customOption);
+    }
+    providerSelect.value = config.providerId;
+
+    const modelInput = row.querySelector('.model-route-model');
+    modelInput.value = config.model || resolved.model || '';
+
+    providerSelect.addEventListener('change', () => {
+      const selectedProvider = getProviderById(providerSelect.value);
+      const nextRouting = normalizeTaskModelRouting(appState.settings.taskModelRouting);
+      const previousProviderId = nextRouting[route.id]?.providerId;
+      nextRouting[route.id] = {
+        providerId: providerSelect.value,
+        model: nextRouting[route.id]?.model || ''
+      };
+
+      if (!nextRouting[route.id].model || previousProviderId !== providerSelect.value) {
+        nextRouting[route.id].model = selectedProvider?.defaultModel || '';
+      }
+
+      appState.settings.taskModelRouting = nextRouting;
+      appState.settings.profilePreset = 'custom';
+      saveSettings();
+      applySettings();
+    });
+
+    modelInput.addEventListener('change', () => {
+      const nextRouting = normalizeTaskModelRouting(appState.settings.taskModelRouting);
+      nextRouting[route.id] = {
+        providerId: providerSelect.value,
+        model: modelInput.value.trim()
+      };
+      appState.settings.taskModelRouting = nextRouting;
+      appState.settings.profilePreset = 'custom';
+      saveSettings();
+      applySettings();
+    });
+
+    container.appendChild(row);
   });
 }
 
@@ -691,6 +1164,7 @@ async function syncProviderSecretPresence() {
     provider.secretStored = provider.authType === 'none' || !!result[provider.id];
   });
   saveProviders();
+  renderTaskModelRoutingControls();
 }
 
 function renderProviderTypes() {
@@ -709,6 +1183,7 @@ function renderProviderTypes() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.provider-type-btn').forEach(b => b.classList.remove('selected'));
       btn.classList.add('selected');
+      appState.selectedProviderTemplateId = type.id;
       
       document.getElementById('providerName').value = type.name;
       document.getElementById('providerBaseUrl').value = type.baseUrl;
@@ -792,6 +1267,15 @@ function executeCommand(action) {
     case 'toggleSidebar':
       elements.sidebar.classList.toggle('collapsed');
       break;
+    case 'vibeStatus':
+      void runVibeStatusFromDashboard();
+      break;
+    case 'continueAutonomy':
+      void runVibeContinueFromDashboard();
+      break;
+    case 'runSoak':
+      void runSoakFromDashboard();
+      break;
   }
   closeCommandPalette();
 }
@@ -803,8 +1287,18 @@ function executeCommand(action) {
 function renderConversationList() {
   const list = elements.conversationList;
   list.innerHTML = '';
+
+  const searchQuery = (appState.conversationSearchQuery || '').trim().toLowerCase();
+  const visibleConversations = searchQuery
+    ? appState.conversations.filter(conv => {
+      const latestMessage = conv.messages[conv.messages.length - 1]?.content || '';
+      return conv.title.toLowerCase().includes(searchQuery)
+        || latestMessage.toLowerCase().includes(searchQuery)
+        || String(conv.mode || '').toLowerCase().includes(searchQuery);
+    })
+    : appState.conversations;
   
-  appState.conversations.forEach(conv => {
+  visibleConversations.forEach(conv => {
     const item = document.createElement('div');
     item.className = `conversation-item ${conv.id === appState.activeConversationId ? 'active' : ''}`;
     item.dataset.id = conv.id;
@@ -1102,11 +1596,367 @@ function filterByFolder(folderId) {
   console.log('Filter by folder:', folderId);
 }
 
+function splitCommandArgs(rawCommand) {
+  const input = String(rawCommand || '').trim();
+  if (!input) {
+    return [];
+  }
+
+  const tokens = [];
+  let current = '';
+  let quote = null;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    const prev = input[i - 1];
+
+    if ((char === '"' || char === "'") && prev !== '\\') {
+      if (!quote) {
+        quote = char;
+        continue;
+      }
+      if (quote === char) {
+        quote = null;
+        continue;
+      }
+    }
+
+    if (!quote && /\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function setInsightPanel(panelId) {
+  appState.activeInsightPanel = panelId;
+  document.querySelectorAll('.insight-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.panel === panelId);
+  });
+  document.querySelectorAll('.insight-panel').forEach(panel => {
+    panel.classList.remove('active');
+  });
+
+  const panelMap = {
+    lineage: elements.insightLineagePanel,
+    risk: elements.insightRiskPanel,
+    integrations: elements.insightIntegrationsPanel
+  };
+  panelMap[panelId]?.classList.add('active');
+}
+
+function getConversationChildren(parentId) {
+  return appState.conversations.filter(conv => conv.parentId === parentId);
+}
+
+function renderLineageInsight() {
+  if (!elements.lineageOutput) {
+    return;
+  }
+
+  const active = appState.conversations.find(conv => conv.id === appState.activeConversationId);
+  if (!active) {
+    elements.lineageOutput.innerHTML = '<div class="insight-row"><span class="insight-label">Status</span><span class="insight-value">No active conversation</span></div>';
+    return;
+  }
+
+  const chain = [];
+  let cursor = active;
+  while (cursor) {
+    chain.unshift(cursor);
+    cursor = cursor.parentId ? appState.conversations.find(conv => conv.id === cursor.parentId) : null;
+  }
+
+  const activeChildren = getConversationChildren(active.id);
+  const branchCount = appState.conversations.filter(conv => conv.parentId).length;
+  const chainText = chain.map(conv => conv.title).join(' → ');
+  const childText = activeChildren.length > 0
+    ? activeChildren.map(conv => conv.title).join(', ')
+    : 'None';
+
+  elements.lineageOutput.innerHTML = `
+    <div class="insight-row"><span class="insight-label">Active Chain</span><span class="insight-value">${escapeHtml(chainText)}</span></div>
+    <div class="insight-row"><span class="insight-label">Depth</span><span class="insight-value">${Math.max(chain.length - 1, 0)} hops</span></div>
+    <div class="insight-row"><span class="insight-label">Child Branches</span><span class="insight-value">${activeChildren.length}</span></div>
+    <div class="insight-row"><span class="insight-label">Children</span><span class="insight-value">${escapeHtml(childText)}</span></div>
+    <div class="insight-row"><span class="insight-label">Forked Sessions</span><span class="insight-value">${branchCount}</span></div>
+  `;
+}
+
+async function renderRiskInsight() {
+  if (!elements.riskOutput) {
+    return;
+  }
+
+  const [pendingApprovals, pendingQuestions] = await Promise.all([
+    callBackend('list_pending_approvals'),
+    callBackend('list_pending_questions')
+  ]);
+
+  const approvals = Array.isArray(pendingApprovals) ? pendingApprovals : [];
+  const questions = Array.isArray(pendingQuestions) ? pendingQuestions : [];
+  const openclaw = appState.openclawStatus || {};
+  const queueSize = Number(openclaw.queuedOutbound || openclaw.queued_outbound || 0);
+  const waitingAcks = Number(openclaw.pendingAckCount || openclaw.pending_ack_count || 0);
+
+  const approvalTools = approvals.length > 0
+    ? approvals.map(item => item.toolId || item.tool_id || 'unknown').join(', ')
+    : 'None';
+
+  const hasRisk = approvals.length > 0 || questions.length > 0 || queueSize > 0 || waitingAcks > 0;
+
+  elements.riskOutput.innerHTML = `
+    <div class="insight-row"><span class="insight-label">Pending Approvals</span><span class="insight-value ${approvals.length > 0 ? 'highlight' : ''}">${approvals.length}</span></div>
+    <div class="insight-row"><span class="insight-label">Pending Questions</span><span class="insight-value ${questions.length > 0 ? 'highlight' : ''}">${questions.length}</span></div>
+    <div class="insight-row"><span class="insight-label">Tools Awaiting</span><span class="insight-value">${escapeHtml(approvalTools)}</span></div>
+    <div class="insight-row"><span class="insight-label">Queue Outbound</span><span class="insight-value ${queueSize > 0 ? 'highlight' : ''}">${queueSize}</span></div>
+    <div class="insight-row"><span class="insight-label">Waiting Acks</span><span class="insight-value ${waitingAcks > 0 ? 'highlight' : ''}">${waitingAcks}</span></div>
+  `;
+}
+
+function renderIntegrationsInsight() {
+  if (!elements.integrationOutput) {
+    return;
+  }
+
+  const mcpEnabled = appState.settings.mcpServers.filter(server => server.enabled !== false).length;
+  const pluginEnabled = appState.settings.plugins.filter(plugin => plugin.enabled !== false).length;
+  const skillEnabled = appState.settings.skills.filter(skill => skill.enabled !== false).length;
+  const permissionAskCount = Object.values(appState.settings.permissionMatrix).filter(value => value === 'ask').length;
+
+  const runLiveCmd = appState.settings.runLiveCommand || 'npm run dev:live';
+
+  elements.integrationOutput.innerHTML = `
+    <div class="insight-row"><span class="insight-label">MCP Servers</span><span class="insight-value">${mcpEnabled}/${appState.settings.mcpServers.length}</span></div>
+    <div class="insight-row"><span class="insight-label">Plugins</span><span class="insight-value">${pluginEnabled}/${appState.settings.plugins.length}</span></div>
+    <div class="insight-row"><span class="insight-label">Skills</span><span class="insight-value">${skillEnabled}/${appState.settings.skills.length}</span></div>
+    <div class="insight-row"><span class="insight-label">Ask Permissions</span><span class="insight-value">${permissionAskCount}</span></div>
+    <div class="insight-row"><span class="insight-label">Run Live</span><span class="insight-value highlight">${escapeHtml(runLiveCmd)}</span></div>
+  `;
+}
+
+async function refreshMissionControl() {
+  renderLineageInsight();
+  await renderRiskInsight();
+  renderIntegrationsInsight();
+}
+
+function renderPermissionMatrix() {
+  if (!elements.permissionGrid) {
+    return;
+  }
+
+  elements.permissionGrid.innerHTML = '';
+  PERMISSION_CAPABILITIES.forEach(capability => {
+    const row = document.createElement('div');
+    row.className = 'permission-row';
+    row.innerHTML = `
+      <span class="permission-label">${escapeHtml(capability.label)}</span>
+      <select class="select-dropdown permission-select" data-capability="${escapeHtml(capability.id)}">
+        <option value="allow">Allow</option>
+        <option value="ask">Ask</option>
+        <option value="deny">Deny</option>
+      </select>
+    `;
+
+    const select = row.querySelector('.permission-select');
+    select.value = appState.settings.permissionMatrix[capability.id] || 'ask';
+    select.addEventListener('change', () => {
+      appState.settings.permissionMatrix = normalizePermissionMatrix(appState.settings.permissionMatrix);
+      appState.settings.permissionMatrix[capability.id] = select.value;
+      saveSettings();
+      void refreshMissionControl();
+    });
+
+    elements.permissionGrid.appendChild(row);
+  });
+}
+
+function renderIntegrationList(container, list, kind) {
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(list) || list.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'setting-desc';
+    empty.textContent = `No ${kind} configured.`;
+    container.appendChild(empty);
+    return;
+  }
+
+  list.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'integration-item';
+    const meta = kind === 'MCP servers' && item.command
+      ? `${item.command}${Array.isArray(item.args) && item.args.length ? ` ${item.args.join(' ')}` : ''}`
+      : item.enabled === false ? 'Disabled' : 'Enabled';
+
+    row.innerHTML = `
+      <div class="integration-meta">
+        <div class="integration-name">${escapeHtml(item.name)}</div>
+        <div class="integration-desc">${escapeHtml(meta)}</div>
+      </div>
+      <div class="integration-actions">
+        <button class="inline-btn integration-toggle" type="button">${item.enabled === false ? 'Enable' : 'Disable'}</button>
+        <button class="inline-btn integration-remove" type="button">Remove</button>
+      </div>
+    `;
+
+    row.querySelector('.integration-toggle')?.addEventListener('click', () => {
+      item.enabled = item.enabled === false;
+      saveSettings();
+      renderIntegrationsSettings();
+      void refreshMissionControl();
+    });
+
+    row.querySelector('.integration-remove')?.addEventListener('click', () => {
+      if (kind === 'MCP servers') {
+        appState.settings.mcpServers = appState.settings.mcpServers.filter(server => server.id !== item.id);
+      } else if (kind === 'plugins') {
+        appState.settings.plugins = appState.settings.plugins.filter(plugin => plugin.id !== item.id);
+      } else {
+        appState.settings.skills = appState.settings.skills.filter(skill => skill.id !== item.id);
+      }
+      saveSettings();
+      renderIntegrationsSettings();
+      void refreshMissionControl();
+    });
+
+    container.appendChild(row);
+  });
+}
+
+function renderIntegrationsSettings() {
+  renderIntegrationList(elements.mcpServersList, appState.settings.mcpServers, 'MCP servers');
+  renderIntegrationList(elements.pluginsList, appState.settings.plugins, 'plugins');
+  renderIntegrationList(elements.skillsList, appState.settings.skills, 'skills');
+}
+
+function forkActiveConversation() {
+  const active = appState.conversations.find(conv => conv.id === appState.activeConversationId);
+  if (!active) {
+    return;
+  }
+
+  const fork = {
+    ...active,
+    id: generateId(),
+    title: `${active.title} (Fork)`,
+    parentId: active.id,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: active.messages.map(message => ({ ...message, id: generateId() }))
+  };
+
+  appState.conversations.unshift(fork);
+  saveConversations();
+  setActiveConversation(fork.id);
+  void refreshMissionControl();
+}
+
+async function runLiveCommand(source = 'desktop_ui') {
+  if (appState.runLiveInFlight) {
+    return;
+  }
+
+  const rawCommand = (elements.runLiveCommandInput?.value || appState.settings.runLiveCommand || '').trim();
+  const cwd = (elements.runLiveCwdInput?.value || appState.settings.runLiveCwd || '').trim();
+  const tokens = splitCommandArgs(rawCommand);
+  if (tokens.length === 0) {
+    addMessage('Run Live command is empty. Set it in Settings > Run Live.', 'assistant');
+    renderActiveConversation();
+    return;
+  }
+
+  const [command, ...args] = tokens;
+  appState.settings.runLiveCommand = rawCommand;
+  appState.settings.runLiveCwd = cwd;
+  saveSettings();
+  applySettings();
+
+  appState.runLiveInFlight = true;
+  const runButtons = [elements.runLiveBtn, elements.autonomyRunLiveBtn, elements.runLiveFromSettingsBtn].filter(Boolean);
+  runButtons.forEach(button => {
+    button.disabled = true;
+  });
+
+  try {
+    const outcome = await callBackend('action_request', {
+      payload: {
+        toolId: 'node.command',
+        source,
+        args: {
+          command,
+          args,
+          cwd: cwd || null,
+          timeoutSeconds: 180
+        }
+      }
+    }, { throwOnError: true });
+
+    const status = outcome?.status;
+    if (status === 'pending') {
+      addMessage('Run Live is waiting for approval. Check the approval question and approve to execute.', 'assistant');
+      setAutonomyOutput('Run Live requested and waiting for approval.');
+      return;
+    }
+
+    if (status === 'denied' || status === 'rejected') {
+      const reason = outcome?.reason || 'Run Live request was denied.';
+      addMessage(`Run Live denied: ${reason}`, 'assistant');
+      setAutonomyOutput(`Run Live denied: ${reason}`);
+      return;
+    }
+
+    const output = outcome?.output || {};
+    const stdout = (output.stdout || '').trim();
+    const stderr = (output.stderr || '').trim();
+    const success = !!output.success;
+    const parts = [];
+    parts.push(`Run Live ${success ? 'completed' : 'finished with errors'} (${command} ${args.join(' ')})`);
+    if (stdout) {
+      parts.push(`stdout:\n${stdout}`);
+    }
+    if (stderr) {
+      parts.push(`stderr:\n${stderr}`);
+    }
+
+    const outputText = parts.join('\n\n');
+    addMessage(outputText, 'assistant');
+    renderActiveConversation();
+    setAutonomyOutput(outputText);
+  } catch (error) {
+    const reason = error?.message || String(error);
+    addMessage(`Run Live failed: ${reason}`, 'assistant');
+    renderActiveConversation();
+    setAutonomyOutput(`Run Live failed: ${reason}`);
+  } finally {
+    appState.runLiveInFlight = false;
+    runButtons.forEach(button => {
+      button.disabled = false;
+    });
+    await refreshMissionControl();
+  }
+}
+
 // ====================
 // Settings
 // ====================
 
 function applySettings() {
+  appState.settings = normalizeSettings(appState.settings);
   const { settings } = appState;
   
   document.documentElement.setAttribute('data-theme', settings.theme);
@@ -1170,7 +2020,18 @@ function applySettings() {
   if (elements.openclawGatewayUrlInput) {
     elements.openclawGatewayUrlInput.value = settings.openclawGatewayUrl || 'ws://127.0.0.1:8765';
   }
+  if (elements.runLiveCommandInput) {
+    elements.runLiveCommandInput.value = settings.runLiveCommand || DEFAULT_SETTINGS.runLiveCommand;
+  }
+  if (elements.runLiveCwdInput) {
+    elements.runLiveCwdInput.value = settings.runLiveCwd || '';
+  }
+  renderTaskModelRoutingControls();
+  renderPermissionMatrix();
+  renderIntegrationsSettings();
   renderOpenclawStatus();
+  renderAutonomyDashboard();
+  void refreshMissionControl();
 }
 
 function openSettings() {
@@ -1314,6 +2175,11 @@ function renderOpenclawStatus() {
     : Number.isFinite(status.queued_outbound)
       ? status.queued_outbound
       : 0;
+  const pendingAckCount = Number.isFinite(status.pendingAckCount)
+    ? status.pendingAckCount
+    : Number.isFinite(status.pending_ack_count)
+      ? status.pending_ack_count
+      : 0;
   const reconnectAttempt = Number.isFinite(status.reconnectAttempt)
     ? status.reconnectAttempt
     : Number.isFinite(status.reconnect_attempt)
@@ -1346,6 +2212,9 @@ function renderOpenclawStatus() {
 
   if (queuedOutbound > 0) {
     elements.openclawStatusText.textContent += ` ${queuedOutbound} message(s) queued for replay.`;
+  }
+  if (pendingAckCount > 0) {
+    elements.openclawStatusText.textContent += ` Waiting ack for ${pendingAckCount} message(s).`;
   }
 
   if (elements.openclawToggleBtn) {
@@ -1408,12 +2277,241 @@ async function syncOpenclawForMode() {
   renderOpenclawStatus();
 }
 
+function pickValue(payload, camelKey, snakeKey, fallback = null) {
+  if (!payload || typeof payload !== 'object') {
+    return fallback;
+  }
+  if (payload[camelKey] !== undefined && payload[camelKey] !== null) {
+    return payload[camelKey];
+  }
+  if (payload[snakeKey] !== undefined && payload[snakeKey] !== null) {
+    return payload[snakeKey];
+  }
+  return fallback;
+}
+
+function formatDashboardTimestamp(value) {
+  if (!value) {
+    return 'No run data yet';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return `Updated ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+}
+
+function setAutonomyOutput(text) {
+  const content = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+  appState.lastAutonomyOutput = content;
+  if (elements.autonomyOutput) {
+    elements.autonomyOutput.textContent = content;
+  }
+}
+
+function renderAutonomyDashboard() {
+  const snapshot = appState.autonomySnapshot || {};
+
+  if (elements.autonomySessionValue) {
+    elements.autonomySessionValue.textContent = pickValue(snapshot, 'latestSessionId', 'latest_session_id', '—') || '—';
+  }
+
+  const autopilotStatus = pickValue(snapshot, 'autopilotStatus', 'autopilot_status', '—') || '—';
+  const pauseReason = pickValue(snapshot, 'autopilotPauseReason', 'autopilot_pause_reason', '');
+  if (elements.autonomyStatusValue) {
+    elements.autonomyStatusValue.textContent = pauseReason ? `${autopilotStatus} (${pauseReason})` : autopilotStatus;
+  }
+
+  const mergePolicy = pickValue(snapshot, 'mergePolicy', 'merge_policy', '—') || '—';
+  const parallelAgents = pickValue(snapshot, 'parallelAgents', 'parallel_agents', null);
+  if (elements.autonomyMergeValue) {
+    elements.autonomyMergeValue.textContent = Number.isFinite(parallelAgents)
+      ? `${mergePolicy} • ${parallelAgents} workers`
+      : mergePolicy;
+  }
+
+  if (elements.autonomyCheckpointsValue) {
+    elements.autonomyCheckpointsValue.textContent = String(pickValue(snapshot, 'checkpointCount', 'checkpoint_count', 0));
+  }
+  if (elements.autonomyRemainingValue) {
+    elements.autonomyRemainingValue.textContent = String(pickValue(snapshot, 'remainingSteps', 'remaining_steps', 0));
+  }
+
+  const pendingApprovals = pickValue(snapshot, 'pendingApprovals', 'pending_approvals', 0);
+  const pendingQuestions = pickValue(snapshot, 'pendingQuestions', 'pending_questions', 0);
+  if (elements.autonomyApprovalsValue) {
+    elements.autonomyApprovalsValue.textContent = `${pendingApprovals} approvals • ${pendingQuestions} questions`;
+  }
+
+  if (elements.autonomyUpdatedValue) {
+    elements.autonomyUpdatedValue.textContent = formatDashboardTimestamp(
+      pickValue(snapshot, 'updatedAt', 'updated_at', null)
+    );
+  }
+
+  if (elements.autonomyOutput && !elements.autonomyOutput.textContent?.trim()) {
+    elements.autonomyOutput.textContent = appState.lastAutonomyOutput;
+  }
+}
+
+function clampNumberInput(rawValue, min, max, fallback) {
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function getAutonomyRunOptions() {
+  const mode = appState.settings.agentMode || 'profile';
+  const profile = mode === 'profile' && appState.settings.profilePreset !== 'custom'
+    ? appState.settings.profilePreset
+    : null;
+  return {
+    mode,
+    profile,
+    mergePolicy: appState.settings.mergePolicy || null,
+    cycles: clampNumberInput(elements.autonomyCyclesInput?.value, 1, 20, 2),
+    iterations: clampNumberInput(elements.autonomyIterationsInput?.value, 1, 24, 4)
+  };
+}
+
+function inferSoakObjective() {
+  const prompt = elements.promptInput?.value?.trim();
+  if (prompt) {
+    return prompt;
+  }
+
+  const active = appState.conversations.find(conv => conv.id === appState.activeConversationId);
+  if (active) {
+    const latestUserMessage = [...active.messages].reverse().find(msg => msg.role === 'user' && msg.content?.trim());
+    if (latestUserMessage) {
+      return latestUserMessage.content.trim();
+    }
+    if (active.title?.trim()) {
+      return `Soak: ${active.title.trim()}`;
+    }
+  }
+
+  return 'Desktop-triggered autonomous soak validation';
+}
+
+async function refreshAutonomyDashboard() {
+  const snapshot = await callBackend('get_autonomy_dashboard_snapshot', {
+    payload: { root: null }
+  });
+
+  if (snapshot && typeof snapshot === 'object') {
+    appState.autonomySnapshot = snapshot;
+    if (snapshot.openclawStatus && typeof snapshot.openclawStatus === 'object') {
+      appState.openclawStatus = snapshot.openclawStatus;
+      renderOpenclawStatus();
+    } else if (snapshot.openclaw_status && typeof snapshot.openclaw_status === 'object') {
+      appState.openclawStatus = snapshot.openclaw_status;
+      renderOpenclawStatus();
+    }
+  }
+  renderAutonomyDashboard();
+}
+
+function stringifyResult(result) {
+  try {
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return String(result);
+  }
+}
+
+async function runDashboardAction(actionLabel, action) {
+  const buttons = [
+    elements.autonomyRefreshBtn,
+    elements.autonomyVibeStatusBtn,
+    elements.autonomyContinueBtn,
+    elements.autonomySoakBtn,
+    elements.autonomyRunLiveBtn
+  ].filter(Boolean);
+
+  buttons.forEach(btn => {
+    btn.disabled = true;
+  });
+  setAutonomyOutput(`${actionLabel}...`);
+
+  try {
+    const result = await action();
+    setAutonomyOutput(stringifyResult(result));
+    await refreshAutonomyDashboard();
+    return result;
+  } catch (error) {
+    const message = error?.message || String(error);
+    setAutonomyOutput(`${actionLabel} failed: ${message}`);
+    throw error;
+  } finally {
+    buttons.forEach(btn => {
+      btn.disabled = false;
+    });
+  }
+}
+
+async function runVibeStatusFromDashboard() {
+  await runDashboardAction('Running vibe-status', () => callBackend(
+    'run_agent_vibe_status_command',
+    { payload: { root: null } },
+    { throwOnError: true }
+  ));
+}
+
+async function runVibeContinueFromDashboard() {
+  const options = getAutonomyRunOptions();
+  await runDashboardAction('Running vibe-continue', () => callBackend(
+    'run_agent_vibe_continue_command',
+    {
+      payload: {
+        root: null,
+        cycles: options.cycles,
+        iterations: options.iterations,
+        mode: options.mode,
+        profile: options.profile,
+        mergePolicy: options.mergePolicy
+      }
+    },
+    { throwOnError: true }
+  ));
+}
+
+async function runSoakFromDashboard() {
+  const options = getAutonomyRunOptions();
+  await runDashboardAction('Running soak', () => callBackend(
+    'run_agent_soak_command',
+    {
+      payload: {
+        root: null,
+        objective: inferSoakObjective(),
+        docs: [],
+        cycles: options.cycles,
+        iterations: options.iterations,
+        mode: options.mode,
+        profile: options.profile,
+        mergePolicy: options.mergePolicy
+      }
+    },
+    { throwOnError: true }
+  ));
+}
+
 async function submitPrompt(text) {
   addMessage(text, 'user');
   renderActiveConversation();
-  
-  const provider = appState.providers.find(p => p.id === appState.activeProvider);
+
   const autonomousMode = isAutonomousModeEnabled();
+  const routing = computePromptRouting(text);
+  const primaryProvider = getProviderById(routing.primaryRoute.providerId);
+
+  if (appState.activeConversationId && routing.primaryRoute.providerId) {
+    updateConversation(appState.activeConversationId, {
+      providerId: routing.primaryRoute.providerId
+    });
+    renderConversationList();
+  }
 
   if (autonomousMode && !appState.openclawStatus?.connected) {
     await syncOpenclawForMode();
@@ -1424,13 +2522,46 @@ async function submitPrompt(text) {
     renderActiveConversation();
     return;
   }
+
+  if (autonomousMode) {
+    const missingAuth = [];
+    const routeChecks = [
+      { route: routing.primaryRoute, label: routing.taskType },
+      { route: routing.verificationRoute, label: 'verification' }
+    ];
+
+    routeChecks.forEach(item => {
+      const provider = getProviderById(item.route.providerId);
+      if (!provider) {
+        missingAuth.push(`${item.label}: provider '${item.route.providerId}' is missing`);
+        return;
+      }
+      if (provider.authType !== 'none' && !providerHasCredential(provider.id)) {
+        const authLabel = provider.authType === 'bearer' ? 'bearer token' : 'API key';
+        missingAuth.push(`${item.label}: ${provider.name} requires a ${authLabel}`);
+      }
+    });
+
+    if (missingAuth.length > 0) {
+      addMessage(
+        `Model routing is configured but missing credentials: ${missingAuth.join('; ')}. Configure keys in Settings > AI Providers. Codex uses API key auth, MiniMax uses bearer token auth.`,
+        'assistant'
+      );
+      renderActiveConversation();
+      return;
+    }
+  }
   
   try {
     await callBackend('submit_prompt', {
       prompt: text,
-      provider: provider?.id,
-      model: provider?.defaultModel,
-      autonomous_mode: autonomousMode
+      provider: routing.primaryRoute.providerId,
+      model: routing.primaryRoute.model,
+      autonomous_mode: autonomousMode,
+      task_type: routing.taskType,
+      task_routing: routing.routingMap,
+      verification_provider: routing.verificationRoute.providerId,
+      verification_model: routing.verificationRoute.model
     }, { throwOnError: true });
   } catch {
     addMessage('Failed to submit prompt to backend. Check gateway/backend status and retry.', 'assistant');
@@ -1439,7 +2570,10 @@ async function submitPrompt(text) {
   }
 
   if (!autonomousMode) {
-    addMessage('Prompt captured. OpenClaw routing is active only in autonomous modes.', 'assistant');
+    const routeLabel = primaryProvider
+      ? `${routing.taskType} -> ${primaryProvider.name} (${routing.primaryRoute.model || 'default model'})`
+      : `${routing.taskType} -> ${routing.primaryRoute.providerId}`;
+    addMessage(`Prompt captured. Routed with task profile: ${routeLabel}. OpenClaw execution activates in autonomous modes.`, 'assistant');
     renderActiveConversation();
   }
 }
@@ -1612,6 +2746,23 @@ function setupEventListeners() {
     const conv = createConversation();
     setActiveConversation(conv.id);
   });
+
+  if (elements.conversationSearchInput) {
+    elements.conversationSearchInput.addEventListener('input', (e) => {
+      appState.conversationSearchQuery = e.target.value || '';
+      renderConversationList();
+    });
+  }
+
+  if (elements.forkConversationBtn) {
+    elements.forkConversationBtn.addEventListener('click', forkActiveConversation);
+  }
+
+  if (elements.runLiveBtn) {
+    elements.runLiveBtn.addEventListener('click', async () => {
+      await runLiveCommand('header_run_live');
+    });
+  }
   
   // Settings
   elements.settingsBtn.addEventListener('click', openSettings);
@@ -1756,6 +2907,109 @@ function setupEventListeners() {
       await refreshOpenclawStatus();
     });
   }
+
+  if (elements.autonomyRefreshBtn) {
+    elements.autonomyRefreshBtn.addEventListener('click', async () => {
+      await runDashboardAction('Refreshing dashboard', async () => {
+        await refreshAutonomyDashboard();
+        return appState.autonomySnapshot || {};
+      });
+    });
+  }
+
+  if (elements.autonomyVibeStatusBtn) {
+    elements.autonomyVibeStatusBtn.addEventListener('click', async () => {
+      await runVibeStatusFromDashboard();
+    });
+  }
+
+  if (elements.autonomyContinueBtn) {
+    elements.autonomyContinueBtn.addEventListener('click', async () => {
+      await runVibeContinueFromDashboard();
+    });
+  }
+
+  if (elements.autonomySoakBtn) {
+    elements.autonomySoakBtn.addEventListener('click', async () => {
+      await runSoakFromDashboard();
+    });
+  }
+
+  if (elements.autonomyRunLiveBtn) {
+    elements.autonomyRunLiveBtn.addEventListener('click', async () => {
+      await runLiveCommand('dashboard_run_live');
+    });
+  }
+
+  if (elements.runLiveFromSettingsBtn) {
+    elements.runLiveFromSettingsBtn.addEventListener('click', async () => {
+      await runLiveCommand('settings_run_live');
+    });
+  }
+
+  if (elements.runLiveCommandInput) {
+    elements.runLiveCommandInput.addEventListener('change', (e) => {
+      appState.settings.runLiveCommand = e.target.value.trim() || DEFAULT_SETTINGS.runLiveCommand;
+      saveSettings();
+      void refreshMissionControl();
+    });
+  }
+
+  if (elements.runLiveCwdInput) {
+    elements.runLiveCwdInput.addEventListener('change', (e) => {
+      appState.settings.runLiveCwd = e.target.value.trim();
+      saveSettings();
+    });
+  }
+
+  if (elements.addMcpServerBtn) {
+    elements.addMcpServerBtn.addEventListener('click', () => {
+      const name = prompt('MCP server name:');
+      if (!name || !name.trim()) {
+        return;
+      }
+      const command = prompt('Command (for example: npx):', 'npx') || 'npx';
+      const argsRaw = prompt('Args (space-separated):', '') || '';
+      const args = splitCommandArgs(argsRaw);
+      appState.settings.mcpServers.push({
+        id: generateId(),
+        name: name.trim(),
+        command: command.trim(),
+        args,
+        enabled: true
+      });
+      saveSettings();
+      renderIntegrationsSettings();
+      void refreshMissionControl();
+    });
+  }
+
+  if (elements.insightTabs) {
+    elements.insightTabs.addEventListener('click', (e) => {
+      const tab = e.target.closest('.insight-tab');
+      if (!tab) {
+        return;
+      }
+      const panel = tab.dataset.panel || 'lineage';
+      setInsightPanel(panel);
+    });
+  }
+
+  if (elements.autonomyCyclesInput) {
+    elements.autonomyCyclesInput.addEventListener('change', () => {
+      elements.autonomyCyclesInput.value = String(
+        clampNumberInput(elements.autonomyCyclesInput.value, 1, 20, 2)
+      );
+    });
+  }
+
+  if (elements.autonomyIterationsInput) {
+    elements.autonomyIterationsInput.addEventListener('change', () => {
+      elements.autonomyIterationsInput.value = String(
+        clampNumberInput(elements.autonomyIterationsInput.value, 1, 24, 4)
+      );
+    });
+  }
   
   // New notification toggles
   if (elements.showAllNotificationsToggle) {
@@ -1896,6 +3150,7 @@ function setupEventListeners() {
   // Providers
   elements.addProviderBtn.addEventListener('click', () => {
     appState.editingProviderId = null;
+    appState.selectedProviderTemplateId = null;
     elements.providerModalTitle.textContent = 'Add AI Provider';
     renderProviderTypes();
     openProviderModal();
@@ -1908,6 +3163,7 @@ function setupEventListeners() {
   });
   
   document.getElementById('providerAuthType').addEventListener('change', updateAuthFieldsVisibility);
+  document.getElementById('providerName').addEventListener('input', updateProviderAuthHelp);
   
   elements.providerSaveBtn.addEventListener('click', saveProviderConfig);
   
@@ -1978,8 +3234,14 @@ async function setupBackendListeners() {
   await listen('overlay://visibility', (event) => {
     if (event.payload?.visible) elements.promptInput.focus();
   });
-  await listen('overlay://question', (event) => renderQuestionBubble(event.payload));
-  await listen('overlay://question_answered', (event) => console.log('Answered:', event.payload));
+  await listen('overlay://question', (event) => {
+    renderQuestionBubble(event.payload);
+    void refreshMissionControl();
+  });
+  await listen('overlay://question_answered', (event) => {
+    console.log('Answered:', event.payload);
+    void refreshMissionControl();
+  });
   await listen('dictation://started', () => console.log('Dictation started'));
   await listen('dictation://stopped', (event) => {
     console.log('Dictation stopped:', event.payload);
@@ -1999,6 +3261,7 @@ async function setupBackendListeners() {
     if (event.payload && typeof event.payload === 'object') {
       appState.openclawStatus = event.payload;
       renderOpenclawStatus();
+      renderAutonomyDashboard();
     }
   });
 
@@ -2030,6 +3293,14 @@ async function setupBackendListeners() {
       : `OpenClaw action result: ${status}`;
     addMessage(text, 'assistant');
     renderActiveConversation();
+    void refreshMissionControl();
+  });
+
+  await listen('openclaw://ack', (event) => {
+    if (event.payload?.acknowledged) {
+      renderOpenclawStatus();
+      renderAutonomyDashboard();
+    }
   });
 }
 
@@ -2042,10 +3313,13 @@ async function initialize() {
   appState.conversations = loadConversations();
   appState.folders = loadFolders();
   appState.settings = loadSettings();
-  appState.providers = loadProviders();
+  appState.providers = ensureCoreProviders(loadProviders().map((provider, index) => normalizeProviderRecord(provider, index)));
   appState.activeProvider = loadActiveProvider();
   appState.shortcuts = loadShortcuts();
   appState.activeConversationId = loadActiveConversation();
+
+  saveSettings();
+  saveProviders();
   
   // Ensure defaults
   if (appState.conversations.length === 0) {
@@ -2071,6 +3345,8 @@ async function initialize() {
   
   await syncProviderSecretPresence();
   await refreshOpenclawStatus();
+  await refreshAutonomyDashboard();
+  setAutonomyOutput(appState.lastAutonomyOutput);
 
   // Render
   applySettings();
@@ -2078,10 +3354,18 @@ async function initialize() {
   renderConversationList();
   renderFolderList();
   renderActiveConversation();
+  renderAutonomyDashboard();
+  setInsightPanel(appState.activeInsightPanel);
+  await refreshMissionControl();
   
   // Events
   setupEventListeners();
   await setupBackendListeners();
+
+  setInterval(() => {
+    void refreshAutonomyDashboard();
+    void refreshMissionControl();
+  }, 15000);
   
   // Tutorial
   setTimeout(() => checkTutorial(), 500);
@@ -2102,6 +3386,7 @@ async function initialize() {
     appState.openclawStatus = snapshot.openclaw_status;
   }
   renderOpenclawStatus();
+  renderAutonomyDashboard();
   await syncOpenclawForMode();
 }
 

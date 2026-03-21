@@ -1,0 +1,95 @@
+{
+  "default_profile": "hands_free_builder",
+  "workspace_profiles": [
+    {
+      "pattern": "*",
+      "profile": "hands_free_builder"
+    }
+  ],
+  "profiles": {
+    "minimal_focus": {
+      "description": "Low-noise profile for deep focus and short task bursts.",
+      "ui": {
+        "theme": "default",
+        "font": "compact",
+        "density": "compact",
+        "motion": "reduced",
+        "voice_mode": "push",
+        "notifications": "important_only"
+      },
+      "agent": {
+        "mode": "fast",
+        "persona": "balanced_builder",
+        "parallel_agents": 1,
+        "merge_policy": "risk_averse",
+        "pause_on_verification_failure": true,
+        "max_tokens": 1800,
+        "max_handoffs": 3,
+        "max_runtime_seconds": 240
+      }
+    },
+    "hands_free_builder": {
+      "description": "Default profile for voice-first coding with autonomous continuity.",
+      "ui": {
+        "theme": "default",
+        "font": "default",
+        "density": "comfortable",
+        "motion": "standard",
+        "voice_mode": "always",
+        "notifications": "all"
+      },
+      "agent": {
+        "mode": "autopilot",
+        "persona": "balanced_builder",
+        "parallel_agents": 3,
+        "merge_policy": "consensus",
+        "pause_on_verification_failure": true,
+        "max_tokens": 2600,
+        "max_handoffs": 50,
+        "max_runtime_seconds": 43200
+      }
+    },
+    "research_sprint": {
+      "description": "Research-heavy profile with broader context and parallel exploration.",
+      "ui": {
+        "theme": "midnight",
+        "font": "default",
+        "density": "comfortable",
+        "motion": "standard",
+        "voice_mode": "push",
+        "notifications": "all"
+      },
+      "agent": {
+        "mode": "swarms",
+        "persona": "creative_architect",
+        "parallel_agents": 5,
+        "merge_policy": "best_score",
+        "pause_on_verification_failure": false,
+        "max_tokens": 3200,
+        "max_handoffs": 24,
+        "max_runtime_seconds": 5400
+      }
+    },
+    "safety_gate": {
+      "description": "Conservative profile with strict guardrails and verification-first behavior.",
+      "ui": {
+        "theme": "forest",
+        "font": "compact",
+        "density": "comfortable",
+        "motion": "reduced",
+        "voice_mode": "push",
+        "notifications": "all"
+      },
+      "agent": {
+        "mode": "careful",
+        "persona": "safety_reviewer",
+        "parallel_agents": 1,
+        "merge_policy": "risk_averse",
+        "pause_on_verification_failure": true,
+        "max_tokens": 3200,
+        "max_handoffs": 12,
+        "max_runtime_seconds": 3600
+      }
+    }
+  }
+}

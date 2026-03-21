@@ -87,9 +87,13 @@ Implemented backend features:
 - Autonomous-mode gateway activation: OpenClaw routing is enabled in autonomous agent modes and disabled outside them.
 - OpenClaw offline queue + replay for outbound payload continuity after reconnect.
 - OpenClaw duplicate-event suppression via recent gateway event id tracking.
+- OpenClaw nonce/integrity envelope + ack tracking for safer replay semantics.
 - Night mode scheduler for safe maintenance tasks only.
 - Append-only audit log and keychain-backed gateway credential storage.
 - Key-first provider setup: provider secrets are stored in OS keychain (not local storage).
+- Desktop autonomous dashboard with one-click `vibe-status`, `vibe-continue`, and `soak` actions.
+- Task-level model routing in desktop settings (frontend/backend/verification/research/general), with automatic prompt classification and provider/model switching.
+- Codex and MiniMax provider defaults hardened (Codex API-key flow, MiniMax bearer-token flow) with credential status surfaced in routing UI.
 
 Reference docs:
 
