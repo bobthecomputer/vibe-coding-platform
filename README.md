@@ -4,6 +4,11 @@ Grant Agent Harness is a docs-first, safety-aware orchestration layer for long-r
 
 It is built around one core promise: the agent can keep moving when context gets full, but users stay in control through explicit plans, checks, and handoff artifacts.
 
+Current product stop point:
+
+- [Fluxio 1.0 Release Definition](docs/FLUXIO_1_0_RELEASE.md)
+- [Live UI Development](docs/LIVE_UI_DEVELOPMENT.md)
+
 ## What this MVP includes
 
 - Prompt stack assembly with persona profiles.
@@ -103,6 +108,7 @@ Reference docs:
 - `docs/NIGHT_MODE.md`
 - `docs/THREAT_MODEL.md`
 - `docs/DESKTOP_PERFORMANCE_REPORT.md`
+- `docs/LIVE_UI_DEVELOPMENT.md`
 
 Generated artifacts are written under `.agent_runs/`.
 

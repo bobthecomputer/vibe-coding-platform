@@ -1,12 +1,112 @@
 {
-  "default_profile": "hands_free_builder",
+  "default_profile": "builder",
   "workspace_profiles": [
     {
       "pattern": "*",
-      "profile": "hands_free_builder"
+      "profile": "builder"
     }
   ],
   "profiles": {
+    "beginner": {
+      "description": "Guided profile for non-technical users with stricter approvals and more explanation.",
+      "ui": {
+        "theme": "default",
+        "font": "default",
+        "density": "comfortable",
+        "motion": "reduced",
+        "voice_mode": "push",
+        "notifications": "important_only"
+      },
+      "agent": {
+        "mode": "fast",
+        "persona": "balanced_builder",
+        "parallel_agents": 1,
+        "merge_policy": "risk_averse",
+        "pause_on_verification_failure": true,
+        "execution_scope": "isolated",
+        "approval_mode": "strict",
+        "explanation_depth": "high",
+        "delegation_aggressiveness": "low",
+        "max_tokens": 1800,
+        "max_handoffs": 4,
+        "max_runtime_seconds": 900
+      }
+    },
+    "builder": {
+      "description": "Balanced default profile with premium planning, efficient execution, and bounded innovation.",
+      "ui": {
+        "theme": "default",
+        "font": "default",
+        "density": "comfortable",
+        "motion": "standard",
+        "voice_mode": "always",
+        "notifications": "all"
+      },
+      "agent": {
+        "mode": "autopilot",
+        "persona": "balanced_builder",
+        "parallel_agents": 2,
+        "merge_policy": "best_score",
+        "pause_on_verification_failure": true,
+        "execution_scope": "isolated",
+        "approval_mode": "tiered",
+        "explanation_depth": "medium",
+        "delegation_aggressiveness": "balanced",
+        "max_tokens": 2600,
+        "max_handoffs": 50,
+        "max_runtime_seconds": 43200
+      }
+    },
+    "advanced": {
+      "description": "Concise, higher-autonomy profile for experienced users who want faster broadening and fewer interruptions.",
+      "ui": {
+        "theme": "forest",
+        "font": "compact",
+        "density": "comfortable",
+        "motion": "standard",
+        "voice_mode": "push",
+        "notifications": "all"
+      },
+      "agent": {
+        "mode": "swarms",
+        "persona": "creative_architect",
+        "parallel_agents": 3,
+        "merge_policy": "best_score",
+        "pause_on_verification_failure": false,
+        "execution_scope": "isolated",
+        "approval_mode": "tiered",
+        "explanation_depth": "low",
+        "delegation_aggressiveness": "balanced",
+        "max_tokens": 3200,
+        "max_handoffs": 32,
+        "max_runtime_seconds": 21600
+      }
+    },
+    "experimental": {
+      "description": "Wide-autonomy profile with broader innovation scope, learned-skill visibility, and harness experimentation.",
+      "ui": {
+        "theme": "midnight",
+        "font": "default",
+        "density": "comfortable",
+        "motion": "standard",
+        "voice_mode": "always",
+        "notifications": "all"
+      },
+      "agent": {
+        "mode": "deep_run",
+        "persona": "creative_architect",
+        "parallel_agents": 3,
+        "merge_policy": "consensus",
+        "pause_on_verification_failure": false,
+        "execution_scope": "isolated",
+        "approval_mode": "hands_free",
+        "explanation_depth": "low",
+        "delegation_aggressiveness": "high",
+        "max_tokens": 3600,
+        "max_handoffs": 80,
+        "max_runtime_seconds": 86400
+      }
+    },
     "minimal_focus": {
       "description": "Low-noise profile for deep focus and short task bursts.",
       "ui": {

@@ -17,6 +17,10 @@ class Skill:
     schema: dict
     permissions: list[str]
     examples: list[str]
+    action_kinds: list[str]
+    profile_suitability: list[str]
+    guidance_only: bool
+    execution_capable: bool
 
 
 class SkillRegistry:
@@ -38,6 +42,10 @@ class SkillRegistry:
                     schema=raw.get("schema", {}),
                     permissions=raw.get("permissions", []),
                     examples=raw.get("examples", []),
+                    action_kinds=raw.get("action_kinds", []),
+                    profile_suitability=raw.get("profile_suitability", []),
+                    guidance_only=bool(raw.get("guidance_only", False)),
+                    execution_capable=bool(raw.get("execution_capable", False)),
                 )
             )
         return output

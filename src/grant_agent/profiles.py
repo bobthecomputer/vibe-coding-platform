@@ -17,6 +17,10 @@ class AgentProfileConfig:
     max_tokens: int | None = None
     max_handoffs: int | None = None
     max_runtime_seconds: int | None = None
+    execution_scope: str | None = None
+    approval_mode: str | None = None
+    explanation_depth: str | None = None
+    delegation_aggressiveness: str | None = None
 
 
 @dataclass
@@ -66,6 +70,10 @@ class ProfileRegistry:
                     max_tokens=agent_raw.get("max_tokens"),
                     max_handoffs=agent_raw.get("max_handoffs"),
                     max_runtime_seconds=agent_raw.get("max_runtime_seconds"),
+                    execution_scope=agent_raw.get("execution_scope"),
+                    approval_mode=agent_raw.get("approval_mode"),
+                    explanation_depth=agent_raw.get("explanation_depth"),
+                    delegation_aggressiveness=agent_raw.get("delegation_aggressiveness"),
                 ),
             )
             out[name] = profile

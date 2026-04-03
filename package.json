@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "frontend:dev": "vite --config vite.config.mjs",
+    "frontend:build": "vite build --config vite.config.mjs",
     "dev": "tauri dev",
     "dev:live": "powershell -NoProfile -Command \"Get-Process vibe-coding-platform,cargo -ErrorAction SilentlyContinue | Stop-Process -Force\"; tauri dev",
     "build": "tauri build",
@@ -11,7 +13,11 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0"
+  },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.10.0"
+    "@tauri-apps/cli": "^2.10.0",
+    "vite": "^7.1.3"
   }
 }

@@ -1,13 +1,13 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex,
     },
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use active_win_pos_rs::get_active_window;
@@ -57,9 +57,14 @@ const OPENCLAW_KEYRING_SERVICE: &str = "vibe-coding-platform";
 const OPENCLAW_KEYRING_USER: &str = "openclaw-gateway-token";
 const LOCALHOST_API_KEYRING_USER: &str = "localhost-api-token";
 const PROVIDER_KEYRING_USER_PREFIX: &str = "provider-secret:";
+const TELEGRAM_BOT_KEYRING_USER: &str = "telegram-phone-bot-token";
 const OPENCLAW_MAX_PENDING_OUTBOUND: usize = 256;
 const OPENCLAW_MAX_RECENT_EVENT_IDS: usize = 512;
 const OPENCLAW_MAX_PENDING_ACKS: usize = 512;
+const CONTROL_ROOM_EVENT_NAME: &str = "control-room://changed";
+const CONTROL_ROOM_DELTA_EVENT_NAME: &str = "control-room://delta";
+const CONTROL_ROOM_WATCH_INTERVAL_MS: u64 = 250;
+const CONTROL_ROOM_WATCH_MAX_SESSIONS: usize = 8;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -684,6 +689,7 @@ struct OverlayAppState {
     space_is_held: AtomicBool,
     localhost_started: AtomicBool,
     night_mode_started: AtomicBool,
+    control_room_watch_started: AtomicBool,
 }
 
 impl OverlayAppState {
@@ -706,6 +712,7 @@ impl OverlayAppState {
             space_is_held: AtomicBool::new(false),
             localhost_started: AtomicBool::new(false),
             night_mode_started: AtomicBool::new(false),
+            control_room_watch_started: AtomicBool::new(false),
         }
     }
 }
@@ -824,6 +831,46 @@ struct AgentSoakPayload {
 #[serde(rename_all = "camelCase")]
 struct AutonomyDashboardPayload {
     root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceSavePayload {
+    root: Option<String>,
+    workspace_id: Option<String>,
+    name: String,
+    path: String,
+    default_runtime: String,
+    user_profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlMissionStartPayload {
+    root: Option<String>,
+    workspace_id: String,
+    runtime: String,
+    objective: String,
+    success_checks: Option<Vec<String>>,
+    mode: Option<String>,
+    budget_hours: Option<u32>,
+    profile: Option<String>,
+    escalation_destination: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlMissionActionPayload {
+    root: Option<String>,
+    mission_id: String,
+    action: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TelegramMessagePayload {
+    chat_id: String,
+    text: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1028,6 +1075,242 @@ fn resolve_workspace_root(root_override: Option<String>) -> Result<PathBuf, Stri
     }
 
     Ok(canonical)
+}
+
+fn modified_nanos(value: SystemTime) -> u128 {
+    value.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+fn collect_control_room_signature_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![
+        root.join("config").join("connected_apps.json"),
+        root.join("config").join("profiles.json"),
+        root.join("config").join("skills.json"),
+    ];
+
+    let control_dir = root.join(".agent_control");
+    if let Ok(entries) = fs::read_dir(&control_dir) {
+        let mut control_files: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|item| item.path()))
+            .filter(|path| {
+                path.is_file()
+                    && matches!(
+                        path.extension().and_then(|item| item.to_str()),
+                        Some("json") | Some("jsonl")
+                    )
+            })
+            .collect();
+        control_files.sort();
+        paths.extend(control_files);
+    }
+
+    let runs_root = root.join(".agent_runs");
+    if let Ok(entries) = fs::read_dir(&runs_root) {
+        let mut sessions: Vec<(SystemTime, PathBuf)> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    return None;
+                }
+                let name = path.file_name()?.to_string_lossy();
+                if !name.starts_with("session_") {
+                    return None;
+                }
+                let modified = entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                Some((modified, path))
+            })
+            .collect();
+        sessions.sort_by(|left, right| right.0.cmp(&left.0));
+        for (_modified, session_path) in sessions.into_iter().take(CONTROL_ROOM_WATCH_MAX_SESSIONS) {
+            paths.push(session_path.join("state.json"));
+            paths.push(session_path.join("timeline.jsonl"));
+        }
+    }
+
+    paths
+}
+
+fn compute_control_room_signature(root: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(root.to_string_lossy().as_bytes());
+    for path in collect_control_room_signature_paths(root) {
+        if let Ok(metadata) = fs::metadata(&path) {
+            hasher.update(path.to_string_lossy().as_bytes());
+            hasher.update(metadata.len().to_le_bytes());
+            if let Ok(modified) = metadata.modified() {
+                hasher.update(modified_nanos(modified).to_le_bytes());
+            }
+        }
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn jsonl_line_count(path: &Path) -> usize {
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
+fn read_jsonl_delta(path: &Path, start_line: usize) -> Vec<Value> {
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+
+    BufReader::new(file)
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            if index < start_line {
+                return None;
+            }
+            let line = line.ok()?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<Value>(trimmed).ok()
+        })
+        .collect()
+}
+
+fn runtime_event_paths(root: &Path) -> Vec<PathBuf> {
+    let runtime_dir = root.join(".agent_control").join("runtime_sessions");
+    let Ok(entries) = fs::read_dir(runtime_dir) else {
+        return Vec::new();
+    };
+
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|item| item.path()))
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|item| item.to_str())
+                    .map(|name| name.ends_with(".events.jsonl"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn emit_control_room_delta(
+    app: &AppHandle,
+    root: &Path,
+    source: &str,
+    row: Value,
+) {
+    let _ = app.emit(
+        CONTROL_ROOM_DELTA_EVENT_NAME,
+        json!({
+            "root": root.to_string_lossy().to_string(),
+            "source": source,
+            "row": row,
+            "detectedAt": now_utc_iso(),
+        }),
+    );
+}
+
+fn start_control_room_watch(app: &AppHandle) {
+    let state = app.state::<OverlayAppState>();
+    if state
+        .control_room_watch_started
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+
+    let root = match resolve_workspace_root(None) {
+        Ok(root) => root,
+        Err(err) => {
+            log::warn!("control-room watch disabled: {err}");
+            return;
+        }
+    };
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last_signature = compute_control_room_signature(&root);
+        let mission_events_path = root.join(".agent_control").join("mission_events.jsonl");
+        let mut mission_event_cursor = jsonl_line_count(&mission_events_path);
+        let mut runtime_event_cursors: HashMap<String, usize> = runtime_event_paths(&root)
+            .into_iter()
+            .map(|path| {
+                let key = path.to_string_lossy().to_string();
+                let count = jsonl_line_count(&path);
+                (key, count)
+            })
+            .collect();
+
+        loop {
+            sleep(Duration::from_millis(CONTROL_ROOM_WATCH_INTERVAL_MS)).await;
+
+            let mission_delta = read_jsonl_delta(&mission_events_path, mission_event_cursor);
+            if !mission_delta.is_empty() {
+                mission_event_cursor += mission_delta.len();
+                for row in mission_delta {
+                    emit_control_room_delta(&app_handle, &root, "mission_event", row);
+                }
+            }
+
+            for path in runtime_event_paths(&root) {
+                let key = path.to_string_lossy().to_string();
+                let cursor = runtime_event_cursors.get(&key).copied().unwrap_or(0);
+                let delta = read_jsonl_delta(&path, cursor);
+                if delta.is_empty() {
+                    runtime_event_cursors
+                        .entry(key)
+                        .or_insert_with(|| jsonl_line_count(&path));
+                    continue;
+                }
+
+                runtime_event_cursors.insert(key, cursor + delta.len());
+                for row in delta {
+                    emit_control_room_delta(&app_handle, &root, "runtime_event", row);
+                }
+            }
+
+            let next_signature = compute_control_room_signature(&root);
+            if next_signature == last_signature {
+                continue;
+            }
+            last_signature = next_signature.clone();
+            let _ = app_handle.emit(
+                CONTROL_ROOM_EVENT_NAME,
+                json!({
+                    "root": root.to_string_lossy().to_string(),
+                    "signature": next_signature,
+                    "reason": "fs.changed",
+                    "detectedAt": now_utc_iso(),
+                }),
+            );
+        }
+    });
+}
+
+fn emit_control_room_changed(app: &AppHandle, reason: &str) {
+    let root = resolve_workspace_root(None)
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let _ = app.emit(
+        CONTROL_ROOM_EVENT_NAME,
+        json!({
+            "root": root,
+            "reason": reason,
+            "detectedAt": now_utc_iso(),
+        }),
+    );
 }
 
 fn latest_session_path(runs_root: &Path) -> Result<Option<PathBuf>, String> {
@@ -1721,6 +2004,61 @@ fn clear_provider_secret(provider_id: &str) -> Result<(), String> {
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) => Err(format!("Failed to clear secure credential: {err}")),
     }
+}
+
+fn load_telegram_bot_token() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, TELEGRAM_BOT_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+
+    match entry.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("Failed to read secure credential: {err}")),
+    }
+}
+
+fn save_telegram_bot_token(token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, TELEGRAM_BOT_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    entry
+        .set_password(token)
+        .map_err(|err| format!("Failed to save secure credential: {err}"))
+}
+
+fn clear_telegram_bot_token() -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, TELEGRAM_BOT_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(format!("Failed to clear secure credential: {err}")),
+    }
+}
+
+async fn send_telegram_message(chat_id: &str, text: &str) -> Result<Value, String> {
+    let token = load_telegram_bot_token()?
+        .ok_or_else(|| "Telegram bot token is not configured.".to_string())?;
+    let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+    let client = reqwest::Client::new();
+    let response = client
+        .post(url)
+        .json(&json!({
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": true,
+        }))
+        .send()
+        .await
+        .map_err(|err| format!("Failed to reach Telegram API: {err}"))?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|err| format!("Failed to parse Telegram API response: {err}"))?;
+    if !status.is_success() {
+        return Err(format!("Telegram API error {}: {}", status, body));
+    }
+    Ok(body)
 }
 
 fn parse_bearer_token(header_value: &str) -> Option<&str> {
@@ -4337,6 +4675,147 @@ fn get_autonomy_dashboard_snapshot(
 }
 
 #[tauri::command]
+async fn get_control_room_snapshot_command(
+    app: AppHandle,
+    payload: Option<AutonomyDashboardPayload>,
+) -> Result<Value, String> {
+    run_agent_cli_json(&app, payload.and_then(|item| item.root), "control-room", vec![], 180)
+        .await
+}
+
+#[tauri::command]
+async fn get_onboarding_status_command(
+    app: AppHandle,
+    payload: Option<AutonomyDashboardPayload>,
+) -> Result<Value, String> {
+    run_agent_cli_json(
+        &app,
+        payload.and_then(|item| item.root),
+        "onboarding-status",
+        vec![],
+        120,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn save_workspace_profile_command(
+    app: AppHandle,
+    payload: WorkspaceSavePayload,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "--name".to_string(),
+        payload.name,
+        "--path".to_string(),
+        payload.path,
+        "--default-runtime".to_string(),
+        payload.default_runtime,
+    ];
+    if let Some(workspace_id) = payload.workspace_id.filter(|value| !value.trim().is_empty()) {
+        args.push("--workspace-id".to_string());
+        args.push(workspace_id);
+    }
+    if let Some(user_profile) = payload.user_profile.filter(|value| !value.trim().is_empty()) {
+        args.push("--user-profile".to_string());
+        args.push(user_profile);
+    }
+    let response = run_agent_cli_json(&app, payload.root, "workspace-save", args, 180).await?;
+    emit_control_room_changed(&app, "workspace.saved");
+    Ok(response)
+}
+
+#[tauri::command]
+async fn start_control_room_mission_command(
+    app: AppHandle,
+    payload: ControlMissionStartPayload,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "--workspace-id".to_string(),
+        payload.workspace_id,
+        "--runtime".to_string(),
+        payload.runtime,
+        "--objective".to_string(),
+        payload.objective,
+        "--mode".to_string(),
+        payload.mode.unwrap_or_else(|| "Autopilot".to_string()),
+        "--budget-hours".to_string(),
+        payload.budget_hours.unwrap_or(12).to_string(),
+    ];
+    for success_check in payload.success_checks.unwrap_or_default() {
+        if !success_check.trim().is_empty() {
+            args.push("--success-check".to_string());
+            args.push(success_check);
+        }
+    }
+    if let Some(destination) = payload
+        .escalation_destination
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--escalation-destination".to_string());
+        args.push(destination);
+    }
+    if let Some(profile) = payload.profile.filter(|value| !value.trim().is_empty()) {
+        args.push("--profile".to_string());
+        args.push(profile);
+    }
+    let response = run_agent_cli_json(&app, payload.root, "mission-start", args, 300).await?;
+    emit_control_room_changed(&app, "mission.started");
+    Ok(response)
+}
+
+#[tauri::command]
+async fn apply_control_room_mission_action_command(
+    app: AppHandle,
+    payload: ControlMissionActionPayload,
+) -> Result<Value, String> {
+    let args = vec![
+        "--mission-id".to_string(),
+        payload.mission_id,
+        "--action".to_string(),
+        payload.action,
+    ];
+    let response = run_agent_cli_json(&app, payload.root, "mission-action", args, 240).await?;
+    emit_control_room_changed(&app, "mission.action");
+    Ok(response)
+}
+
+#[tauri::command]
+fn has_telegram_bot_token_command() -> Result<bool, String> {
+    Ok(load_telegram_bot_token()?.is_some())
+}
+
+#[tauri::command]
+fn save_telegram_bot_token_command(app: AppHandle, token: String) -> Result<bool, String> {
+    if token.trim().is_empty() {
+        return Err("Telegram bot token cannot be empty".to_string());
+    }
+    save_telegram_bot_token(&token)?;
+    append_audit_entry(&app, "telegram.token_saved", json!({ "saved": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn clear_telegram_bot_token_command(app: AppHandle) -> Result<bool, String> {
+    clear_telegram_bot_token()?;
+    append_audit_entry(&app, "telegram.token_cleared", json!({ "cleared": true }));
+    Ok(true)
+}
+
+#[tauri::command]
+async fn send_telegram_message_command(
+    app: AppHandle,
+    payload: TelegramMessagePayload,
+) -> Result<Value, String> {
+    let response = send_telegram_message(&payload.chat_id, &payload.text).await?;
+    append_audit_entry(
+        &app,
+        "telegram.message_sent",
+        json!({ "chatId": payload.chat_id }),
+    );
+    Ok(response)
+}
+
+#[tauri::command]
 async fn run_agent_vibe_status_command(
     app: AppHandle,
     payload: Option<AutonomyDashboardPayload>,
@@ -4578,6 +5057,15 @@ pub fn run() {
             get_last_night_mode_report,
             get_audit_log,
             get_autonomy_dashboard_snapshot,
+            get_control_room_snapshot_command,
+            get_onboarding_status_command,
+            save_workspace_profile_command,
+            start_control_room_mission_command,
+            apply_control_room_mission_action_command,
+            has_telegram_bot_token_command,
+            save_telegram_bot_token_command,
+            clear_telegram_bot_token_command,
+            send_telegram_message_command,
             run_agent_vibe_status_command,
             run_agent_vibe_continue_command,
             run_agent_soak_command
@@ -4615,6 +5103,7 @@ pub fn run() {
             });
 
             start_night_mode_scheduler(app.handle());
+            start_control_room_watch(app.handle());
             append_audit_entry(
                 app.handle(),
                 "app.started",

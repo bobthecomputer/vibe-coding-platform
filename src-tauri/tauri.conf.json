@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.vibecoding.platform",
   "build": {
-    "frontendDist": "../desktop-ui"
+    "beforeBuildCommand": "npm run frontend:build",
+    "beforeDevCommand": "npm run frontend:dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../desktop-ui/dist"
   },
   "app": {
     "windows": [

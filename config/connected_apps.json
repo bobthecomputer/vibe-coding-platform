@@ -1,0 +1,98 @@
+[
+  {
+    "manifest_id": "manifest_oratio_viva",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "oratio-viva",
+    "name": "Oratio Viva",
+    "description": "Speech and voice workflows exposed through a local bridge for guided agent execution.",
+    "bridge": {
+      "transport": "http",
+      "endpoint": "http://127.0.0.1:47830/fluxio",
+      "healthcheck": "/health",
+      "event_stream": "/events"
+    },
+    "auth": {
+      "mode": "local_token",
+      "scopes": ["speech.manage", "voice.render"]
+    },
+    "permissions": ["task.run", "context.read", "action.invoke"],
+    "tasks": [
+      {
+        "task_id": "render-voice-preview",
+        "label": "Render voice preview",
+        "description": "Create a short preview from app-managed voices and prompts.",
+        "requires_approval": false
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "voice-catalog",
+        "label": "Voice Catalog",
+        "description": "App-managed voice inventory and metadata.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "queue-render",
+        "label": "Queue Render",
+        "description": "Send a render request into the app job queue.",
+        "mutability": "write",
+        "risk_level": "medium",
+        "requires_approval": false
+      }
+    ],
+    "ui_hints": {
+      "category": "speech",
+      "requiresUserPresent": false
+    }
+  },
+  {
+    "manifest_id": "manifest_solantir_terminal",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "solantir-terminal",
+    "name": "Solantir Terminal",
+    "description": "Operator dashboard surfaces exposed to Fluxio through a capability-scoped bridge.",
+    "bridge": {
+      "transport": "ipc",
+      "endpoint": "pipe://fluxio-solantir",
+      "healthcheck": "ping",
+      "event_stream": "events"
+    },
+    "auth": {
+      "mode": "local_session",
+      "scopes": ["dashboard.read", "watchlist.write"]
+    },
+    "permissions": ["task.run", "context.read", "approval.request"],
+    "tasks": [
+      {
+        "task_id": "refresh-watchlist",
+        "label": "Refresh watchlist",
+        "description": "Run the app-native watchlist refresh workflow.",
+        "requires_approval": true
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "watchlist",
+        "label": "Watchlist",
+        "description": "Current analyst watchlist state.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "ack-alert",
+        "label": "Acknowledge alert",
+        "description": "Mark a surfaced alert as acknowledged inside the app.",
+        "mutability": "write",
+        "risk_level": "medium",
+        "requires_approval": true
+      }
+    ],
+    "ui_hints": {
+      "category": "operations",
+      "requiresUserPresent": true
+    }
+  }
+]

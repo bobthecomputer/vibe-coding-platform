@@ -1,5 +1,9 @@
 # Build Roadmap
 
+Current release goalpost:
+
+- `Fluxio 1.0` is defined in `docs/FLUXIO_1_0_RELEASE.md`
+
 ## M1 - Core Loop
 
 - Done in this repo: docs-first preflight, planning, context tracking, session artifacts.

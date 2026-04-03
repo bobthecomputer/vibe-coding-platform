@@ -23,15 +23,28 @@ from .demo_runner import (
 from .engine import AutonomousEngine
 from .eval import summarize_runs
 from .feature_suggester import suggest_features_from_text
+from .fluxio_harness import FluxioHarness, LegacyHarnessAdapter
 from .improvement_advisor import recommend_improvements
+from .action_executor import cleanup_execution_scope
 from .memory import MemoryStore
+from .mission_control import (
+    ControlRoomStore,
+    build_escalation_preview,
+    default_docs_for_workspace,
+    mission_mode_to_engine_mode,
+)
+from .models import DelegatedRuntimeSession, ExecutionPolicy, ExecutionScope, MissionEvent
 from .modes import ModeRegistry
+from .onboarding import detect_onboarding_status
 from .openai_adapter import build_responses_request, tools_from_skills
 from .persona import PersonaRegistry
 from .profiles import ProfileRegistry
 from .replay import build_lineage_timeline
+from .runtimes import runtime_adapter_map
 from .research import search_workspace
+from .runtime_supervisor import DelegatedRuntimeSupervisor
 from .session_store import SessionStore
+from .skill_library import SkillLibrary
 from .skills import SkillRegistry
 from .suite_report import build_suite_summary, write_suite_artifacts
 from .verification import VerificationRunner, detect_default_verification_commands
@@ -754,6 +767,95 @@ def build_parser() -> argparse.ArgumentParser:
     next_cmd.add_argument(
         "--top-k", type=int, default=6, help="Maximum recommendations"
     )
+
+    control_room_cmd = subparsers.add_parser(
+        "control-room", help="Return the mission-control snapshot for the desktop UI"
+    )
+    control_room_cmd.add_argument("--root", default=".", help="Project root path")
+
+    onboarding_cmd = subparsers.add_parser(
+        "onboarding-status", help="Return Windows-first onboarding diagnostics"
+    )
+    onboarding_cmd.add_argument("--root", default=".", help="Project root path")
+
+    workspace_cmd = subparsers.add_parser(
+        "workspace-save", help="Create or update a managed workspace profile"
+    )
+    workspace_cmd.add_argument("--root", default=".", help="Project root path")
+    workspace_cmd.add_argument("--name", required=True, help="Workspace label")
+    workspace_cmd.add_argument("--path", required=True, help="Workspace root path")
+    workspace_cmd.add_argument(
+        "--default-runtime",
+        default="openclaw",
+        choices=["openclaw", "hermes"],
+        help="Default runtime for the workspace",
+    )
+    workspace_cmd.add_argument(
+        "--workspace-id", default=None, help="Existing workspace id to update"
+    )
+    workspace_cmd.add_argument(
+        "--user-profile",
+        default="builder",
+        help="Guided profile default for this workspace",
+    )
+
+    mission_start_cmd = subparsers.add_parser(
+        "mission-start", help="Create a mission and run its first control-plane cycle"
+    )
+    mission_start_cmd.add_argument("--root", default=".", help="Project root path")
+    mission_start_cmd.add_argument("--workspace-id", required=True, help="Workspace id")
+    mission_start_cmd.add_argument(
+        "--runtime",
+        required=True,
+        choices=["openclaw", "hermes"],
+        help="Selected runtime adapter",
+    )
+    mission_start_cmd.add_argument("--objective", required=True, help="Mission objective")
+    mission_start_cmd.add_argument(
+        "--success-check",
+        action="append",
+        default=[],
+        help="Success criteria to prove completion",
+    )
+    mission_start_cmd.add_argument(
+        "--mode",
+        default="Autopilot",
+        choices=["Focus", "Autopilot", "Deep Run", "Research"],
+        help="Mission mode vocabulary for the desktop UI",
+    )
+    mission_start_cmd.add_argument(
+        "--budget-hours", type=int, default=12, help="Time budget in hours"
+    )
+    mission_start_cmd.add_argument(
+        "--profile",
+        default="builder",
+        help="Guided profile name for routing, approvals, and debugging defaults",
+    )
+    mission_start_cmd.add_argument(
+        "--escalation-destination",
+        default="",
+        help="Telegram chat id or destination label for phone escalation",
+    )
+
+    mission_action_cmd = subparsers.add_parser(
+        "mission-action", help="Apply a control-room action to an existing mission"
+    )
+    mission_action_cmd.add_argument("--root", default=".", help="Project root path")
+    mission_action_cmd.add_argument("--mission-id", required=True, help="Mission id")
+    mission_action_cmd.add_argument(
+        "--action",
+        required=True,
+        choices=[
+            "resume",
+            "stop",
+            "complete",
+            "fail-verification",
+            "need-approval",
+            "approve-latest",
+            "reject-latest",
+        ],
+        help="Mission lifecycle action",
+    )
     return parser
 
 
@@ -815,11 +917,17 @@ def _invoke_engine(
     max_runtime_override: int | None = None,
     parallel_agents_override: int | None = None,
     merge_policy_override: str | None = None,
+    runtime_id: str = "openclaw",
+    mission_id: str | None = None,
 ) -> dict:
     constitution = AgentConstitution.load(root / "config" / "constitution.json")
     modes = ModeRegistry(root / "config" / "modes.json")
     profiles = ProfileRegistry(root / "config" / "profiles.json")
-    resolved_profile = profiles.resolve(profile_name, root)
+    resolved_profile = (
+        profiles.resolve(profile_name, root)
+        if profile_name is not None or mode_name == "profile"
+        else None
+    )
 
     selected_mode_name = mode_name
     if mode_name == "profile" and resolved_profile and resolved_profile.agent.mode:
@@ -908,26 +1016,34 @@ def _invoke_engine(
         skill_registry=skills,
         memory_store=memory,
     )
+    compatibility_harness = LegacyHarnessAdapter(engine)
+    fluxio_harness = FluxioHarness(
+        compatibility_harness=compatibility_harness,
+        session_store=store,
+        verification_runner=verification,
+        skill_library=SkillLibrary(root=root, registry=skills),
+    )
 
     effective_verify_commands = verify_commands or detect_default_verification_commands(
         root
     )
 
-    result = engine.run(
+    result = fluxio_harness.run(
         objective=objective,
         docs=docs,
-        persona=resolved_persona,
-        iterations=iterations,
-        repo_path=root,
-        verify_commands=effective_verify_commands,
         project_profile=project_profile,
+        verify_commands=effective_verify_commands,
+        repo_path=root,
+        iterations=iterations,
         max_handoffs=resolved_max_handoffs,
         max_runtime_seconds=resolved_max_runtime,
-        parallel_agents=resolved_parallel_agents,
-        merge_policy=resolved_merge_policy,
+        mission_id=mission_id,
+        runtime_id=runtime_id,
+        profile_name=(resolved_profile.name if resolved_profile else "builder"),
+        selected_profile=resolved_profile,
         resume_from_session_id=resume_from,
-        checkpoint_every=checkpoint_every,
         resume_from_checkpoint_path=resume_checkpoint,
+        checkpoint_every=checkpoint_every,
         autopilot_guardrails={
             "pause_on_handoff": True,
             "pause_on_verification_failure": resolved_pause_on_verification_failure,
@@ -1819,6 +1935,539 @@ def cmd_next_features(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mission_iterations_for_mode(mode: str) -> int:
+    normalized = mode.strip().lower()
+    if normalized == "focus":
+        return 1
+    if normalized == "research":
+        return 2
+    return 2
+
+
+def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: dict) -> dict:
+    mission = store.get_mission(mission_id)
+    if mission is None:
+        return {"error": f"Unknown mission id: {mission_id}"}
+
+    session_path_value = result.get("session_path")
+    latest_session_id = Path(session_path_value).name if session_path_value else None
+    mission.state.latest_session_id = latest_session_id
+    mission.state.last_runtime_event = result.get("autopilot_status")
+    mission.state.last_error = result.get("autopilot_pause_reason") or None
+    mission.state.remaining_steps = result.get("remaining_steps", [])
+    mission.state.verification_failures = result.get("verification_failures", [])
+    mission.state.active_step_id = result.get("plan_revisions", [{}])[-1].get(
+        "active_step_id"
+    )
+    mission.state.repeated_failure_count = int(
+        result.get("repeated_failure_count", mission.state.repeated_failure_count)
+    )
+    mission.state.planner_loop_status = (
+        "paused" if result.get("autopilot_pause_reason") else result.get("autopilot_status", "running")
+    )
+    mission.state.stop_reason = result.get("autopilot_pause_reason") or None
+    mission.state.last_plan_summary = (
+        result.get("plan_revisions", [{}])[-1].get("summary", "")
+        if result.get("plan_revisions")
+        else ""
+    )
+
+    if mission.state.verification_failures:
+        mission.state.status = "verification_failed"
+    elif waiting_delegated is not None:
+        mission.state.status = "needs_approval"
+    elif result.get("autopilot_pause_reason") == "approval_required":
+        mission.state.status = "needs_approval"
+    elif result.get("autopilot_pause_reason") == "delegated_runtime_running":
+        mission.state.status = "running"
+    elif result.get("autopilot_status") == "completed":
+        mission.state.status = "completed"
+    elif result.get("autopilot_pause_reason"):
+        mission.state.status = "blocked"
+    else:
+        mission.state.status = "running"
+
+    mission.harness_id = result.get("harness_id", mission.harness_id)
+    scope_payload = result.get("execution_scope")
+    policy_payload = result.get("execution_policy")
+    if scope_payload:
+        mission.execution_scope = (
+            scope_payload
+            if isinstance(scope_payload, ExecutionScope)
+            else ExecutionScope(**scope_payload)
+        )
+    if policy_payload:
+        mission.execution_policy = (
+            policy_payload
+            if isinstance(policy_payload, ExecutionPolicy)
+            else ExecutionPolicy(**policy_payload)
+        )
+    mission.route_configs = result.get("route_configs", [])
+    mission.routing_decisions = result.get("routing_decisions", [])
+    mission.current_plan_revision_id = result.get("current_plan_revision_id")
+    mission.plan_revisions = result.get("plan_revisions", [])
+    mission.derived_tasks = result.get("derived_tasks", [])
+    mission.improvement_queue = result.get("improvement_queue", [])
+    mission.skill_usage = result.get("skill_usage", [])
+    mission.learned_skill_events = result.get("learned_skill_events", [])
+    mission.action_history = result.get("action_history", [])
+    mission.delegated_runtime_sessions = [
+        item
+        if isinstance(item, DelegatedRuntimeSession)
+        else DelegatedRuntimeSession(**item)
+        for item in result.get("delegated_runtime_sessions", [])
+    ]
+    waiting_delegated = next(
+        (
+            item
+            for item in mission.delegated_runtime_sessions
+            if item.status == "waiting_for_approval"
+        ),
+        None,
+    )
+    mission.tutorial_context = {
+        "profile": mission.selected_profile,
+        "explanationDepth": result.get("execution_policy", {}).get("explanation_depth", "medium"),
+        "scope": result.get("execution_scope", {}).get("strategy", "direct"),
+    }
+    mission.planner_loop_status = mission.state.planner_loop_status
+    mission.state.execution_scope = (
+        asdict(mission.execution_scope)
+        if hasattr(mission.execution_scope, "__dataclass_fields__")
+        else result.get("execution_scope", {})
+    )
+    mission.state.pending_mutating_actions = sum(
+        1
+        for item in mission.action_history
+        if item.get("proposal", {}).get("mutability_class") == "write"
+        and item.get("gate", {}).get("status") == "pending"
+    )
+    mission.state.delegated_runtime_sessions = [
+        asdict(item) if hasattr(item, "__dataclass_fields__") else item
+        for item in mission.delegated_runtime_sessions
+    ]
+    mission.state.replay_action_cursor = (
+        mission.action_history[-1].get("proposal", {}).get("replay_cursor", "")
+        if mission.action_history
+        else ""
+    )
+    mission.state.tutorial_context = mission.tutorial_context
+
+    mission.escalation_policy.pending_count = len(mission.state.verification_failures)
+    mission.escalation_policy.delivery_ready = bool(mission.escalation_policy.destination)
+    mission.escalation_policy.preview_message = build_escalation_preview(mission)
+    if mission.state.status == "needs_approval":
+        mission.escalation_policy.pending_count = max(1, mission.escalation_policy.pending_count)
+
+    mission.proof.summary = (
+        "Mission completed with proof artifacts."
+        if mission.state.status == "completed"
+        else (
+            waiting_delegated.pending_approval.get(
+                "prompt",
+                "Delegated runtime is waiting for operator approval.",
+            )
+            if waiting_delegated is not None
+            else (
+                "Delegated runtime lane is active. Fluxio will continue when it finishes."
+                if result.get("autopilot_pause_reason") == "delegated_runtime_running"
+                else (
+                    mission.state.last_plan_summary
+                    or "Mission bootstrapped. Review remaining steps and proof artifacts."
+                )
+            )
+        )
+    )
+    mission.proof.changed_files = result.get("changed_files", [])
+    mission.proof.passed_checks = [
+        command
+        for command in result.get("effective_verify_commands", [])
+        if command not in mission.state.verification_failures
+    ]
+    mission.proof.failed_checks = mission.state.verification_failures
+    mission.proof.pending_approvals = [
+        item["proposal"]["title"]
+        for item in mission.action_history
+        if item.get("gate", {}).get("status") == "pending"
+    ]
+    if waiting_delegated is not None:
+        mission.proof.pending_approvals.append(
+            waiting_delegated.pending_approval.get(
+                "prompt",
+                f"Delegated approval required for {waiting_delegated.runtime_id}.",
+            )
+        )
+    mission.proof.blocked_by = (
+        [mission.state.last_error] if mission.state.last_error else []
+    )
+    if waiting_delegated is not None and waiting_delegated.pending_approval.get("prompt"):
+        mission.proof.blocked_by.append(waiting_delegated.pending_approval["prompt"])
+
+    store.update_mission(mission)
+    store.append_event(
+        MissionEvent(
+            mission_id=mission.mission_id,
+            kind="mission.runtime_cycle",
+            message=f"{mission.runtime_id} control cycle finished with status {mission.state.status}.",
+            metadata={
+                "sessionId": latest_session_id,
+                "autopilotStatus": result.get("autopilot_status"),
+                "pauseReason": result.get("autopilot_pause_reason"),
+            },
+        )
+    )
+    cleanup_payload = _cleanup_mission_scope_if_finished(store, mission)
+    if cleanup_payload:
+        return {"mission": asdict(mission), "result": result, "cleanup": cleanup_payload}
+    return {"mission": asdict(mission), "result": result}
+
+
+def _cleanup_mission_scope_if_finished(store: ControlRoomStore, mission) -> dict | None:
+    if mission.state.status not in {"completed", "stopped"}:
+        return None
+
+    cleanup = cleanup_execution_scope(mission.execution_scope)
+    if not cleanup.get("cleaned"):
+        return cleanup
+
+    mission.execution_scope.status = "cleaned"
+    mission.execution_scope.detail = (
+        "Mission isolation root was cleaned up after completion."
+        if mission.state.status == "completed"
+        else "Mission isolation root was cleaned up after stop."
+    )
+    mission.state.execution_scope = asdict(mission.execution_scope)
+    store.update_mission(mission)
+    store.append_event(
+        MissionEvent(
+            mission_id=mission.mission_id,
+            kind="mission.cleanup",
+            message=f"Cleaned isolated execution root at {cleanup.get('path', '')}.",
+            metadata=cleanup,
+        )
+    )
+    return cleanup
+
+
+def _update_latest_action_gate(root: Path, session_id: str, status: str) -> dict:
+    session_path = root / ".agent_runs" / session_id
+    state_path = session_path / "state.json"
+    if not state_path.exists():
+        return {"error": f"Missing session state for {session_id}"}
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    history = payload.get("action_history", [])
+    if not history:
+        return {"error": "Mission session has no action history."}
+
+    last = history[-1]
+    gate = last.setdefault("gate", {})
+    if not gate.get("required"):
+        return {"error": "Latest action does not require approval."}
+
+    gate["status"] = status
+    gate["resolved_at"] = utc_stamp()
+    gate["approved_by"] = "operator"
+    payload["action_history"] = history
+    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return {"ok": True, "state": payload}
+
+
+def _update_latest_approval_requirement(
+    root: Path,
+    mission,
+    session_id: str,
+    status: str,
+) -> dict:
+    local_result = _update_latest_action_gate(root=root, session_id=session_id, status=status)
+    if not local_result.get("error"):
+        local_result["approval_kind"] = "local_action"
+        return local_result
+
+    runtime_supervisor = DelegatedRuntimeSupervisor(root)
+    for delegated in reversed(mission.delegated_runtime_sessions):
+        if delegated.status != "waiting_for_approval":
+            continue
+        try:
+            resolved = runtime_supervisor.resolve_approval(
+                delegated,
+                status=status,
+                actor="operator",
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return {"error": str(exc)}
+        return {
+            "ok": True,
+            "approval_kind": "delegated_runtime",
+            "delegated_session": asdict(resolved),
+        }
+    return local_result
+
+
+def cmd_control_room(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    payload = store.build_snapshot()
+    payload["onboarding"] = detect_onboarding_status(root)
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_onboarding_status(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    print(json.dumps(detect_onboarding_status(root), indent=2))
+    return 0
+
+
+def cmd_workspace_save(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    workspace = store.upsert_workspace(
+        name=args.name,
+        root_path=args.path,
+        default_runtime=args.default_runtime,
+        user_profile=args.user_profile,
+        workspace_id=args.workspace_id,
+    )
+    payload = {"workspace": asdict(workspace), "snapshot": store.build_snapshot()}
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_mission_start(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    workspace = store.get_workspace(args.workspace_id)
+    if workspace is None:
+        print(
+            json.dumps(
+                {"error": f"Unknown workspace id: {args.workspace_id}"}, indent=2
+            )
+        )
+        return 1
+
+    adapters = runtime_adapter_map()
+    adapter = adapters.get(args.runtime)
+    if adapter is None:
+        print(json.dumps({"error": f"Unknown runtime: {args.runtime}"}, indent=2))
+        return 1
+
+    runtime_status = adapter.doctor(Path(workspace.root_path))
+    verification_commands = detect_default_verification_commands(Path(workspace.root_path))
+    mission = store.create_mission(
+        workspace_id=workspace.workspace_id,
+        runtime_id=args.runtime,
+        objective=args.objective,
+        success_checks=args.success_check,
+        mode=args.mode,
+        verification_commands=verification_commands,
+        max_runtime_seconds=max(3600, args.budget_hours * 3600),
+        selected_profile=args.profile or workspace.user_profile,
+        escalation_destination=args.escalation_destination,
+    )
+    store.append_event(
+        MissionEvent(
+            mission_id=mission.mission_id,
+            kind="runtime.status",
+            message=runtime_status.doctor_summary,
+            metadata=asdict(runtime_status),
+        )
+    )
+
+    if not runtime_status.detected:
+        mission.state.status = "blocked"
+        mission.proof.summary = "Mission is blocked until the selected runtime is installed."
+        mission.proof.blocked_by = runtime_status.issues
+        mission.escalation_policy.pending_count = 1
+        mission.escalation_policy.delivery_ready = bool(
+            mission.escalation_policy.destination
+        )
+        mission.escalation_policy.preview_message = build_escalation_preview(mission)
+        store.update_mission(mission)
+        payload = {
+            "mission": asdict(mission),
+            "runtimeStatus": asdict(runtime_status),
+            "snapshot": store.build_snapshot(),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    docs = default_docs_for_workspace(Path(workspace.root_path))
+    engine_mode = mission_mode_to_engine_mode(args.mode)
+    result = _invoke_engine(
+        root=Path(workspace.root_path),
+        objective=args.objective,
+        docs=docs,
+        mode_name=engine_mode,
+        profile_name=args.profile or workspace.user_profile,
+        persona_override=None,
+        iterations=_mission_iterations_for_mode(args.mode),
+        verify_commands=verification_commands,
+        project_profile=(
+            f"Mission controlled through {args.runtime} adapter. "
+            "Use phone escalation, explicit proof, and multi-project safety defaults."
+        ),
+        resume_from=None,
+        resume_checkpoint=None,
+        checkpoint_every=1,
+        pause_on_verification_failure=True,
+        runtime_id=args.runtime,
+        mission_id=mission.mission_id,
+    )
+    synced = _sync_mission_from_result(store, mission.mission_id, result)
+    synced["runtimeStatus"] = asdict(runtime_status)
+    synced["snapshot"] = store.build_snapshot()
+    print(json.dumps(synced, indent=2))
+    return 0 if result.get("status") == "ok" else 2
+
+
+def cmd_mission_action(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    mission = store.get_mission(args.mission_id)
+    if mission is None:
+        print(json.dumps({"error": f"Unknown mission id: {args.mission_id}"}, indent=2))
+        return 1
+
+    workspace = store.get_workspace(mission.workspace_id)
+    if workspace is None:
+        print(
+            json.dumps(
+                {"error": f"Unknown workspace for mission: {mission.workspace_id}"},
+                indent=2,
+            )
+        )
+        return 1
+    runtime_supervisor = DelegatedRuntimeSupervisor(root)
+
+    if args.action == "resume":
+        if not mission.state.latest_session_id:
+            print(
+                json.dumps(
+                    {"error": "Mission has no session to resume from yet."}, indent=2
+                )
+            )
+            return 1
+        result = _invoke_engine(
+            root=Path(workspace.root_path),
+            objective=mission.objective,
+            docs=default_docs_for_workspace(Path(workspace.root_path)),
+            mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
+            profile_name=None,
+            persona_override=None,
+            iterations=_mission_iterations_for_mode(mission.run_budget.mode),
+            verify_commands=mission.verification_policy.commands,
+            project_profile=(
+                f"Resume mission {mission.mission_id} through {mission.runtime_id} adapter."
+            ),
+            resume_from=mission.state.latest_session_id,
+            resume_checkpoint=None,
+            checkpoint_every=1,
+            pause_on_verification_failure=True,
+            runtime_id=mission.runtime_id,
+            mission_id=mission.mission_id,
+        )
+        payload = _sync_mission_from_result(store, mission.mission_id, result)
+        payload["snapshot"] = store.build_snapshot()
+        print(json.dumps(payload, indent=2))
+        return 0 if result.get("status") == "ok" else 2
+
+    if args.action in {"approve-latest", "reject-latest"}:
+        if not mission.state.latest_session_id:
+            print(json.dumps({"error": "Mission has no session state yet."}, indent=2))
+            return 1
+        status = "approved" if args.action == "approve-latest" else "rejected"
+        update_result = _update_latest_approval_requirement(
+            root=root,
+            mission=mission,
+            session_id=mission.state.latest_session_id,
+            status=status,
+        )
+        if update_result.get("error"):
+            print(json.dumps(update_result, indent=2))
+            return 1
+        if update_result.get("approval_kind") == "local_action" and mission.action_history:
+            mission.action_history[-1]["gate"]["status"] = status
+            mission.action_history[-1]["gate"]["approved_by"] = "operator"
+            mission.action_history[-1]["gate"]["resolved_at"] = utc_stamp()
+        if update_result.get("approval_kind") == "delegated_runtime":
+            mission.delegated_runtime_sessions = [
+                item
+                if item.delegated_id != update_result["delegated_session"]["delegated_id"]
+                else DelegatedRuntimeSession(**update_result["delegated_session"])
+                for item in mission.delegated_runtime_sessions
+            ]
+            mission.state.delegated_runtime_sessions = [
+                asdict(item) if hasattr(item, "__dataclass_fields__") else item
+                for item in mission.delegated_runtime_sessions
+            ]
+        mission.state.status = "queued" if status == "approved" else "blocked"
+        mission.proof.summary = (
+            "Latest approval requirement approved. Resume mission to continue."
+            if status == "approved"
+            else "Latest approval requirement rejected. Resume mission to trigger replanning."
+        )
+        mission.proof.pending_approvals = []
+        mission.escalation_policy.pending_count = 0
+        mission.escalation_policy.preview_message = build_escalation_preview(mission)
+        store.update_mission(mission)
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.approval",
+                message=f"Latest action {status} by operator.",
+                metadata={"status": status},
+            )
+        )
+        payload = {"mission": asdict(mission), "snapshot": store.build_snapshot()}
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if args.action == "stop":
+        stopped_sessions = []
+        for item in mission.delegated_runtime_sessions:
+            refreshed = runtime_supervisor.stop_session(item)
+            stopped_sessions.append(refreshed)
+        mission.delegated_runtime_sessions = stopped_sessions
+        mission.state.delegated_runtime_sessions = [asdict(item) for item in stopped_sessions]
+        mission.state.status = "stopped"
+        mission.proof.summary = "Mission was stopped from the control room."
+    elif args.action == "complete":
+        mission.state.status = "completed"
+        mission.proof.summary = "Mission marked complete by operator."
+    elif args.action == "fail-verification":
+        mission.state.status = "verification_failed"
+        if not mission.state.verification_failures:
+            mission.state.verification_failures = ["Manual verification failure"]
+        mission.proof.failed_checks = mission.state.verification_failures
+        mission.proof.summary = "Mission needs intervention after verification failure."
+    elif args.action == "need-approval":
+        mission.state.status = "needs_approval"
+        mission.escalation_policy.pending_count = max(
+            1, mission.escalation_policy.pending_count
+        )
+        mission.proof.pending_approvals = ["Operator approval required"]
+        mission.proof.summary = "Mission is waiting for operator approval."
+
+    mission.escalation_policy.delivery_ready = bool(mission.escalation_policy.destination)
+    mission.escalation_policy.preview_message = build_escalation_preview(mission)
+    store.update_mission(mission)
+    cleanup_payload = _cleanup_mission_scope_if_finished(store, mission)
+    store.append_event(
+        MissionEvent(
+            mission_id=mission.mission_id,
+            kind="mission.action",
+            message=f"Mission action applied: {args.action}",
+            metadata={"action": args.action},
+        )
+    )
+    payload = {"mission": asdict(mission), "snapshot": store.build_snapshot()}
+    if cleanup_payload:
+        payload["cleanup"] = cleanup_payload
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -1896,6 +2545,21 @@ def main() -> int:
 
     if args.command == "next-features":
         return cmd_next_features(args)
+
+    if args.command == "control-room":
+        return cmd_control_room(args)
+
+    if args.command == "onboarding-status":
+        return cmd_onboarding_status(args)
+
+    if args.command == "workspace-save":
+        return cmd_workspace_save(args)
+
+    if args.command == "mission-start":
+        return cmd_mission_start(args)
+
+    if args.command == "mission-action":
+        return cmd_mission_action(args)
 
     parser.print_help()
     return 1

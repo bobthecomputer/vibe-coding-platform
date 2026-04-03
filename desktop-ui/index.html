@@ -1,654 +1,275 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="default" data-font="default">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fluxio - Hands-Free AI</title>
+    <title>Fluxio Control Room</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <!-- Splash Screen -->
-    <div class="splash-screen" id="splashScreen">
-      <div class="splash-logo">
-        <img src="./fluxio-logo-main.svg" alt="Fluxio" />
-      </div>
-      <div class="splash-spinner"></div>
-      <p class="splash-text">Starting Fluxio...</p>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Desktop-first agent control plane</p>
+          <h1>Fluxio Workbench</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="preview-picker">
+            <span>Preview</span>
+            <select id="previewModeSelect">
+              <option value="live">Live Backend</option>
+            </select>
+          </label>
+          <label class="preview-picker compact-picker">
+            <span>Live Sync</span>
+            <select id="liveSyncSelect">
+              <option value="off">Off</option>
+              <option value="1">1s</option>
+              <option value="5">5s</option>
+              <option value="15">15s</option>
+              <option value="30">30s</option>
+            </select>
+          </label>
+          <span class="status-pill" id="devLoopStatus">Packaged build</span>
+          <span class="status-pill" id="liveFeedStatus">Manual refresh</span>
+          <span class="status-pill" id="refreshStatus">Idle</span>
+          <button class="ghost-btn" id="refreshBtn" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="hero-grid" id="heroGrid"></section>
+      <section class="guidance-strip" id="guidanceStrip"></section>
+
+      <main class="workbench-grid">
+        <section class="panel deck-panel" aria-labelledby="projectsHeading">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Mission Deck</p>
+              <h2 id="projectsHeading">Projects And Missions</h2>
+            </div>
+          </div>
+          <div class="workspace-list" id="workspaceList"></div>
+          <form class="stack-form" id="workspaceForm">
+            <h3>Add Workspace</h3>
+            <label>
+              <span>Name</span>
+              <input id="workspaceName" name="name" type="text" placeholder="Customer Portal" required />
+            </label>
+            <label>
+              <span>Path</span>
+              <input id="workspacePath" name="path" type="text" placeholder="C:\Users\paul\Projects\repo" required />
+            </label>
+            <label>
+              <span>Default Runtime</span>
+              <select id="workspaceRuntime" name="defaultRuntime">
+                <option value="openclaw">OpenClaw</option>
+                <option value="hermes">Hermes</option>
+              </select>
+            </label>
+            <label>
+              <span>Guided Profile</span>
+              <select id="workspaceProfile" name="userProfile">
+                <option value="builder">Builder</option>
+                <option value="beginner">Beginner</option>
+                <option value="advanced">Advanced</option>
+                <option value="experimental">Experimental</option>
+              </select>
+            </label>
+            <button class="primary-btn" type="submit">Save Workspace</button>
+          </form>
+
+          <form class="stack-form mission-form" id="missionForm">
+            <h3>Launch Mission</h3>
+            <label>
+              <span>Workspace</span>
+              <select id="missionWorkspace" name="workspaceId"></select>
+            </label>
+            <label>
+              <span>Runtime</span>
+              <select id="missionRuntime" name="runtime">
+                <option value="openclaw">OpenClaw</option>
+                <option value="hermes">Hermes</option>
+              </select>
+            </label>
+            <label>
+              <span>Mode</span>
+              <select id="missionMode" name="mode">
+                <option value="Focus">Focus</option>
+                <option value="Autopilot" selected>Autopilot</option>
+                <option value="Deep Run">Deep Run</option>
+                <option value="Research">Research</option>
+              </select>
+            </label>
+            <label>
+              <span>Guided Profile</span>
+              <select id="missionProfile" name="profile"></select>
+            </label>
+            <label>
+              <span>Objective</span>
+              <textarea id="missionObjective" name="objective" rows="3" placeholder="Define the daily goal, proof expectations, and what success looks like." required></textarea>
+            </label>
+            <label>
+              <span>Success Checks</span>
+              <textarea id="missionChecks" name="successChecks" rows="2" placeholder="One per line: tests pass, run report written, proof summary ready"></textarea>
+            </label>
+            <label>
+              <span>Phone Destination (Telegram chat id)</span>
+              <input id="telegramChatId" name="telegramChatId" type="text" placeholder="123456789" />
+            </label>
+            <button class="primary-btn" type="submit">Start Mission</button>
+          </form>
+
+          <div class="mission-list" id="missionList"></div>
+        </section>
+
+        <section class="panel command-panel" aria-labelledby="plannerHeading">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Command Center</p>
+              <h2 id="plannerHeading">Active Mission Workbench</h2>
+            </div>
+          </div>
+          <div class="mission-proof spotlight-proof" id="plannerSummary"></div>
+          <div class="workbench-metrics" id="proofArtifactList"></div>
+          <div class="command-grid">
+            <div class="command-column">
+              <h3>Model Routing</h3>
+              <div class="workspace-list" id="routingList"></div>
+            </div>
+            <div class="command-column">
+              <h3>Plan Revisions</h3>
+              <div class="activity-list" id="planRevisionList"></div>
+            </div>
+          </div>
+          <div class="command-grid">
+            <div class="command-column">
+              <h3>Action History</h3>
+              <div class="activity-list" id="actionHistoryList"></div>
+            </div>
+            <div class="command-column">
+              <h3>Delegated Runtime Lanes</h3>
+              <div class="activity-list" id="delegatedLaneList"></div>
+            </div>
+          </div>
+          <div class="command-column">
+            <h3>Derived Tasks And Improvements</h3>
+            <div class="activity-list" id="improvementQueueList"></div>
+          </div>
+        </section>
+
+        <section class="panel rail-panel" aria-labelledby="guidanceHeading">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Operator Rail</p>
+              <h2 id="guidanceHeading">Guidance And Inbox</h2>
+            </div>
+          </div>
+          <div class="mission-proof" id="guidanceSummary"></div>
+          <div class="recommendation-columns">
+            <div>
+              <h3>Tutorial</h3>
+              <div class="activity-list" id="tutorialStepList"></div>
+            </div>
+            <div>
+              <h3>Profile Defaults</h3>
+              <div class="workspace-list" id="profileChoiceList"></div>
+            </div>
+          </div>
+          <div class="activity-list" id="guidanceCardList"></div>
+
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Approvals</p>
+              <h2 id="inboxHeading">Inbox And Phone Escalation</h2>
+            </div>
+          </div>
+          <div class="inbox-summary" id="inboxSummary"></div>
+          <div class="inbox-list" id="inboxList"></div>
+
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Live Activity</p>
+              <h2 id="activityHeading">Proof Timeline</h2>
+            </div>
+          </div>
+          <div class="activity-list" id="activityList"></div>
+
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Setup</p>
+              <h2 id="setupHeading">Readiness And Integrations</h2>
+            </div>
+          </div>
+          <div class="setup-grid" id="setupGrid"></div>
+          <div class="runtime-list" id="runtimeList"></div>
+          <div class="phone-card">
+            <h3>Telegram Escalation</h3>
+            <label>
+              <span>Bot Token</span>
+              <input id="telegramBotToken" type="password" placeholder="Stored securely in the OS keychain" />
+            </label>
+            <div class="inline-actions">
+              <button class="ghost-btn" id="saveTelegramTokenBtn" type="button">Save Token</button>
+              <button class="ghost-btn" id="clearTelegramTokenBtn" type="button">Clear Token</button>
+              <button class="ghost-btn" id="sendTelegramTestBtn" type="button">Send Test</button>
+            </div>
+            <p class="muted" id="telegramStatus">Telegram bot token not checked yet.</p>
+          </div>
+          <div class="recommendation-columns">
+            <div>
+              <h3>Skill Packs</h3>
+              <div id="skillRecommendations"></div>
+            </div>
+            <div>
+              <h3>MCP And Tooling</h3>
+              <div id="integrationRecommendations"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel labs-panel" aria-labelledby="skillsHeading">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Labs</p>
+              <h2 id="skillsHeading">Skills, Harness, And Product Lab</h2>
+            </div>
+          </div>
+          <div class="recommendation-columns">
+            <div>
+              <h3>Catalog</h3>
+              <div id="skillCatalog"></div>
+            </div>
+            <div>
+              <h3>Harness Lab</h3>
+              <div id="harnessLab"></div>
+            </div>
+          </div>
+          <div class="activity-list product-lab" id="productLab"></div>
+        </section>
+
+        <section class="panel bridge-panel" aria-labelledby="bridgeLabHeading">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Bridge Lab</p>
+              <h2 id="bridgeLabHeading">Fluxio App Capability Standard</h2>
+            </div>
+          </div>
+          <div class="mission-proof" id="bridgeLabSummary"></div>
+          <div class="recommendation-columns">
+            <div>
+              <h3>Discovered Apps</h3>
+              <div id="bridgeLabApps"></div>
+            </div>
+            <div>
+              <h3>Connected Sessions</h3>
+              <div id="bridgeLabSessions"></div>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
 
-    <!-- Main App Container -->
-    <div class="app-container" id="appContainer">
-      <div class="main-layout">
-        <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
-          <div class="sidebar-header">
-            <div class="sidebar-logo">
-              <img src="./fluxio-logo-mark.svg" alt="Fluxio" />
-            </div>
-            <span class="sidebar-title">Fluxio</span>
-            <div class="sidebar-actions">
-              <button class="icon-btn" id="newChatBtn" title="New Chat">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 5v14M5 12h14"/>
-                </svg>
-              </button>
-              <button class="icon-btn" id="settingsBtn" title="Settings">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="3"/>
-                  <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div class="conversation-section">
-            <div class="section-label">
-              <span>Conversations</span>
-            </div>
-            <div class="conversation-search">
-              <input type="text" id="conversationSearchInput" placeholder="Search sessions..." />
-            </div>
-            <div class="conversation-list" id="conversationList">
-              <!-- Conversations populated by JS -->
-            </div>
-          </div>
-
-          <div class="folder-section">
-            <div class="section-label">
-              <span>Folders</span>
-              <button class="icon-btn" id="newFolderBtn" title="New Folder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                  <path d="M12 5v14M5 12h14"/>
-                </svg>
-              </button>
-            </div>
-            <div class="folder-list" id="folderList">
-              <!-- Folders populated by JS -->
-            </div>
-          </div>
-        </aside>
-
-        <!-- Content Area -->
-        <main class="content-area">
-          <header class="content-header">
-            <div class="content-title">
-              <input type="text" id="conversationTitle" placeholder="New Conversation" />
-              <span class="mode-badge" id="modeBadge">coding</span>
-            </div>
-            <div class="header-actions">
-              <button class="icon-btn" id="forkConversationBtn" title="Fork Conversation">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 3v12a4 4 0 0 0 4 4h8"/>
-                  <path d="M14 3h7v7"/>
-                  <path d="M21 3l-8 8"/>
-                </svg>
-              </button>
-              <button class="icon-btn" id="runLiveBtn" title="Run Live (npm run dev:live)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 3 19 12 5 21 5 3"/>
-                </svg>
-              </button>
-              <button class="icon-btn" id="toggleSidebarBtn" title="Toggle Sidebar">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3 12h18M3 6h18M3 18h18"/>
-                </svg>
-              </button>
-              <button class="icon-btn" id="menuBtn" title="Menu">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="1"/>
-                  <circle cx="12" cy="5" r="1"/>
-                  <circle cx="12" cy="19" r="1"/>
-                </svg>
-              </button>
-            </div>
-          </header>
-
-          <section class="autonomy-dashboard" id="autonomyDashboard">
-            <div class="autonomy-dashboard-top">
-              <h3 class="autonomy-title">Autonomous Run Dashboard</h3>
-              <span class="autonomy-updated" id="autonomyUpdatedValue">No run data yet</span>
-            </div>
-            <div class="autonomy-grid">
-              <div class="autonomy-card">
-                <p class="autonomy-label">Latest Session</p>
-                <p class="autonomy-value" id="autonomySessionValue">—</p>
-              </div>
-              <div class="autonomy-card">
-                <p class="autonomy-label">Autopilot Status</p>
-                <p class="autonomy-value" id="autonomyStatusValue">—</p>
-              </div>
-              <div class="autonomy-card">
-                <p class="autonomy-label">Merge Policy</p>
-                <p class="autonomy-value" id="autonomyMergeValue">—</p>
-              </div>
-              <div class="autonomy-card">
-                <p class="autonomy-label">Checkpoints</p>
-                <p class="autonomy-value" id="autonomyCheckpointsValue">0</p>
-              </div>
-              <div class="autonomy-card">
-                <p class="autonomy-label">Remaining Steps</p>
-                <p class="autonomy-value" id="autonomyRemainingValue">0</p>
-              </div>
-              <div class="autonomy-card">
-                <p class="autonomy-label">Pending Approvals</p>
-                <p class="autonomy-value" id="autonomyApprovalsValue">0</p>
-              </div>
-            </div>
-            <div class="autonomy-config-row">
-              <span class="autonomy-config-label">Cycles</span>
-              <div class="autonomy-number-group">
-                <input class="number-input" id="autonomyCyclesInput" type="number" min="1" max="20" value="2" />
-              </div>
-              <span class="autonomy-config-label" style="margin-left: 16px;">Iterations</span>
-              <div class="autonomy-number-group">
-                <input class="number-input" id="autonomyIterationsInput" type="number" min="1" max="24" value="4" />
-              </div>
-            </div>
-            <div class="autonomy-actions">
-              <button class="autonomy-btn secondary" id="autonomyRefreshBtn">Refresh</button>
-              <button class="autonomy-btn secondary" id="autonomyVibeStatusBtn">Vibe Status</button>
-              <button class="autonomy-btn secondary" id="autonomyContinueBtn">Continue</button>
-              <button class="autonomy-btn secondary" id="autonomySoakBtn">Soak</button>
-              <button class="autonomy-btn primary" id="autonomyRunLiveBtn">Run Live</button>
-            </div>
-            <div class="autonomy-output" id="autonomyOutput">Run output will appear here.</div>
-          </section>
-
-          <section class="insight-board" id="insightBoard">
-            <div class="insight-board-header">
-              <h3 class="insight-title">Mission Control</h3>
-              <div class="insight-tabs" id="insightTabs">
-                <button class="insight-tab active" data-panel="lineage">Lineage</button>
-                <button class="insight-tab" data-panel="risk">Risk</button>
-                <button class="insight-tab" data-panel="integrations">Integrations</button>
-              </div>
-            </div>
-            <div class="insight-panels">
-              <div class="insight-panel active" id="insightLineagePanel">
-                <div class="insight-content" id="lineageOutput">Lineage insight will appear here.</div>
-              </div>
-              <div class="insight-panel" id="insightRiskPanel">
-                <div class="insight-content" id="riskOutput">Risk insight will appear here.</div>
-              </div>
-              <div class="insight-panel" id="insightIntegrationsPanel">
-                <div class="insight-content" id="integrationOutput">Integration insight will appear here.</div>
-              </div>
-            </div>
-          </section>
-
-          <div class="messages-container" id="messagesContainer">
-            <!-- Messages populated by JS -->
-          </div>
-
-          <!-- Prompt Bar -->
-          <div class="prompt-bar">
-            <div class="prompt-wrapper">
-              <div class="prompt-input-container">
-                <textarea 
-                  id="promptInput" 
-                  placeholder="Type a message... (Press Enter to send, Shift+Enter for new line)"
-                  rows="1"
-                ></textarea>
-              </div>
-              <div class="prompt-actions">
-                <button class="voice-btn" id="voiceBtn" title="Voice Input (Hold to record)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                    <line x1="12" y1="19" x2="12" y2="23"/>
-                    <line x1="8" y1="23" x2="16" y2="23"/>
-                  </svg>
-                </button>
-                <button class="send-btn" id="sendBtn" title="Send">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="22" y1="2" x2="11" y2="13"/>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div class="prompt-shortcuts">
-              <span><kbd>Enter</kbd> Send</span>
-              <span><kbd>Shift+Enter</kbd> New line</span>
-              <span><kbd>Space</kbd> Hold to open</span>
-            </div>
-          </div>
-        </main>
-      </div>
-    </div>
-
-    <!-- Settings Panel -->
-    <div class="settings-overlay" id="settingsOverlay">
-      <div class="settings-panel">
-        <div class="settings-header">
-          <h2 class="settings-title">Settings</h2>
-          <button class="settings-close" id="settingsCloseBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-        <div class="settings-content">
-          <div class="settings-section">
-            <h3 class="settings-section-title">Personalization</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Profile Preset</p>
-                <p class="setting-desc">Apply a ready-to-use style + agent behavior pack</p>
-              </div>
-              <select class="select-dropdown" id="profilePresetSelector">
-                <option value="hands_free_builder">Hands-Free Builder</option>
-                <option value="minimal_focus">Minimal Focus</option>
-                <option value="research_sprint">Research Sprint</option>
-                <option value="safety_gate">Safety Gate</option>
-                <option value="custom">Custom</option>
-              </select>
-            </div>
-            <div class="profile-preset-actions">
-              <button class="inline-btn" id="applyProfilePresetBtn">Apply Preset</button>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Appearance</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Theme</p>
-                <p class="setting-desc">Choose your preferred color scheme</p>
-              </div>
-              <div class="theme-grid" id="themeSelector">
-                <div class="theme-option active" data-theme="default" data-name="Default"></div>
-                <div class="theme-option" data-theme="light" data-name="Light"></div>
-                <div class="theme-option" data-theme="sunset" data-name="Sunset"></div>
-                <div class="theme-option" data-theme="forest" data-name="Forest"></div>
-                <div class="theme-option" data-theme="midnight" data-name="Midnight"></div>
-              </div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Font Style</p>
-                <p class="setting-desc">Choose text rendering style</p>
-              </div>
-              <select class="select-dropdown" id="fontSelector">
-                <option value="default">Default</option>
-                <option value="compact">Compact</option>
-                <option value="elegant">Elegant</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Behavior</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Pin Overlay</p>
-                <p class="setting-desc">Keep overlay visible when typing</p>
-              </div>
-              <div class="toggle active" id="pinToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Sound Effects</p>
-                <p class="setting-desc">Play sounds for notifications</p>
-              </div>
-              <div class="toggle active" id="soundToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Show All Notifications</p>
-                <p class="setting-desc">Enable all notification types</p>
-              </div>
-              <div class="toggle active" id="showAllNotificationsToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Notify on Questions</p>
-                <p class="setting-desc">Alert when AI asks a question</p>
-              </div>
-              <div class="toggle active" id="notifyQuestionToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Notify on Messages</p>
-                <p class="setting-desc">Alert on new messages</p>
-              </div>
-              <div class="toggle active" id="notifyMessageToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Notify on Completion</p>
-                <p class="setting-desc">Alert when task completes</p>
-              </div>
-              <div class="toggle active" id="notifyCompletionToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Notify on Errors</p>
-                <p class="setting-desc">Alert on errors or failures</p>
-              </div>
-              <div class="toggle active" id="notifyErrorToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Auto-Import Conversations</p>
-                <p class="setting-desc">Automatically detect and import chats</p>
-              </div>
-              <div class="toggle active" id="autoImportToggle"></div>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Voice</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Enable Voice Input</p>
-                <p class="setting-desc">Use microphone for dictation</p>
-              </div>
-              <div class="toggle active" id="voiceToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Voice Activation</p>
-                <p class="setting-desc">Push-to-talk or always listening</p>
-              </div>
-              <select class="select-dropdown" id="voiceModeSelector">
-                <option value="push">Push-to-Talk</option>
-                <option value="always">Always Listening</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Agent Studio</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Agent Mode</p>
-                <p class="setting-desc">Default orchestration mode for autonomous runs</p>
-              </div>
-              <select class="select-dropdown" id="agentModeSelector">
-                <option value="profile">From Profile</option>
-                <option value="fast">Fast</option>
-                <option value="balanced">Balanced</option>
-                <option value="careful">Careful</option>
-                <option value="creative">Creative</option>
-                <option value="swarms">Swarms</option>
-                <option value="autopilot">Autopilot</option>
-                <option value="deep_run">Deep Run</option>
-                <option value="swarm_mega">Swarm Mega</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Parallel Agents</p>
-                <p class="setting-desc">How many worker branches to run in parallel</p>
-              </div>
-              <input class="number-input" id="parallelAgentsInput" type="number" min="1" max="8" value="3" />
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Merge Policy</p>
-                <p class="setting-desc">How worker branches are combined</p>
-              </div>
-              <select class="select-dropdown" id="mergePolicySelector">
-                <option value="best_score">Best Score</option>
-                <option value="consensus">Consensus</option>
-                <option value="risk_averse">Risk Averse</option>
-              </select>
-            </div>
-            <div class="setting-row setting-row-stack">
-              <div>
-                <p class="setting-label">Task Model Routing</p>
-                <p class="setting-desc">Assign provider/model by task type (for example: MiniMax frontend, Codex backend + verification)</p>
-              </div>
-            </div>
-            <div class="model-routing-grid" id="modelRoutingGrid"></div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Pause on Verification Failure</p>
-                <p class="setting-desc">Stop autonomous loop when checks fail</p>
-              </div>
-              <div class="toggle active" id="agentPauseOnFailToggle"></div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">OpenClaw Gateway</p>
-                <p class="setting-desc" id="openclawStatusText">OpenClaw is only active in autonomous modes.</p>
-              </div>
-              <div class="gateway-controls">
-                <span class="mode-badge" id="openclawStatusBadge">Inactive</span>
-                <button class="inline-btn" id="openclawToggleBtn" type="button">Connect</button>
-              </div>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Gateway URL</p>
-                <p class="setting-desc">Used when autonomous mode is active</p>
-              </div>
-              <input class="settings-input" id="openclawGatewayUrlInput" type="text" placeholder="ws://127.0.0.1:8765" />
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Permission Matrix</h3>
-            <p class="setting-desc" style="margin-bottom: 10px;">Control whether each capability is automatically allowed, asks for approval, or denied.</p>
-            <div class="permission-grid" id="permissionGrid"></div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Integrations</h3>
-            <div class="integration-block">
-              <div class="integration-block-header">
-                <p class="setting-label">MCP Servers</p>
-                <button class="inline-btn" id="addMcpServerBtn" type="button">Add MCP Server</button>
-              </div>
-              <div class="integration-list" id="mcpServersList"></div>
-            </div>
-            <div class="integration-block">
-              <p class="setting-label">Plugins</p>
-              <div class="integration-list" id="pluginsList"></div>
-            </div>
-            <div class="integration-block">
-              <p class="setting-label">Skills</p>
-              <div class="integration-list" id="skillsList"></div>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Run Live</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Run command</p>
-                <p class="setting-desc">Executed with approval gate through `node.command`.</p>
-              </div>
-              <input class="settings-input" id="runLiveCommandInput" type="text" placeholder="npm run dev:live" />
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Working directory (optional)</p>
-                <p class="setting-desc">Leave empty to use the app's default directory.</p>
-              </div>
-              <input class="settings-input" id="runLiveCwdInput" type="text" placeholder="C:\\Users\\paul\\Projects\\vibe-coding-platform" />
-            </div>
-            <div class="profile-preset-actions">
-              <button class="inline-btn" id="runLiveFromSettingsBtn" type="button">Run Live Now</button>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Shortcuts</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Open Overlay</p>
-              </div>
-              <span class="mode-badge">Space</span>
-            </div>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Voice Input</p>
-              </div>
-              <span class="mode-badge">Hold Space</span>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">AI Providers</h3>
-            <div class="providers-list" id="providersList">
-              <!-- Providers populated by JS -->
-            </div>
-            <button class="provider-add-btn" id="addProviderBtn">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                <path d="M12 5v14M5 12h14"/>
-              </svg>
-              Add Provider
-            </button>
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Import Conversations</h3>
-            <p class="setting-desc" style="margin-bottom: 12px;">Import chats from ChatGPT, Claude, or other platforms</p>
-            <div class="import-options">
-              <button class="import-btn" id="importChatGPTBtn">
-                <span class="import-icon">📋</span>
-                <span>Import from ChatGPT</span>
-              </button>
-              <button class="import-btn" id="importClaudeBtn">
-                <span class="import-icon">🧠</span>
-                <span>Import from Claude</span>
-              </button>
-              <button class="import-btn" id="importJsonBtn">
-                <span class="import-icon">📁</span>
-                <span>Import JSON File</span>
-              </button>
-            </div>
-            <input type="file" id="importFileInput" accept=".json,.txt" style="display: none;" />
-          </div>
-
-          <div class="settings-section">
-            <h3 class="settings-section-title">Current Model</h3>
-            <div class="setting-row">
-              <div>
-                <p class="setting-label">Active Provider</p>
-                <p class="setting-desc">Select which AI to use</p>
-              </div>
-              <select class="select-dropdown" id="modelSelector">
-                <option value="">Select provider first</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Provider Config Modal -->
-    <div class="provider-modal-overlay" id="providerModal">
-      <div class="provider-modal">
-        <div class="provider-modal-header">
-          <h3 class="provider-modal-title" id="providerModalTitle">Add AI Provider</h3>
-          <button class="settings-close" id="providerModalClose">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-        <div class="provider-modal-content">
-          <div class="provider-type-grid" id="providerTypeGrid">
-            <!-- Provider types populated by JS -->
-          </div>
-          <div class="provider-config" id="providerConfig">
-            <div class="form-group">
-              <label class="form-label">Provider Name</label>
-              <input type="text" class="form-input" id="providerName" placeholder="My OpenAI" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Base URL (optional)</label>
-              <input type="text" class="form-input" id="providerBaseUrl" placeholder="https://api.openai.com/v1" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Authentication Type</label>
-              <select class="form-select" id="providerAuthType">
-                <option value="api_key">API Key</option>
-                <option value="bearer">Bearer Token</option>
-                <option value="basic">Basic Auth</option>
-                <option value="oauth">OAuth 2.0</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Quick Key Paste</label>
-              <input type="password" class="form-input" id="providerQuickKey" placeholder="Paste provider key/token here" />
-              <p class="form-help" id="providerAuthHelp">Stored securely in your OS keychain. Not saved in plain app storage.</p>
-            </div>
-            <div class="form-group" id="apiKeyGroup">
-              <label class="form-label">API Key</label>
-              <input type="password" class="form-input" id="providerApiKey" placeholder="sk-..." />
-            </div>
-            <div class="form-group hidden" id="bearerGroup">
-              <label class="form-label">Bearer Token</label>
-              <input type="password" class="form-input" id="providerBearerToken" placeholder="Token..." />
-            </div>
-            <div class="form-group hidden" id="basicGroup">
-              <label class="form-label">Username</label>
-              <input type="text" class="form-input" id="providerUsername" placeholder="Username" />
-              <label class="form-label" style="margin-top: 12px;">Password</label>
-              <input type="password" class="form-input" id="providerPassword" placeholder="Password" />
-            </div>
-            <div class="form-group hidden" id="oauthGroup">
-              <label class="form-label">OAuth Client ID</label>
-              <input type="text" class="form-input" id="providerOauthClientId" placeholder="Client ID" />
-              <label class="form-label" style="margin-top: 12px;">OAuth Client Secret</label>
-              <input type="password" class="form-input" id="providerOauthClientSecret" placeholder="Client Secret" />
-              <label class="form-label" style="margin-top: 12px;">Authorization URL</label>
-              <input type="text" class="form-input" id="providerOauthAuthUrl" placeholder="https://provider.com/oauth/authorize" />
-              <label class="form-label" style="margin-top: 12px;">Token URL</label>
-              <input type="text" class="form-input" id="providerOauthTokenUrl" placeholder="https://provider.com/oauth/token" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Default Model</label>
-              <input type="text" class="form-input" id="providerDefaultModel" placeholder="gpt-4" />
-            </div>
-          </div>
-        </div>
-        <div class="provider-modal-footer">
-          <button class="provider-cancel-btn" id="providerCancelBtn">Cancel</button>
-          <button class="provider-save-btn" id="providerSaveBtn">Save Provider</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Command Palette -->
-    <div class="command-palette-overlay hidden" id="commandPalette">
-      <div class="command-palette">
-        <div class="command-input-wrapper">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-            <circle cx="11" cy="11" r="8"/>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input type="text" class="command-input" id="commandInput" placeholder="Type a command..." />
-        </div>
-        <div class="command-list" id="commandList">
-          <!-- Commands populated by JS -->
-        </div>
-      </div>
-    </div>
-
-    <!-- Tutorial Overlay -->
-    <div class="tutorial-overlay hidden" id="tutorialOverlay">
-      <div class="tutorial-card">
-        <div class="tutorial-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32">
-            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-            <path d="M2 17l10 5 10-5"/>
-            <path d="M2 12l10 5 10-5"/>
-          </svg>
-        </div>
-        <h3 class="tutorial-title" id="tutorialTitle">Welcome to Fluxio!</h3>
-        <p class="tutorial-text" id="tutorialText">
-          This is your AI assistant. Type a message or hold the microphone button to start speaking.
-        </p>
-        <button class="tutorial-btn" id="tutorialBtn">Get Started</button>
-      </div>
-    </div>
+    <div class="toast-host" id="toastHost"></div>
 
     <script type="module" src="./app.js"></script>
   </body>
