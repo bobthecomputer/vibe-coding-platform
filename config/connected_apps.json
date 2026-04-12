@@ -48,6 +48,54 @@
     }
   },
   {
+    "manifest_id": "manifest_mind_tower",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "mind-tower",
+    "name": "Mind Tower",
+    "description": "Monitoring, admin, and digest workflows exposed to Fluxio through a local bridge.",
+    "bridge": {
+      "transport": "http",
+      "endpoint": "http://127.0.0.1:47831/fluxio",
+      "healthcheck": "/health",
+      "event_stream": "/events"
+    },
+    "auth": {
+      "mode": "local_token",
+      "scopes": ["admin.read", "digest.run", "telegram.callback"]
+    },
+    "permissions": ["task.run", "context.read", "approval.callback"],
+    "tasks": [
+      {
+        "task_id": "run-monitor-digest",
+        "label": "Run monitoring digest",
+        "description": "Collect monitoring context and generate a digest-style task result.",
+        "requires_approval": false
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "monitoring-dashboard",
+        "label": "Monitoring Dashboard",
+        "description": "Admin and monitoring context surfaced from Mind Tower.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "send-digest",
+        "label": "Send Digest",
+        "description": "Trigger a digest delivery or callback-aware review action.",
+        "mutability": "write",
+        "risk_level": "medium",
+        "requires_approval": false
+      }
+    ],
+    "ui_hints": {
+      "category": "operations",
+      "requiresUserPresent": false
+    }
+  },
+  {
     "manifest_id": "manifest_solantir_terminal",
     "schema_version": "fluxio.app-capability/v0-draft",
     "app_id": "solantir-terminal",

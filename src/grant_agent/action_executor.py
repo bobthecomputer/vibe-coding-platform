@@ -23,6 +23,7 @@ from .models import (
     WorkspaceProfile,
     utc_now_iso,
 )
+from .execution_truth import derive_execution_target
 from .research import search_workspace
 from .runtimes import runtime_adapter_map
 from .runtime_supervisor import DelegatedRuntimeSupervisor
@@ -61,6 +62,10 @@ DELEGATE_HINTS = ("delegate", "runtime lane", "openclaw", "hermes")
 STATUS_HINTS = ("status", "ground", "inspect mutable", "workspace state")
 DIFF_HINTS = ("rollout", "diff", "next iteration", "changed files")
 VERIFY_HINTS = ("verify", "test", "build", "lint", "smoke")
+EXECUTION_TARGET_SCOPE_OVERRIDES = {
+    "workspace_root": "direct",
+    "isolated_worktree": "isolated",
+}
 
 
 class ExecutionAdapter(ABC):
@@ -146,7 +151,8 @@ class HybridExecutionAdapter(ExecutionAdapter):
             (profile_name or "builder").strip().lower(),
             PROFILE_EXECUTION_DEFAULTS["builder"],
         )["scope"]
-        direct_scope = ExecutionScope(
+        direct_scope = _with_execution_truth(
+            ExecutionScope(
             requested=requested,
             strategy="direct",
             execution_root=str(workspace_root),
@@ -154,6 +160,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
             isolated=False,
             status="ready",
             detail="Mission is executing in the primary workspace.",
+            )
         )
         if requested == "direct" or not _is_git_workspace(workspace_root):
             if requested != "direct" and not _is_git_workspace(workspace_root):
@@ -164,7 +171,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
         branch_name = f"fluxio/{mission_id}"
         worktree_path = workspace_root.parent / f".fluxio-worktrees-{workspace_root.name}" / mission_id
         if worktree_path.exists():
-            return ExecutionScope(
+            return _with_execution_truth(ExecutionScope(
                 requested=requested,
                 strategy="git_worktree",
                 execution_root=str(worktree_path),
@@ -174,7 +181,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 isolated=True,
                 status="ready",
                 detail="Mission is isolated in a dedicated git worktree.",
-            )
+            ))
 
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         add_attempts = [
@@ -196,7 +203,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 last_error = str(exc)
                 continue
             if completed.returncode == 0:
-                return ExecutionScope(
+                return _with_execution_truth(ExecutionScope(
                     requested=requested,
                     strategy="git_worktree",
                     execution_root=str(worktree_path),
@@ -206,7 +213,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                     isolated=True,
                     status="ready",
                     detail="Mission is isolated in a dedicated git worktree.",
-                )
+                ))
             last_error = (completed.stderr or completed.stdout).strip()
 
         direct_scope.status = "fallback"
@@ -495,6 +502,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 runtime_id=runtime_id,
                 objective=str(proposal.delegation_metadata.get("objective", proposal.title)),
                 success_checks=[],
+                execution_scope=execution_scope,
             )
             delegated_workspace = WorkspaceProfile(
                 workspace_id="delegated",
@@ -596,6 +604,11 @@ def build_execution_policy(profile_name: str) -> ExecutionPolicy:
     return DEFAULT_EXECUTION_ADAPTER.build_policy(profile_name)
 
 
+def requested_scope_for_execution_target(preference: str = "") -> str:
+    normalized = (preference or "").strip().lower()
+    return EXECUTION_TARGET_SCOPE_OVERRIDES.get(normalized, "")
+
+
 def prepare_execution_scope(
     workspace_root: Path,
     mission_id: str,
@@ -619,10 +632,13 @@ def build_action_proposal(
     execution_scope: ExecutionScope | None = None,
     execution_policy: ExecutionPolicy | None = None,
 ) -> ActionProposal:
-    execution_scope = execution_scope or ExecutionScope(
-        execution_root=str(workspace_root),
-        workspace_root=str(workspace_root),
-        status="ready",
+    execution_scope = _with_execution_truth(
+        execution_scope
+        or ExecutionScope(
+            execution_root=str(workspace_root),
+            workspace_root=str(workspace_root),
+            status="ready",
+        )
     )
     execution_policy = execution_policy or build_execution_policy("builder")
     return DEFAULT_EXECUTION_ADAPTER.build_action_proposal(
@@ -644,10 +660,13 @@ def execute_action(
     timeout_seconds: int = 90,
     approval_override: bool = False,
 ) -> ActionExecutionRecord:
-    execution_scope = execution_scope or ExecutionScope(
-        execution_root=str(workspace_root),
-        workspace_root=str(workspace_root),
-        status="ready",
+    execution_scope = _with_execution_truth(
+        execution_scope
+        or ExecutionScope(
+            execution_root=str(workspace_root),
+            workspace_root=str(workspace_root),
+            status="ready",
+        )
     )
     execution_policy = execution_policy or build_execution_policy("builder")
     return DEFAULT_EXECUTION_ADAPTER.execute(
@@ -735,6 +754,19 @@ def cleanup_execution_scope(execution_scope: ExecutionScope | None) -> dict[str,
 
 def _is_git_workspace(workspace_root: Path) -> bool:
     return (workspace_root / ".git").exists()
+
+
+def _with_execution_truth(scope: ExecutionScope) -> ExecutionScope:
+    truth = derive_execution_target(
+        execution_root=scope.execution_root,
+        workspace_root=scope.workspace_root,
+        strategy=scope.strategy,
+    )
+    scope.execution_target = truth["execution_target"]
+    scope.storage_mode = truth["storage_mode"]
+    scope.host_locality = truth["host_locality"]
+    scope.execution_target_detail = truth["execution_target_detail"]
+    return scope
 
 
 def _git_changed_files(root: Path) -> list[str]:

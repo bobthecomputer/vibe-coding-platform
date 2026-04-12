@@ -7,7 +7,9 @@ import subprocess
 import sys
 import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from .models import (
     DelegatedApprovalRequest,
@@ -18,7 +20,13 @@ from .models import (
     WorkspaceProfile,
     utc_now_iso,
 )
+from .execution_truth import derive_execution_target
 from .runtimes import runtime_adapter_map
+
+HEARTBEAT_STALE_FLOOR_SECONDS = max(
+    int(os.environ.get("FLUXIO_HEARTBEAT_STALE_SECONDS", "35")),
+    5,
+)
 
 
 class DelegatedRuntimeSupervisor:
@@ -47,6 +55,11 @@ class DelegatedRuntimeSupervisor:
         log_path = self.control_dir / f"{delegated_id}.log"
         events_path = self.control_dir / f"{delegated_id}.events.jsonl"
         decision_path = self.control_dir / f"{delegated_id}.approval.json"
+        mission_scope = getattr(mission, "execution_scope", None)
+        workspace_root = (
+            str(getattr(mission_scope, "workspace_root", "") or "")
+            or workspace.root_path
+        )
         execution_root = str(launch.get("workspace") or workspace.root_path)
         session = DelegatedRuntimeSession(
             delegated_id=delegated_id,
@@ -55,13 +68,14 @@ class DelegatedRuntimeSupervisor:
             status="queued",
             detail="Delegated runtime worker queued.",
             session_path=str(session_path),
-            workspace_root=workspace.root_path,
+            workspace_root=workspace_root,
             execution_root=execution_root,
             log_path=str(log_path),
             events_path=str(events_path),
             decision_path=str(decision_path),
             source_step_id=source_step_id,
         )
+        _apply_execution_truth(session)
         self._write_session(session)
         self._append_structured_event(
             session,
@@ -104,6 +118,8 @@ class DelegatedRuntimeSupervisor:
         if payload is None:
             raise FileNotFoundError(f"Unknown delegated runtime session: {session}")
         payload = self._sync_structured_state(payload)
+        _apply_execution_truth(payload)
+        _apply_heartbeat_truth(payload)
         if payload.status in {"completed", "failed", "stopped"}:
             payload.updated_at = utc_now_iso()
             self._write_session(payload)
@@ -122,6 +138,7 @@ class DelegatedRuntimeSupervisor:
         else:
             payload.status = "completed" if payload.exit_code in {0, None} else "failed"
             payload.detail = "Delegated runtime process is no longer active."
+        _apply_heartbeat_truth(payload)
         payload.updated_at = utc_now_iso()
         self._write_session(payload)
         return payload
@@ -226,12 +243,20 @@ class DelegatedRuntimeSupervisor:
             updated_at=payload.updated_at,
             workspace_root=payload.workspace_root,
             execution_root=payload.execution_root,
+            execution_target=payload.execution_target,
+            storage_mode=payload.storage_mode,
+            host_locality=payload.host_locality,
+            execution_target_detail=payload.execution_target_detail,
             session_path=payload.session_path,
             log_path=payload.log_path,
             source_step_id=payload.source_step_id,
             pid=payload.pid,
             supervisor_pid=payload.supervisor_pid,
             exit_code=payload.exit_code,
+            heartbeat_at=payload.heartbeat_at,
+            heartbeat_status=payload.heartbeat_status,
+            heartbeat_age_seconds=payload.heartbeat_age_seconds,
+            heartbeat_interval_seconds=payload.heartbeat_interval_seconds,
         )
 
     def _load_session(self, session: DelegatedRuntimeSession | dict | str) -> DelegatedRuntimeSession | None:
@@ -248,13 +273,13 @@ class DelegatedRuntimeSupervisor:
                 path = self.control_dir / f"{session}.json"
         if not path.exists():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = _read_json_with_retries(path)
         return DelegatedRuntimeSession(**payload)
 
     def _write_session(self, session: DelegatedRuntimeSession) -> None:
         path = Path(session.session_path) if session.session_path else self.control_dir / f"{session.delegated_id}.json"
         session.session_path = str(path)
-        path.write_text(json.dumps(asdict(session), indent=2), encoding="utf-8")
+        _atomic_write_json(path, asdict(session))
 
     def _append_structured_event(
         self,
@@ -311,6 +336,101 @@ def _read_structured_events(events_path: Path) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return events
+
+
+def _read_json_with_retries(path: Path, retries: int = 8, delay: float = 0.02) -> dict:
+    last_error: json.JSONDecodeError | None = None
+    for attempt in range(retries):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if attempt == retries - 1:
+                break
+            time.sleep(delay)
+    raise RuntimeError(f"Unable to read delegated session state from {path}") from last_error
+
+
+def _apply_execution_truth(session: DelegatedRuntimeSession) -> DelegatedRuntimeSession:
+    truth = derive_execution_target(
+        execution_root=session.execution_root,
+        workspace_root=session.workspace_root,
+        strategy="delegated_runtime",
+    )
+    session.execution_target = truth["execution_target"]
+    session.storage_mode = truth["storage_mode"]
+    session.host_locality = truth["host_locality"]
+    session.execution_target_detail = truth["execution_target_detail"]
+    return session
+
+
+def _parse_utc_timestamp(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _age_seconds(value: str) -> int | None:
+    parsed = _parse_utc_timestamp(value)
+    if parsed is None:
+        return None
+    delta = datetime.now(timezone.utc) - parsed
+    return max(int(delta.total_seconds()), 0)
+
+
+def _apply_heartbeat_truth(session: DelegatedRuntimeSession) -> DelegatedRuntimeSession:
+    active_statuses = {"launching", "running", "waiting_for_approval"}
+    if session.status in {"completed", "failed", "stopped"}:
+        session.heartbeat_status = "inactive"
+        session.heartbeat_age_seconds = _age_seconds(
+            session.heartbeat_at or session.updated_at
+        )
+        return session
+
+    heartbeat_source = session.heartbeat_at or session.updated_at
+    heartbeat_age = _age_seconds(heartbeat_source)
+    session.heartbeat_age_seconds = heartbeat_age
+    if session.status not in active_statuses:
+        session.heartbeat_status = "unknown"
+        return session
+    stale_after = max(
+        int(session.heartbeat_interval_seconds or 10) * 3,
+        HEARTBEAT_STALE_FLOOR_SECONDS,
+    )
+    if heartbeat_age is None:
+        session.heartbeat_status = "unknown"
+    elif heartbeat_age > stale_after:
+        session.heartbeat_status = "stale"
+    else:
+        session.heartbeat_status = "healthy"
+    return session
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.{uuid.uuid4().hex}.tmp")
+    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    for attempt in range(10):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError:
+            if attempt == 9:
+                break
+            time.sleep(0.02)
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    raise PermissionError(f"Unable to atomically update delegated session state at {path}")
 
 
 def _creationflags() -> int:

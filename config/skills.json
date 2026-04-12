@@ -66,5 +66,45 @@
     },
     "permissions": ["file_write"],
     "examples": ["Generate report for latest session"]
+  },
+  {
+    "name": "agent_provider_conformance",
+    "description": "Keep Codex and MiniMax provider profiles, model defaults, and plan-first boot behavior aligned with official docs and honest runtime semantics.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string" },
+        "providers": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["target"]
+    },
+    "permissions": ["file_read"],
+    "examples": [
+      "Align the Codex provider defaults with current OpenAI Codex model docs",
+      "Document the MiniMax custom model_provider profile and preserve-think rules"
+    ]
+  },
+  {
+    "name": "fluxio_workbench_studio",
+    "description": "Design Fluxio's operator UI, skill library, workflow studio, and Git-aware workspace surfaces around real user tasks.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string" },
+        "goals": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["target"]
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "examples": [
+      "Design the workspace panel to show branch, dirty state, and safe deploy actions",
+      "Refine the skill studio for non-technical and expert users"
+    ]
   }
 ]

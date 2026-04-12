@@ -842,6 +842,13 @@ struct WorkspaceSavePayload {
     path: String,
     default_runtime: String,
     user_profile: Option<String>,
+    preferred_harness: Option<String>,
+    routing_strategy: Option<String>,
+    route_overrides: Option<Vec<Value>>,
+    auto_optimize_routing: Option<bool>,
+    minimax_auth_mode: Option<String>,
+    commit_message_style: Option<String>,
+    execution_target_preference: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -854,8 +861,76 @@ struct ControlMissionStartPayload {
     success_checks: Option<Vec<String>>,
     mode: Option<String>,
     budget_hours: Option<u32>,
+    run_until: Option<String>,
     profile: Option<String>,
     escalation_destination: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexThreadIndexRecord {
+    id: String,
+    #[serde(default)]
+    thread_name: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CodexSessionMetaPayload {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    originator: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    model_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct CodexSessionMetaEnvelope {
+    #[serde(rename = "type", default)]
+    record_type: String,
+    #[serde(default)]
+    payload: CodexSessionMetaPayload,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexRecentThreadSummary {
+    id: String,
+    thread_name: String,
+    updated_at: Option<String>,
+    cwd: Option<String>,
+    originator: Option<String>,
+    source: Option<String>,
+    model_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexWorkspaceSummary {
+    path: String,
+    name: String,
+    thread_count: usize,
+    latest_thread_name: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexImportSnapshot {
+    available: bool,
+    codex_home: Option<String>,
+    session_count: usize,
+    skill_count: usize,
+    recent_threads: Vec<CodexRecentThreadSummary>,
+    workspaces: Vec<CodexWorkspaceSummary>,
+    package_state_path: Option<String>,
+    notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -864,6 +939,16 @@ struct ControlMissionActionPayload {
     root: Option<String>,
     mission_id: String,
     action: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlWorkspaceActionPayload {
+    root: Option<String>,
+    workspace_id: Option<String>,
+    surface: String,
+    action_id: String,
+    approved: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1081,6 +1166,213 @@ fn modified_nanos(value: SystemTime) -> u128 {
     value.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+fn home_dir_path() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+}
+
+fn count_codex_skill_dirs(skills_root: &Path) -> usize {
+    fs::read_dir(skills_root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .filter(|entry| entry.path().is_dir() && entry.path().join("SKILL.md").exists())
+        .count()
+}
+
+fn collect_codex_session_files(root: &Path, files: &mut Vec<(PathBuf, SystemTime)>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_codex_session_files(&path, files);
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        files.push((path, modified));
+    }
+}
+
+fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMetaPayload> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines().take(8) {
+        let line = line.ok()?;
+        let Ok(record) = serde_json::from_str::<CodexSessionMetaEnvelope>(&line) else {
+            continue;
+        };
+        if record.record_type == "session_meta" {
+            return Some(record.payload);
+        }
+    }
+    None
+}
+
+fn collect_recent_codex_session_meta(
+    sessions_root: &Path,
+    limit: usize,
+) -> HashMap<String, CodexSessionMetaPayload> {
+    let mut files = Vec::new();
+    collect_codex_session_files(sessions_root, &mut files);
+    files.sort_by(|left, right| modified_nanos(right.1).cmp(&modified_nanos(left.1)));
+
+    let mut recent = HashMap::new();
+    for (path, _) in files {
+        if recent.len() >= limit {
+            break;
+        }
+        let Some(meta) = read_codex_session_meta(&path) else {
+            continue;
+        };
+        let Some(id) = meta.id.clone() else {
+            continue;
+        };
+        recent.entry(id).or_insert(meta);
+    }
+    recent
+}
+
+fn codex_workspace_name(path: &str) -> String {
+    let candidate = Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(path);
+    candidate.replace(['_', '-'], " ")
+}
+
+fn build_codex_import_snapshot() -> CodexImportSnapshot {
+    let Some(home) = home_dir_path() else {
+        return CodexImportSnapshot {
+            available: false,
+            codex_home: None,
+            session_count: 0,
+            skill_count: 0,
+            recent_threads: Vec::new(),
+            workspaces: Vec::new(),
+            package_state_path: None,
+            notes: vec!["Could not resolve the user home directory.".to_string()],
+        };
+    };
+
+    let codex_home = home.join(".codex");
+    let package_state_path = home
+        .join("AppData")
+        .join("Local")
+        .join("Packages")
+        .join("OpenAI.Codex_2p2nqsd0c76g0")
+        .join("LocalState");
+    let mut notes = Vec::new();
+
+    if !codex_home.exists() {
+        return CodexImportSnapshot {
+            available: false,
+            codex_home: Some(codex_home.display().to_string()),
+            session_count: 0,
+            skill_count: 0,
+            recent_threads: Vec::new(),
+            workspaces: Vec::new(),
+            package_state_path: package_state_path
+                .exists()
+                .then(|| package_state_path.display().to_string()),
+            notes: vec!["No Codex home directory was found on this machine.".to_string()],
+        };
+    }
+
+    let session_index_path = codex_home.join("session_index.jsonl");
+    let sessions_root = codex_home.join("sessions");
+    let skills_root = codex_home.join("skills");
+    let recent_meta = collect_recent_codex_session_meta(&sessions_root, 48);
+    let mut session_count = 0usize;
+    let mut indexed_threads = Vec::new();
+
+    if session_index_path.exists() {
+        if let Ok(file) = File::open(&session_index_path) {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
+                let Ok(record) = serde_json::from_str::<CodexThreadIndexRecord>(&line) else {
+                    continue;
+                };
+                session_count += 1;
+                indexed_threads.push(record);
+            }
+        }
+    } else {
+        notes.push("Codex session index was not found, so only partial import data is available.".to_string());
+    }
+
+    indexed_threads.reverse();
+    let recent_threads = indexed_threads
+        .into_iter()
+        .take(12)
+        .map(|record| {
+            let meta = recent_meta.get(&record.id);
+            CodexRecentThreadSummary {
+                id: record.id,
+                thread_name: record
+                    .thread_name
+                    .unwrap_or_else(|| "Untitled Codex thread".to_string()),
+                updated_at: record.updated_at,
+                cwd: meta.and_then(|item| item.cwd.clone()),
+                originator: meta.and_then(|item| item.originator.clone()),
+                source: meta.and_then(|item| item.source.clone()),
+                model_provider: meta.and_then(|item| item.model_provider.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut workspace_map: HashMap<String, CodexWorkspaceSummary> = HashMap::new();
+    for thread in &recent_threads {
+        let Some(path) = thread.cwd.clone() else {
+            continue;
+        };
+        let entry = workspace_map
+            .entry(path.clone())
+            .or_insert_with(|| CodexWorkspaceSummary {
+                name: codex_workspace_name(&path),
+                path: path.clone(),
+                thread_count: 0,
+                latest_thread_name: None,
+                updated_at: None,
+            });
+        entry.thread_count += 1;
+        if entry.latest_thread_name.is_none() {
+            entry.latest_thread_name = Some(thread.thread_name.clone());
+        }
+        if entry.updated_at.is_none() {
+            entry.updated_at = thread.updated_at.clone();
+        }
+    }
+
+    let mut workspaces = workspace_map.into_values().collect::<Vec<_>>();
+    workspaces.sort_by(|left, right| right.thread_count.cmp(&left.thread_count));
+
+    let skill_count = count_codex_skill_dirs(&skills_root);
+    if skill_count == 0 {
+        notes.push("No local Codex skills were detected under the Codex home.".to_string());
+    }
+
+    CodexImportSnapshot {
+        available: !recent_threads.is_empty() || skill_count > 0,
+        codex_home: Some(codex_home.display().to_string()),
+        session_count,
+        skill_count,
+        recent_threads,
+        workspaces,
+        package_state_path: package_state_path
+            .exists()
+            .then(|| package_state_path.display().to_string()),
+        notes,
+    }
 }
 
 fn collect_control_room_signature_paths(root: &Path) -> Vec<PathBuf> {
@@ -4684,6 +4976,11 @@ async fn get_control_room_snapshot_command(
 }
 
 #[tauri::command]
+fn inspect_codex_import_command() -> Result<CodexImportSnapshot, String> {
+    Ok(build_codex_import_snapshot())
+}
+
+#[tauri::command]
 async fn get_onboarding_status_command(
     app: AppHandle,
     payload: Option<AutonomyDashboardPayload>,
@@ -4719,6 +5016,51 @@ async fn save_workspace_profile_command(
         args.push("--user-profile".to_string());
         args.push(user_profile);
     }
+    if let Some(preferred_harness) = payload
+        .preferred_harness
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--preferred-harness".to_string());
+        args.push(preferred_harness);
+    }
+    if let Some(routing_strategy) = payload
+        .routing_strategy
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--routing-strategy".to_string());
+        args.push(routing_strategy);
+    }
+    if let Some(route_overrides) = payload.route_overrides {
+        let serialized = serde_json::to_string(&route_overrides)
+            .map_err(|error| format!("Failed to serialize route overrides: {error}"))?;
+        args.push("--route-overrides-json".to_string());
+        args.push(serialized);
+    }
+    if let Some(auto_optimize_routing) = payload.auto_optimize_routing {
+        args.push("--auto-optimize-routing".to_string());
+        args.push(if auto_optimize_routing { "true" } else { "false" }.to_string());
+    }
+    if let Some(minimax_auth_mode) = payload
+        .minimax_auth_mode
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--minimax-auth-mode".to_string());
+        args.push(minimax_auth_mode);
+    }
+    if let Some(commit_message_style) = payload
+        .commit_message_style
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--commit-message-style".to_string());
+        args.push(commit_message_style);
+    }
+    if let Some(execution_target_preference) = payload
+        .execution_target_preference
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--execution-target-preference".to_string());
+        args.push(execution_target_preference);
+    }
     let response = run_agent_cli_json(&app, payload.root, "workspace-save", args, 180).await?;
     emit_control_room_changed(&app, "workspace.saved");
     Ok(response)
@@ -4741,6 +5083,10 @@ async fn start_control_room_mission_command(
         "--budget-hours".to_string(),
         payload.budget_hours.unwrap_or(12).to_string(),
     ];
+    if let Some(run_until) = payload.run_until.filter(|value| !value.trim().is_empty()) {
+        args.push("--run-until".to_string());
+        args.push(run_until);
+    }
     for success_check in payload.success_checks.unwrap_or_default() {
         if !success_check.trim().is_empty() {
             args.push("--success-check".to_string());
@@ -4776,6 +5122,32 @@ async fn apply_control_room_mission_action_command(
     ];
     let response = run_agent_cli_json(&app, payload.root, "mission-action", args, 240).await?;
     emit_control_room_changed(&app, "mission.action");
+    Ok(response)
+}
+
+#[tauri::command]
+async fn apply_control_room_workspace_action_command(
+    app: AppHandle,
+    payload: ControlWorkspaceActionPayload,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "--surface".to_string(),
+        payload.surface,
+        "--action-id".to_string(),
+        payload.action_id,
+    ];
+    if let Some(workspace_id) = payload
+        .workspace_id
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--workspace-id".to_string());
+        args.push(workspace_id);
+    }
+    if payload.approved.unwrap_or(false) {
+        args.push("--approved".to_string());
+    }
+    let response = run_agent_cli_json(&app, payload.root, "workspace-action", args, 900).await?;
+    emit_control_room_changed(&app, "workspace.action");
     Ok(response)
 }
 
@@ -5058,10 +5430,12 @@ pub fn run() {
             get_audit_log,
             get_autonomy_dashboard_snapshot,
             get_control_room_snapshot_command,
+            inspect_codex_import_command,
             get_onboarding_status_command,
             save_workspace_profile_command,
             start_control_room_mission_command,
             apply_control_room_mission_action_command,
+            apply_control_room_workspace_action_command,
             has_telegram_bot_token_command,
             save_telegram_bot_token_command,
             clear_telegram_bot_token_command,

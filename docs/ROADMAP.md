@@ -1,37 +1,46 @@
 # Build Roadmap
 
-Current release goalpost:
+Current roadmap span:
 
-- `Fluxio 1.0` is defined in `docs/FLUXIO_1_0_RELEASE.md`
+- `Fluxio 1.0`
+- the immediate `1.1` leverage release
 
-## M1 - Core Loop
+Current source-of-truth docs:
 
-- Done in this repo: docs-first preflight, planning, context tracking, session artifacts.
-- Added: execution mode presets (`fast`, `balanced`, `careful`, `creative`).
-- Added: vibe loop command with checkpointing and next-step suggestions.
-- Added: vibe status and auto-continue commands for longer hands-free sessions.
+- `docs/FLUXIO_1_0_RELEASE.md`
+- `docs/FLUXIO_1_0_POLISH_PLAN.md`
 
-## M2 - Context Rollover
+## Fixed Next Steps
 
-- Done in this repo: rollover thresholds, compaction seed, handoff packet generation.
-- Added: persistent memory writes and automatic resume from previous sessions.
+1. Reliability contract and launch safety
+   - close launch and restart reliability gaps
+   - treat `npm run verify:desktop` as the canonical desktop validation command
+   - keep Hermes and `uv` as hard blockers
+2. Human-quality workbench and personalization
+   - run the human-feel audit
+   - resolve the ranked fix list before adding new surface area
+   - make `Beginner`, `Builder`, and `Advanced` feel materially different
+3. Skill Studio completion
+   - finish create, import, edit, test, enable, disable, archive, promote, and reuse
+   - back visible actions with persisted library state
+4. Service Management completion
+   - finish the shared detect, install, verify, repair, and manage loop
+   - keep local services, MCP/tool servers, runtimes, and bridges distinct
+5. Workflow Studio and agency hardening
+   - keep workflow scope narrow: save-run, replay, and reviewed recipe composition only
+   - harden continue, ask, replan, and context-preservation behavior
+6. `1.0` validation cycle
+   - validate on Windows desktop + WSL2 only
+   - require proof capture plus real OpenClaw and Hermes missions
+7. `1.1` leverage release
+   - add reviewed workflow packs, stronger skill reuse, service drift detection, and trust scoring
+   - do not widen into cloud sync, inbox or thread products, container abstractions, or a heavyweight workflow builder
 
-## M3 - Verification Defaults
+## Release Gates
 
-- Done in this repo: configurable verification command runner, default detection, safety blocking, and timeline logging.
+Keep these gates for desktop release readiness:
 
-## M4 - GUI Cockpit
-
-- Next: chat + diff + preview + timeline desktop interface against this engine.
-- Added: lightweight one-click demo button launcher for local showcase runs.
-
-## M5 - Skill Studio + Evals
-
-- In progress: typed skill registry and run metrics CLI (`evaluate`).
-- Added: timeline replay/search/story commands for observability and public reporting.
-- Added: OpenAI request export adapter for Responses API payload generation.
-- Added: feature suggestion command from paper text (`suggest-features`).
-- Added: one-click `demo-run` pipeline + proof report panel bundle for stakeholders.
-- Added: `demo-suite` for cross-preset benchmark sweeps and consolidated suite reports.
-- Added: `next-features` advisor for metric-driven improvement planning.
-- Next: benchmark dashboards and live model adapters.
+- `python -m pytest tests -q`
+- `npm run frontend:build`
+- `npm run tauri build -- --debug`
+- `npm run verify:desktop`

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -61,4 +62,16 @@ def detect_default_verification_commands(workdir: Path) -> list[str]:
     has_tests_dir = (workdir / "tests").exists()
     if has_pyproject and has_tests_dir:
         commands.append("python -m unittest discover -s tests")
+    package_json_path = workdir / "package.json"
+    if package_json_path.exists():
+        try:
+            package_payload = json.loads(package_json_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            package_payload = {}
+        scripts = package_payload.get("scripts", {}) if isinstance(package_payload, dict) else {}
+        if isinstance(scripts, dict):
+            if "frontend:build" in scripts:
+                commands.append("npm run frontend:build")
+            elif "build" in scripts:
+                commands.append("npm run build")
     return commands

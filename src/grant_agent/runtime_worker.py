@@ -6,27 +6,29 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
 
 
 STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
+HEARTBEAT_INTERVAL_SECONDS = max(
+    float(os.environ.get("FLUXIO_HEARTBEAT_INTERVAL_SECONDS", "10")),
+    0.05,
+)
 
 
 def _load_state(path: Path) -> dict:
     if not path.exists():
         return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    return _read_json_with_retries(path)
 
 
 def _write_state(path: Path, updates: dict) -> dict:
     payload = _load_state(path)
     payload.update(updates)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _atomic_write_json(path, payload)
     return payload
 
 
@@ -34,6 +36,7 @@ def _append_event(session_path: Path, *, kind: str, message: str, status: str = 
     payload = _load_state(session_path)
     events_path = Path(payload.get("events_path", session_path.with_suffix(".events.jsonl"))).resolve()
     events_path.parent.mkdir(parents=True, exist_ok=True)
+    event_timestamp = _utc_now()
     event = {
         "event_id": f"evt_{uuid.uuid4().hex[:10]}",
         "delegated_id": payload.get("delegated_id", ""),
@@ -41,21 +44,32 @@ def _append_event(session_path: Path, *, kind: str, message: str, status: str = 
         "kind": kind,
         "message": message,
         "status": status or payload.get("status", ""),
-        "created_at": _utc_now(),
+        "created_at": event_timestamp,
         "data": data or {},
     }
     with events_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=True) + "\n")
     latest_events = _read_events(events_path)[-5:]
+    updates = {
+        "updated_at": event_timestamp,
+        "last_event": message,
+        "last_event_kind": kind,
+        "latest_events": latest_events,
+        "event_cursor": len(_read_events(events_path)),
+    }
+    current_status = str(event["status"] or "")
+    if current_status in {"launching", "running", "waiting_for_approval"}:
+        updates["heartbeat_at"] = event_timestamp
+        updates["heartbeat_status"] = "healthy"
+        updates["heartbeat_interval_seconds"] = max(
+            int(round(HEARTBEAT_INTERVAL_SECONDS)),
+            1,
+        )
+    elif current_status in {"completed", "failed", "stopped"}:
+        updates["heartbeat_status"] = "inactive"
     _write_state(
         session_path,
-        {
-            "updated_at": _utc_now(),
-            "last_event": message,
-            "last_event_kind": kind,
-            "latest_events": latest_events,
-            "event_cursor": len(_read_events(events_path)),
-        },
+        updates,
     )
     return event
 
@@ -73,6 +87,38 @@ def _read_events(path: Path) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return rows
+
+
+def _read_json_with_retries(path: Path, retries: int = 8, delay: float = 0.02) -> dict:
+    last_error: json.JSONDecodeError | None = None
+    for attempt in range(retries):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if attempt == retries - 1:
+                break
+            time.sleep(delay)
+    raise RuntimeError(f"Unable to read delegated runtime state from {path}") from last_error
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.{uuid.uuid4().hex}.tmp")
+    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    for attempt in range(10):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError:
+            if attempt == 9:
+                break
+            time.sleep(0.02)
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    raise PermissionError(f"Unable to atomically update delegated runtime state at {path}")
 
 
 def _creationflags() -> int:
@@ -118,10 +164,6 @@ def _wait_for_approval(session_path: Path, child: subprocess.Popen, request: dic
                 decision = json.loads(decision_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 decision = {}
-            try:
-                decision_path.unlink()
-            except OSError:
-                pass
             status = str(decision.get("status", "approved"))
             resolved_at = str(decision.get("resolved_at", _utc_now()))
             request["status"] = status
@@ -171,6 +213,36 @@ def _wait_for_approval(session_path: Path, child: subprocess.Popen, request: dic
         time.sleep(0.1)
 
 
+def _heartbeat_message(status: str) -> str:
+    normalized = (status or "running").strip().lower()
+    if normalized == "waiting_for_approval":
+        return "Delegated runtime heartbeat: waiting for approval."
+    if normalized == "launching":
+        return "Delegated runtime heartbeat: launch still in progress."
+    return "Delegated runtime heartbeat: session is healthy."
+
+
+def _heartbeat_loop(
+    session_path: Path,
+    child: subprocess.Popen,
+    stop_event: threading.Event,
+) -> None:
+    while not stop_event.wait(HEARTBEAT_INTERVAL_SECONDS):
+        if child.poll() is not None:
+            return
+        payload = _load_state(session_path)
+        status = str(payload.get("status", "running"))
+        if status in {"completed", "failed", "stopped"}:
+            return
+        _append_event(
+            session_path,
+            kind="session.heartbeat",
+            message=_heartbeat_message(status),
+            status=status,
+            data={"phase": status},
+        )
+
+
 def run(session_path: Path, cwd: Path, command: str) -> int:
     session_path = session_path.resolve()
     cwd = cwd.resolve()
@@ -189,6 +261,12 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
             "detail": "Launching delegated runtime process.",
             "events_path": str(events_path),
             "decision_path": str(decision_path),
+            "heartbeat_at": _utc_now(),
+            "heartbeat_status": "healthy",
+            "heartbeat_interval_seconds": max(
+                int(round(HEARTBEAT_INTERVAL_SECONDS)),
+                1,
+            ),
         },
     )
     _append_event(
@@ -226,6 +304,13 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
             message="Delegated runtime process is running.",
             status="running",
         )
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop,
+            args=(session_path, child, heartbeat_stop),
+            daemon=True,
+        )
+        heartbeat_thread.start()
 
         if child.stdout is not None:
             for raw_line in iter(child.stdout.readline, ""):
@@ -300,9 +385,15 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
                     data=event_data,
                 )
 
+    heartbeat_stop.set()
+    heartbeat_thread.join(timeout=1)
     return_code = child.wait()
     summary = _tail_summary(log_path)
     existing = _load_state(session_path)
+    try:
+        decision_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     if existing.get("status") == "failed" and existing.get("pending_approval", {}).get("status") == "rejected":
         final_status = "failed"
     elif existing.get("status") == "stopped":
@@ -321,6 +412,7 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
                 else "Delegated runtime process failed."
             ),
             "last_event": summary or "runtime_finished",
+            "heartbeat_status": "inactive",
         },
     )
     _append_event(

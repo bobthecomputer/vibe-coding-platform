@@ -10,6 +10,7 @@ from .action_executor import (
     build_execution_policy,
     execute_action,
     prepare_execution_scope,
+    requested_scope_for_execution_target,
 )
 from .checkpoints import CheckpointStore
 from .doc_ingestion import ingest_docs
@@ -107,47 +108,212 @@ def guided_profile_defaults(name: str) -> dict:
     return defaults.get(legacy_mapping.get(normalized, "builder"), defaults["builder"])
 
 
-def recommended_model_routes(profile_name: str) -> list[ModelRouteConfig]:
+def normalize_route_overrides(route_overrides: object) -> list[dict]:
+    if not isinstance(route_overrides, list):
+        return []
+    normalized: list[dict] = []
+    for item in route_overrides:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        provider = str(item.get("provider", "")).strip().lower()
+        model = str(item.get("model", "")).strip()
+        if role not in {"planner", "executor", "verifier"} or not provider or not model:
+            continue
+        row = {
+            "role": role,
+            "provider": provider,
+            "model": model,
+        }
+        effort = str(item.get("effort", "")).strip().lower()
+        if effort:
+            row["effort"] = effort
+        budget_class = str(item.get("budgetClass", item.get("budget_class", ""))).strip().lower()
+        if budget_class:
+            row["budgetClass"] = budget_class
+        normalized.append(row)
+    deduped: list[dict] = []
+    seen_roles: set[str] = set()
+    for item in normalized:
+        if item["role"] in seen_roles:
+            continue
+        seen_roles.add(item["role"])
+        deduped.append(item)
+    return deduped
+
+
+def resolve_efficiency_autotune_policy(
+    *,
+    harness_lab_snapshot: dict,
+    auto_optimize_routing: bool,
+    requested_strategy: str,
+) -> dict:
+    efficiency = harness_lab_snapshot.get("efficiency", {})
+    session_health = harness_lab_snapshot.get("sessionHealth", {})
+    total_runs = int(efficiency.get("totalRuns", 0) or 0)
+    completion_rate = int(efficiency.get("completionRate", 0) or 0)
+    approval_pause_rate = int(efficiency.get("approvalPauseRate", 0) or 0)
+    average_verification_failures = float(
+        efficiency.get("averageVerificationFailures", 0.0) or 0.0
+    )
+    stale_heartbeat_count = int(session_health.get("staleHeartbeatCount", 0) or 0)
+    normalized_requested = (requested_strategy or "profile_default").strip().lower()
+    eligible = total_runs >= 3
+    if not auto_optimize_routing:
+        return {
+            "enabled": False,
+            "eligible": eligible,
+            "reason": "Auto-optimize routing is disabled for this workspace.",
+            "requestedStrategy": normalized_requested,
+            "routingStrategy": normalized_requested,
+            "appliedPolicy": {},
+            "forcePauseOnFailure": False,
+        }
+    if not eligible:
+        return {
+            "enabled": True,
+            "eligible": False,
+            "reason": "Not enough local data yet (need at least 3 runs).",
+            "requestedStrategy": normalized_requested,
+            "routingStrategy": normalized_requested,
+            "appliedPolicy": {},
+            "forcePauseOnFailure": False,
+        }
+    if stale_heartbeat_count > 0 or completion_rate < 50:
+        return {
+            "enabled": True,
+            "eligible": True,
+            "reason": (
+                "Stale runtime heartbeat or low completion rate triggered a safer routing policy."
+            ),
+            "requestedStrategy": normalized_requested,
+            "routingStrategy": "uniform_quality",
+            "appliedPolicy": {
+                "policy": "safety_bias",
+                "routingStrategy": "uniform_quality",
+                "approvalMode": "tiered",
+                "delegationAggressiveness": "low",
+                "pauseOnVerificationFailure": True,
+            },
+            "forcePauseOnFailure": True,
+        }
+    if approval_pause_rate > 40:
+        return {
+            "enabled": True,
+            "eligible": True,
+            "reason": "Approval pauses are high, so delegation is reduced while keeping tiered approvals.",
+            "requestedStrategy": normalized_requested,
+            "routingStrategy": normalized_requested,
+            "appliedPolicy": {
+                "policy": "approval_pressure",
+                "routingStrategy": normalized_requested,
+                "approvalMode": "tiered",
+                "delegationAggressiveness": "low",
+                "pauseOnVerificationFailure": True,
+            },
+            "forcePauseOnFailure": True,
+        }
+    if (
+        completion_rate >= 70
+        and stale_heartbeat_count == 0
+        and average_verification_failures <= 1.0
+    ):
+        return {
+            "enabled": True,
+            "eligible": True,
+            "reason": "Local runs are stable, so Fluxio can use a more efficient executor profile.",
+            "requestedStrategy": normalized_requested,
+            "routingStrategy": "planner_premium_executor_efficient",
+            "appliedPolicy": {
+                "policy": "stable_efficiency",
+                "routingStrategy": "planner_premium_executor_efficient",
+                "approvalMode": "tiered",
+                "delegationAggressiveness": "balanced",
+                "pauseOnVerificationFailure": True,
+            },
+            "forcePauseOnFailure": True,
+        }
+    return {
+        "enabled": True,
+        "eligible": True,
+        "reason": "No stronger local signal yet; Fluxio keeps the requested routing strategy.",
+        "requestedStrategy": normalized_requested,
+        "routingStrategy": normalized_requested,
+        "appliedPolicy": {},
+        "forcePauseOnFailure": False,
+    }
+
+
+def _budget_class_for_model(model: str, override_value: str = "") -> str:
+    normalized_override = (override_value or "").strip().lower()
+    if normalized_override:
+        return normalized_override
+    normalized_model = (model or "").strip().lower()
+    if "mini" in normalized_model or "highspeed" in normalized_model:
+        return "efficient"
+    return "premium"
+
+
+def recommended_model_routes(
+    profile_name: str,
+    routing_strategy_override: str | None = None,
+    route_overrides: list[dict] | None = None,
+) -> list[ModelRouteConfig]:
     defaults = guided_profile_defaults(profile_name)
-    strategy = defaults["routing_strategy"]
+    strategy = (routing_strategy_override or "profile_default").strip().lower()
+    strategy_source = "strategy"
+    if not strategy or strategy == "profile_default":
+        strategy = defaults["routing_strategy"]
+        strategy_source = "profile_default"
+    override_map = {
+        item["role"]: item for item in normalize_route_overrides(route_overrides or [])
+    }
     if strategy == "uniform_quality":
-        planner = ("openai", "gpt-5")
-        executor = ("openai", "gpt-5")
+        planner = ("openai", "gpt-5.4")
+        executor = ("openai", "gpt-5.4")
     elif strategy == "budget_first":
-        planner = ("openai", "gpt-5-mini")
-        executor = ("openai", "gpt-5-mini")
+        planner = ("openai", "gpt-5.4-mini")
+        executor = ("openai", "gpt-5.4-mini")
     else:
-        planner = ("openai", "gpt-5")
-        executor = ("openai", "gpt-5-mini")
-    return [
+        planner = ("openai", "gpt-5.4")
+        executor = ("openai", "gpt-5.4-mini")
+    routes = [
         ModelRouteConfig(
             role="planner",
             provider=planner[0],
             model=planner[1],
             effort="high",
-            budget_class="premium" if planner[1] == "gpt-5" else "efficient",
-            explanation="Planner defaults come from the selected Fluxio profile.",
+            budget_class="premium" if planner[1] == "gpt-5.4" else "efficient",
+            explanation=(
+                "Planner route resolved from workspace strategy."
+                if strategy_source == "strategy"
+                else "Planner route resolved from profile default strategy."
+            ),
         ),
         ModelRouteConfig(
             role="executor",
             provider=executor[0],
             model=executor[1],
             effort="medium",
-            budget_class="efficient" if executor[1] != "gpt-5" else "premium",
-            explanation="Executor defaults prioritize cheaper action loops unless the profile prefers uniform quality.",
+            budget_class="efficient" if executor[1] != "gpt-5.4" else "premium",
+            explanation=(
+                "Executor route resolved from workspace strategy."
+                if strategy_source == "strategy"
+                else "Executor route resolved from profile default strategy."
+            ),
         ),
         ModelRouteConfig(
             role="verifier",
             provider="openai",
-            model="gpt-5",
+            model="gpt-5.4",
             effort="high",
             budget_class="premium",
-            explanation="Verification stays high-confidence by default.",
+            explanation="Verifier route resolved from profile confidence defaults.",
         ),
         ModelRouteConfig(
             role="summarizer",
             provider="openai",
-            model="gpt-5-mini",
+            model="gpt-5.4-mini",
             effort="medium",
             budget_class="efficient",
             explanation="Summaries stay efficient unless overridden.",
@@ -155,7 +321,7 @@ def recommended_model_routes(profile_name: str) -> list[ModelRouteConfig]:
         ModelRouteConfig(
             role="skill_curator",
             provider="openai",
-            model="gpt-5-mini",
+            model="gpt-5.4-mini",
             effort="medium",
             budget_class="efficient",
             explanation="Skill curation is efficient and reviewable by default.",
@@ -163,12 +329,29 @@ def recommended_model_routes(profile_name: str) -> list[ModelRouteConfig]:
         ModelRouteConfig(
             role="guide_author",
             provider="openai",
-            model="gpt-5-mini",
+            model="gpt-5.4-mini",
             effort="medium",
             budget_class="efficient",
             explanation="Guidance and onboarding copy stay concise and adaptive to the selected profile.",
         ),
     ]
+    for index, route in enumerate(routes):
+        override = override_map.get(route.role)
+        if not override:
+            continue
+        routes[index] = ModelRouteConfig(
+            role=route.role,
+            provider=override.get("provider", route.provider),
+            model=override.get("model", route.model),
+            effort=override.get("effort", route.effort),
+            budget_class=_budget_class_for_model(
+                override.get("model", route.model),
+                override.get("budgetClass", ""),
+            ),
+            fallback_policy="same_provider",
+            explanation="Route override from workspace runtime contract.",
+        )
+    return routes
 
 
 class LegacyHarnessAdapter:
@@ -214,6 +397,9 @@ class FluxioHarness:
         resume_from_checkpoint_path: str | None = None,
         checkpoint_every: int = 1,
         autopilot_guardrails: dict | None = None,
+        routing_strategy_override: str | None = None,
+        route_overrides: list[dict] | None = None,
+        execution_target_preference: str | None = None,
     ) -> dict:
         del max_handoffs
         guardrails = autopilot_guardrails or {
@@ -223,12 +409,19 @@ class FluxioHarness:
         started_at = time.monotonic()
         resolved_mission_id = mission_id or f"mission_{uuid.uuid4().hex[:8]}"
         profile_defaults = guided_profile_defaults(profile_name)
-        route_configs = recommended_model_routes(profile_name)
+        route_configs = recommended_model_routes(
+            profile_name,
+            routing_strategy_override=routing_strategy_override,
+            route_overrides=route_overrides,
+        )
         execution_policy = build_execution_policy(profile_name)
         execution_scope = prepare_execution_scope(
             workspace_root=repo_path,
             mission_id=resolved_mission_id,
-            requested_scope=profile_defaults.get("execution_scope", ""),
+            requested_scope=(
+                requested_scope_for_execution_target(execution_target_preference)
+                or profile_defaults.get("execution_scope", "")
+            ),
             profile_name=profile_name,
         )
         execution_context = HarnessExecutionContext(
@@ -265,12 +458,24 @@ class FluxioHarness:
         if resumed_state:
             loaded_scope = self._load_execution_scope(resumed_state)
             loaded_policy = self._load_execution_policy(resumed_state)
+            loaded_routes = self._load_route_configs(resumed_state)
             if loaded_scope is not None:
                 execution_scope = loaded_scope
             if loaded_policy is not None:
                 execution_policy = loaded_policy
+            keep_loaded_routes = bool(
+                loaded_routes
+                and not normalize_route_overrides(route_overrides or [])
+                and (
+                    not routing_strategy_override
+                    or routing_strategy_override == "profile_default"
+                )
+            )
+            if keep_loaded_routes:
+                route_configs = loaded_routes
             execution_context.execution_scope = execution_scope
             execution_context.execution_policy = execution_policy
+            execution_context.route_configs = route_configs
 
         session_path = self.session_store.create_session(
             objective=objective,
@@ -374,7 +579,11 @@ class FluxioHarness:
                 )
 
         for iteration in range(1, iterations + 1):
-            delegated_runtime_sessions, delegated_status = self._reconcile_delegated_sessions(
+            (
+                delegated_runtime_sessions,
+                delegated_status,
+                delegated_replan_trigger,
+            ) = self._reconcile_delegated_sessions(
                 delegated_runtime_sessions=delegated_runtime_sessions,
                 plan_revisions=plan_revisions,
                 runtime_supervisor=runtime_supervisor,
@@ -385,6 +594,23 @@ class FluxioHarness:
                 autopilot_status = "paused"
                 autopilot_pause_reason = "approval_required"
                 break
+            if delegated_replan_trigger == "approval_rejected":
+                repeated_failure_count += 1
+                self._append_revised_plan(
+                    plan_revisions=plan_revisions,
+                    base_revision=plan_revisions[-1],
+                    trigger="approval_rejected",
+                    summary="Planner revised the mission after a delegated approval was rejected.",
+                    extra_steps=[
+                        PlannedStep(
+                            step_id=f"step_{uuid.uuid4().hex[:8]}",
+                            title="Replan after delegated approval rejection",
+                            description="Find a safer path after the delegated lane was rejected.",
+                            kind="derived",
+                        )
+                    ],
+                )
+                continue
             if delegated_status == "running":
                 autopilot_status = "paused"
                 autopilot_pause_reason = "delegated_runtime_running"
@@ -778,12 +1004,13 @@ class FluxioHarness:
         runtime_supervisor: DelegatedRuntimeSupervisor,
         notes: list[str],
         risks: list[str],
-    ) -> tuple[list[dict], str]:
+    ) -> tuple[list[dict], str, str]:
         if not delegated_runtime_sessions:
-            return delegated_runtime_sessions, ""
+            return delegated_runtime_sessions, "", ""
 
         refreshed: list[dict] = []
         active_status = ""
+        replan_trigger = ""
         latest_revision = plan_revisions[-1]
         step_lookup = {step.step_id: step for revision in plan_revisions for step in revision.steps}
         for item in delegated_runtime_sessions:
@@ -812,13 +1039,19 @@ class FluxioHarness:
                 else:
                     step.status = "blocked"
                     step.attempts += 1
+                    if any(
+                        entry.get("status") == "rejected"
+                        for entry in session.approval_history
+                        if isinstance(entry, dict)
+                    ):
+                        replan_trigger = "approval_rejected"
                     risks.append(
                         f"Delegated runtime {session.runtime_id} stopped with status {session.status}: "
                         f"{session.last_event or session.detail}"
                     )
                 session.acknowledged = True
             refreshed.append(asdict(session))
-        return refreshed, active_status
+        return refreshed, active_status, replan_trigger
 
     @staticmethod
     def _load_plan_revisions(
@@ -898,6 +1131,18 @@ class FluxioHarness:
         if not resumed_state or not resumed_state.get("execution_policy"):
             return None
         return ExecutionPolicy(**resumed_state["execution_policy"])
+
+    @staticmethod
+    def _load_route_configs(
+        resumed_state: dict | None,
+    ) -> list[ModelRouteConfig]:
+        if not resumed_state:
+            return []
+        return [
+            ModelRouteConfig(**item)
+            for item in resumed_state.get("route_configs", [])
+            if isinstance(item, dict) and item.get("role")
+        ]
 
     @staticmethod
     def _next_pending_step(revision: PlanRevision) -> PlannedStep | None:

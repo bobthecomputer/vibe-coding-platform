@@ -106,19 +106,171 @@ class SkillLibrary:
     def learned_skill_rows(self) -> list[dict]:
         return [asdict(item) for item in self.learned_skills]
 
+    def _usage_summary(self, skill_id: str) -> dict[str, str | int | None]:
+        records = [item for item in self.usage_records if item.skill_id == skill_id]
+        helped = [item for item in records if item.helped]
+        last_used_at = max((item.created_at for item in records), default=None)
+        last_helped_at = max((item.created_at for item in helped), default=None)
+        return {
+            "usageCount": len(records),
+            "helpedCount": len(helped),
+            "lastUsedAt": last_used_at,
+            "lastHelpedAt": last_helped_at,
+        }
+
+    def _enrich_catalog_row(
+        self,
+        row: dict,
+        *,
+        default_origin_type: str,
+        default_editable_status: str,
+        default_test_status: str,
+        default_promotion_state: str,
+    ) -> dict:
+        item = dict(row)
+        source = item.get("source", {}) if isinstance(item.get("source"), dict) else {}
+        skill_id = (
+            item.get("skillId")
+            or item.get("skill_id")
+            or item.get("packId")
+            or item.get("pack_id")
+            or item.get("label")
+            or item.get("name")
+            or ""
+        )
+        usage = self._usage_summary(str(skill_id))
+
+        if item.get("disabled"):
+            editable_status = "disabled"
+        elif item.get("archived"):
+            editable_status = "archived"
+        else:
+            editable_status = (
+                item.get("editableStatus")
+                or item.get("editable_status")
+                or item.get("status")
+                or default_editable_status
+            )
+
+        origin_type = (
+            item.get("originType")
+            or item.get("origin_type")
+            or source.get("kind")
+            or default_origin_type
+        )
+        test_status = (
+            item.get("testStatus")
+            or item.get("test_status")
+            or default_test_status
+        )
+        promotion_state = (
+            item.get("promotionState")
+            or item.get("promotion_state")
+            or default_promotion_state
+        )
+
+        if "skill_id" in item and "skillId" not in item:
+            item["skillId"] = item["skill_id"]
+        if "pack_id" in item and "packId" not in item:
+            item["packId"] = item["pack_id"]
+        if "prompt_hint" in item and "promptHint" not in item:
+            item["promptHint"] = item["prompt_hint"]
+
+        item.update(
+            {
+                "editableStatus": editable_status,
+                "testStatus": test_status,
+                "promotionState": promotion_state,
+                "lastUsedAt": item.get("lastUsedAt") or item.get("last_used_at") or usage["lastUsedAt"],
+                "lastHelpedAt": item.get("lastHelpedAt") or item.get("last_helped_at") or usage["lastHelpedAt"],
+                "originType": origin_type,
+                "usageCount": item.get("usageCount", usage["usageCount"]),
+                "helpedCount": item.get("helpedCount", usage["helpedCount"]),
+            }
+        )
+        return item
+
+    def _normalized_user_installed_skills(self) -> list[dict]:
+        rows: list[dict] = []
+        for item in self.user_installed_skills:
+            source = item.get("source", {}) if isinstance(item.get("source"), dict) else {}
+            origin_type = (
+                item.get("originType")
+                or item.get("origin_type")
+                or source.get("kind")
+                or "user_authored"
+            )
+            promotion_state = "imported" if origin_type == "imported" else "reviewed"
+            rows.append(
+                self._enrich_catalog_row(
+                    item,
+                    default_origin_type=origin_type,
+                    default_editable_status="active",
+                    default_test_status="untested",
+                    default_promotion_state=promotion_state,
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _management_summary(sections: list[list[dict]]) -> dict[str, int]:
+        items = [item for section in sections for item in section]
+        return {
+            "totalSkills": len(items),
+            "needsTestCount": sum(
+                1 for item in items if item.get("testStatus") in {"untested", "pending", "sample_ready"}
+            ),
+            "reviewedReusableCount": sum(
+                1 for item in items if item.get("promotionState") == "reviewed"
+            ),
+            "learnedCount": sum(1 for item in items if item.get("originType") == "learned"),
+            "disabledCount": sum(
+                1 for item in items if item.get("editableStatus") in {"disabled", "archived"}
+            ),
+        }
+
     def build_catalog(
         self,
         recommended_packs: list[SkillPack] | None = None,
     ) -> dict[str, list[dict]]:
-        curated = [asdict(item) for item in self.curated_packs()]
-        learned = [asdict(item) for item in self.learned_skills]
-        user_installed = list(self.user_installed_skills)
-        recommended = [asdict(item) for item in (recommended_packs or [])]
+        curated = [
+            self._enrich_catalog_row(
+                asdict(item),
+                default_origin_type="curated",
+                default_editable_status="active",
+                default_test_status="reviewed",
+                default_promotion_state="reviewed",
+            )
+            for item in self.curated_packs()
+        ]
+        learned = [
+            self._enrich_catalog_row(
+                asdict(item),
+                default_origin_type="learned",
+                default_editable_status="disabled" if item.disabled else "active",
+                default_test_status="untested",
+                default_promotion_state="learning",
+            )
+            for item in self.learned_skills
+        ]
+        user_installed = self._normalized_user_installed_skills()
+        recommended = [
+            self._enrich_catalog_row(
+                asdict(item),
+                default_origin_type="curated",
+                default_editable_status="available",
+                default_test_status="recommended",
+                default_promotion_state="recommended",
+            )
+            for item in (recommended_packs or [])
+        ]
+        sections = [recommended, curated, user_installed, learned]
         return {
             "curatedPacks": curated,
             "recommendedPacks": recommended,
             "userInstalledSkills": user_installed,
             "learnedSkills": learned,
+            "managementSummary": self._management_summary(sections),
         }
 
     def retrieve(

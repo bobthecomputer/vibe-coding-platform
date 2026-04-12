@@ -1,0 +1,10 @@
+2026/04/12-16:55:29.322 445c Reusing MANIFEST C:\Users\paul\projects\vibe-coding-platform\artifacts\ui-audit\edge-capture-profile\Default\EdgeCoupons/coupons_data.db/MANIFEST-000001
+2026/04/12-16:55:29.324 445c Recovering log #3
+2026/04/12-16:55:29.325 445c Level-0 table #3: started
+2026/04/12-16:55:29.328 445c Level-0 table #3: 682105 bytes OK
+2026/04/12-16:55:29.328 445c Recovering log #4
+2026/04/12-16:55:29.328 445c Reusing old log C:\Users\paul\projects\vibe-coding-platform\artifacts\ui-audit\edge-capture-profile\Default\EdgeCoupons/coupons_data.db/000004.log 
+2026/04/12-16:55:29.332 445c Delete type=0 #3
+2026/04/12-16:55:29.332 445c Delete type=2 #5
+2026/04/12-16:55:29.335 2b0c Level-0 table #6: started
+2026/04/12-16:55:29.337 2b0c Level-0 table #6: 682208 bytes OK

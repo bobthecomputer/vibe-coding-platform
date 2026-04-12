@@ -107,6 +107,7 @@ class MissionRunBudget:
     mode: str
     max_runtime_seconds: int
     focus_window_hours: int = 12
+    run_until_behavior: str = "pause_on_failure"
 
 
 @dataclass
@@ -131,6 +132,13 @@ class MissionStateSnapshot:
     latest_session_id: str | None = None
     last_runtime_event: str | None = None
     last_error: str | None = None
+    current_cycle_phase: str = "plan"
+    cycle_count: int = 0
+    last_verification_result: str = ""
+    last_replan_reason: str = ""
+    queue_position: int = 0
+    blocking_mission_id: str | None = None
+    queue_reason: str = ""
     remaining_steps: list[str] = field(default_factory=list)
     verification_failures: list[str] = field(default_factory=list)
     active_step_id: str | None = None
@@ -143,6 +151,17 @@ class MissionStateSnapshot:
     delegated_runtime_sessions: list[dict[str, Any]] = field(default_factory=list)
     replay_action_cursor: str = ""
     tutorial_context: dict[str, Any] = field(default_factory=dict)
+    continuity_state: str = "fresh_only"
+    continuity_detail: str = ""
+    last_verification_summary: str = ""
+    last_replan_trigger: str = ""
+    pending_approval_payload: dict[str, Any] = field(default_factory=dict)
+    approval_history: list[dict[str, Any]] = field(default_factory=list)
+    elapsed_runtime_seconds: int = 0
+    remaining_runtime_seconds: int = 0
+    time_budget_status: str = "pending"
+    last_budget_pause_reason: str = ""
+    current_runtime_lane: str = ""
 
 
 @dataclass
@@ -242,6 +261,10 @@ class ExecutionScope:
     strategy: str = "direct"
     execution_root: str = ""
     workspace_root: str = ""
+    execution_target: str = "unresolved"
+    storage_mode: str = "unknown"
+    host_locality: str = "unknown"
+    execution_target_detail: str = ""
     branch_name: str = ""
     worktree_path: str = ""
     isolated: bool = False
@@ -301,12 +324,20 @@ class DelegatedSessionSnapshot:
     updated_at: str = field(default_factory=utc_now_iso)
     workspace_root: str = ""
     execution_root: str = ""
+    execution_target: str = "unresolved"
+    storage_mode: str = "unknown"
+    host_locality: str = "unknown"
+    execution_target_detail: str = ""
     session_path: str = ""
     log_path: str = ""
     source_step_id: str = ""
     pid: int = 0
     supervisor_pid: int = 0
     exit_code: int | None = None
+    heartbeat_at: str = ""
+    heartbeat_status: str = "unknown"
+    heartbeat_age_seconds: int | None = None
+    heartbeat_interval_seconds: int = 10
 
 
 @dataclass
@@ -322,6 +353,10 @@ class DelegatedRuntimeSession:
     session_path: str = ""
     workspace_root: str = ""
     execution_root: str = ""
+    execution_target: str = "unresolved"
+    storage_mode: str = "unknown"
+    host_locality: str = "unknown"
+    execution_target_detail: str = ""
     log_path: str = ""
     events_path: str = ""
     decision_path: str = ""
@@ -335,6 +370,10 @@ class DelegatedRuntimeSession:
     pending_approval: dict[str, Any] = field(default_factory=dict)
     approval_history: list[dict[str, Any]] = field(default_factory=list)
     event_cursor: int = 0
+    heartbeat_at: str = ""
+    heartbeat_status: str = "unknown"
+    heartbeat_age_seconds: int | None = None
+    heartbeat_interval_seconds: int = 10
 
 
 @dataclass
@@ -463,6 +502,15 @@ class ConnectedAppSession:
     active_tasks: list[str] = field(default_factory=list)
     last_seen_at: str = field(default_factory=utc_now_iso)
     notes: list[str] = field(default_factory=list)
+    handshake_status: str = ""
+    bridge_transport: str = ""
+    bridge_endpoint: str = ""
+    source_kind: str = "connected_app"
+    app_root: str = ""
+    context_preview: list[dict[str, Any]] = field(default_factory=list)
+    task_history: list[dict[str, Any]] = field(default_factory=list)
+    latest_task_result: dict[str, Any] = field(default_factory=dict)
+    approval_callback: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -652,6 +700,7 @@ class Mission:
     )
     route_configs: list[ModelRouteConfig] = field(default_factory=list)
     routing_decisions: list[RoutingDecision] = field(default_factory=list)
+    effective_route_contract: dict[str, Any] = field(default_factory=dict)
     current_plan_revision_id: str | None = None
     plan_revisions: list[PlanRevision] = field(default_factory=list)
     derived_tasks: list[DerivedTask] = field(default_factory=list)
@@ -674,6 +723,13 @@ class WorkspaceProfile:
     default_runtime: str
     workspace_type: str
     user_profile: str = "builder"
+    preferred_harness: str = "fluxio_hybrid"
+    routing_strategy: str = "profile_default"
+    route_overrides: list[dict[str, Any]] = field(default_factory=list)
+    auto_optimize_routing: bool = False
+    minimax_auth_mode: str = "none"
+    commit_message_style: str = "scoped"
+    execution_target_preference: str = "profile_default"
     goals: list[str] = field(default_factory=list)
     enabled: bool = True
     created_at: str = field(default_factory=utc_now_iso)

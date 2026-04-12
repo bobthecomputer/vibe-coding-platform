@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 import tempfile
@@ -34,42 +35,52 @@ class RuntimeSupervisorTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
-            supervisor = DelegatedRuntimeSupervisor(root)
-            mission = Mission(
-                mission_id="mission_delegate",
-                workspace_id="workspace_primary",
-                runtime_id="hermes",
-                objective="Delegated runtime lifecycle",
-                success_checks=[],
-            )
-            workspace = WorkspaceProfile(
-                workspace_id="workspace_primary",
-                name="Demo",
-                root_path=str(root),
-                default_runtime="hermes",
-                workspace_type="python",
-            )
+            with mock.patch.dict(
+                os.environ,
+                {"FLUXIO_HEARTBEAT_INTERVAL_SECONDS": "0.05"},
+                clear=False,
+            ):
+                supervisor = DelegatedRuntimeSupervisor(root)
+                mission = Mission(
+                    mission_id="mission_delegate",
+                    workspace_id="workspace_primary",
+                    runtime_id="hermes",
+                    objective="Delegated runtime lifecycle",
+                    success_checks=[],
+                )
+                workspace = WorkspaceProfile(
+                    workspace_id="workspace_primary",
+                    name="Demo",
+                    root_path=str(root),
+                    default_runtime="hermes",
+                    workspace_type="python",
+                )
 
-            session = supervisor.start_session(
-                runtime_id="hermes",
-                mission=mission,
-                workspace=workspace,
-                source_step_id="step_delegate",
-            )
-            self.assertIn(session.status, {"launching", "running"})
+                session = supervisor.start_session(
+                    runtime_id="hermes",
+                    mission=mission,
+                    workspace=workspace,
+                    source_step_id="step_delegate",
+                )
+                self.assertIn(session.status, {"launching", "running"})
 
-            for _ in range(20):
-                time.sleep(0.15)
-                session = supervisor.refresh_session(session)
-                if session.status in {"completed", "failed"}:
-                    break
+                for _ in range(20):
+                    time.sleep(0.15)
+                    session = supervisor.refresh_session(session)
+                    if session.status in {"completed", "failed"}:
+                        break
 
-            self.assertEqual(session.status, "completed")
-            self.assertTrue(pathlib.Path(session.session_path).exists())
-            self.assertTrue(pathlib.Path(session.log_path).exists())
-            self.assertTrue(pathlib.Path(session.events_path).exists())
-            self.assertIn("lane", pathlib.Path(session.log_path).read_text(encoding="utf-8"))
-            self.assertTrue(any(item["kind"].startswith("session.") for item in session.latest_events))
+                self.assertEqual(session.status, "completed")
+                self.assertTrue(pathlib.Path(session.session_path).exists())
+                self.assertTrue(pathlib.Path(session.log_path).exists())
+                self.assertTrue(pathlib.Path(session.events_path).exists())
+                self.assertIn("lane", pathlib.Path(session.log_path).read_text(encoding="utf-8"))
+                self.assertTrue(any(item["kind"].startswith("session.") for item in session.latest_events))
+                self.assertTrue(session.heartbeat_at)
+                self.assertIn(session.heartbeat_status, {"healthy", "inactive"})
+                self.assertTrue(
+                    any(item["kind"] == "session.heartbeat" for item in session.latest_events)
+                )
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     def test_supervisor_handles_structured_approval_callbacks(

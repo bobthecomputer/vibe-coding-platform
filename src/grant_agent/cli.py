@@ -23,15 +23,30 @@ from .demo_runner import (
 from .engine import AutonomousEngine
 from .eval import summarize_runs
 from .feature_suggester import suggest_features_from_text
-from .fluxio_harness import FluxioHarness, LegacyHarnessAdapter
+from .fluxio_harness import (
+    FluxioHarness,
+    LegacyHarnessAdapter,
+    guided_profile_defaults,
+    normalize_route_overrides,
+    recommended_model_routes,
+    resolve_efficiency_autotune_policy,
+)
 from .improvement_advisor import recommend_improvements
-from .action_executor import cleanup_execution_scope
+from .action_executor import (
+    build_execution_policy,
+    cleanup_execution_scope,
+    prepare_execution_scope,
+    requested_scope_for_execution_target,
+)
 from .memory import MemoryStore
 from .mission_control import (
     ControlRoomStore,
+    build_harness_lab_snapshot,
     build_escalation_preview,
     default_docs_for_workspace,
     mission_mode_to_engine_mode,
+    normalize_action_history,
+    sync_mission_state_snapshot,
 )
 from .models import DelegatedRuntimeSession, ExecutionPolicy, ExecutionScope, MissionEvent
 from .modes import ModeRegistry
@@ -48,6 +63,26 @@ from .skill_library import SkillLibrary
 from .skills import SkillRegistry
 from .suite_report import build_suite_summary, write_suite_artifacts
 from .verification import VerificationRunner, detect_default_verification_commands
+from .workspace_actions import execute_control_room_workspace_action
+
+SUPPORTED_HARNESS_IDS = ("fluxio_hybrid", "legacy_autonomous_engine")
+SUPPORTED_ROUTING_STRATEGIES = (
+    "profile_default",
+    "planner_premium_executor_efficient",
+    "uniform_quality",
+    "budget_first",
+)
+SUPPORTED_COMMIT_MESSAGE_STYLES = ("scoped", "concise", "detailed")
+SUPPORTED_EXECUTION_TARGET_PREFERENCES = (
+    "profile_default",
+    "workspace_root",
+    "isolated_worktree",
+)
+SUPPORTED_MINIMAX_AUTH_MODES = (
+    "none",
+    "minimax-portal-oauth",
+    "minimax-api",
+)
 
 
 def bootstrap_project(root: Path) -> None:
@@ -798,6 +833,47 @@ def build_parser() -> argparse.ArgumentParser:
         default="builder",
         help="Guided profile default for this workspace",
     )
+    workspace_cmd.add_argument(
+        "--preferred-harness",
+        default="fluxio_hybrid",
+        choices=list(SUPPORTED_HARNESS_IDS),
+        help="Execution harness to use for new missions in this workspace",
+    )
+    workspace_cmd.add_argument(
+        "--routing-strategy",
+        default="profile_default",
+        choices=list(SUPPORTED_ROUTING_STRATEGIES),
+        help="Role-based model routing policy for new missions in this workspace",
+    )
+    workspace_cmd.add_argument(
+        "--commit-message-style",
+        default="scoped",
+        choices=list(SUPPORTED_COMMIT_MESSAGE_STYLES),
+        help="How Fluxio should draft one-click commit messages in this workspace",
+    )
+    workspace_cmd.add_argument(
+        "--execution-target-preference",
+        default="profile_default",
+        choices=list(SUPPORTED_EXECUTION_TARGET_PREFERENCES),
+        help="Where new missions should execute for this workspace",
+    )
+    workspace_cmd.add_argument(
+        "--route-overrides-json",
+        default="[]",
+        help="JSON array of per-role route overrides for planner/executor/verifier",
+    )
+    workspace_cmd.add_argument(
+        "--auto-optimize-routing",
+        default="false",
+        choices=["true", "false"],
+        help="Enable deterministic routing autotune when enough local history exists",
+    )
+    workspace_cmd.add_argument(
+        "--minimax-auth-mode",
+        default="none",
+        choices=list(SUPPORTED_MINIMAX_AUTH_MODES),
+        help="MiniMax auth contract mode for this workspace",
+    )
 
     mission_start_cmd = subparsers.add_parser(
         "mission-start", help="Create a mission and run its first control-plane cycle"
@@ -827,8 +903,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--budget-hours", type=int, default=12, help="Time budget in hours"
     )
     mission_start_cmd.add_argument(
+        "--run-until",
+        default="pause_on_failure",
+        choices=["pause_on_failure", "continue_until_blocked"],
+        help="How long Fluxio should keep running before it pauses or needs review",
+    )
+    mission_start_cmd.add_argument(
         "--profile",
-        default="builder",
+        default=None,
         help="Guided profile name for routing, approvals, and debugging defaults",
     )
     mission_start_cmd.add_argument(
@@ -855,6 +937,33 @@ def build_parser() -> argparse.ArgumentParser:
             "reject-latest",
         ],
         help="Mission lifecycle action",
+    )
+
+    workspace_action_cmd = subparsers.add_parser(
+        "workspace-action",
+        help="Run an approval-aware setup or git action from the control room",
+    )
+    workspace_action_cmd.add_argument("--root", default=".", help="Project root path")
+    workspace_action_cmd.add_argument(
+        "--surface",
+        required=True,
+        choices=["setup", "git", "validate"],
+        help="Shared control-room action surface",
+    )
+    workspace_action_cmd.add_argument(
+        "--action-id",
+        required=True,
+        help="Stable workspace or setup action identifier",
+    )
+    workspace_action_cmd.add_argument(
+        "--workspace-id",
+        default="",
+        help="Workspace id for git actions or profile resolution",
+    )
+    workspace_action_cmd.add_argument(
+        "--approved",
+        action="store_true",
+        help="Run immediately when the operator has approved the action",
     )
     return parser
 
@@ -898,6 +1007,77 @@ def _mode_values(
     }
 
 
+def _normalize_harness_preference(value: str | None) -> str:
+    normalized = str(value or "fluxio_hybrid").strip().lower()
+    if normalized in SUPPORTED_HARNESS_IDS:
+        return normalized
+    return "fluxio_hybrid"
+
+
+def _normalize_execution_target_preference(value: str | None) -> str:
+    normalized = str(value or "profile_default").strip().lower()
+    if normalized in SUPPORTED_EXECUTION_TARGET_PREFERENCES:
+        return normalized
+    return "profile_default"
+
+
+def _parse_bool_flag(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_route_overrides_json(value: str | None) -> list[dict]:
+    if not value:
+        return []
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return normalize_route_overrides(payload)
+
+
+def _legacy_execution_scope(
+    root: Path,
+    *,
+    mission_id: str | None,
+    profile_name: str,
+    execution_target_preference: str | None,
+) -> ExecutionScope:
+    resolved_preference = _normalize_execution_target_preference(
+        execution_target_preference
+    )
+    scope = prepare_execution_scope(
+        workspace_root=root,
+        mission_id=mission_id or "legacy_execution_scope",
+        requested_scope=requested_scope_for_execution_target(resolved_preference),
+        profile_name=profile_name,
+    )
+    if scope.status == "pending":
+        scope.status = "active"
+    if resolved_preference == "workspace_root":
+        scope.detail = "Legacy autonomous engine runs in the workspace root."
+    elif resolved_preference == "isolated_worktree" and scope.isolated:
+        scope.detail = "Legacy autonomous engine runs inside a dedicated git worktree."
+    elif resolved_preference == "isolated_worktree" and not scope.isolated:
+        scope.detail = (
+            "Legacy autonomous engine requested an isolated worktree, but Fluxio fell back "
+            "to the workspace root."
+        )
+    else:
+        scope.detail = (
+            "Legacy autonomous engine follows the profile execution target."
+            if scope.isolated
+            else "Legacy autonomous engine runs in the workspace root."
+        )
+    return scope
+
+
 def _invoke_engine(
     root: Path,
     objective: str,
@@ -919,6 +1099,11 @@ def _invoke_engine(
     merge_policy_override: str | None = None,
     runtime_id: str = "openclaw",
     mission_id: str | None = None,
+    harness_preference: str = "fluxio_hybrid",
+    routing_strategy_override: str | None = None,
+    route_overrides_override: list[dict] | None = None,
+    auto_optimize_routing: bool = False,
+    execution_target_preference: str | None = None,
 ) -> dict:
     constitution = AgentConstitution.load(root / "config" / "constitution.json")
     modes = ModeRegistry(root / "config" / "modes.json")
@@ -1027,28 +1212,114 @@ def _invoke_engine(
     effective_verify_commands = verify_commands or detect_default_verification_commands(
         root
     )
-
-    result = fluxio_harness.run(
-        objective=objective,
-        docs=docs,
-        project_profile=project_profile,
-        verify_commands=effective_verify_commands,
-        repo_path=root,
-        iterations=iterations,
-        max_handoffs=resolved_max_handoffs,
-        max_runtime_seconds=resolved_max_runtime,
-        mission_id=mission_id,
-        runtime_id=runtime_id,
-        profile_name=(resolved_profile.name if resolved_profile else "builder"),
-        selected_profile=resolved_profile,
-        resume_from_session_id=resume_from,
-        resume_from_checkpoint_path=resume_checkpoint,
-        checkpoint_every=checkpoint_every,
-        autopilot_guardrails={
-            "pause_on_handoff": True,
-            "pause_on_verification_failure": resolved_pause_on_verification_failure,
-        },
+    resolved_profile_name = resolved_profile.name if resolved_profile else "builder"
+    resolved_harness = _normalize_harness_preference(harness_preference)
+    resolved_execution_target_preference = _normalize_execution_target_preference(
+        execution_target_preference
     )
+    resolved_route_overrides = normalize_route_overrides(route_overrides_override or [])
+    harness_lab_snapshot = build_harness_lab_snapshot(root)
+    efficiency_autotune = resolve_efficiency_autotune_policy(
+        harness_lab_snapshot=harness_lab_snapshot,
+        auto_optimize_routing=bool(auto_optimize_routing),
+        requested_strategy=routing_strategy_override or "profile_default",
+    )
+    effective_routing_strategy = (
+        efficiency_autotune.get("routingStrategy")
+        or routing_strategy_override
+        or "profile_default"
+    )
+    guardrails = {
+        "pause_on_handoff": True,
+        "pause_on_verification_failure": resolved_pause_on_verification_failure,
+    }
+    if efficiency_autotune.get("forcePauseOnFailure"):
+        guardrails["pause_on_verification_failure"] = True
+
+    if resolved_harness == compatibility_harness.harness_id:
+        legacy_scope = _legacy_execution_scope(
+            root,
+            mission_id=mission_id,
+            profile_name=resolved_profile_name,
+            execution_target_preference=resolved_execution_target_preference,
+        )
+        legacy_policy = build_execution_policy(resolved_profile_name)
+        legacy_routes = recommended_model_routes(
+            resolved_profile_name,
+            routing_strategy_override=effective_routing_strategy,
+            route_overrides=resolved_route_overrides,
+        )
+        result = compatibility_harness.run(
+            objective=objective,
+            docs=docs,
+            persona=resolved_persona,
+            iterations=iterations,
+            repo_path=Path(legacy_scope.execution_root or root),
+            verify_commands=effective_verify_commands,
+            project_profile=project_profile,
+            max_handoffs=resolved_max_handoffs,
+            max_runtime_seconds=resolved_max_runtime,
+            parallel_agents=resolved_parallel_agents,
+            merge_policy=resolved_merge_policy,
+            resume_from_session_id=resume_from,
+            checkpoint_every=checkpoint_every,
+            resume_from_checkpoint_path=resume_checkpoint,
+            autopilot_guardrails=guardrails,
+            suggest_vibe_next_steps=True,
+        )
+        result.setdefault("harness_id", compatibility_harness.harness_id)
+        result.setdefault(
+            "route_configs",
+            [asdict(item) for item in legacy_routes],
+        )
+        result.setdefault(
+            "routing_decisions",
+            [
+                {
+                    "role": item.role,
+                    "provider": item.provider,
+                    "model": item.model,
+                    "reason": item.explanation,
+                    "budget_class": item.budget_class,
+                }
+                for item in legacy_routes
+            ],
+        )
+        result.setdefault("execution_scope", asdict(legacy_scope))
+        result.setdefault("execution_policy", asdict(legacy_policy))
+        result.setdefault(
+            "profile_defaults",
+            guided_profile_defaults(resolved_profile_name),
+        )
+        result.setdefault("derived_tasks", [])
+        result.setdefault("improvement_queue", [])
+        result.setdefault("skill_usage", [])
+        result.setdefault("learned_skill_events", [])
+        result.setdefault("action_history", [])
+        result.setdefault("delegated_runtime_sessions", [])
+        result.setdefault("repeated_failure_count", 0)
+    else:
+        result = fluxio_harness.run(
+            objective=objective,
+            docs=docs,
+            project_profile=project_profile,
+            verify_commands=effective_verify_commands,
+            repo_path=root,
+            iterations=iterations,
+            max_handoffs=resolved_max_handoffs,
+            max_runtime_seconds=resolved_max_runtime,
+            mission_id=mission_id,
+            runtime_id=runtime_id,
+            profile_name=resolved_profile_name,
+            selected_profile=resolved_profile,
+            resume_from_session_id=resume_from,
+            resume_from_checkpoint_path=resume_checkpoint,
+            checkpoint_every=checkpoint_every,
+            autopilot_guardrails=guardrails,
+            routing_strategy_override=effective_routing_strategy,
+            route_overrides=resolved_route_overrides,
+            execution_target_preference=resolved_execution_target_preference,
+        )
     result["effective_verify_commands"] = effective_verify_commands
     result["mode"] = selected_mode_name
     result["effective_persona"] = resolved_persona
@@ -1058,10 +1329,18 @@ def _invoke_engine(
     result["effective_parallel_agents"] = resolved_parallel_agents
     result["effective_merge_policy"] = resolved_merge_policy
     result["effective_pause_on_verification_failure"] = (
-        resolved_pause_on_verification_failure
+        bool(guardrails.get("pause_on_verification_failure"))
     )
     result["mode_description"] = mode.description
     result["profile"] = resolved_profile.name if resolved_profile else None
+    result["effective_harness"] = resolved_harness
+    result["effective_routing_strategy"] = effective_routing_strategy
+    result["effective_route_overrides"] = resolved_route_overrides
+    result["effective_route_contract"] = _effective_route_contract_from_result(result)
+    result["efficiency_autotune"] = efficiency_autotune
+    result["effective_execution_target_preference"] = (
+        resolved_execution_target_preference
+    )
     return result
 
 
@@ -1944,6 +2223,47 @@ def _mission_iterations_for_mode(mode: str) -> int:
     return 2
 
 
+def _effective_route_contract_from_result(result: dict) -> dict:
+    role_rows = []
+    for item in result.get("route_configs", []):
+        row = dict(item) if isinstance(item, dict) else asdict(item)
+        role = str(row.get("role", "")).strip().lower()
+        if role not in {"planner", "executor", "verifier"}:
+            continue
+        explanation = str(row.get("explanation", "") or "")
+        source = (
+            "override"
+            if "override" in explanation.lower()
+            else ("strategy" if "strategy" in explanation.lower() else "profile_default")
+        )
+        role_rows.append(
+            {
+                "role": role,
+                "provider": row.get("provider", ""),
+                "model": row.get("model", ""),
+                "effort": row.get("effort", "medium"),
+                "budgetClass": row.get("budget_class", row.get("budgetClass", "")),
+                "fallbackPolicy": row.get("fallback_policy", "same_provider"),
+                "source": source,
+                "reason": explanation,
+            }
+        )
+    summary = (
+        " | ".join(
+            f"{item['role']}: {item['provider']}:{item['model']} ({item['source']})"
+            for item in role_rows
+        )
+        if role_rows
+        else "No route contract resolved yet."
+    )
+    return {
+        "roles": role_rows,
+        "resolutionOrder": "override > strategy > profile_default",
+        "whyThisRoute": summary,
+        "fallbackPolicy": "same_provider",
+    }
+
+
 def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: dict) -> dict:
     mission = store.get_mission(mission_id)
     if mission is None:
@@ -1951,14 +2271,13 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
 
     session_path_value = result.get("session_path")
     latest_session_id = Path(session_path_value).name if session_path_value else None
+    latest_plan_revisions = result.get("plan_revisions") or [{}]
     mission.state.latest_session_id = latest_session_id
     mission.state.last_runtime_event = result.get("autopilot_status")
     mission.state.last_error = result.get("autopilot_pause_reason") or None
     mission.state.remaining_steps = result.get("remaining_steps", [])
     mission.state.verification_failures = result.get("verification_failures", [])
-    mission.state.active_step_id = result.get("plan_revisions", [{}])[-1].get(
-        "active_step_id"
-    )
+    mission.state.active_step_id = latest_plan_revisions[-1].get("active_step_id")
     mission.state.repeated_failure_count = int(
         result.get("repeated_failure_count", mission.state.repeated_failure_count)
     )
@@ -1966,26 +2285,7 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         "paused" if result.get("autopilot_pause_reason") else result.get("autopilot_status", "running")
     )
     mission.state.stop_reason = result.get("autopilot_pause_reason") or None
-    mission.state.last_plan_summary = (
-        result.get("plan_revisions", [{}])[-1].get("summary", "")
-        if result.get("plan_revisions")
-        else ""
-    )
-
-    if mission.state.verification_failures:
-        mission.state.status = "verification_failed"
-    elif waiting_delegated is not None:
-        mission.state.status = "needs_approval"
-    elif result.get("autopilot_pause_reason") == "approval_required":
-        mission.state.status = "needs_approval"
-    elif result.get("autopilot_pause_reason") == "delegated_runtime_running":
-        mission.state.status = "running"
-    elif result.get("autopilot_status") == "completed":
-        mission.state.status = "completed"
-    elif result.get("autopilot_pause_reason"):
-        mission.state.status = "blocked"
-    else:
-        mission.state.status = "running"
+    mission.state.last_plan_summary = latest_plan_revisions[-1].get("summary", "")
 
     mission.harness_id = result.get("harness_id", mission.harness_id)
     scope_payload = result.get("execution_scope")
@@ -2004,13 +2304,17 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         )
     mission.route_configs = result.get("route_configs", [])
     mission.routing_decisions = result.get("routing_decisions", [])
+    mission.effective_route_contract = (
+        result.get("effective_route_contract")
+        or _effective_route_contract_from_result(result)
+    )
     mission.current_plan_revision_id = result.get("current_plan_revision_id")
     mission.plan_revisions = result.get("plan_revisions", [])
     mission.derived_tasks = result.get("derived_tasks", [])
     mission.improvement_queue = result.get("improvement_queue", [])
     mission.skill_usage = result.get("skill_usage", [])
     mission.learned_skill_events = result.get("learned_skill_events", [])
-    mission.action_history = result.get("action_history", [])
+    mission.action_history = normalize_action_history(result.get("action_history", []))
     mission.delegated_runtime_sessions = [
         item
         if isinstance(item, DelegatedRuntimeSession)
@@ -2025,11 +2329,61 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         ),
         None,
     )
+    if mission.state.verification_failures:
+        mission.state.status = "verification_failed"
+    elif waiting_delegated is not None:
+        mission.state.status = "needs_approval"
+    elif result.get("autopilot_pause_reason") == "approval_required":
+        mission.state.status = "needs_approval"
+    elif result.get("autopilot_pause_reason") == "delegated_runtime_running":
+        mission.state.status = "running"
+    elif result.get("autopilot_status") == "completed":
+        mission.state.status = "completed"
+    elif result.get("autopilot_pause_reason"):
+        mission.state.status = "blocked"
+    else:
+        mission.state.status = "running"
+
+    if mission.state.status in {"completed", "verification_failed", "blocked"}:
+        mission.delegated_runtime_sessions = [
+            DelegatedRuntimeSession(
+                **{
+                    **asdict(item),
+                    "acknowledged": True
+                    if item.status in {"completed", "failed"} and not item.pending_approval
+                    else item.acknowledged,
+                }
+            )
+            if hasattr(item, "__dataclass_fields__")
+            else item
+            for item in mission.delegated_runtime_sessions
+        ]
+
+    mission.state.queue_position = 0
+    mission.state.blocking_mission_id = None
+    mission.state.queue_reason = ""
     mission.tutorial_context = {
         "profile": mission.selected_profile,
         "explanationDepth": result.get("execution_policy", {}).get("explanation_depth", "medium"),
         "scope": result.get("execution_scope", {}).get("strategy", "direct"),
     }
+    efficiency_autotune = result.get("efficiency_autotune", {})
+    applied_policy = (
+        efficiency_autotune.get("appliedPolicy")
+        if isinstance(efficiency_autotune, dict)
+        else {}
+    )
+    if isinstance(applied_policy, dict) and applied_policy:
+        if applied_policy.get("approvalMode"):
+            mission.execution_policy.approval_mode = str(applied_policy["approvalMode"])
+        if applied_policy.get("delegationAggressiveness"):
+            mission.execution_policy.delegation_aggressiveness = str(
+                applied_policy["delegationAggressiveness"]
+            )
+        if applied_policy.get("pauseOnVerificationFailure") is not None:
+            mission.verification_policy.pause_on_failure = bool(
+                applied_policy["pauseOnVerificationFailure"]
+            )
     mission.planner_loop_status = mission.state.planner_loop_status
     mission.state.execution_scope = (
         asdict(mission.execution_scope)
@@ -2052,6 +2406,15 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         else ""
     )
     mission.state.tutorial_context = mission.tutorial_context
+    mission.state.pending_approval_payload = (
+        dict(waiting_delegated.pending_approval) if waiting_delegated is not None else {}
+    )
+    mission.state.approval_history = [
+        entry
+        for delegated in mission.delegated_runtime_sessions
+        for entry in delegated.approval_history
+        if isinstance(entry, dict)
+    ][-8:]
 
     mission.escalation_policy.pending_count = len(mission.state.verification_failures)
     mission.escalation_policy.delivery_ready = bool(mission.escalation_policy.destination)
@@ -2103,7 +2466,11 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
     if waiting_delegated is not None and waiting_delegated.pending_approval.get("prompt"):
         mission.proof.blocked_by.append(waiting_delegated.pending_approval["prompt"])
 
+    sync_mission_state_snapshot(mission)
+
     store.update_mission(mission)
+    if mission.state.status == "completed":
+        store.rebalance_mission_queue(mission.workspace_id)
     store.append_event(
         MissionEvent(
             mission_id=mission.mission_id,
@@ -2116,6 +2483,23 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
             },
         )
     )
+    if isinstance(applied_policy, dict) and applied_policy:
+        reason = efficiency_autotune.get("reason", "")
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.autotune.applied",
+                message=(
+                    "Auto-optimize routing updated the mission policy."
+                    + (f" {reason}" if reason else "")
+                ),
+                metadata={
+                    "policy": applied_policy.get("policy", ""),
+                    "routingStrategy": applied_policy.get("routingStrategy", ""),
+                    "reason": reason,
+                },
+            )
+        )
     cleanup_payload = _cleanup_mission_scope_if_finished(store, mission)
     if cleanup_payload:
         return {"mission": asdict(mission), "result": result, "cleanup": cleanup_payload}
@@ -2222,11 +2606,26 @@ def cmd_onboarding_status(args: argparse.Namespace) -> int:
 def cmd_workspace_save(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
+    route_overrides = _parse_route_overrides_json(
+        getattr(args, "route_overrides_json", "[]")
+    )
+    auto_optimize_routing = _parse_bool_flag(
+        getattr(args, "auto_optimize_routing", "false")
+    )
     workspace = store.upsert_workspace(
         name=args.name,
         root_path=args.path,
         default_runtime=args.default_runtime,
         user_profile=args.user_profile,
+        preferred_harness=getattr(args, "preferred_harness", "fluxio_hybrid"),
+        routing_strategy=getattr(args, "routing_strategy", "profile_default"),
+        route_overrides=route_overrides,
+        auto_optimize_routing=auto_optimize_routing,
+        minimax_auth_mode=getattr(args, "minimax_auth_mode", "none"),
+        commit_message_style=getattr(args, "commit_message_style", "scoped"),
+        execution_target_preference=getattr(
+            args, "execution_target_preference", "profile_default"
+        ),
         workspace_id=args.workspace_id,
     )
     payload = {"workspace": asdict(workspace), "snapshot": store.build_snapshot()}
@@ -2237,6 +2636,7 @@ def cmd_workspace_save(args: argparse.Namespace) -> int:
 def cmd_mission_start(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
+    store.rebalance_mission_queue(args.workspace_id)
     workspace = store.get_workspace(args.workspace_id)
     if workspace is None:
         print(
@@ -2264,7 +2664,19 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         max_runtime_seconds=max(3600, args.budget_hours * 3600),
         selected_profile=args.profile or workspace.user_profile,
         escalation_destination=args.escalation_destination,
+        run_until_behavior=args.run_until,
+        harness_id=workspace.preferred_harness,
     )
+    if mission.state.queue_position > 0:
+        payload = {
+            "mission": asdict(mission),
+            "runtimeStatus": asdict(runtime_status),
+            "wasQueued": True,
+            "snapshot": store.build_snapshot(),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
     store.append_event(
         MissionEvent(
             mission_id=mission.mission_id,
@@ -2310,9 +2722,14 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         resume_from=None,
         resume_checkpoint=None,
         checkpoint_every=1,
-        pause_on_verification_failure=True,
+        pause_on_verification_failure=mission.verification_policy.pause_on_failure,
         runtime_id=args.runtime,
         mission_id=mission.mission_id,
+        harness_preference=workspace.preferred_harness,
+        routing_strategy_override=workspace.routing_strategy,
+        route_overrides_override=workspace.route_overrides,
+        auto_optimize_routing=workspace.auto_optimize_routing,
+        execution_target_preference=workspace.execution_target_preference,
     )
     synced = _sync_mission_from_result(store, mission.mission_id, result)
     synced["runtimeStatus"] = asdict(runtime_status)
@@ -2324,6 +2741,7 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
 def cmd_mission_action(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
+    store.rebalance_mission_queue()
     mission = store.get_mission(args.mission_id)
     if mission is None:
         print(json.dumps({"error": f"Unknown mission id: {args.mission_id}"}, indent=2))
@@ -2341,19 +2759,94 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
     runtime_supervisor = DelegatedRuntimeSupervisor(root)
 
     if args.action == "resume":
-        if not mission.state.latest_session_id:
+        if mission.state.queue_position > 0:
             print(
                 json.dumps(
-                    {"error": "Mission has no session to resume from yet."}, indent=2
+                    {
+                        "error": (
+                            f"Mission is still queued behind {mission.state.blocking_mission_id} "
+                            "for this workspace."
+                        ),
+                        "mission": asdict(mission),
+                        "snapshot": store.build_snapshot(),
+                    },
+                    indent=2,
                 )
             )
             return 1
+        if not mission.state.latest_session_id:
+            adapters = runtime_adapter_map()
+            adapter = adapters.get(mission.runtime_id)
+            if adapter is None:
+                print(
+                    json.dumps(
+                        {"error": f"Unknown runtime: {mission.runtime_id}"}, indent=2
+                    )
+                )
+                return 1
+            runtime_status = adapter.doctor(Path(workspace.root_path))
+            if not runtime_status.detected:
+                mission.state.status = "blocked"
+                mission.proof.summary = (
+                    "Mission is blocked until the selected runtime is installed."
+                )
+                mission.proof.blocked_by = runtime_status.issues
+                mission.escalation_policy.pending_count = max(
+                    1, mission.escalation_policy.pending_count
+                )
+                mission.escalation_policy.delivery_ready = bool(
+                    mission.escalation_policy.destination
+                )
+                mission.escalation_policy.preview_message = build_escalation_preview(
+                    mission
+                )
+                store.update_mission(mission)
+                print(
+                    json.dumps(
+                        {
+                            "mission": asdict(mission),
+                            "runtimeStatus": asdict(runtime_status),
+                            "snapshot": store.build_snapshot(),
+                        },
+                        indent=2,
+                    )
+                )
+                return 0
+            result = _invoke_engine(
+                root=Path(workspace.root_path),
+                objective=mission.objective,
+                docs=default_docs_for_workspace(Path(workspace.root_path)),
+                mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
+                profile_name=mission.selected_profile or workspace.user_profile,
+                persona_override=None,
+                iterations=_mission_iterations_for_mode(mission.run_budget.mode),
+                verify_commands=mission.verification_policy.commands,
+                project_profile=(
+                    f"Start queued mission {mission.mission_id} through {mission.runtime_id} adapter."
+                ),
+                resume_from=None,
+                resume_checkpoint=None,
+                checkpoint_every=1,
+                pause_on_verification_failure=mission.verification_policy.pause_on_failure,
+                runtime_id=mission.runtime_id,
+                mission_id=mission.mission_id,
+                harness_preference=mission.harness_id or workspace.preferred_harness,
+                routing_strategy_override=workspace.routing_strategy,
+                route_overrides_override=workspace.route_overrides,
+                auto_optimize_routing=workspace.auto_optimize_routing,
+                execution_target_preference=workspace.execution_target_preference,
+            )
+            payload = _sync_mission_from_result(store, mission.mission_id, result)
+            payload["runtimeStatus"] = asdict(runtime_status)
+            payload["snapshot"] = store.build_snapshot()
+            print(json.dumps(payload, indent=2))
+            return 0 if result.get("status") == "ok" else 2
         result = _invoke_engine(
             root=Path(workspace.root_path),
             objective=mission.objective,
             docs=default_docs_for_workspace(Path(workspace.root_path)),
             mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
-            profile_name=None,
+            profile_name=mission.selected_profile or workspace.user_profile,
             persona_override=None,
             iterations=_mission_iterations_for_mode(mission.run_budget.mode),
             verify_commands=mission.verification_policy.commands,
@@ -2363,9 +2856,14 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
             resume_from=mission.state.latest_session_id,
             resume_checkpoint=None,
             checkpoint_every=1,
-            pause_on_verification_failure=True,
+            pause_on_verification_failure=mission.verification_policy.pause_on_failure,
             runtime_id=mission.runtime_id,
             mission_id=mission.mission_id,
+            harness_preference=mission.harness_id or workspace.preferred_harness,
+            routing_strategy_override=workspace.routing_strategy,
+            route_overrides_override=workspace.route_overrides,
+            auto_optimize_routing=workspace.auto_optimize_routing,
+            execution_target_preference=workspace.execution_target_preference,
         )
         payload = _sync_mission_from_result(store, mission.mission_id, result)
         payload["snapshot"] = store.build_snapshot()
@@ -2410,7 +2908,9 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         mission.proof.pending_approvals = []
         mission.escalation_policy.pending_count = 0
         mission.escalation_policy.preview_message = build_escalation_preview(mission)
+        sync_mission_state_snapshot(mission)
         store.update_mission(mission)
+        store.rebalance_mission_queue(mission.workspace_id)
         store.append_event(
             MissionEvent(
                 mission_id=mission.mission_id,
@@ -2451,7 +2951,10 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
 
     mission.escalation_policy.delivery_ready = bool(mission.escalation_policy.destination)
     mission.escalation_policy.preview_message = build_escalation_preview(mission)
+    sync_mission_state_snapshot(mission)
     store.update_mission(mission)
+    if mission.state.status in {"completed", "stopped"}:
+        store.rebalance_mission_queue(mission.workspace_id)
     cleanup_payload = _cleanup_mission_scope_if_finished(store, mission)
     store.append_event(
         MissionEvent(
@@ -2466,6 +2969,25 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         payload["cleanup"] = cleanup_payload
     print(json.dumps(payload, indent=2))
     return 0
+
+
+def cmd_workspace_action(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    try:
+        payload = execute_control_room_workspace_action(
+            store=store,
+            root=root,
+            surface=args.surface,
+            action_id=args.action_id,
+            workspace_id=args.workspace_id or None,
+            approved=bool(args.approved),
+        )
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 1
+    print(json.dumps(payload, indent=2))
+    return 0 if payload.get("ok") or payload.get("record", {}).get("gate", {}).get("status") == "pending" else 2
 
 
 def main() -> int:
@@ -2560,6 +3082,9 @@ def main() -> int:
 
     if args.command == "mission-action":
         return cmd_mission_action(args)
+
+    if args.command == "workspace-action":
+        return cmd_workspace_action(args)
 
     parser.print_help()
     return 1

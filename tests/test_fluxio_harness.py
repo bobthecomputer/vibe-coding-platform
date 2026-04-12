@@ -8,7 +8,12 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from grant_agent.fluxio_harness import FluxioHarness, LegacyHarnessAdapter
+from grant_agent.fluxio_harness import (
+    FluxioHarness,
+    LegacyHarnessAdapter,
+    recommended_model_routes,
+    resolve_efficiency_autotune_policy,
+)
 from grant_agent.session_store import SessionStore
 from grant_agent.skill_library import SkillLibrary
 from grant_agent.skills import SkillRegistry
@@ -122,6 +127,113 @@ class FluxioHarnessTests(unittest.TestCase):
 
             triggers = [item["trigger"] for item in resumed["plan_revisions"]]
             self.assertIn("approval_rejected", triggers)
+
+    def test_resume_recomputes_route_config_from_current_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_sample.py").write_text(
+                "import unittest\n\nclass Sample(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+
+            harness = self._build_harness(root)
+            first = harness.run(
+                objective="Keep route choices stable across resume",
+                docs=["README.md"],
+                project_profile="Routing continuity test",
+                verify_commands=["python -m unittest discover -s tests"],
+                repo_path=root,
+                iterations=2,
+                max_handoffs=4,
+                max_runtime_seconds=120,
+                profile_name="builder",
+                routing_strategy_override="budget_first",
+            )
+            first_planner = next(
+                item for item in first["route_configs"] if item["role"] == "planner"
+            )
+            first_executor = next(
+                item for item in first["route_configs"] if item["role"] == "executor"
+            )
+            self.assertEqual(first_planner["model"], "gpt-5.4-mini")
+            self.assertEqual(first_executor["model"], "gpt-5.4-mini")
+
+            resumed = harness.run(
+                objective="Keep route choices stable across resume",
+                docs=["README.md"],
+                project_profile="Routing continuity test",
+                verify_commands=["python -m unittest discover -s tests"],
+                repo_path=root,
+                iterations=1,
+                max_handoffs=4,
+                max_runtime_seconds=120,
+                profile_name="builder",
+                resume_from_session_id=pathlib.Path(first["session_path"]).name,
+                routing_strategy_override="uniform_quality",
+            )
+            resumed_planner = next(
+                item for item in resumed["route_configs"] if item["role"] == "planner"
+            )
+            resumed_executor = next(
+                item for item in resumed["route_configs"] if item["role"] == "executor"
+            )
+            self.assertEqual(resumed_planner["model"], "gpt-5.4")
+            self.assertEqual(resumed_executor["model"], "gpt-5.4")
+
+    def test_recommended_routes_apply_role_overrides_first(self) -> None:
+        routes = recommended_model_routes(
+            "builder",
+            routing_strategy_override="uniform_quality",
+            route_overrides=[
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7-highspeed",
+                    "effort": "medium",
+                }
+            ],
+        )
+        planner = next(item for item in routes if item.role == "planner")
+        executor = next(item for item in routes if item.role == "executor")
+        self.assertEqual(planner.model, "gpt-5.4")
+        self.assertEqual(executor.provider, "minimax")
+        self.assertEqual(executor.model, "MiniMax-M2.7-highspeed")
+        self.assertIn("override", executor.explanation.lower())
+
+    def test_autotune_policy_waits_for_local_sample_size(self) -> None:
+        policy = resolve_efficiency_autotune_policy(
+            harness_lab_snapshot={
+                "efficiency": {"totalRuns": 2, "completionRate": 100, "approvalPauseRate": 0},
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            },
+            auto_optimize_routing=True,
+            requested_strategy="profile_default",
+        )
+        self.assertTrue(policy["enabled"])
+        self.assertFalse(policy["eligible"])
+        self.assertFalse(policy["appliedPolicy"])
+        self.assertIn("Not enough local data", policy["reason"])
+
+    def test_autotune_policy_switches_to_safe_route_when_completion_is_low(self) -> None:
+        policy = resolve_efficiency_autotune_policy(
+            harness_lab_snapshot={
+                "efficiency": {
+                    "totalRuns": 5,
+                    "completionRate": 40,
+                    "approvalPauseRate": 10,
+                    "averageVerificationFailures": 1.2,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            },
+            auto_optimize_routing=True,
+            requested_strategy="budget_first",
+        )
+        self.assertTrue(policy["eligible"])
+        self.assertEqual(policy["routingStrategy"], "uniform_quality")
+        self.assertEqual(policy["appliedPolicy"]["policy"], "safety_bias")
 
 
 if __name__ == "__main__":

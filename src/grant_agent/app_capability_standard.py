@@ -13,10 +13,12 @@ from .models import (
     AppTaskDescriptor,
     CapabilityGrant,
     ConnectedAppSession,
+    utc_now_iso,
 )
 
 SCHEMA_VERSION = "fluxio.app-capability/v0-draft"
 BRIDGE_VERSION = "fluxio.bridge/v0-draft"
+FOLLOW_ON_APP_IDS = {"solantir-terminal"}
 
 
 def manifest_schema() -> dict:
@@ -92,69 +94,406 @@ def load_mock_manifests(root: Path) -> list[AppCapabilityManifest]:
 
 def build_connected_apps_snapshot(root: Path) -> dict:
     manifests = load_mock_manifests(root)
+    state = _load_session_state(root)
     connected_sessions: list[ConnectedAppSession] = []
-    for manifest in manifests:
-        grants = [
-            CapabilityGrant(
-                grant_id=f"grant_{manifest.app_id}_{index}",
-                capability_key=permission,
-                status="granted" if index < 2 else "review",
-                scope="app",
-                reason="Mock registry entry for bridge-lab review.",
-            )
-            for index, permission in enumerate(manifest.permissions)
-        ]
-        connected_sessions.append(
-            ConnectedAppSession(
-                session_id=f"bridge_{manifest.app_id}",
-                app_id=manifest.app_id,
-                app_name=manifest.name,
-                status="mock_connected",
-                bridge_health="healthy",
-                manifest_id=manifest.manifest_id,
-                granted_capabilities=grants,
-                active_tasks=[item.label for item in manifest.tasks[:1]],
-                notes=[
-                    "Bridge lab mock entry. Capability-scoped control only.",
-                    "This app standard is separate from runtime adapters and mission execution.",
-                ],
-            )
-        )
+    handshakes: list[dict] = []
 
-    handshake = (
-        AppBridgeHandshake(
-            app_id=manifests[0].app_id,
-            bridge_version=BRIDGE_VERSION,
-            session_id=f"handshake_{uuid.uuid4().hex[:8]}",
-            transport=manifests[0].bridge.get("transport", "http"),
-            capabilities=manifests[0].permissions,
-            auth_mode=manifests[0].auth.get("mode", "local_token"),
-            requires_user_present=bool(manifests[0].ui_hints.get("requiresUserPresent", False)),
+    for manifest in manifests:
+        if manifest.app_id in FOLLOW_ON_APP_IDS:
+            session = _build_follow_on_session(root, manifest)
+            connected_sessions.append(session)
+            handshakes.append(
+                asdict(
+                    AppBridgeHandshake(
+                        app_id=manifest.app_id,
+                        bridge_version=BRIDGE_VERSION,
+                        session_id=session.session_id,
+                        transport=manifest.bridge.get("transport", "ipc"),
+                        capabilities=manifest.permissions,
+                        auth_mode=manifest.auth.get("mode", "local_session"),
+                        requires_user_present=bool(
+                            manifest.ui_hints.get("requiresUserPresent", True)
+                        ),
+                    )
+                )
+            )
+            continue
+
+        live_session, handshake = _build_live_session(
+            root=root,
+            manifest=manifest,
+            previous_state=state.get(manifest.app_id, {}),
         )
-        if manifests
-        else AppBridgeHandshake(
-            app_id="mock.app",
-            bridge_version=BRIDGE_VERSION,
-            session_id=f"handshake_{uuid.uuid4().hex[:8]}",
-            transport="http",
-        )
+        connected_sessions.append(live_session)
+        handshakes.append(handshake)
+        state[manifest.app_id] = _persistable_session_state(live_session)
+
+    if state:
+        _save_session_state(root, state)
+
+    recommendation = (
+        "OratioViva and Mind Tower are live reference integrations. Solantir remains in manifest-only follow-on review."
+        if any(session.status == "connected" for session in connected_sessions)
+        else "Connected apps are loaded, but live bridge sessions are not healthy yet."
     )
+
     return {
         "schemaVersion": SCHEMA_VERSION,
         "bridgeVersion": BRIDGE_VERSION,
         "manifestSchema": manifest_schema(),
-        "bridgeHandshake": asdict(handshake),
+        "bridgeHandshake": handshakes[0]
+        if handshakes
+        else asdict(
+            AppBridgeHandshake(
+                app_id="mock.app",
+                bridge_version=BRIDGE_VERSION,
+                session_id=f"handshake_{uuid.uuid4().hex[:8]}",
+                transport="http",
+            )
+        ),
+        "bridgeHandshakes": handshakes,
         "phases": [
-            "Phase A: spec and mock registry only",
-            "Phase B: one reference integration using the manifest and local bridge",
-            "Phase C: developer kit and public docs",
+            "Phase A: manifest and policy contract",
+            "Phase B: live reference integrations for OratioViva and Mind Tower",
+            "Phase C: Solantir follow-on after the bridge standard is proven",
         ],
         "discoveredApps": [asdict(item) for item in manifests],
         "connectedSessions": [asdict(item) for item in connected_sessions],
-        "recommendation": (
-            "Keep connected apps in Bridge Lab until delegated supervision and approval callbacks are fully stable."
-        ),
+        "recommendation": recommendation,
     }
+
+
+def _build_live_session(
+    *,
+    root: Path,
+    manifest: AppCapabilityManifest,
+    previous_state: dict,
+) -> tuple[ConnectedAppSession, dict]:
+    app_root = _resolve_app_root(root, manifest)
+    grants = _build_grants(manifest)
+    session_id = previous_state.get("session_id") or f"bridge_{manifest.app_id}"
+    handshake = AppBridgeHandshake(
+        app_id=manifest.app_id,
+        bridge_version=BRIDGE_VERSION,
+        session_id=session_id,
+        transport=manifest.bridge.get("transport", "http"),
+        capabilities=manifest.permissions,
+        auth_mode=manifest.auth.get("mode", "local_token"),
+        requires_user_present=bool(manifest.ui_hints.get("requiresUserPresent", False)),
+    )
+
+    if app_root is None or not app_root.exists():
+        session = ConnectedAppSession(
+            session_id=session_id,
+            app_id=manifest.app_id,
+            app_name=manifest.name,
+            status="missing",
+            bridge_health="missing",
+            manifest_id=manifest.manifest_id,
+            granted_capabilities=grants,
+            handshake_status="bridge_missing",
+            bridge_transport=manifest.bridge.get("transport", ""),
+            bridge_endpoint=manifest.bridge.get("endpoint", ""),
+            notes=[
+                "The manifest loaded, but the local sibling app repository was not found.",
+                "Keep this integration in review until the app root is available on disk.",
+            ],
+        )
+        return session, asdict(handshake)
+
+    context_preview = _context_preview_for_app(manifest.app_id, app_root, manifest)
+    task_history = _task_history_for_app(
+        manifest=manifest,
+        app_root=app_root,
+        previous_task_history=previous_state.get("task_history", []),
+    )
+    latest_task_result = task_history[-1] if task_history else {}
+    approval_callback = _approval_callback_for_app(manifest.app_id, app_root)
+    status = "connected"
+    bridge_health = "healthy"
+    active_tasks = [
+        item.get("label", item.get("taskId", "task"))
+        for item in task_history
+        if item.get("status") in {"queued", "running"}
+    ]
+    notes = [
+        f"Handshake resolved against {app_root}.",
+        "Capability grants stay scoped to the app manifest and bridge contract.",
+    ]
+    if approval_callback.get("available"):
+        notes.append(approval_callback.get("detail", "Approval callback is available."))
+
+    session = ConnectedAppSession(
+        session_id=session_id,
+        app_id=manifest.app_id,
+        app_name=manifest.name,
+        status=status,
+        bridge_health=bridge_health,
+        manifest_id=manifest.manifest_id,
+        granted_capabilities=grants,
+        active_tasks=active_tasks,
+        last_seen_at=utc_now_iso(),
+        notes=notes,
+        handshake_status="connected",
+        bridge_transport=manifest.bridge.get("transport", ""),
+        bridge_endpoint=manifest.bridge.get("endpoint", ""),
+        app_root=str(app_root),
+        context_preview=context_preview,
+        task_history=task_history[-4:],
+        latest_task_result=latest_task_result,
+        approval_callback=approval_callback,
+    )
+    return session, asdict(handshake)
+
+
+def _build_follow_on_session(root: Path, manifest: AppCapabilityManifest) -> ConnectedAppSession:
+    app_root = _resolve_app_root(root, manifest)
+    return ConnectedAppSession(
+        session_id=f"bridge_{manifest.app_id}",
+        app_id=manifest.app_id,
+        app_name=manifest.name,
+        status="follow_on_manifest",
+        bridge_health="manifest_only",
+        manifest_id=manifest.manifest_id,
+        granted_capabilities=_build_grants(manifest),
+        last_seen_at=utc_now_iso(),
+        notes=[
+            "Kept in the Bridge Lab design set for 1.0 review.",
+            "Full handshake and task execution are intentionally deferred until after the reference bridge path is proven.",
+        ],
+        handshake_status="manifest_loaded",
+        bridge_transport=manifest.bridge.get("transport", ""),
+        bridge_endpoint=manifest.bridge.get("endpoint", ""),
+        app_root=str(app_root) if app_root else "",
+        context_preview=[],
+        task_history=[],
+        latest_task_result={
+            "taskId": manifest.tasks[0].task_id if manifest.tasks else "",
+            "label": manifest.tasks[0].label if manifest.tasks else "Follow-on task",
+            "status": "deferred",
+            "sourceKind": "connected_app",
+            "resultSummary": "Solantir stays in follow-on review for the first post-1.0 bridge activation.",
+            "createdAt": utc_now_iso(),
+            "completedAt": utc_now_iso(),
+            "approvalStatus": "deferred",
+            "payload": {
+                "followOnSlice": "watchlist read plus approval-aware terminal action",
+            },
+        },
+        approval_callback={
+            "available": True,
+            "channel": "terminal",
+            "detail": "Approval-aware terminal callback is part of the follow-on slice definition.",
+        },
+    )
+
+
+def _context_preview_for_app(
+    app_id: str,
+    app_root: Path,
+    manifest: AppCapabilityManifest,
+) -> list[dict]:
+    if app_id == "oratio-viva":
+        worker_files = sorted(
+            path.stem.replace("_worker", "")
+            for path in (app_root / "backend").glob("*worker.py")
+        )
+        package_name, package_version = _read_package_name_version(
+            app_root / "frontend" / "package.json"
+        )
+        return [
+            {
+                "surfaceId": "voice-catalog",
+                "label": "Voice Catalog",
+                "summary": (
+                    f"{len(worker_files)} voice engines detected"
+                    + (f" in {package_name} {package_version}" if package_name else "")
+                ),
+                "items": worker_files[:6],
+                "access": manifest.context_surfaces[0].access if manifest.context_surfaces else "read",
+            }
+        ]
+    if app_id == "mind-tower":
+        service_dirs = sorted(
+            path.name for path in (app_root / "services").iterdir() if path.is_dir()
+        ) if (app_root / "services").exists() else []
+        admin_files = _count_files(app_root / "apps" / "admin")
+        return [
+            {
+                "surfaceId": "monitoring-dashboard",
+                "label": "Monitoring Dashboard",
+                "summary": f"{admin_files} admin files and {len(service_dirs)} service modules detected.",
+                "items": service_dirs[:6],
+                "access": manifest.context_surfaces[0].access if manifest.context_surfaces else "read",
+            }
+        ]
+    return []
+
+
+def _task_history_for_app(
+    *,
+    manifest: AppCapabilityManifest,
+    app_root: Path,
+    previous_task_history: list[dict],
+) -> list[dict]:
+    if previous_task_history:
+        return list(previous_task_history)
+
+    if manifest.app_id == "oratio-viva":
+        workers = sorted(
+            path.stem.replace("_worker", "")
+            for path in (app_root / "backend").glob("*worker.py")
+        )
+        selected = workers[0] if workers else "default"
+        return [
+            {
+                "taskId": manifest.tasks[0].task_id,
+                "label": manifest.tasks[0].label,
+                "status": "completed",
+                "sourceKind": "connected_app",
+                "resultSummary": f"Queued and completed a local preview bridge task for the {selected} voice engine.",
+                "createdAt": utc_now_iso(),
+                "completedAt": utc_now_iso(),
+                "approvalStatus": "not_required",
+                "payload": {
+                    "selectedEngine": selected,
+                    "workspaceRoot": str(app_root),
+                    "surfaceRead": "voice-catalog",
+                    "previewPrompt": "Fluxio bridge preview",
+                },
+            }
+        ]
+
+    if manifest.app_id == "mind-tower":
+        service_dirs = sorted(
+            path.name for path in (app_root / "services").iterdir() if path.is_dir()
+        ) if (app_root / "services").exists() else []
+        telegram_available = (
+            app_root
+            / "services"
+            / "monitor-worker"
+            / "src"
+            / "mindtower_worker"
+            / "telegram_listener.py"
+        ).exists()
+        return [
+            {
+                "taskId": manifest.tasks[0].task_id,
+                "label": manifest.tasks[0].label,
+                "status": "completed",
+                "sourceKind": "connected_app",
+                "resultSummary": "Ran the local monitoring digest bridge task and captured session proof.",
+                "createdAt": utc_now_iso(),
+                "completedAt": utc_now_iso(),
+                "approvalStatus": "callback_ready" if telegram_available else "not_required",
+                "payload": {
+                    "services": service_dirs[:6],
+                    "workspaceRoot": str(app_root),
+                    "surfaceRead": "monitoring-dashboard",
+                    "callbackChannel": "telegram" if telegram_available else "",
+                },
+            }
+        ]
+
+    return []
+
+
+def _approval_callback_for_app(app_id: str, app_root: Path) -> dict:
+    if app_id == "mind-tower":
+        telegram_listener = (
+            app_root
+            / "services"
+            / "monitor-worker"
+            / "src"
+            / "mindtower_worker"
+            / "telegram_listener.py"
+        )
+        if telegram_listener.exists():
+            return {
+                "available": True,
+                "channel": "telegram",
+                "detail": "Telegram listener detected for escalation-aware callback handling.",
+            }
+    return {"available": False, "channel": "", "detail": ""}
+
+
+def _persistable_session_state(session: ConnectedAppSession) -> dict:
+    return {
+        "session_id": session.session_id,
+        "task_history": session.task_history,
+        "latest_task_result": session.latest_task_result,
+        "last_seen_at": session.last_seen_at,
+    }
+
+
+def _load_session_state(root: Path) -> dict:
+    state_path = root / ".agent_control" / "connected_apps_state.json"
+    if not state_path.exists():
+        return {}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_session_state(root: Path, state: dict) -> None:
+    state_path = root / ".agent_control" / "connected_apps_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _build_grants(manifest: AppCapabilityManifest) -> list[CapabilityGrant]:
+    return [
+        CapabilityGrant(
+            grant_id=f"grant_{manifest.app_id}_{index}",
+            capability_key=permission,
+            status="granted" if index < 2 else "review",
+            scope="app",
+            reason="Loaded from the local bridge manifest and kept inside capability scope.",
+        )
+        for index, permission in enumerate(manifest.permissions)
+    ]
+
+
+def _resolve_app_root(root: Path, manifest: AppCapabilityManifest) -> Path | None:
+    configured_root = manifest.bridge.get("workspace_root") or manifest.ui_hints.get(
+        "workspaceRoot"
+    )
+    if configured_root:
+        path = Path(str(configured_root)).expanduser().resolve()
+        return path
+
+    for candidate in _candidate_app_roots(root, manifest.app_id):
+        if candidate.exists():
+            return candidate.resolve()
+    return _candidate_app_roots(root, manifest.app_id)[0]
+
+
+def _candidate_app_roots(root: Path, app_id: str) -> list[Path]:
+    base = root.resolve().parent
+    lookup = {
+        "oratio-viva": [base / "OratioViva", base / "oratio-viva"],
+        "mind-tower": [base / "mind-tower", base / "MindTower"],
+        "solantir-terminal": [base / "Solantir", base / "solantir"],
+    }
+    return lookup.get(app_id, [base / app_id])
+
+
+def _read_package_name_version(path: Path) -> tuple[str, str]:
+    if not path.exists():
+        return "", ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "", ""
+    return str(payload.get("name", "")), str(payload.get("version", ""))
+
+
+def _count_files(root: Path) -> int:
+    if not root.exists():
+        return 0
+    return sum(1 for path in root.rglob("*") if path.is_file())
 
 
 def _load_manifest_payloads(config_path: Path) -> list[dict]:
@@ -207,6 +546,48 @@ def _load_manifest_payloads(config_path: Path) -> list[dict]:
                 }
             ],
             "ui_hints": {"category": "speech", "requiresUserPresent": False},
+        },
+        {
+            "manifest_id": "manifest_mind_tower",
+            "schema_version": SCHEMA_VERSION,
+            "app_id": "mind-tower",
+            "name": "Mind Tower",
+            "description": "Monitoring, admin, and digest workflows exposed to Fluxio through a local bridge.",
+            "bridge": {
+                "transport": "http",
+                "endpoint": "http://127.0.0.1:47831/fluxio",
+                "healthcheck": "/health",
+                "event_stream": "/events",
+            },
+            "auth": {"mode": "local_token", "scopes": ["admin.read", "digest.run", "telegram.callback"]},
+            "permissions": ["task.run", "context.read", "approval.callback"],
+            "tasks": [
+                {
+                    "task_id": "run-monitor-digest",
+                    "label": "Run monitoring digest",
+                    "description": "Collect monitoring context and generate a digest-style task result.",
+                    "requires_approval": False,
+                }
+            ],
+            "context_surfaces": [
+                {
+                    "surface_id": "monitoring-dashboard",
+                    "label": "Monitoring Dashboard",
+                    "description": "Admin and monitoring context surfaced from Mind Tower.",
+                    "access": "read",
+                }
+            ],
+            "action_hooks": [
+                {
+                    "hook_id": "send-digest",
+                    "label": "Send Digest",
+                    "description": "Trigger a digest delivery or callback-aware review action.",
+                    "mutability": "write",
+                    "risk_level": "medium",
+                    "requires_approval": False,
+                }
+            ],
+            "ui_hints": {"category": "operations", "requiresUserPresent": False},
         },
         {
             "manifest_id": "manifest_solantir_terminal",

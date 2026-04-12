@@ -6,6 +6,7 @@
   "scripts": {
     "frontend:dev": "vite --config vite.config.mjs",
     "frontend:build": "vite build --config vite.config.mjs",
+    "verify:desktop": "python -m pytest tests -q && npm run frontend:build && npm run tauri build -- --debug",
     "dev": "tauri dev",
     "dev:live": "powershell -NoProfile -Command \"Get-Process vibe-coding-platform,cargo -ErrorAction SilentlyContinue | Stop-Process -Force\"; tauri dev",
     "build": "tauri build",
@@ -14,10 +15,20 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.8.0"
+    "@base-ui/react": "^1.2.0",
+    "@tauri-apps/api": "^2.8.0",
+    "class-variance-authority": "^0.7.1",
+    "effect": "^4.0.0-beta.43",
+    "lucide-react": "^0.564.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@vitejs/plugin-react": "^5.1.0",
     "@tauri-apps/cli": "^2.10.0",
+    "tailwindcss": "^4.0.0",
     "vite": "^7.1.3"
   }
 }
