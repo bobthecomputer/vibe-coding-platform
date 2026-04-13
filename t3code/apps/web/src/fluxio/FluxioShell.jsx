@@ -51,6 +51,36 @@ const DEFAULT_MISSION_FORM = {
   successChecks: "",
 };
 
+const PREFERRED_HARNESS_OPTIONS = [
+  { value: "fluxio_hybrid", label: "Fluxio Hybrid" },
+  { value: "legacy_autonomous_engine", label: "Legacy Autonomous Engine" },
+];
+
+const ROUTING_STRATEGY_OPTIONS = [
+  { value: "profile_default", label: "Profile Default" },
+  { value: "planner_premium_executor_efficient", label: "Planner Premium / Executor Efficient" },
+  { value: "uniform_quality", label: "Uniform Quality" },
+  { value: "budget_first", label: "Budget First" },
+];
+
+const MINIMAX_AUTH_OPTIONS = [
+  { value: "none", label: "Not Configured" },
+  { value: "minimax-portal-oauth", label: "MiniMax Portal OAuth" },
+  { value: "minimax-api", label: "MiniMax API Key" },
+];
+
+const COMMIT_STYLE_OPTIONS = [
+  { value: "scoped", label: "Scoped" },
+  { value: "concise", label: "Concise" },
+  { value: "detailed", label: "Detailed" },
+];
+
+const EXECUTION_TARGET_OPTIONS = [
+  { value: "profile_default", label: "Profile Default" },
+  { value: "workspace_root", label: "Workspace Root" },
+  { value: "isolated_worktree", label: "Isolated Worktree" },
+];
+
 function hasTauriBackend() {
   return Boolean(globalThis.window?.__TAURI__ || globalThis.window?.__TAURI_INTERNALS__);
 }
@@ -187,6 +217,32 @@ function listLabel(value) {
   return String(value);
 }
 
+function profileFormFromWorkspace(workspace, fallbackProfile) {
+  return {
+    userProfile: workspace?.user_profile || fallbackProfile || "builder",
+    preferredHarness: workspace?.preferred_harness || "fluxio_hybrid",
+    routingStrategy: workspace?.routing_strategy || "profile_default",
+    autoOptimizeRouting: Boolean(workspace?.auto_optimize_routing),
+    minimaxAuthMode: workspace?.minimax_auth_mode || "none",
+    commitMessageStyle: workspace?.commit_message_style || "scoped",
+    executionTargetPreference: workspace?.execution_target_preference || "profile_default",
+  };
+}
+
+function inferSurfaceFromAction(action) {
+  if (action?.surface) {
+    return action.surface;
+  }
+  const commandSurface = action?.commandSurface || "";
+  if (commandSurface.startsWith("git.") || commandSurface.startsWith("deploy.")) {
+    return "git";
+  }
+  if (commandSurface.startsWith("validate.")) {
+    return "validate";
+  }
+  return "setup";
+}
+
 export function FluxioShellApp({ reportUiAction = () => {} }) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const storedUiMode = localStorage.getItem(STORAGE_KEYS.uiMode) || "agent";
@@ -213,6 +269,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [showEscalationDialog, setShowEscalationDialog] = useState(false);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_FORM);
   const [missionForm, setMissionForm] = useState(DEFAULT_MISSION_FORM);
+  const [workspaceProfileForm, setWorkspaceProfileForm] = useState(
+    profileFormFromWorkspace(null, "builder"),
+  );
   const [telegramChatId, setTelegramChatId] = useState(storedChatId);
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [lastPushReason, setLastPushReason] = useState("");
@@ -510,6 +569,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
 
   useEffect(() => {
+    setWorkspaceProfileForm(profileFormFromWorkspace(workspace, profileId));
+  }, [
+    profileId,
+    workspace?.auto_optimize_routing,
+    workspace?.commit_message_style,
+    workspace?.execution_target_preference,
+    workspace?.minimax_auth_mode,
+    workspace?.preferred_harness,
+    workspace?.routing_strategy,
+    workspace?.user_profile,
+    workspace?.workspace_id,
+  ]);
+
+  useEffect(() => {
     setMissionForm(current => ({
       ...current,
       workspaceId: workspace?.workspace_id || current.workspaceId || "",
@@ -530,10 +603,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       setActiveDrawer("queue");
       return;
     }
+    if (uiMode === "builder" && activeDrawer !== "builder") {
+      setActiveDrawer("builder");
+      return;
+    }
     if (!mission && uiMode === "agent") {
       setActiveDrawer("context");
     }
-  }, [mission, uiMode, viewModel.drawers.queue.urgent]);
+  }, [activeDrawer, mission, uiMode, viewModel.drawers.queue.urgent]);
 
   useEffect(() => {
     if (uiMode === "agent" && activeDrawer === "builder") {
@@ -598,6 +675,68 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     },
     [markAction, previewMode, pushToast, refreshAll, workspace?.workspace_id],
   );
+
+  const runWorkspaceActionSpec = useCallback(
+    async action => {
+      if (!action?.actionId) {
+        pushToast("Action is missing an action id.", "warn");
+        return;
+      }
+      const surface = inferSurfaceFromAction(action);
+      const requiresApproval = Boolean(action.requiresApproval);
+      let approved = false;
+      if (requiresApproval) {
+        const confirmed = window.confirm(
+          `Run "${action.label || action.actionId}" now?\n\nThis action is approval-gated and may mutate workspace state.`,
+        );
+        if (!confirmed) {
+          return;
+        }
+        approved = true;
+      }
+      await runWorkspaceAction(surface, action.actionId, approved);
+    },
+    [pushToast, runWorkspaceAction],
+  );
+
+  const saveWorkspacePolicy = useCallback(async () => {
+    markAction("submit:workspace-policy");
+    if (!workspace) {
+      pushToast("Select a workspace first.", "warn");
+      return;
+    }
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot save workspace policy.", "warn");
+      return;
+    }
+
+    try {
+      await callBackend(
+        "save_workspace_profile_command",
+        {
+          payload: {
+            root: null,
+            workspaceId: workspace.workspace_id,
+            name: workspace.name,
+            path: workspace.root_path,
+            defaultRuntime: workspace.default_runtime,
+            userProfile: workspaceProfileForm.userProfile,
+            preferredHarness: workspaceProfileForm.preferredHarness,
+            routingStrategy: workspaceProfileForm.routingStrategy,
+            autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
+            minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
+            commitMessageStyle: workspaceProfileForm.commitMessageStyle,
+            executionTargetPreference: workspaceProfileForm.executionTargetPreference,
+          },
+        },
+        { throwOnError: true },
+      );
+      pushToast("Workspace policy saved.", "info");
+      await refreshAll("workspace-policy-save");
+    } catch (error) {
+      pushToast(`Workspace policy save failed: ${error}`, "error");
+    }
+  }, [markAction, previewMode, pushToast, refreshAll, workspace, workspaceProfileForm]);
 
   const openMissionDialog = useCallback(() => {
     markAction("open:mission-dialog");
@@ -933,9 +1072,46 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         <section className="drawer-panel">
           <header>
             <p className="eyebrow">Builder review</p>
-            <h2>Runtime and feature truth</h2>
+            <h2>Confidence and control surfaces</h2>
             <p>{viewModel.drawers.builder.liveSurface.note}</p>
           </header>
+
+          <section className="drawer-block">
+            <h3>Confidence engine</h3>
+            <div className="confidence-headline">
+              <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
+                {viewModel.drawers.builder.confidence.label}
+              </strong>
+              <span>{viewModel.drawers.builder.confidence.phase}</span>
+            </div>
+            <div className="confidence-meter" role="presentation">
+              <span style={{ width: `${viewModel.drawers.builder.confidence.score}%` }} />
+            </div>
+            <p>
+              {viewModel.drawers.builder.confidence.requiredGateSummary.label}
+              {` · Quality ${viewModel.drawers.builder.confidence.qualityScore}%`}
+              {` · Release ${viewModel.drawers.builder.confidence.releaseStatus}`}
+            </p>
+            <div className="audit-list">
+              {viewModel.drawers.builder.confidence.milestones.map(item => (
+                <article className="audit-item" key={item.id}>
+                  <strong>{item.label}</strong>
+                  <p>
+                    {item.percent}% · {item.detail}
+                  </p>
+                </article>
+              ))}
+            </div>
+            <ul>
+              {viewModel.drawers.builder.confidence.nextActions.length > 0 ? (
+                viewModel.drawers.builder.confidence.nextActions.map(item => (
+                  <li key={`confidence-action-${item}`}>{item}</li>
+                ))
+              ) : (
+                <li>No blocking action reported.</li>
+              )}
+            </ul>
+          </section>
 
           <section className="drawer-block">
             <h3>Live surface</h3>
@@ -964,6 +1140,289 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               {previewLabel(previewMode, data.previewMeta)}
               {lastPushReason ? ` · Last push ${lastPushReason}` : ""}
             </p>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Profile studio</h3>
+            <div className="field-row">
+              <Field label="Workspace profile">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      userProfile: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.userProfile}
+                >
+                  {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
+                    option => (
+                      <option key={option} value={option}>
+                        {titleizeToken(option)}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </Field>
+              <Field label="Preferred harness">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      preferredHarness: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.preferredHarness}
+                >
+                  {PREFERRED_HARNESS_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <div className="field-row">
+              <Field label="Routing strategy">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      routingStrategy: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.routingStrategy}
+                >
+                  {ROUTING_STRATEGY_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Execution target">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      executionTargetPreference: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.executionTargetPreference}
+                >
+                  {EXECUTION_TARGET_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <div className="field-row">
+              <Field label="MiniMax auth path">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      minimaxAuthMode: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.minimaxAuthMode}
+                >
+                  {MINIMAX_AUTH_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Commit message style">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      commitMessageStyle: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.commitMessageStyle}
+                >
+                  {COMMIT_STYLE_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <label className="check-field">
+              <input
+                checked={workspaceProfileForm.autoOptimizeRouting}
+                onChange={event =>
+                  setWorkspaceProfileForm(current => ({
+                    ...current,
+                    autoOptimizeRouting: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>Enable deterministic routing auto-optimize when enough local runs exist.</span>
+            </label>
+
+            <div className="drawer-actions">
+              <ActionButton onClick={() => void saveWorkspacePolicy()} variant="primary">
+                Save workspace policy
+              </ActionButton>
+            </div>
+
+            <div className="drawer-list">
+              {viewModel.drawers.builder.profileStudio.behavior.map(item => (
+                <article className="drawer-card" key={`profile-behavior-${item.label}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Service management</h3>
+            <p>
+              {`${viewModel.drawers.builder.serviceStudio.summary.healthyCount}/${viewModel.drawers.builder.serviceStudio.summary.totalItems} healthy`}
+              {` · ${viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} need attention`}
+              {` · ${viewModel.drawers.builder.serviceStudio.availableActionCount} executable actions`}
+            </p>
+            <div className="drawer-list">
+              {viewModel.drawers.builder.serviceStudio.services.map(service => (
+                <article className={`drawer-card ${toneClass(service.tone)}`} key={service.serviceId}>
+                  <span>{service.category}</span>
+                  <strong>{service.label}</strong>
+                  <p>
+                    {service.status}
+                    {service.version ? ` · ${service.version}` : ""}
+                  </p>
+                  <p>
+                    {service.managementMode}
+                    {service.required ? " · required" : " · optional"}
+                  </p>
+                  {service.details ? <p>{service.details}</p> : null}
+                  {service.actions.length > 0 ? (
+                    <div className="drawer-actions">
+                      {service.actions.slice(0, 3).map(action => (
+                        <ActionButton
+                          key={`${service.serviceId}-${action.actionId}`}
+                          onClick={() => void runWorkspaceActionSpec(action)}
+                        >
+                          {action.label}
+                        </ActionButton>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Skill studio</h3>
+            <p>
+              {`${viewModel.drawers.builder.skillStudio.summary.reviewedReusableCount}/${viewModel.drawers.builder.skillStudio.summary.totalSkills} reviewed reusable`}
+              {` · ${viewModel.drawers.builder.skillStudio.summary.needsTestCount} need tests`}
+              {` · ${viewModel.drawers.builder.skillStudio.summary.learnedCount} learned`}
+            </p>
+            <p className="drawer-footnote">{viewModel.drawers.builder.skillStudio.capabilitiesNote}</p>
+            <details open>
+              <summary>Recommended packs</summary>
+              <div className="drawer-list">
+                {viewModel.drawers.builder.skillStudio.recommended.map(item => (
+                  <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
+                    <span>{item.audience}</span>
+                    <strong>{item.label}</strong>
+                    <p>{item.description}</p>
+                    <p>{item.status}</p>
+                  </article>
+                ))}
+              </div>
+            </details>
+            <details>
+              <summary>Curated inventory</summary>
+              <div className="drawer-list">
+                {viewModel.drawers.builder.skillStudio.curated.map(item => (
+                  <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
+                    <span>{item.status}</span>
+                    <strong>{item.label}</strong>
+                    <p>
+                      Used {item.usageCount} time(s) · Helped {item.helpedCount} run(s)
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </details>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Workflow studio</h3>
+            <p>
+              {`${viewModel.drawers.builder.workflowStudio.summary.reviewedCount}/${viewModel.drawers.builder.workflowStudio.summary.recipeCount} reviewed`}
+              {` · ${viewModel.drawers.builder.workflowStudio.summary.blockedCount} blocked`}
+              {` · Recommended mode ${viewModel.drawers.builder.workflowStudio.summary.recommendedMode}`}
+            </p>
+            <div className="drawer-list">
+              {viewModel.drawers.builder.workflowStudio.recipes.map(item => (
+                <article className={`drawer-card ${toneClass(item.tone)}`} key={item.workflowId}>
+                  <span>{item.surface}</span>
+                  <strong>{item.label}</strong>
+                  <p>{item.description}</p>
+                  <p>
+                    {item.status} · {item.audience} · {item.runtimeChoice}
+                  </p>
+                  {item.verificationDefaults.length > 0 ? (
+                    <p>{`Default verification: ${item.verificationDefaults.join(" | ")}`}</p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Repo operations</h3>
+            <div className="drawer-list">
+              {[...viewModel.drawers.builder.gitActions, ...viewModel.drawers.builder.validationActions].map(
+                action => (
+                  <article className={`drawer-card ${toneClass(action.tone)}`} key={`${action.surface}-${action.actionId}`}>
+                    <span>{titleizeToken(action.surface)}</span>
+                    <strong>{action.label}</strong>
+                    <p>{action.detail}</p>
+                    <div className="drawer-actions">
+                      <ActionButton onClick={() => void runWorkspaceActionSpec(action)}>
+                        {action.requiresApproval ? "Approve and run" : "Run action"}
+                      </ActionButton>
+                    </div>
+                  </article>
+                ),
+              )}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Release gates</h3>
+            <div className="drawer-list">
+              {viewModel.drawers.builder.confidence.gates.length > 0 ? (
+                viewModel.drawers.builder.confidence.gates.map(gate => (
+                  <article className={`drawer-card ${toneClass(gate.tone)}`} key={gate.gateId}>
+                    <span>{gate.required ? "Required" : "Quality"}</span>
+                    <strong>{gate.label}</strong>
+                    <p>{gate.details}</p>
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>Release gates are not available yet.</strong>
+                </article>
+              )}
+            </div>
           </section>
 
           <section className="drawer-block">
@@ -1103,6 +1562,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ))}
         </div>
 
+        <div className="topbar-confidence">
+          <span>1.0 confidence</span>
+          <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
+            {viewModel.drawers.builder.confidence.score}%
+          </strong>
+        </div>
+
         <ActionButton onClick={handlePrimaryAction} variant="primary">
           {viewModel.topBar.primaryAction.label}
         </ActionButton>
@@ -1165,6 +1631,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               <p className="eyebrow">Readiness</p>
               <h1>{viewModel.emptyState.title}</h1>
               <p>{viewModel.emptyState.summary}</p>
+              <div className="empty-confidence">
+                <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
+                  {viewModel.emptyState.confidenceLabel}
+                </strong>
+                <p>{viewModel.emptyState.confidencePhase}</p>
+                <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
+              </div>
               <ul>
                 {viewModel.emptyState.readiness.map(item => (
                   <li key={item}>{item}</li>
@@ -1219,6 +1692,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   <ThreadSection item={item} key={item.id} />
                 ))}
               </div>
+
+              {uiMode === "builder" ? (
+                <section className="builder-inline">
+                  <article className="builder-inline-card">
+                    <p className="eyebrow">Release confidence</p>
+                    <h3>{viewModel.drawers.builder.confidence.label}</h3>
+                    <p>{viewModel.drawers.builder.confidence.phase}</p>
+                    <div className="milestone-strip">
+                      {viewModel.drawers.builder.confidence.milestones.map(item => (
+                        <article className="milestone-card" key={item.id}>
+                          <span>{item.label}</span>
+                          <strong>{item.percent}%</strong>
+                          <p>{item.detail}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="builder-inline-card">
+                    <p className="eyebrow">Workflow studio</p>
+                    <h3>
+                      {viewModel.drawers.builder.workflowStudio.recommended?.label ||
+                        "Workflow recommendation pending"}
+                    </h3>
+                    <p>
+                      {viewModel.drawers.builder.workflowStudio.recommended?.description ||
+                        "Select a recipe in the Builder drawer."}
+                    </p>
+                    {viewModel.drawers.builder.workflowStudio.recommended ? (
+                      <div className="builder-inline-list">
+                        <span>
+                          Audience:{" "}
+                          {viewModel.drawers.builder.workflowStudio.recommended.audience}
+                        </span>
+                        <span>
+                          Runtime:{" "}
+                          {viewModel.drawers.builder.workflowStudio.recommended.runtimeChoice}
+                        </span>
+                        <span>
+                          Status: {viewModel.drawers.builder.workflowStudio.recommended.status}
+                        </span>
+                      </div>
+                    ) : null}
+                  </article>
+                </section>
+              ) : null}
 
               <section className="thread-proof-inline">
                 <div className="thread-proof-head">

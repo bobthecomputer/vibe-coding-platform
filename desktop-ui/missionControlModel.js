@@ -1,14 +1,19 @@
 import {
+  describeApprovalBehavior,
+  describeExplanationBehavior,
   describeMissionAssumption,
   describeMissionKnownState,
   describeMissionNeedsInput,
   describeNextOperatorAction,
+  describeProfileFit,
+  describeVisibilityBehavior,
   formatDurationCompact,
   missionStatusTone,
   resolveCurrentRuntimeLane,
   resolveMissionPauseReason,
   runtimeLabel,
   titleizeToken,
+  visibilityProfileState,
 } from "./fluxioHelpers.js";
 
 function asList(value) {
@@ -17,6 +22,52 @@ function asList(value) {
 
 function uniq(items) {
   return [...new Set(asList(items).filter(Boolean).map(item => String(item).trim()))];
+}
+
+function asInt(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, asInt(value)));
+}
+
+function ratioPercent(part, total) {
+  if (total <= 0) {
+    return 0;
+  }
+  return clampPercent(Math.round((part / total) * 100));
+}
+
+function scoreTone(score) {
+  if (score >= 85) {
+    return "good";
+  }
+  if (score >= 65) {
+    return "warn";
+  }
+  return "bad";
+}
+
+function serviceStatusTone(status) {
+  if (["healthy", "connected", "ready", "passed"].includes(status)) {
+    return "good";
+  }
+  if (
+    [
+      "missing",
+      "blocked",
+      "failed",
+      "error",
+      "degraded",
+      "unavailable",
+      "stale",
+    ].includes(status)
+  ) {
+    return "bad";
+  }
+  return "warn";
 }
 
 function topBarLiveStatus(mission, pendingQuestions, pendingApprovals) {
@@ -357,6 +408,457 @@ function deriveEvents(mission, snapshot) {
   return events.slice(0, 24);
 }
 
+function deriveConfidenceSurface({
+  mission,
+  snapshot,
+  setupHealth,
+  queueItems,
+  pendingQuestions,
+  pendingApprovals,
+}) {
+  const release = snapshot?.releaseReadiness || {};
+  const requiredGateSummary = release?.requiredGateSummary || {};
+  const requiredPassed = asInt(requiredGateSummary?.passed);
+  const requiredTotal = asInt(requiredGateSummary?.total);
+  const requiredScore = clampPercent(
+    requiredGateSummary?.score ?? ratioPercent(requiredPassed, requiredTotal),
+  );
+  const qualityScore = clampPercent(release?.qualityScore ?? 0);
+  const releaseScore = clampPercent(release?.score ?? 0);
+  const verificationFailures = asList(mission?.state?.verification_failures).length;
+  const questionCount = asList(pendingQuestions).length;
+  const approvalCount =
+    asList(mission?.proof?.pending_approvals).length + asList(pendingApprovals).length;
+  const missingDependencyCount = asList(setupHealth?.missingDependencies).length;
+  const urgentQueueCount = queueItems.filter(
+    item => item?.tone === "warn" || item?.tone === "bad",
+  ).length;
+  const frictionPenalty = Math.min(
+    36,
+    urgentQueueCount * 4 +
+      questionCount * 4 +
+      approvalCount * 3 +
+      verificationFailures * 6 +
+      missingDependencyCount * 5,
+  );
+
+  const fallbackBase = requiredTotal > 0 ? requiredScore : qualityScore;
+  const blendedBase = releaseScore > 0 ? releaseScore : fallbackBase;
+  const confidenceScore = clampPercent(
+    Math.round(blendedBase * 0.78 + requiredScore * 0.14 + qualityScore * 0.08) -
+      frictionPenalty +
+      (mission ? 4 : -4),
+  );
+
+  const setupSummary =
+    setupHealth?.serviceManagementSummary || {
+      totalItems: asList(setupHealth?.serviceManagement).length,
+      healthyCount: asList(setupHealth?.serviceManagement).filter(
+        item => serviceStatusTone(item?.currentHealthStatus) === "good",
+      ).length,
+    };
+  const environmentPercent =
+    asInt(setupSummary?.totalItems) > 0
+      ? ratioPercent(asInt(setupSummary?.healthyCount), asInt(setupSummary?.totalItems))
+      : setupHealth?.environmentReady
+        ? 100
+        : 40;
+
+  const proofChecks = asList(release?.proofReadiness?.proofs);
+  const proofPassed = proofChecks.filter(item => item?.passed).length;
+  const proofPercent =
+    proofChecks.length > 0
+      ? ratioPercent(proofPassed, proofChecks.length)
+      : mission
+        ? 60
+        : 0;
+
+  const continuityPercent = !mission
+    ? 0
+    : mission?.state?.status === "completed"
+      ? 100
+      : mission?.state?.status === "running"
+        ? 84
+        : mission?.missionLoop?.continuityState === "resume_available"
+          ? 78
+          : mission?.state?.status === "queued"
+            ? 62
+            : 70;
+
+  const operatorPercent = clampPercent(
+    100 - Math.min(75, questionCount * 12 + approvalCount * 10 + verificationFailures * 15),
+  );
+
+  const phase =
+    confidenceScore >= 85 && requiredPassed === requiredTotal && requiredTotal > 0
+      ? "Validation ready"
+      : confidenceScore >= 70
+        ? "Close to validation"
+        : "Hardening required";
+
+  const nextActions = uniq([
+    ...asList(release?.nextActions),
+    ...queueItems
+      .filter(item => item?.tone === "warn" || item?.tone === "bad")
+      .map(item => item?.title || item?.reason),
+    ...asList(setupHealth?.blockerExplanations),
+  ]).slice(0, 6);
+
+  const gates = asList(release?.gates).slice(0, 10).map(gate => ({
+    gateId: gate?.gateId || gate?.label || "",
+    label: gate?.label || "Gate",
+    required: Boolean(gate?.required),
+    passed: Boolean(gate?.passed),
+    details: gate?.details || "",
+    tone: gate?.passed ? "good" : gate?.required ? "bad" : "warn",
+  }));
+
+  return {
+    score: confidenceScore,
+    tone: scoreTone(confidenceScore),
+    label: `${confidenceScore}% toward 1.0 validation`,
+    phase,
+    releaseStatus: titleizeToken(release?.status || "building"),
+    releaseScore,
+    qualityScore,
+    requiredGateSummary: {
+      passed: requiredPassed,
+      total: requiredTotal,
+      score: requiredScore,
+      label:
+        requiredTotal > 0
+          ? `${requiredPassed}/${requiredTotal} required gates passed`
+          : "Required gates not reported yet",
+    },
+    calculatedAt: release?.calculatedAt || "",
+    milestones: [
+      {
+        id: "environment",
+        label: "Environment and services",
+        percent: environmentPercent,
+        detail:
+          asInt(setupSummary?.totalItems) > 0
+            ? `${asInt(setupSummary?.healthyCount)}/${asInt(setupSummary?.totalItems)} services healthy`
+            : "Service health snapshot unavailable",
+      },
+      {
+        id: "continuity",
+        label: "Mission continuity",
+        percent: continuityPercent,
+        detail: mission
+          ? titleizeToken(
+              mission?.missionLoop?.continuityState || mission?.state?.status || "active",
+            )
+          : "No active mission yet",
+      },
+      {
+        id: "proof",
+        label: "Proof and verification",
+        percent: proofPercent,
+        detail:
+          proofChecks.length > 0
+            ? `${proofPassed}/${proofChecks.length} proving checks passed`
+            : "Proof checks appear after first proving cycle",
+      },
+      {
+        id: "operator",
+        label: "Operator confidence",
+        percent: operatorPercent,
+        detail:
+          questionCount + approvalCount + verificationFailures > 0
+            ? `${questionCount} questions · ${approvalCount} approvals · ${verificationFailures} failures`
+            : "No active friction in queue",
+      },
+    ],
+    gates,
+    nextActions,
+  };
+}
+
+function deriveProfileStudio(snapshot, workspace, profileId, profileParams) {
+  const profiles = snapshot?.profiles || {};
+  const availableProfiles = asList(profiles?.availableProfiles);
+  const details = profiles?.details || {};
+  const activeDetail = details?.[profileId] || {};
+  const activeAgent = activeDetail?.agent || {};
+  const visibilityState = visibilityProfileState(profileParams);
+  const profileRows = availableProfiles.slice(0, 10).map(name => {
+    const item = details?.[name] || {};
+    const params = item?.parameters || {};
+    return {
+      id: name,
+      label: titleizeToken(name),
+      description: item?.description || describeProfileFit(name),
+      approval: titleizeToken(params?.approvalStrictness || "tiered"),
+      autonomy: titleizeToken(params?.autonomyLevel || "balanced"),
+      visibility: titleizeToken(params?.visibilityLevel || "balanced"),
+      density: titleizeToken(params?.uiDensity || "comfortable"),
+      tone: name === profileId ? "good" : "neutral",
+    };
+  });
+
+  return {
+    activeProfileId: profileId,
+    activeProfileLabel: titleizeToken(profileId),
+    availableProfiles,
+    activeDescription: activeDetail?.description || describeProfileFit(profileId),
+    behavior: [
+      {
+        label: "Approval boundary",
+        value: describeApprovalBehavior(profileParams?.approvalStrictness || "tiered"),
+      },
+      {
+        label: "Explanation style",
+        value: describeExplanationBehavior(
+          profileParams?.explanationLevel || activeAgent?.explanation_depth || "medium",
+        ),
+      },
+      {
+        label: "Visibility policy",
+        value: describeVisibilityBehavior(profileParams?.visibilityLevel || "balanced"),
+      },
+      {
+        label: "Profile fit",
+        value: describeProfileFit(profileId),
+      },
+    ],
+    visibilityState: {
+      level: visibilityState?.level || "balanced",
+      guided: Boolean(visibilityState?.guided),
+      detailed: Boolean(visibilityState?.detailed),
+      expert: Boolean(visibilityState?.expert),
+    },
+    workspacePolicy: [
+      {
+        label: "Current workspace profile",
+        value: titleizeToken(workspace?.user_profile || profileId),
+      },
+      {
+        label: "Preferred harness",
+        value: titleizeToken(workspace?.preferred_harness || "fluxio_hybrid"),
+      },
+      {
+        label: "Routing strategy",
+        value: titleizeToken(workspace?.routing_strategy || "profile_default"),
+      },
+      {
+        label: "Auto-optimize routing",
+        value: workspace?.auto_optimize_routing ? "Enabled" : "Disabled",
+      },
+      {
+        label: "Commit style",
+        value: titleizeToken(workspace?.commit_message_style || "scoped"),
+      },
+      {
+        label: "Execution target",
+        value: titleizeToken(workspace?.execution_target_preference || "profile_default"),
+      },
+    ],
+    profileRows,
+  };
+}
+
+function deriveServiceStudio(workspace, setupHealth) {
+  const workspaceServices = asList(workspace?.serviceManagement);
+  const setupServices = asList(setupHealth?.serviceManagement);
+  const services = workspaceServices.length > 0 ? workspaceServices : setupServices;
+  const summary = workspace?.serviceManagementSummary || setupHealth?.serviceManagementSummary || {};
+
+  const normalized = services
+    .map(item => {
+      const status =
+        item?.currentHealthStatus || item?.lastVerificationResult || item?.status || "unknown";
+      const tone = serviceStatusTone(status);
+      const actions = [
+        ...asList(item?.serviceActions),
+        ...(item?.verifyAction?.actionId ? [item.verifyAction] : []),
+      ]
+        .filter(action => action?.actionId)
+        .map(action => {
+          const surface = action?.surface
+            ? action.surface
+            : action?.commandSurface?.startsWith("git.")
+              ? "git"
+              : action?.commandSurface?.startsWith("validate.")
+                ? "validate"
+                : "setup";
+          return {
+            actionId: action.actionId,
+            label: action.label || action.actionId,
+            commandSurface: action.commandSurface || "",
+            detail: action.description || action.detail || action.followUp || "",
+            requiresApproval: Boolean(action.requiresApproval),
+            surface,
+          };
+        });
+
+      return {
+        serviceId: item?.serviceId || item?.label || "service",
+        label: item?.label || item?.serviceId || "Service",
+        category: titleizeToken(item?.serviceCategory || "service"),
+        status: titleizeToken(status),
+        tone,
+        managementMode: titleizeToken(item?.managementMode || "externally_managed"),
+        required: Boolean(item?.required),
+        details: item?.details || "",
+        version: item?.version || "",
+        actions,
+      };
+    })
+    .sort((left, right) => {
+      const rank = { bad: 0, warn: 1, good: 2, neutral: 3 };
+      const leftRank = rank[left.tone] ?? 3;
+      const rightRank = rank[right.tone] ?? 3;
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+      return left.label.localeCompare(right.label);
+    });
+
+  return {
+    summary: {
+      totalItems: asInt(summary?.totalItems, normalized.length),
+      healthyCount: asInt(
+        summary?.healthyCount,
+        normalized.filter(item => item.tone === "good").length,
+      ),
+      needsAttentionCount: asInt(
+        summary?.needsAttentionCount,
+        normalized.filter(item => item.tone !== "good").length,
+      ),
+      runtimeCount: asInt(summary?.runtimeCount),
+      toolServerCount: asInt(summary?.toolServerCount),
+      bridgeCount: asInt(summary?.bridgeCount),
+    },
+    services: normalized.slice(0, 20),
+    urgent: normalized.filter(item => item.tone === "bad" || item.tone === "warn").slice(0, 6),
+    availableActionCount: normalized.reduce((total, item) => total + item.actions.length, 0),
+  };
+}
+
+function skillPackTone(item) {
+  if (item?.installed && item?.testStatus === "reviewed") {
+    return "good";
+  }
+  if (item?.installed) {
+    return "warn";
+  }
+  return item?.recommended ? "neutral" : "warn";
+}
+
+function deriveSkillStudio(snapshot, workspace) {
+  const skillLibrary = snapshot?.skillLibrary || {};
+  const summary = skillLibrary?.managementSummary || {};
+  const curatedPacks = asList(skillLibrary?.curatedPacks);
+  const recommendedPacks = asList(skillLibrary?.recommendedPacks);
+  const workspaceRecommendations = asList(workspace?.recommendedSkillPacks);
+  const recommended = (
+    workspaceRecommendations.length > 0 ? workspaceRecommendations : recommendedPacks
+  )
+    .slice(0, 8)
+    .map(item => ({
+      id: item?.packId || item?.pack_id || item?.label,
+      label: item?.label || item?.packId || "Pack",
+      description: item?.description || "",
+      audience: titleizeToken(item?.audience || "all"),
+      status: titleizeToken(item?.testStatus || item?.promotionState || "recommended"),
+      tone: skillPackTone(item),
+    }));
+
+  const curated = curatedPacks.slice(0, 10).map(item => ({
+    id: item?.packId || item?.pack_id || item?.label,
+    label: item?.label || item?.packId || "Pack",
+    status: titleizeToken(item?.testStatus || item?.promotionState || "active"),
+    usageCount: asInt(item?.usageCount),
+    helpedCount: asInt(item?.helpedCount),
+    tone: skillPackTone(item),
+  }));
+
+  return {
+    summary: {
+      totalSkills: asInt(summary?.totalSkills, curatedPacks.length),
+      reviewedReusableCount: asInt(summary?.reviewedReusableCount),
+      needsTestCount: asInt(summary?.needsTestCount),
+      learnedCount: asInt(summary?.learnedCount),
+      disabledCount: asInt(summary?.disabledCount),
+      installedCount: curatedPacks.filter(item => item?.installed).length,
+    },
+    recommended,
+    curated,
+    capabilitiesNote:
+      "Skill CRUD is not exposed as a dedicated control-room command yet, so this studio is review-first.",
+  };
+}
+
+function workflowTone(status) {
+  if (status === "ready") {
+    return "good";
+  }
+  if (status === "blocked") {
+    return "bad";
+  }
+  return "warn";
+}
+
+function deriveWorkflowStudio(snapshot, profileId) {
+  const studio = snapshot?.workflowStudio || {};
+  const recipes = asList(studio?.recipes).map(item => ({
+    workflowId: item?.workflowId || item?.label || "",
+    label: item?.label || "Workflow",
+    description: item?.description || "",
+    status: titleizeToken(item?.status || "available"),
+    audience: titleizeToken(item?.audience || "all"),
+    surface: titleizeToken(item?.surface || "builder_view"),
+    reviewStatus: titleizeToken(item?.reviewStatus || "reviewed"),
+    runtimeChoice: runtimeLabel(item?.runtimeChoice),
+    skillIds: asList(item?.skillIds),
+    serviceIds: asList(item?.serviceIds),
+    verificationDefaults: asList(item?.verificationDefaults),
+    tone: workflowTone(item?.status),
+  }));
+  const recommended =
+    recipes.find(
+      item =>
+        item.tone !== "bad" &&
+        ["All", titleizeToken(profileId), "Builder", "Beginner", "Advanced"].includes(
+          item.audience,
+        ),
+    ) || recipes[0] || null;
+
+  return {
+    summary: {
+      recipeCount: asInt(studio?.managementSummary?.recipeCount, recipes.length),
+      reviewedCount: asInt(studio?.managementSummary?.reviewedCount),
+      blockedCount: asInt(studio?.managementSummary?.blockedCount),
+      recommendedMode: titleizeToken(studio?.recommendedMode || "agent"),
+    },
+    recipes: recipes.slice(0, 10),
+    recommended,
+    learningQueue: asList(studio?.learningQueue).slice(0, 6),
+  };
+}
+
+function deriveBuilderOps(workspace) {
+  return {
+    gitActions: asList(workspace?.gitActions).map(item => ({
+      actionId: item?.actionId || "",
+      label: item?.label || item?.actionId || "Git action",
+      detail: item?.detail || item?.command || "",
+      requiresApproval: Boolean(item?.requiresApproval),
+      surface: "git",
+      tone: item?.requiresApproval ? "warn" : "neutral",
+    })),
+    validationActions: asList(workspace?.validationActions).map(item => ({
+      actionId: item?.actionId || "",
+      label: item?.label || item?.actionId || "Validation action",
+      detail: item?.detail || item?.command || "",
+      requiresApproval: Boolean(item?.requiresApproval),
+      surface: "validate",
+      tone: item?.requiresApproval ? "warn" : "good",
+    })),
+  };
+}
+
 function classifyFeatureTruth({ mission, snapshot, setupHealth, previewMode }) {
   const realReady = [];
   const realSecondary = [];
@@ -369,17 +871,29 @@ function classifyFeatureTruth({ mission, snapshot, setupHealth, previewMode }) {
   if ((snapshot?.workspaces || []).length > 0) {
     realReady.push("Workspace registration and runtime selection");
   }
+  if ((snapshot?.workspaces || []).some(item => asList(item?.serviceManagement).length > 0)) {
+    realReady.push("Service management summary and health detail");
+  }
+  if ((snapshot?.skillLibrary?.curatedPacks || []).length > 0) {
+    realReady.push("Skill catalog with reviewed pack metadata");
+  }
+  if ((snapshot?.workflowStudio?.recipes || []).length > 0) {
+    realReady.push("Workflow recipe studio");
+  }
+  if (snapshot?.releaseReadiness?.score !== undefined) {
+    realReady.push("Release-readiness scoring and gate evidence");
+  }
   if ((snapshot?.runtimes || []).some(item => item?.detected)) {
     realReady.push("Runtime detection and health telemetry");
   }
   if ((snapshot?.bridgeLab?.connectedSessions || []).length > 0) {
     realSecondary.push("Connected app bridge telemetry");
   }
-  if ((snapshot?.workflowStudio?.recipes || []).length > 0) {
-    realSecondary.push("Workflow recipe catalog");
-  }
   if ((snapshot?.skillLibrary?.recommendedPacks || []).length > 0) {
     realSecondary.push("Skill recommendation signals");
+  }
+  if (snapshot?.profiles?.availableProfiles?.length > 0) {
+    realSecondary.push("Profile parameter matrix and behavior defaults");
   }
 
   if (previewMode !== "live") {
@@ -390,6 +904,11 @@ function classifyFeatureTruth({ mission, snapshot, setupHealth, previewMode }) {
 
   for (const blocker of asList(setupHealth?.blockerExplanations)) {
     notReady.push(blocker);
+  }
+  for (const gate of asList(snapshot?.releaseReadiness?.gates)) {
+    if (gate?.required && !gate?.passed) {
+      notReady.push(`${gate.label}: ${gate.details}`);
+    }
   }
 
   if (asList(snapshot?.workspaces).length === 0) {
@@ -561,6 +1080,19 @@ export function buildMissionControlModel({
   const events = deriveEvents(mission, snapshot);
   const inboxPreview = asList(inbox)[0];
   const featureTruth = classifyFeatureTruth({ mission, snapshot, setupHealth, previewMode });
+  const confidence = deriveConfidenceSurface({
+    mission,
+    snapshot,
+    setupHealth,
+    queueItems,
+    pendingQuestions,
+    pendingApprovals,
+  });
+  const profileStudio = deriveProfileStudio(snapshot, workspace, profileId, profileParams);
+  const serviceStudio = deriveServiceStudio(workspace, setupHealth);
+  const skillStudio = deriveSkillStudio(snapshot, workspace);
+  const workflowStudio = deriveWorkflowStudio(snapshot, profileId);
+  const builderOps = deriveBuilderOps(workspace);
   const proofTone =
     asList(mission?.state?.verification_failures).length > 0
       ? "bad"
@@ -648,6 +1180,26 @@ export function buildMissionControlModel({
         },
       ],
     },
+    {
+      title: "Confidence",
+      items: [
+        {
+          label: "1.0 progress",
+          value: confidence.label,
+          note: confidence.phase,
+        },
+        {
+          label: "Release status",
+          value: confidence.releaseStatus,
+          note: confidence.requiredGateSummary.label,
+        },
+        {
+          label: "Quality score",
+          value: `${confidence.qualityScore}%`,
+          note: confidence.nextActions[0] || "No blocker reported.",
+        },
+      ],
+    },
   ];
 
   const threadSections = deriveThreadSections({ mission, pendingQuestions, workspace });
@@ -657,6 +1209,18 @@ export function buildMissionControlModel({
     asList(snapshot?.workspaces).length === 0 ? "Add at least one workspace" : "",
     previewMode !== "live" ? "Preview mode is active; actions are read-only." : "",
   ]);
+  const activeAuditCount = deriveStateAudit({ mission, setupHealth }).filter(
+    item => item.state === "active",
+  ).length;
+  const requiredGateFailures = confidence.gates.filter(
+    item => item.required && item.passed === false,
+  ).length;
+  const builderReviewCount =
+    featureTruth.notReady.length +
+    activeAuditCount +
+    asInt(serviceStudio.summary.needsAttentionCount) +
+    asInt(skillStudio.summary.needsTestCount) +
+    requiredGateFailures;
 
   return {
     topBar: {
@@ -666,6 +1230,7 @@ export function buildMissionControlModel({
         queueItems.filter(item => item.tone === "warn" || item.tone === "bad").length +
         asList(inbox).length,
       primaryAction,
+      confidence,
     },
     shell: {
       isEmpty: !mission,
@@ -677,8 +1242,11 @@ export function buildMissionControlModel({
         emptyReadiness[0] ||
         "Launch one real mission to replace scaffolding with a thread, proof, and review boundaries.",
       readiness: emptyReadiness.length > 0 ? emptyReadiness : ["Environment appears ready."],
-      recommendedAction:
-        asList(setupHealth?.globalActions)[0]?.label || "Launch mission",
+      recommendedAction: primaryAction.label,
+      confidenceLabel: confidence.label,
+      confidencePhase: confidence.phase,
+      recommendedWorkflow:
+        workflowStudio?.recommended?.label || "Long-Run Agent Session",
       launchEntryLabel: asList(snapshot?.workspaces).length > 0 ? "Launch mission" : "Add workspace",
     },
     thread: {
@@ -695,6 +1263,10 @@ export function buildMissionControlModel({
             { label: titleizeToken(mission?.state?.status || "active"), tone: missionStatusTone(mission?.state?.status) },
             { label: `Elapsed ${deriveElapsed(mission)}`, tone: "neutral" },
             { label: `Remaining ${deriveRemaining(mission)}`, tone: "neutral" },
+            {
+              label: `${confidence.score}% confidence`,
+              tone: confidence.tone,
+            },
           ]
         : [],
       sections: threadSections,
@@ -732,9 +1304,8 @@ export function buildMissionControlModel({
       },
       builder: {
         label: "Builder review",
-        reviewCount:
-          featureTruth.notReady.length +
-          deriveStateAudit({ mission, setupHealth }).filter(item => item.state === "active").length,
+        reviewCount: builderReviewCount,
+        confidence,
         liveSurface: {
           previewMode,
           liveSyncSeconds,
@@ -748,6 +1319,12 @@ export function buildMissionControlModel({
                 : `Live backend${lastPushReason ? ` · last push ${lastPushReason}` : ""}`
               : "Fixture-backed review mode is active.",
         },
+        profileStudio,
+        serviceStudio,
+        skillStudio,
+        workflowStudio,
+        gitActions: builderOps.gitActions,
+        validationActions: builderOps.validationActions,
         featureTruth,
         stateAudit: deriveStateAudit({ mission, setupHealth }),
         events: events.slice(0, 10),
