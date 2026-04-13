@@ -245,7 +245,7 @@ function inferSurfaceFromAction(action) {
 
 export function FluxioShellApp({ reportUiAction = () => {} }) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
-  const storedUiMode = localStorage.getItem(STORAGE_KEYS.uiMode) || "agent";
+  const storedUiMode = searchParams.get("mode") || localStorage.getItem(STORAGE_KEYS.uiMode) || "agent";
   const storedChatId = localStorage.getItem(STORAGE_KEYS.telegramChatId) || "";
   const storedPreviewMode =
     searchParams.get("fixture") || localStorage.getItem(STORAGE_KEYS.previewMode) || "live";
@@ -272,6 +272,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [workspaceProfileForm, setWorkspaceProfileForm] = useState(
     profileFormFromWorkspace(null, "builder"),
   );
+  const [skillStudioFilter, setSkillStudioFilter] = useState("all");
+  const [skillStudioQuery, setSkillStudioQuery] = useState("");
   const [telegramChatId, setTelegramChatId] = useState(storedChatId);
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [lastPushReason, setLastPushReason] = useState("");
@@ -757,6 +759,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     workspace?.workspace_id,
   ]);
 
+  const handleQualityRoadmapAction = useCallback(
+    async item => {
+      const actionKind = item?.actionKind || "";
+      markAction(`quality-roadmap:${item?.id || "unknown"}`);
+      if (actionKind === "validate") {
+        const validateAction = viewModel.drawers.builder.validationActions[0];
+        if (validateAction) {
+          await runWorkspaceActionSpec(validateAction);
+          return;
+        }
+        pushToast("No validation action is currently available.", "warn");
+        return;
+      }
+      if (actionKind === "mission") {
+        openMissionDialog();
+        return;
+      }
+      if (actionKind === "service") {
+        const serviceAction = viewModel.drawers.builder.serviceStudio.services
+          .flatMap(service => service.actions)
+          .find(action => action);
+        if (serviceAction) {
+          await runWorkspaceActionSpec(serviceAction);
+          return;
+        }
+        pushToast("No service repair action is currently available.", "warn");
+        return;
+      }
+      if (actionKind === "skill") {
+        setSkillStudioFilter("needs_attention");
+        setActiveDrawer("builder");
+        return;
+      }
+      if (actionKind === "workflow") {
+        const suggested = viewModel.drawers.builder.workflowStudio.recommended;
+        if (suggested?.label) {
+          pushToast(`Open workflow: ${suggested.label}`, "info");
+        }
+        openMissionDialog();
+        return;
+      }
+      pushToast("No executable action is mapped for this roadmap item yet.", "warn");
+    },
+    [markAction, openMissionDialog, pushToast, runWorkspaceActionSpec, viewModel],
+  );
+
   const handleWorkspaceSubmit = useCallback(
     async event => {
       event.preventDefault();
@@ -1068,6 +1116,36 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
 
     if (activeDrawer === "builder" && uiMode === "builder") {
+      const skillQuery = skillStudioQuery.trim().toLowerCase();
+      const skillMatchesQuery = item =>
+        !skillQuery ||
+        String(item?.label || "")
+          .toLowerCase()
+          .includes(skillQuery) ||
+        String(item?.description || "")
+          .toLowerCase()
+          .includes(skillQuery) ||
+        (item?.profileSuitability || []).some(entry =>
+          String(entry).toLowerCase().includes(skillQuery),
+        );
+      const matchesSkillFilter = item => {
+        if (skillStudioFilter === "recommended") {
+          return !item?.installed;
+        }
+        if (skillStudioFilter === "installed") {
+          return Boolean(item?.installed);
+        }
+        if (skillStudioFilter === "needs_attention") {
+          return item?.testStatus !== "Reviewed" || !item?.installed;
+        }
+        return true;
+      };
+      const filteredRecommendedSkills = viewModel.drawers.builder.skillStudio.recommended.filter(
+        item => matchesSkillFilter(item) && skillMatchesQuery(item),
+      );
+      const filteredCuratedSkills = viewModel.drawers.builder.skillStudio.curated.filter(
+        item => matchesSkillFilter(item) && skillMatchesQuery(item),
+      );
       return (
         <section className="drawer-panel">
           <header>
@@ -1111,6 +1189,32 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <li>No blocking action reported.</li>
               )}
             </ul>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Road to 100%</h3>
+            <p>
+              {viewModel.drawers.builder.qualityRoadmap.headline}
+              {` · Gap ${viewModel.drawers.builder.qualityRoadmap.gap}%`}
+            </p>
+            <div className="roadmap-grid">
+              {viewModel.drawers.builder.qualityRoadmap.tracks.map(item => (
+                <article className={`roadmap-item ${toneClass(item.tone)}`} key={item.id}>
+                  <span>{titleizeToken(item.state)}</span>
+                  <strong>{item.label}</strong>
+                  <p>{item.detail}</p>
+                  <p>{item.hint}</p>
+                  <div className="drawer-actions">
+                    <ActionButton
+                      onClick={() => void handleQualityRoadmapAction(item)}
+                      type="button"
+                    >
+                      {item.suggestedAction || "Open"}
+                    </ActionButton>
+                  </div>
+                </article>
+              ))}
+            </div>
           </section>
 
           <section className="drawer-block">
@@ -1285,6 +1389,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </article>
               ))}
             </div>
+            <details>
+              <summary>Available profile contracts</summary>
+              <div className="drawer-list">
+                {viewModel.drawers.builder.profileStudio.profileRows.map(item => (
+                  <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
+                    <span>{item.label}</span>
+                    <strong>{item.description}</strong>
+                    <p>
+                      {item.approval} approvals · {item.autonomy} autonomy · {item.visibility} visibility
+                    </p>
+                    <p>{item.density} density</p>
+                  </article>
+                ))}
+              </div>
+            </details>
           </section>
 
           <section className="drawer-block">
@@ -1332,32 +1451,130 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               {` · ${viewModel.drawers.builder.skillStudio.summary.needsTestCount} need tests`}
               {` · ${viewModel.drawers.builder.skillStudio.summary.learnedCount} learned`}
             </p>
+            <p>
+              {`${viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready`}
+              {` · ${viewModel.drawers.builder.skillStudio.summary.installedCount} installed`}
+              {` · ${viewModel.drawers.builder.skillStudio.summary.uniquePackCount} unique packs`}
+            </p>
+            <div className="skill-toolbar">
+              <Field label="Filter">
+                <select
+                  onChange={event => setSkillStudioFilter(event.target.value)}
+                  value={skillStudioFilter}
+                >
+                  <option value="all">All packs</option>
+                  <option value="recommended">Recommended only</option>
+                  <option value="installed">Installed only</option>
+                  <option value="needs_attention">Needs attention</option>
+                </select>
+              </Field>
+              <Field label="Search">
+                <input
+                  onChange={event => setSkillStudioQuery(event.target.value)}
+                  placeholder="Search by pack or profile"
+                  value={skillStudioQuery}
+                />
+              </Field>
+            </div>
             <p className="drawer-footnote">{viewModel.drawers.builder.skillStudio.capabilitiesNote}</p>
             <details open>
               <summary>Recommended packs</summary>
               <div className="drawer-list">
-                {viewModel.drawers.builder.skillStudio.recommended.map(item => (
-                  <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
-                    <span>{item.audience}</span>
-                    <strong>{item.label}</strong>
-                    <p>{item.description}</p>
-                    <p>{item.status}</p>
+                {filteredRecommendedSkills.length > 0 ? (
+                  filteredRecommendedSkills.map(item => (
+                    <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
+                      <span>{item.originType}</span>
+                      <strong>{item.label}</strong>
+                      <p>{item.description}</p>
+                      <p>
+                        {item.status}
+                        {item.installed ? " · installed" : " · not installed"}
+                        {item.executionCapable ? " · execution-capable" : " · guidance-only"}
+                      </p>
+                      {item.profileSuitability?.length > 0 ? (
+                        <div className="pill-row">
+                          {item.profileSuitability.map(entry => (
+                            <span className="mini-pill" key={`${item.id}-${entry}`}>
+                              {entry}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {item.permissions?.length > 0 ? (
+                        <div className="pill-row">
+                          {item.permissions.map(permission => (
+                            <span className="mini-pill muted" key={`${item.id}-perm-${permission}`}>
+                              {permission}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  ))
+                ) : (
+                  <article className="drawer-card">
+                    <strong>No recommended pack matches this filter.</strong>
                   </article>
-                ))}
+                )}
               </div>
             </details>
             <details>
               <summary>Curated inventory</summary>
               <div className="drawer-list">
-                {viewModel.drawers.builder.skillStudio.curated.map(item => (
-                  <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
-                    <span>{item.status}</span>
-                    <strong>{item.label}</strong>
-                    <p>
-                      Used {item.usageCount} time(s) · Helped {item.helpedCount} run(s)
-                    </p>
+                {filteredCuratedSkills.length > 0 ? (
+                  filteredCuratedSkills.map(item => (
+                    <article className={`drawer-card ${toneClass(item.tone)}`} key={item.id}>
+                      <span>{item.originType}</span>
+                      <strong>{item.label}</strong>
+                      <p>
+                        {item.status}
+                        {item.installed ? " · installed" : " · not installed"}
+                        {item.executionCapable ? " · execution-capable" : " · guidance-only"}
+                      </p>
+                      <p>
+                        Used {item.usageCount} time(s) · Helped {item.helpedCount} run(s)
+                      </p>
+                      {item.profileSuitability?.length > 0 ? (
+                        <div className="pill-row">
+                          {item.profileSuitability.map(entry => (
+                            <span className="mini-pill" key={`${item.id}-${entry}`}>
+                              {entry}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  ))
+                ) : (
+                  <article className="drawer-card">
+                    <strong>No curated pack matches this filter.</strong>
                   </article>
-                ))}
+                )}
+              </div>
+            </details>
+            <details>
+              <summary>Quality actions</summary>
+              <ul>
+                {viewModel.drawers.builder.skillStudio.nextQualityActions.length > 0 ? (
+                  viewModel.drawers.builder.skillStudio.nextQualityActions.map(item => (
+                    <li key={`skill-next-${item}`}>{item}</li>
+                  ))
+                ) : (
+                  <li>Skill quality checklist is currently clear.</li>
+                )}
+              </ul>
+            </details>
+            <details>
+              <summary>Profile coverage</summary>
+              <div className="drawer-list compact">
+                {Object.entries(viewModel.drawers.builder.skillStudio.coverageByProfile).map(
+                  ([profile, count]) => (
+                    <article className="drawer-card" key={`coverage-${profile}`}>
+                      <span>{profile}</span>
+                      <strong>{count} suitable pack(s)</strong>
+                    </article>
+                  ),
+                )}
               </div>
             </details>
           </section>
@@ -1384,6 +1601,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </article>
               ))}
             </div>
+            <details>
+              <summary>Learning queue</summary>
+              <ul>
+                {viewModel.drawers.builder.workflowStudio.learningQueue.length > 0 ? (
+                  viewModel.drawers.builder.workflowStudio.learningQueue.map(item => (
+                    <li key={`learning-${item}`}>{listLabel(item)}</li>
+                  ))
+                ) : (
+                  <li>No pending workflow learning item.</li>
+                )}
+              </ul>
+            </details>
           </section>
 
           <section className="drawer-block">
@@ -1637,6 +1866,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </strong>
                 <p>{viewModel.emptyState.confidencePhase}</p>
                 <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
+                <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
               </div>
               <ul>
                 {viewModel.emptyState.readiness.map(item => (
@@ -1719,6 +1949,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p>
                       {viewModel.drawers.builder.workflowStudio.recommended?.description ||
                         "Select a recipe in the Builder drawer."}
+                    </p>
+                    <p>
+                      {viewModel.drawers.builder.qualityRoadmap.headline}
+                      {` · Gap ${viewModel.drawers.builder.qualityRoadmap.gap}%`}
                     </p>
                     {viewModel.drawers.builder.workflowStudio.recommended ? (
                       <div className="builder-inline-list">

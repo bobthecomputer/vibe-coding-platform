@@ -521,6 +521,14 @@ function deriveConfidenceSurface({
     releaseStatus: titleizeToken(release?.status || "building"),
     releaseScore,
     qualityScore,
+    qualitySignals: {
+      completionRate: asInt(release?.qualitySignals?.completionRate),
+      delegatedRunRate: asInt(release?.qualitySignals?.delegatedRunRate),
+      resumeRunRate: asInt(release?.qualitySignals?.resumeRunRate),
+      resumeCompletionRate: asInt(release?.qualitySignals?.resumeCompletionRate),
+      verificationPauseRate: asInt(release?.qualitySignals?.verificationPauseRate),
+    },
+    proofReady: Boolean(release?.proofReadiness?.ready),
     requiredGateSummary: {
       passed: requiredPassed,
       total: requiredTotal,
@@ -763,6 +771,13 @@ function deriveSkillStudio(snapshot, workspace) {
       audience: titleizeToken(item?.audience || "all"),
       status: titleizeToken(item?.testStatus || item?.promotionState || "recommended"),
       tone: skillPackTone(item),
+      installed: Boolean(item?.installed),
+      executionCapable: Boolean(item?.execution_capable),
+      guidanceOnly: Boolean(item?.guidance_only),
+      permissions: asList(item?.permissions),
+      profileSuitability: asList(item?.profile_suitability).map(entry => titleizeToken(entry)),
+      originType: titleizeToken(item?.originType || item?.source?.kind || "recommended"),
+      testStatus: titleizeToken(item?.testStatus || "recommended"),
     }));
 
   const curated = curatedPacks.slice(0, 10).map(item => ({
@@ -772,7 +787,44 @@ function deriveSkillStudio(snapshot, workspace) {
     usageCount: asInt(item?.usageCount),
     helpedCount: asInt(item?.helpedCount),
     tone: skillPackTone(item),
+    installed: Boolean(item?.installed),
+    executionCapable: Boolean(item?.execution_capable),
+    guidanceOnly: Boolean(item?.guidance_only),
+    permissions: asList(item?.permissions),
+    profileSuitability: asList(item?.profile_suitability).map(entry => titleizeToken(entry)),
+    originType: titleizeToken(item?.originType || item?.source?.kind || "curated"),
+    testStatus: titleizeToken(item?.testStatus || "active"),
   }));
+
+  const allPacks = uniq([...recommended.map(item => item.id), ...curated.map(item => item.id)]);
+  const needsAttention = curated.filter(
+    item =>
+      item.status !== "Reviewed" ||
+      !item.installed ||
+      item.testStatus !== "Reviewed",
+  );
+  const executionReadyCount = curated.filter(
+    item => item.installed && item.executionCapable && item.testStatus === "Reviewed",
+  ).length;
+  const coverageByProfile = {
+    Beginner: curated.filter(item => item.profileSuitability.includes("Beginner")).length,
+    Builder: curated.filter(item => item.profileSuitability.includes("Builder")).length,
+    Advanced: curated.filter(item => item.profileSuitability.includes("Advanced")).length,
+  };
+  const nextQualityActions = uniq([
+    asInt(summary?.needsTestCount) > 0
+      ? `Review and test ${asInt(summary?.needsTestCount)} skill pack(s) with missing verification status.`
+      : "",
+    recommended.some(item => !item.installed)
+      ? "Install or promote recommended packs before claiming full workflow coverage."
+      : "",
+    executionReadyCount < Math.max(1, Math.ceil(curated.length * 0.6))
+      ? "Increase execution-capable reviewed packs to support broader operator workflows."
+      : "",
+    asInt(summary?.learnedCount) === 0
+      ? "Capture at least one learned skill event from a real mission cycle."
+      : "",
+  ]).slice(0, 4);
 
   return {
     summary: {
@@ -782,9 +834,14 @@ function deriveSkillStudio(snapshot, workspace) {
       learnedCount: asInt(summary?.learnedCount),
       disabledCount: asInt(summary?.disabledCount),
       installedCount: curatedPacks.filter(item => item?.installed).length,
+      executionReadyCount,
+      uniquePackCount: allPacks.length,
     },
     recommended,
     curated,
+    needsAttention: needsAttention.slice(0, 8),
+    coverageByProfile,
+    nextQualityActions,
     capabilitiesNote:
       "Skill CRUD is not exposed as a dedicated control-room command yet, so this studio is review-first.",
   };
@@ -856,6 +913,154 @@ function deriveBuilderOps(workspace) {
       surface: "validate",
       tone: item?.requiresApproval ? "warn" : "good",
     })),
+  };
+}
+
+function roadmapState(done, blocked = false) {
+  if (done) {
+    return "done";
+  }
+  return blocked ? "blocked" : "next";
+}
+
+function roadmapTone(state) {
+  if (state === "done") {
+    return "good";
+  }
+  if (state === "blocked") {
+    return "bad";
+  }
+  return "warn";
+}
+
+function deriveQualityRoadmap({
+  confidence,
+  mission,
+  setupHealth,
+  serviceStudio,
+  skillStudio,
+  workflowStudio,
+  builderOps,
+}) {
+  const requiredDone =
+    confidence?.requiredGateSummary?.total > 0 &&
+    confidence?.requiredGateSummary?.passed >= confidence?.requiredGateSummary?.total;
+  const completionRate = asInt(confidence?.qualitySignals?.completionRate);
+  const delegatedRate = asInt(confidence?.qualitySignals?.delegatedRunRate);
+  const resumeCompletionRate = asInt(confidence?.qualitySignals?.resumeCompletionRate);
+  const verificationPauseRate = asInt(confidence?.qualitySignals?.verificationPauseRate);
+  const serviceHealthy =
+    asInt(serviceStudio?.summary?.needsAttentionCount) === 0 &&
+    asInt(setupHealth?.missingDependencies?.length) === 0;
+  const skillQualityReady = asInt(skillStudio?.summary?.needsTestCount) === 0;
+  const workflowReady = asInt(workflowStudio?.summary?.blockedCount) === 0;
+  const proofReady = Boolean(confidence?.proofReady);
+  const hasMission = Boolean(mission);
+  const hasValidationAction = asList(builderOps?.validationActions).length > 0;
+
+  const tracks = [
+    {
+      id: "required-gates",
+      label: "Required gates stay green",
+      state: roadmapState(requiredDone),
+      detail: confidence?.requiredGateSummary?.label || "Required gate summary unavailable.",
+      hint: requiredDone
+        ? "All required gates are currently passing."
+        : "Resolve failed required gates before quality tuning.",
+      suggestedAction: hasValidationAction ? "Run validation action" : "",
+      actionKind: hasValidationAction ? "validate" : "",
+    },
+    {
+      id: "completion-rate",
+      label: "Lift completion rate above 50%",
+      state: roadmapState(completionRate >= 50, !hasMission),
+      detail: `Current completion rate: ${completionRate}%`,
+      hint: hasMission
+        ? "Run bounded missions end-to-end and close them with proof."
+        : "Launch a mission first to generate quality data.",
+      suggestedAction: hasMission ? "Launch one bounded run" : "Start first mission",
+      actionKind: "mission",
+    },
+    {
+      id: "delegated-usage",
+      label: "Lift delegated run rate above 20%",
+      state: roadmapState(delegatedRate >= 20, !hasMission),
+      detail: `Current delegated run rate: ${delegatedRate}%`,
+      hint: "Use runtime lanes that exercise delegated execution with approval boundaries.",
+      suggestedAction: "Launch delegated mission",
+      actionKind: "mission",
+    },
+    {
+      id: "resume-reliability",
+      label: "Lift resumed-run completion above 60%",
+      state: roadmapState(resumeCompletionRate >= 60, !hasMission),
+      detail: `Current resumed completion rate: ${resumeCompletionRate}%`,
+      hint: "Pause/resume real runs and ensure they still close with proof.",
+      suggestedAction: "Run resume scenario",
+      actionKind: "mission",
+    },
+    {
+      id: "verification-friction",
+      label: "Keep verification pauses below 25%",
+      state: roadmapState(verificationPauseRate < 25),
+      detail: `Current verification pause rate: ${verificationPauseRate}%`,
+      hint: "Use validation actions continuously and tighten proof expectations.",
+      suggestedAction: hasValidationAction ? "Run validation action" : "Review verification defaults",
+      actionKind: hasValidationAction ? "validate" : "",
+    },
+    {
+      id: "skill-quality",
+      label: "Skill studio quality bar",
+      state: roadmapState(skillQualityReady),
+      detail: `${asInt(skillStudio?.summary?.needsTestCount)} pack(s) still need test/review coverage.`,
+      hint: skillQualityReady
+        ? "Skill packs are currently reviewed."
+        : "Focus on packs marked as not reviewed or not installed.",
+      suggestedAction:
+        asList(skillStudio?.nextQualityActions)[0] || "Review skill studio inventory",
+      actionKind: "skill",
+    },
+    {
+      id: "service-health",
+      label: "Service health stays stable",
+      state: roadmapState(serviceHealthy),
+      detail: `${asInt(serviceStudio?.summary?.needsAttentionCount)} service(s) need attention.`,
+      hint: serviceHealthy
+        ? "All tracked services are currently healthy."
+        : "Repair service blockers before long unattended runs.",
+      suggestedAction: "Run service repair action",
+      actionKind: "service",
+    },
+    {
+      id: "workflow-readiness",
+      label: "Workflow recipes stay ready",
+      state: roadmapState(workflowReady && proofReady),
+      detail: `${asInt(workflowStudio?.summary?.blockedCount)} workflow(s) blocked · proof cycle ${proofReady ? "ready" : "not ready"}.`,
+      hint: "Use one recommended workflow end-to-end and capture proof.",
+      suggestedAction: "Execute recommended workflow",
+      actionKind: "workflow",
+    },
+  ].map(item => ({
+    ...item,
+    tone: roadmapTone(item.state),
+  }));
+
+  const doneCount = tracks.filter(item => item.state === "done").length;
+  const nextCount = tracks.filter(item => item.state === "next").length;
+  const blockedCount = tracks.filter(item => item.state === "blocked").length;
+
+  return {
+    targetScore: 100,
+    currentScore: confidence?.score || 0,
+    gap: Math.max(0, 100 - (confidence?.score || 0)),
+    doneCount,
+    nextCount,
+    blockedCount,
+    tracks,
+    headline:
+      nextCount === 0 && blockedCount === 0
+        ? "Quality roadmap is complete."
+        : `${nextCount + blockedCount} quality step(s) remain for 100%.`,
   };
 }
 
@@ -1093,6 +1298,16 @@ export function buildMissionControlModel({
   const skillStudio = deriveSkillStudio(snapshot, workspace);
   const workflowStudio = deriveWorkflowStudio(snapshot, profileId);
   const builderOps = deriveBuilderOps(workspace);
+  const stateAudit = deriveStateAudit({ mission, setupHealth });
+  const qualityRoadmap = deriveQualityRoadmap({
+    confidence,
+    mission,
+    setupHealth,
+    serviceStudio,
+    skillStudio,
+    workflowStudio,
+    builderOps,
+  });
   const proofTone =
     asList(mission?.state?.verification_failures).length > 0
       ? "bad"
@@ -1209,9 +1424,7 @@ export function buildMissionControlModel({
     asList(snapshot?.workspaces).length === 0 ? "Add at least one workspace" : "",
     previewMode !== "live" ? "Preview mode is active; actions are read-only." : "",
   ]);
-  const activeAuditCount = deriveStateAudit({ mission, setupHealth }).filter(
-    item => item.state === "active",
-  ).length;
+  const activeAuditCount = stateAudit.filter(item => item.state === "active").length;
   const requiredGateFailures = confidence.gates.filter(
     item => item.required && item.passed === false,
   ).length;
@@ -1220,6 +1433,8 @@ export function buildMissionControlModel({
     activeAuditCount +
     asInt(serviceStudio.summary.needsAttentionCount) +
     asInt(skillStudio.summary.needsTestCount) +
+    qualityRoadmap.nextCount +
+    qualityRoadmap.blockedCount +
     requiredGateFailures;
 
   return {
@@ -1245,6 +1460,7 @@ export function buildMissionControlModel({
       recommendedAction: primaryAction.label,
       confidenceLabel: confidence.label,
       confidencePhase: confidence.phase,
+      qualityRoadmapHeadline: qualityRoadmap.headline,
       recommendedWorkflow:
         workflowStudio?.recommended?.label || "Long-Run Agent Session",
       launchEntryLabel: asList(snapshot?.workspaces).length > 0 ? "Launch mission" : "Add workspace",
@@ -1325,8 +1541,9 @@ export function buildMissionControlModel({
         workflowStudio,
         gitActions: builderOps.gitActions,
         validationActions: builderOps.validationActions,
+        qualityRoadmap,
         featureTruth,
-        stateAudit: deriveStateAudit({ mission, setupHealth }),
+        stateAudit,
         events: events.slice(0, 10),
         mode: uiMode,
       },

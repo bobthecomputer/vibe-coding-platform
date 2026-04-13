@@ -32,6 +32,13 @@ This removes split ownership between `t3code` and `desktop-ui` for the main app 
 3. Switch to `Builder` mode and open the Builder drawer to access:
    - fixture selection
    - live-sync cadence
+   - release-confidence score and required-gate breakdown
+   - roadmap-to-100 quality sprint (state-driven next actions)
+   - workspace profile policy editor (harness, routing, execution target, MiniMax auth path)
+   - service management surface with executable setup actions
+   - skill studio catalog review with filter/search/profile coverage
+   - workflow studio recipes and learning queue
+   - git and validation operations
    - feature-truth audit
    - core-state audit
 4. Keep `Preview = Live Backend` for real mission validation.
@@ -42,6 +49,7 @@ This removes split ownership between `t3code` and `desktop-ui` for the main app 
 - Snapshot refresh still supports push events (`control-room://changed`, `control-room://delta`) plus optional polling fallback.
 - Polling suspends when the window is hidden and resumes on visibility restore.
 - Activity, runtime events, and proof deltas are shown in the mission thread and review drawers.
+- Builder mode now expands into a materially denser technical surface; Agent mode stays thread-first with lower control density.
 - Render-time crashes now show a recoverable error panel with failing action context and boot diagnostics.
 
 Official references:
