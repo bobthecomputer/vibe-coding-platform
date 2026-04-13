@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import uuid
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,27 @@ HEARTBEAT_STALE_FLOOR_SECONDS = max(
     int(os.environ.get("FLUXIO_HEARTBEAT_STALE_SECONDS", "35")),
     5,
 )
+SESSION_SETTLE_TIMEOUT_SECONDS = max(
+    float(os.environ.get("FLUXIO_SESSION_SETTLE_SECONDS", "0.9")),
+    0.0,
+)
+SESSION_QUICK_EXIT_GRACE_SECONDS = max(
+    float(os.environ.get("FLUXIO_SESSION_QUICK_EXIT_GRACE_SECONDS", "0.45")),
+    0.0,
+)
+SESSION_SETTLE_POLL_SECONDS = max(
+    float(os.environ.get("FLUXIO_SESSION_SETTLE_POLL_SECONDS", "0.05")),
+    0.01,
+)
+PID_ALIVE_CACHE_TTL_SECONDS = max(
+    float(os.environ.get("FLUXIO_PID_CACHE_TTL_SECONDS", "0.35")),
+    0.0,
+)
+PID_ALIVE_CACHE_MAX_SIZE = max(
+    int(os.environ.get("FLUXIO_PID_CACHE_MAX_SIZE", "512")),
+    64,
+)
+_PID_ALIVE_CACHE: dict[int, tuple[float, bool]] = {}
 
 
 class DelegatedRuntimeSupervisor:
@@ -95,7 +117,6 @@ class DelegatedRuntimeSupervisor:
                 "--command",
                 session.launch_command,
             ],
-            cwd=str(self.root),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=_creationflags(),
@@ -111,7 +132,7 @@ class DelegatedRuntimeSupervisor:
             message="Delegated runtime supervisor started.",
             status="launching",
         )
-        return self.refresh_session(session)
+        return self._settle_session(session)
 
     def refresh_session(self, session: DelegatedRuntimeSession | dict | str) -> DelegatedRuntimeSession:
         payload = self._load_session(session)
@@ -121,8 +142,6 @@ class DelegatedRuntimeSupervisor:
         _apply_execution_truth(payload)
         _apply_heartbeat_truth(payload)
         if payload.status in {"completed", "failed", "stopped"}:
-            payload.updated_at = utc_now_iso()
-            self._write_session(payload)
             return payload
 
         alive = _pid_alive(payload.supervisor_pid) or _pid_alive(payload.pid)
@@ -138,9 +157,11 @@ class DelegatedRuntimeSupervisor:
         else:
             payload.status = "completed" if payload.exit_code in {0, None} else "failed"
             payload.detail = "Delegated runtime process is no longer active."
+            payload.updated_at = utc_now_iso()
+            _apply_heartbeat_truth(payload)
+            self._write_session(payload)
+            return payload
         _apply_heartbeat_truth(payload)
-        payload.updated_at = utc_now_iso()
-        self._write_session(payload)
         return payload
 
     def stop_session(self, session: DelegatedRuntimeSession | dict | str) -> DelegatedRuntimeSession:
@@ -307,9 +328,15 @@ class DelegatedRuntimeSupervisor:
         return event
 
     def _sync_structured_state(self, session: DelegatedRuntimeSession, max_events: int = 5) -> DelegatedRuntimeSession:
-        events = _read_structured_events(Path(session.events_path)) if session.events_path else []
-        session.event_cursor = len(events)
-        session.latest_events = events[-max_events:]
+        if session.events_path:
+            latest_events, event_count = _read_structured_events(
+                Path(session.events_path),
+                max_events=max_events,
+            )
+        else:
+            latest_events, event_count = [], 0
+        session.event_cursor = event_count
+        session.latest_events = latest_events
         if session.latest_events:
             latest = session.latest_events[-1]
             session.last_event = latest.get("message", session.last_event)
@@ -322,20 +349,51 @@ class DelegatedRuntimeSupervisor:
             session.pending_approval = {}
         return session
 
+    def _settle_session(self, session: DelegatedRuntimeSession) -> DelegatedRuntimeSession:
+        current = self.refresh_session(session)
+        if SESSION_SETTLE_TIMEOUT_SECONDS <= 0:
+            return current
+        terminal_statuses = {"completed", "failed", "stopped", "waiting_for_approval"}
+        if current.status in terminal_statuses:
+            return current
+        now = time.monotonic()
+        settle_deadline = now + SESSION_SETTLE_TIMEOUT_SECONDS
+        quick_exit_deadline = now + min(
+            SESSION_SETTLE_TIMEOUT_SECONDS,
+            SESSION_QUICK_EXIT_GRACE_SECONDS,
+        )
+        while time.monotonic() < settle_deadline:
+            if current.status in terminal_statuses:
+                return current
+            if current.status not in {"launching", "running"}:
+                return current
+            if (
+                current.status == "running"
+                and time.monotonic() >= quick_exit_deadline
+            ):
+                return current
+            time.sleep(SESSION_SETTLE_POLL_SECONDS)
+            current = self.refresh_session(current)
+        return current
 
-def _read_structured_events(events_path: Path) -> list[dict]:
+
+def _read_structured_events(events_path: Path, max_events: int = 5) -> tuple[list[dict], int]:
     if not events_path.exists():
-        return []
-    events: list[dict] = []
-    for line in events_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return events
+        return [], 0
+    event_count = 0
+    tail: deque[dict] = deque(maxlen=max(1, max_events))
+    with events_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_count += 1
+            tail.append(event)
+    return list(tail), event_count
 
 
 def _read_json_with_retries(path: Path, retries: int = 8, delay: float = 0.02) -> dict:
@@ -451,6 +509,11 @@ def _tail_summary(log_path: Path, max_lines: int = 3) -> str:
 def _pid_alive(pid: int) -> bool:
     if not pid:
         return False
+    now = time.monotonic()
+    if PID_ALIVE_CACHE_TTL_SECONDS > 0:
+        cached = _PID_ALIVE_CACHE.get(pid)
+        if cached and now - cached[0] <= PID_ALIVE_CACHE_TTL_SECONDS:
+            return cached[1]
     if os.name == "nt":
         completed = subprocess.run(  # noqa: S603
             ["tasklist", "/FI", f"PID eq {pid}"],
@@ -459,11 +522,15 @@ def _pid_alive(pid: int) -> bool:
             timeout=10,
             check=False,
         )
-        return str(pid) in completed.stdout
+        alive = str(pid) in completed.stdout
+        _cache_pid_liveness(pid, alive, now)
+        return alive
     try:
         os.kill(pid, 0)
     except OSError:
+        _cache_pid_liveness(pid, False, now)
         return False
+    _cache_pid_liveness(pid, True, now)
     return True
 
 
@@ -478,8 +545,27 @@ def _terminate_pid(pid: int) -> None:
             timeout=10,
             check=False,
         )
+        _PID_ALIVE_CACHE.pop(pid, None)
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError:
         return
+    _PID_ALIVE_CACHE.pop(pid, None)
+
+
+def _cache_pid_liveness(pid: int, alive: bool, now: float) -> None:
+    if PID_ALIVE_CACHE_TTL_SECONDS <= 0:
+        return
+    if len(_PID_ALIVE_CACHE) >= PID_ALIVE_CACHE_MAX_SIZE:
+        expiry_cutoff = now - PID_ALIVE_CACHE_TTL_SECONDS
+        expired = [key for key, value in _PID_ALIVE_CACHE.items() if value[0] < expiry_cutoff]
+        for key in expired:
+            _PID_ALIVE_CACHE.pop(key, None)
+    while len(_PID_ALIVE_CACHE) >= PID_ALIVE_CACHE_MAX_SIZE:
+        oldest_pid = min(
+            _PID_ALIVE_CACHE.items(),
+            key=lambda item: item[1][0],
+        )[0]
+        _PID_ALIVE_CACHE.pop(oldest_pid, None)
+    _PID_ALIVE_CACHE[pid] = (now, alive)

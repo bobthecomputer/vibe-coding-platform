@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import uuid
@@ -67,6 +68,14 @@ MINIMAX_SETUP_ACTION_IDS = {
     "minimax-cn-oauth",
     "minimax-global-api",
     "minimax-cn-api",
+}
+HARNESS_RECENT_RUN_LIMIT = max(
+    int(os.environ.get("FLUXIO_HARNESS_RECENT_RUN_LIMIT", "20")),
+    8,
+)
+RELEASE_READINESS_WEIGHTS = {
+    "required": 80,
+    "quality": 20,
 }
 
 
@@ -715,6 +724,12 @@ class ControlRoomStore:
             ),
             activity=activity,
         )
+        release_readiness = build_release_readiness_snapshot(
+            self.root,
+            onboarding=onboarding,
+            setup_health=setup_health,
+            harness_lab=harness_lab_snapshot,
+        )
 
         return {
             "workspaceRoot": str(self.root),
@@ -757,6 +772,7 @@ class ControlRoomStore:
             "providerSetupStatus": provider_setup_status,
             "efficiencyAutotune": efficiency_autotune,
             "bridgeLab": connected_apps_snapshot,
+            "releaseReadiness": release_readiness,
         }
 
     def _default_workspace_profile(self) -> WorkspaceProfile:
@@ -1962,6 +1978,442 @@ def _percent(numerator: int, denominator: int) -> int:
     return int(round((numerator / denominator) * 100))
 
 
+def _load_json_file(path: Path) -> dict | list | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _verify_desktop_script_contract(root: Path) -> tuple[bool, str]:
+    package_path = root / "package.json"
+    payload = _load_json_file(package_path)
+    if not isinstance(payload, dict):
+        return False, "package.json is missing or unreadable."
+    scripts = payload.get("scripts", {})
+    if not isinstance(scripts, dict):
+        return False, "package.json has no scripts section."
+    command = str(scripts.get("verify:desktop", "")).strip()
+    required_snippets = (
+        "python -m pytest tests -q",
+        "npm run frontend:build",
+        "npm run tauri build -- --debug",
+    )
+    missing = [snippet for snippet in required_snippets if snippet not in command]
+    if missing:
+        return False, "verify:desktop is missing required stages."
+    return True, "verify:desktop includes pytest, frontend build, and Tauri build."
+
+
+def _verify_frontend_source_alignment(root: Path) -> tuple[bool, str]:
+    required_paths = [
+        root / "t3code" / "apps" / "web" / "src" / "main.tsx",
+        root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx",
+        root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts",
+    ]
+    if any(not path.exists() for path in required_paths):
+        return False, "t3code frontend entrypoint files are missing."
+
+    vite_path = root / "vite.config.mjs"
+    tauri_path = root / "src-tauri" / "tauri.conf.json"
+    if not vite_path.exists() or not tauri_path.exists():
+        return False, "Vite or Tauri desktop config is missing."
+    vite_text = vite_path.read_text(encoding="utf-8")
+    if not _vite_targets_t3_web(vite_text):
+        return False, "vite.config.mjs is not aligned with t3code/apps/web."
+
+    tauri_payload = _load_json_file(tauri_path)
+    if not isinstance(tauri_payload, dict):
+        return False, "src-tauri/tauri.conf.json is unreadable."
+    frontend_dist = (
+        str(tauri_payload.get("build", {}).get("frontendDist", ""))
+        .replace("\\", "/")
+        .strip()
+    )
+    if "t3code/apps/web/dist" not in frontend_dist:
+        return False, "src-tauri/tauri.conf.json is not aligned with t3code/apps/web/dist."
+    return True, "Frontend source-of-truth is aligned to t3code/apps/web."
+
+
+def _vite_targets_t3_web(vite_text: str) -> bool:
+    normalized = vite_text.replace("\\", "/")
+    if "t3code/apps/web" in normalized:
+        return True
+
+    for match in re.finditer(
+        r"const\s+([A-Za-z_]\w*)\s*=\s*resolve\(([^)]*)\)",
+        normalized,
+        flags=re.DOTALL,
+    ):
+        variable_name = match.group(1)
+        args = match.group(2)
+        if not (
+            re.search(r"['\"]t3code['\"]", args)
+            and re.search(r"['\"]apps['\"]", args)
+            and re.search(r"['\"]web['\"]", args)
+        ):
+            continue
+        root_refs_variable = re.search(
+            rf"\broot\s*:\s*{re.escape(variable_name)}\b",
+            normalized,
+        )
+        if root_refs_variable:
+            return True
+    return False
+
+
+def _release_quality_score(
+    *,
+    completion_rate: int,
+    delegated_run_rate: int,
+    resume_run_rate: int,
+    resume_completion_rate: int,
+    verification_pause_rate: int,
+) -> int:
+    resume_component = resume_completion_rate if resume_run_rate > 0 else 50
+    values = [
+        max(0, min(completion_rate, 100)),
+        max(0, min(delegated_run_rate * 2, 100)),
+        max(0, min(resume_component, 100)),
+        max(0, min(100 - verification_pause_rate, 100)),
+    ]
+    return int(round(sum(values) / len(values)))
+
+
+def _build_proving_cycle_readiness(root: Path) -> dict:
+    payload = _load_json_file(root / ".agent_control" / "missions.json")
+    missions = payload if isinstance(payload, list) else []
+    runtime_counts = {
+        "openclaw": 0,
+        "hermes": 0,
+    }
+    completed_counts = {
+        "openclaw": 0,
+        "hermes": 0,
+    }
+    approval_wait_seen = False
+    delegated_active_seen = False
+
+    for mission in missions:
+        if not isinstance(mission, dict):
+            continue
+        runtime_id = str(mission.get("runtime_id", "")).strip().lower()
+        state = mission.get("state", {})
+        if not isinstance(state, dict):
+            state = {}
+        status = str(state.get("status", "")).strip().lower()
+        continuity_state = str(state.get("continuity_state", "")).strip().lower()
+        time_budget_status = str(state.get("time_budget_status", "")).strip().lower()
+        stop_reason = str(state.get("stop_reason", "")).strip().lower()
+        runtime_lane = str(state.get("current_runtime_lane", "")).strip().lower()
+        escalation_policy = mission.get("escalation_policy", {})
+        if not isinstance(escalation_policy, dict):
+            escalation_policy = {}
+        pending_approval_count = int(escalation_policy.get("pending_count", 0) or 0)
+        delegated_sessions = state.get("delegated_runtime_sessions")
+        if not isinstance(delegated_sessions, list):
+            delegated_sessions = mission.get("delegated_runtime_sessions", [])
+        delegated_session_statuses = {
+            str(item.get("status", "")).strip().lower()
+            for item in delegated_sessions
+            if isinstance(item, dict)
+        }
+        if runtime_id in runtime_counts:
+            runtime_counts[runtime_id] += 1
+            if status == "completed":
+                completed_counts[runtime_id] += 1
+        if runtime_id == "hermes" and (
+            status == "needs_approval"
+            or continuity_state == "approval_waiting"
+            or pending_approval_count > 0
+            or "waiting_for_approval" in delegated_session_statuses
+        ):
+            approval_wait_seen = True
+        if (
+            continuity_state == "delegated_active"
+            or time_budget_status == "delegated_active"
+            or stop_reason == "delegated_runtime_running"
+            or any(
+                status_name in {"launching", "running", "waiting_for_approval"}
+                for status_name in delegated_session_statuses
+            )
+            or (
+                "delegated lane" in runtime_lane
+                and any(token in runtime_lane for token in ("launching", "running", "waiting"))
+            )
+        ):
+            delegated_active_seen = True
+
+    proofs = [
+        {
+            "proofId": "openclaw_proving_mission",
+            "label": "OpenClaw proving mission completed",
+            "passed": completed_counts["openclaw"] > 0,
+            "details": f"Completed OpenClaw missions: {completed_counts['openclaw']}.",
+        },
+        {
+            "proofId": "hermes_delegated_mission",
+            "label": "Hermes delegated mission completed",
+            "passed": completed_counts["hermes"] > 0,
+            "details": f"Completed Hermes missions: {completed_counts['hermes']}.",
+        },
+        {
+            "proofId": "approval_wait_evidence",
+            "label": "Hermes approval-wait evidence recorded",
+            "passed": approval_wait_seen,
+            "details": (
+                "At least one Hermes mission recorded `needs_approval` or `approval_waiting`."
+                if approval_wait_seen
+                else "No Hermes approval-wait state has been recorded yet."
+            ),
+        },
+        {
+            "proofId": "delegated_active_evidence",
+            "label": "Delegated-active continuity evidence recorded",
+            "passed": delegated_active_seen,
+            "details": (
+                "At least one mission recorded `delegated_active` continuity."
+                if delegated_active_seen
+                else "No delegated-active continuity state has been recorded yet."
+            ),
+        },
+    ]
+    missing = [item["label"] for item in proofs if not item["passed"]]
+    next_actions = [f"Capture proof: {label}." for label in missing]
+    return {
+        "missionCount": len(missions),
+        "runtimeMissionCounts": runtime_counts,
+        "runtimeCompletionCounts": completed_counts,
+        "proofs": proofs,
+        "missingProofs": missing,
+        "ready": not missing,
+        "nextActions": next_actions[:4],
+    }
+
+
+def build_release_readiness_snapshot(
+    root: Path,
+    *,
+    onboarding: dict | None = None,
+    setup_health: dict | None = None,
+    harness_lab: dict | None = None,
+) -> dict:
+    root = root.resolve()
+    onboarding_payload = onboarding or detect_onboarding_status(root)
+    setup_health_payload = setup_health or onboarding_payload.get("setupHealth", {})
+    harness_lab_payload = harness_lab or build_harness_lab_snapshot(root)
+    proving_cycle = _build_proving_cycle_readiness(root)
+
+    checks = onboarding_payload.get("checks", {})
+    service_summary = setup_health_payload.get("serviceManagementSummary", {})
+    efficiency = harness_lab_payload.get("efficiency", {})
+    session_health = harness_lab_payload.get("sessionHealth", {})
+
+    verify_desktop_ok, verify_desktop_detail = _verify_desktop_script_contract(root)
+    frontend_alignment_ok, frontend_alignment_detail = _verify_frontend_source_alignment(root)
+    required_total_items = int(service_summary.get("totalItems", 0) or 0)
+    required_healthy_count = int(service_summary.get("healthyCount", 0) or 0)
+    completion_rate = int(efficiency.get("completionRate", 0) or 0)
+    delegated_run_rate = int(efficiency.get("delegatedRunRate", 0) or 0)
+    resume_run_rate = int(efficiency.get("resumeRunRate", 0) or 0)
+    resume_completion_rate = int(efficiency.get("resumeCompletionRate", 0) or 0)
+    verification_pause_rate = int(efficiency.get("verificationPauseRate", 0) or 0)
+    stale_heartbeat_count = int(session_health.get("staleHeartbeatCount", 0) or 0)
+
+    required_gates = [
+        {
+            "gateId": "verify_desktop_contract",
+            "label": "verify:desktop contract",
+            "required": True,
+            "passed": verify_desktop_ok,
+            "details": verify_desktop_detail,
+        },
+        {
+            "gateId": "frontend_source_alignment",
+            "label": "frontend source alignment",
+            "required": True,
+            "passed": frontend_alignment_ok,
+            "details": frontend_alignment_detail,
+        },
+        {
+            "gateId": "uv_installed",
+            "label": "uv installed",
+            "required": True,
+            "passed": bool(checks.get("uv", {}).get("installed")),
+            "details": str(checks.get("uv", {}).get("details", "")),
+        },
+        {
+            "gateId": "openclaw_installed",
+            "label": "OpenClaw installed",
+            "required": True,
+            "passed": bool(checks.get("openclaw", {}).get("installed")),
+            "details": str(checks.get("openclaw", {}).get("details", "")),
+        },
+        {
+            "gateId": "hermes_installed",
+            "label": "Hermes installed",
+            "required": True,
+            "passed": bool(checks.get("hermes", {}).get("installed")),
+            "details": str(checks.get("hermes", {}).get("details", "")),
+        },
+        {
+            "gateId": "setup_required_services_healthy",
+            "label": "required setup services healthy",
+            "required": True,
+            "passed": required_total_items > 0 and required_healthy_count == required_total_items,
+            "details": f"{required_healthy_count}/{required_total_items} required setup services are healthy.",
+        },
+        {
+            "gateId": "runtime_heartbeat_stable",
+            "label": "delegated heartbeat stable",
+            "required": True,
+            "passed": stale_heartbeat_count == 0,
+            "details": (
+                "No stale delegated runtime heartbeat detected."
+                if stale_heartbeat_count == 0
+                else f"{stale_heartbeat_count} delegated runtime session(s) have stale heartbeat."
+            ),
+        },
+    ]
+    optional_signals = [
+        {
+            "gateId": "completion_rate",
+            "label": "recent completion rate >= 50%",
+            "required": False,
+            "passed": completion_rate >= 50,
+            "details": f"Current completion rate is {completion_rate}%.",
+        },
+        {
+            "gateId": "delegated_run_rate",
+            "label": "delegated run rate >= 20%",
+            "required": False,
+            "passed": delegated_run_rate >= 20,
+            "details": f"Current delegated run rate is {delegated_run_rate}%.",
+        },
+        {
+            "gateId": "resume_completion_rate",
+            "label": "resume completion rate >= 60%",
+            "required": False,
+            "passed": resume_run_rate == 0 or resume_completion_rate >= 60,
+            "details": (
+                "No resumed runs recorded yet."
+                if resume_run_rate == 0
+                else f"Current resume completion rate is {resume_completion_rate}%."
+            ),
+        },
+        {
+            "gateId": "proof_openclaw_completed",
+            "label": "OpenClaw proving mission evidence",
+            "required": False,
+            "passed": bool(
+                next(
+                    (
+                        item.get("passed", False)
+                        for item in proving_cycle.get("proofs", [])
+                        if item.get("proofId") == "openclaw_proving_mission"
+                    ),
+                    False,
+                )
+            ),
+            "details": str(
+                next(
+                    (
+                        item.get("details", "")
+                        for item in proving_cycle.get("proofs", [])
+                        if item.get("proofId") == "openclaw_proving_mission"
+                    ),
+                    "",
+                )
+            ),
+        },
+        {
+            "gateId": "proof_hermes_completed",
+            "label": "Hermes delegated mission evidence",
+            "required": False,
+            "passed": bool(
+                next(
+                    (
+                        item.get("passed", False)
+                        for item in proving_cycle.get("proofs", [])
+                        if item.get("proofId") == "hermes_delegated_mission"
+                    ),
+                    False,
+                )
+            ),
+            "details": str(
+                next(
+                    (
+                        item.get("details", "")
+                        for item in proving_cycle.get("proofs", [])
+                        if item.get("proofId") == "hermes_delegated_mission"
+                    ),
+                    "",
+                )
+            ),
+        },
+    ]
+    gates = required_gates + optional_signals
+    required_passed = sum(1 for gate in required_gates if gate["passed"])
+    required_total = len(required_gates)
+    required_score = _percent(required_passed, required_total)
+    quality_score = _release_quality_score(
+        completion_rate=completion_rate,
+        delegated_run_rate=delegated_run_rate,
+        resume_run_rate=resume_run_rate,
+        resume_completion_rate=resume_completion_rate,
+        verification_pause_rate=verification_pause_rate,
+    )
+    overall_score = int(
+        round(
+            (required_score * RELEASE_READINESS_WEIGHTS["required"] / 100)
+            + (quality_score * RELEASE_READINESS_WEIGHTS["quality"] / 100)
+        )
+    )
+
+    if required_passed == required_total and overall_score >= 85:
+        status = "ready_for_1_0_validation"
+    elif required_passed == required_total:
+        status = "validation_ready_with_quality_gaps"
+    elif required_passed >= max(required_total - 1, 1):
+        status = "close_but_blocked"
+    else:
+        status = "blocked"
+
+    failed_required_actions = [
+        f"{gate['label']}: {gate['details']}"
+        for gate in required_gates
+        if not gate["passed"]
+    ]
+    next_actions = (
+        failed_required_actions
+        + list(proving_cycle.get("nextActions", []))
+        + list(onboarding_payload.get("nextActions", []))
+    )
+    return {
+        "status": status,
+        "score": overall_score,
+        "requiredGateSummary": {
+            "passed": required_passed,
+            "total": required_total,
+            "score": required_score,
+        },
+        "qualityScore": quality_score,
+        "qualitySignals": {
+            "completionRate": completion_rate,
+            "delegatedRunRate": delegated_run_rate,
+            "resumeRunRate": resume_run_rate,
+            "resumeCompletionRate": resume_completion_rate,
+            "verificationPauseRate": verification_pause_rate,
+        },
+        "proofReadiness": proving_cycle,
+        "gates": gates,
+        "nextActions": next_actions[:8],
+        "calculatedAt": utc_now_iso(),
+    }
+
+
 def _build_runtime_session_health(root: Path) -> dict:
     runtime_root = root / ".agent_control" / "runtime_sessions"
     session_paths = sorted(
@@ -1973,10 +2425,14 @@ def _build_runtime_session_health(root: Path) -> dict:
     waiting_approval_count = 0
     healthy_heartbeat_count = 0
     stale_heartbeat_count = 0
+    delegated_healthy_count = 0
+    delegated_stale_count = 0
     latest_heartbeat_age_seconds: int | None = None
     latest_status = ""
     for path in session_paths[:16]:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = _load_json_file(path)
+        if not isinstance(payload, dict):
+            continue
         status = str(payload.get("status", "unknown"))
         heartbeat_status = str(payload.get("heartbeat_status", "unknown"))
         heartbeat_age = payload.get("heartbeat_age_seconds")
@@ -2001,12 +2457,21 @@ def _build_runtime_session_health(root: Path) -> dict:
             healthy_heartbeat_count += 1
         elif effective_heartbeat_status == "stale":
             stale_heartbeat_count += 1
+        if status in {"launching", "running", "waiting_for_approval"}:
+            if effective_heartbeat_status == "healthy":
+                delegated_healthy_count += 1
+            elif effective_heartbeat_status == "stale":
+                delegated_stale_count += 1
+    delegated_total = delegated_healthy_count + delegated_stale_count
     return {
         "totalSessions": len(session_paths),
         "activeCount": active_count,
         "waitingApprovalCount": waiting_approval_count,
         "healthyHeartbeatCount": healthy_heartbeat_count,
         "staleHeartbeatCount": stale_heartbeat_count,
+        "delegatedHealthyCount": delegated_healthy_count,
+        "delegatedStaleCount": delegated_stale_count,
+        "delegatedHealthyRate": _percent(delegated_healthy_count, delegated_total),
         "latestHeartbeatAgeSeconds": latest_heartbeat_age_seconds,
         "latestStatus": latest_status or "idle",
     }
@@ -2015,6 +2480,10 @@ def _build_runtime_session_health(root: Path) -> dict:
 def _harness_efficiency_recommendation(
     *,
     total_runs: int,
+    completion_rate: int,
+    delegated_run_rate: int,
+    resume_run_rate: int,
+    resume_completion_rate: int,
     approval_pause_rate: int,
     verification_pause_rate: int,
     stale_heartbeat_count: int,
@@ -2028,6 +2497,21 @@ def _harness_efficiency_recommendation(
         return (
             "Delegated runtime heartbeat went stale recently. Verify runtime health "
             "before widening unattended autonomy."
+        )
+    if delegated_run_rate < 20 and total_runs >= 4:
+        return (
+            "Delegated runtime usage is still low in recent runs. Run more real delegated "
+            "missions before claiming long-run readiness."
+        )
+    if resume_run_rate >= 20 and resume_completion_rate < 60:
+        return (
+            "Resume continuity is still weak after restart. Improve resume completion "
+            "before expanding unattended missions."
+        )
+    if completion_rate < 50:
+        return (
+            "Completion rate is below 50% on recent runs. Stabilize runtime and verification "
+            "before widening autonomy."
         )
     if approval_pause_rate >= 35:
         return (
@@ -2057,24 +2541,67 @@ def build_harness_lab_snapshot(root: Path) -> dict:
     status_counts: dict[str, int] = {}
     pause_reason_counts: dict[str, int] = {}
     delegated_run_count = 0
+    delegated_failure_run_count = 0
+    runtime_budget_pause_count = 0
+    delegated_active_pause_count = 0
+    resumed_run_count = 0
+    resumed_completed_count = 0
+    approval_resolved_run_count = 0
+    approval_rejected_run_count = 0
     verification_failure_total = 0
     action_count_total = 0
-    for session in sessions[:8]:
+    for session in sessions[:HARNESS_RECENT_RUN_LIMIT]:
         state_path = session / "state.json"
         if not state_path.exists():
             continue
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        payload = _load_json_file(state_path)
+        if not isinstance(payload, dict):
+            continue
         harness_id = payload.get("harness_id", "legacy_autonomous_engine")
         status = str(payload.get("autopilot_status", "unknown"))
         pause_reason = str(payload.get("autopilot_pause_reason", "none") or "none")
-        delegated_session_count = len(payload.get("delegated_runtime_sessions", []))
+        delegated_sessions = payload.get("delegated_runtime_sessions", [])
+        if not isinstance(delegated_sessions, list):
+            delegated_sessions = []
+        delegated_session_count = len(delegated_sessions)
         verification_failures = len(payload.get("verification_failures", []))
         action_count = len(payload.get("action_history", []))
+        metadata = _load_json_file(session / "metadata.json")
+        parent_session_id = (
+            str(metadata.get("parent_session_id", "")).strip()
+            if isinstance(metadata, dict)
+            else ""
+        )
         harness_counts[harness_id] = harness_counts.get(harness_id, 0) + 1
         status_counts[status] = status_counts.get(status, 0) + 1
         pause_reason_counts[pause_reason] = pause_reason_counts.get(pause_reason, 0) + 1
         if delegated_session_count:
             delegated_run_count += 1
+            if status == "failed" or any(
+                str(item.get("status", "")) in {"failed", "stopped"}
+                for item in delegated_sessions
+                if isinstance(item, dict)
+            ):
+                delegated_failure_run_count += 1
+            approval_decisions = {
+                str(entry.get("status", ""))
+                for item in delegated_sessions
+                if isinstance(item, dict)
+                for entry in item.get("approval_history", [])
+                if isinstance(entry, dict)
+            }
+            if "approved" in approval_decisions:
+                approval_resolved_run_count += 1
+            if "rejected" in approval_decisions:
+                approval_rejected_run_count += 1
+        if pause_reason == "runtime_budget":
+            runtime_budget_pause_count += 1
+        if pause_reason == "delegated_runtime_running":
+            delegated_active_pause_count += 1
+        if parent_session_id:
+            resumed_run_count += 1
+            if status == "completed":
+                resumed_completed_count += 1
         verification_failure_total += verification_failures
         action_count_total += action_count
         recent_runs.append(
@@ -2086,6 +2613,7 @@ def build_harness_lab_snapshot(root: Path) -> dict:
                 "pauseReason": pause_reason if pause_reason != "none" else "",
                 "verificationFailures": verification_failures,
                 "delegatedSessionCount": delegated_session_count,
+                "resumedFromSessionId": parent_session_id,
                 "actionCount": action_count,
             }
         )
@@ -2093,9 +2621,18 @@ def build_harness_lab_snapshot(root: Path) -> dict:
     completed_runs = status_counts.get("completed", 0)
     approval_pauses = pause_reason_counts.get("approval_required", 0)
     verification_pauses = pause_reason_counts.get("verification_failed", 0)
+    completion_rate = _percent(completed_runs, total_runs)
+    delegated_run_rate = _percent(delegated_run_count, total_runs)
+    resume_run_rate = _percent(resumed_run_count, total_runs)
+    resume_completion_rate = _percent(resumed_completed_count, resumed_run_count)
+    approval_decision_total = approval_resolved_run_count + approval_rejected_run_count
     session_health = _build_runtime_session_health(root)
     recommendation = _harness_efficiency_recommendation(
         total_runs=total_runs,
+        completion_rate=completion_rate,
+        delegated_run_rate=delegated_run_rate,
+        resume_run_rate=resume_run_rate,
+        resume_completion_rate=resume_completion_rate,
         approval_pause_rate=_percent(approval_pauses, total_runs),
         verification_pause_rate=_percent(verification_pauses, total_runs),
         stale_heartbeat_count=int(session_health["staleHeartbeatCount"]),
@@ -2110,10 +2647,25 @@ def build_harness_lab_snapshot(root: Path) -> dict:
         "efficiency": {
             "totalRuns": total_runs,
             "completedRuns": completed_runs,
-            "completionRate": _percent(completed_runs, total_runs),
+            "completionRate": completion_rate,
             "approvalPauseRate": _percent(approval_pauses, total_runs),
             "verificationPauseRate": _percent(verification_pauses, total_runs),
-            "delegatedRunRate": _percent(delegated_run_count, total_runs),
+            "delegatedRunRate": delegated_run_rate,
+            "delegatedFailureRate": _percent(
+                delegated_failure_run_count,
+                delegated_run_count,
+            ),
+            "runtimeBudgetPauseRate": _percent(runtime_budget_pause_count, total_runs),
+            "delegatedActivePauseRate": _percent(
+                delegated_active_pause_count,
+                total_runs,
+            ),
+            "resumeRunRate": resume_run_rate,
+            "resumeCompletionRate": resume_completion_rate,
+            "approvalRecoveryRate": _percent(
+                approval_resolved_run_count,
+                approval_decision_total,
+            ),
             "averageActionsPerRun": round(action_count_total / total_runs, 1)
             if total_runs
             else 0.0,

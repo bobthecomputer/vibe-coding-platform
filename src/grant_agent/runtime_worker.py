@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 
 
@@ -49,13 +50,13 @@ def _append_event(session_path: Path, *, kind: str, message: str, status: str = 
     }
     with events_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=True) + "\n")
-    latest_events = _read_events(events_path)[-5:]
+    latest_events, event_count = _read_events(events_path, max_events=5)
     updates = {
         "updated_at": event_timestamp,
         "last_event": message,
         "last_event_kind": kind,
         "latest_events": latest_events,
-        "event_cursor": len(_read_events(events_path)),
+        "event_cursor": event_count,
     }
     current_status = str(event["status"] or "")
     if current_status in {"launching", "running", "waiting_for_approval"}:
@@ -74,19 +75,26 @@ def _append_event(session_path: Path, *, kind: str, message: str, status: str = 
     return event
 
 
-def _read_events(path: Path) -> list[dict]:
+def _read_events(path: Path, max_events: int = 0) -> tuple[list[dict], int]:
     if not path.exists():
-        return []
-    rows: list[dict] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return rows
+        return [], 0
+    event_count = 0
+    if max_events > 0:
+        rows: deque[dict] = deque(maxlen=max_events)
+    else:
+        rows = deque()
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_count += 1
+            rows.append(event)
+    return list(rows), event_count
 
 
 def _read_json_with_retries(path: Path, retries: int = 8, delay: float = 0.02) -> dict:

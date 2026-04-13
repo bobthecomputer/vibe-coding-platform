@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import uuid
@@ -22,12 +23,16 @@ from .models import (
     WorkspaceProfile,
     utc_now_iso,
 )
-from .onboarding import detect_onboarding_status
+from .onboarding import detect_onboarding_status, load_telegram_destination
 from .profiles import ProfileRegistry
 from .safety import risk_level_for_command
 
 SETUP_HISTORY_KEY = "__setup__"
-
+TELEGRAM_ENV_KEYS = (
+    "FLUXIO_TELEGRAM_DESTINATION",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_DESTINATION",
+)
 
 def execute_control_room_workspace_action(
     *,
@@ -68,6 +73,39 @@ def execute_control_room_workspace_action(
     )
     record_dict = asdict(record)
     store.append_workspace_action(history_key, record_dict)
+    if (
+        surface == "setup"
+        and spec.get("commandSurface") in {"setup.install", "setup.repair", "setup.telegram"}
+        and record_dict.get("result", {}).get("ok", False)
+        and bool(spec.get("autoRunVerify", False))
+    ):
+        verify_spec = next(
+            (
+                item
+                for item in build_setup_actions(root)
+                if item.get("actionId") == "verify_setup_health"
+            ),
+            None,
+        )
+        if verify_spec is not None:
+            verify_record = _run_action(
+                root=root,
+                surface=surface,
+                spec=verify_spec,
+                workspace=workspace,
+                approved=True,
+            )
+            verify_dict = asdict(verify_record)
+            store.append_workspace_action(history_key, verify_dict)
+            payload = dict(record_dict.get("result", {}).get("payload", {}))
+            verify_payload = verify_dict.get("result", {}).get("payload", {})
+            verify_setup = verify_payload.get("setupHealth", {})
+            payload["autoVerify"] = {
+                "ok": verify_dict.get("result", {}).get("ok", False),
+                "resultSummary": verify_dict.get("result", {}).get("result_summary", ""),
+                "missingDependencies": verify_setup.get("missingDependencies", []),
+            }
+            record_dict.setdefault("result", {})["payload"] = payload
     if surface == "setup":
         record_dict = _refresh_setup_result_payload(
             store=store,
@@ -92,11 +130,20 @@ def build_setup_actions(root: Path) -> list[dict]:
     for action in setup_health.get("repairActions", []):
         item = dict(action)
         action_kind = str(item.get("kind", "")).strip().lower()
-        item["commandSurface"] = (
-            "setup.install"
-            if action_kind == "install"
-            else ("setup.auth" if action_kind == "auth" else "setup.repair")
-        )
+        command_surface = str(item.get("commandSurface", "")).strip()
+        if not command_surface:
+            command_surface = (
+                "setup.install"
+                if action_kind == "install"
+                else ("setup.auth" if action_kind == "auth" else "setup.repair")
+            )
+        item["commandSurface"] = command_surface
+        if (
+            action_kind == "install"
+            and item.get("followUp")
+            and item.get("dependencyId") in {"openclaw", "hermes", "tauri_prereqs"}
+        ):
+            item["autoRunFollowUp"] = True
         actions.append(item)
     actions.append(
         {
@@ -127,7 +174,7 @@ def _resolve_action_spec(
         action = next((item for item in actions if item.get("actionId") == action_id), None)
         if action is None:
             raise ValueError(f"Unknown setup action id: {action_id}")
-        if action.get("commandSurface") != "setup.verify":
+        if action.get("commandSurface") not in {"setup.verify", "setup.telegram"}:
             profile_name = workspace.user_profile if workspace is not None else "builder"
             action["requiresApproval"] = _setup_action_requires_approval(profile_name)
         return action, workspace
@@ -246,8 +293,39 @@ def _run_action(
         record.executed_at = utc_now_iso()
         return record
 
+    if spec.get("commandSurface") == "setup.telegram":
+        setup = _configure_telegram_destination(root)
+        onboarding = detect_onboarding_status(root)
+        setup_health = onboarding.get("setupHealth", {})
+        record.result = ActionResultEnvelope(
+            ok=bool(setup.get("ok")),
+            exit_code=0 if setup.get("ok") else 1,
+            error="" if setup.get("ok") else str(setup.get("error", "")),
+            duration_ms=round((time.monotonic() - start) * 1000),
+            payload={
+                "workspaceActionId": spec.get("actionId", ""),
+                "surface": surface,
+                "commandSurface": spec.get("commandSurface", ""),
+                "dependencyId": "telegram_ready",
+                "telegramDestination": setup.get("destination", ""),
+                "destinationSource": setup.get("source", ""),
+                "onboarding": onboarding,
+                "setupHealth": setup_health,
+                "baseExitCode": 0 if setup.get("ok") else 1,
+                "followUpRan": False,
+                "followUpExitCode": None,
+            },
+            result_summary=str(setup.get("summary", "")),
+            target_path=proposal.target_path,
+        )
+        record.executed_at = utc_now_iso()
+        return record
+
+    execution_root = Path(workspace.root_path).resolve() if workspace is not None else root
+    timeout_seconds = _timeout_for_action(spec)
+    batch_commands = list(spec.get("batchCommands", []))
     command = str(spec.get("command", "")).strip()
-    if not command:
+    if not command and not batch_commands:
         record.result = ActionResultEnvelope(
             ok=False,
             error="No executable command was configured for this action.",
@@ -258,20 +336,163 @@ def _run_action(
         record.executed_at = utc_now_iso()
         return record
 
-    completed = _run_shell_action(
-        command=command,
-        cwd=Path(workspace.root_path).resolve() if workspace is not None else root,
-        platform=str(spec.get("platform", "local")),
-        timeout_seconds=_timeout_for_action(spec),
-    )
+    completed: subprocess.CompletedProcess[str] | None = None
+    follow_up_completed: subprocess.CompletedProcess[str] | None = None
+    follow_up_ran = False
+    effective_result: subprocess.CompletedProcess[str] | None = None
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    batch_results: list[dict] = []
+    dependency_ids: list[str] = []
+    if batch_commands:
+        for batch_item in batch_commands:
+            item = dict(batch_item)
+            item_command = str(item.get("command", "")).strip()
+            if not item_command:
+                continue
+            item_label = str(item.get("label", "Setup step"))
+            item_platform = str(item.get("platform") or spec.get("platform", "local"))
+            item_completed = _run_shell_action(
+                command=item_command,
+                cwd=execution_root,
+                platform=item_platform,
+                timeout_seconds=timeout_seconds,
+            )
+            item_follow_up_command = str(item.get("followUp", "")).strip()
+            item_follow_up_completed: subprocess.CompletedProcess[str] | None = None
+            item_follow_up_ran = False
+            if (
+                item_completed.returncode == 0
+                and item_follow_up_command
+                and bool(item.get("autoRunFollowUp", spec.get("autoRunFollowUp", False)))
+            ):
+                item_follow_up_completed = _run_shell_action(
+                    command=item_follow_up_command,
+                    cwd=execution_root,
+                    platform=item_platform,
+                    timeout_seconds=timeout_seconds,
+                )
+                item_follow_up_ran = True
+            item_effective = item_follow_up_completed or item_completed
+            item_stdout = "\n".join(
+                text
+                for text in [
+                    (item_completed.stdout or "").strip(),
+                    (
+                        (item_follow_up_completed.stdout or "").strip()
+                        if item_follow_up_completed is not None
+                        else ""
+                    ),
+                ]
+                if text
+            )
+            item_stderr = "\n".join(
+                text
+                for text in [
+                    (item_completed.stderr or "").strip(),
+                    (
+                        (item_follow_up_completed.stderr or "").strip()
+                        if item_follow_up_completed is not None
+                        else ""
+                    ),
+                ]
+                if text
+            )
+            if item_stdout:
+                stdout_parts.append(item_stdout)
+            if item_stderr:
+                stderr_parts.append(item_stderr)
+            item_dependency_id = str(item.get("dependencyId", "")).strip()
+            if item_dependency_id and item_dependency_id not in dependency_ids:
+                dependency_ids.append(item_dependency_id)
+            batch_results.append(
+                {
+                    "label": item_label,
+                    "dependencyId": item_dependency_id,
+                    "platform": item_platform,
+                    "command": item_command,
+                    "followUp": item_follow_up_command,
+                    "baseExitCode": item_completed.returncode,
+                    "followUpRan": item_follow_up_ran,
+                    "followUpExitCode": (
+                        item_follow_up_completed.returncode
+                        if item_follow_up_completed is not None
+                        else None
+                    ),
+                    "effectiveExitCode": item_effective.returncode,
+                }
+            )
+            completed = item_completed
+            follow_up_completed = item_follow_up_completed
+            follow_up_ran = item_follow_up_ran
+            effective_result = item_effective
+            if item_effective.returncode != 0:
+                break
+    else:
+        completed = _run_shell_action(
+            command=command,
+            cwd=execution_root,
+            platform=str(spec.get("platform", "local")),
+            timeout_seconds=timeout_seconds,
+        )
+        follow_up_command = str(spec.get("followUp", "")).strip()
+        if (
+            completed.returncode == 0
+            and follow_up_command
+            and bool(spec.get("autoRunFollowUp", False))
+        ):
+            follow_up_completed = _run_shell_action(
+                command=follow_up_command,
+                cwd=execution_root,
+                platform=str(spec.get("platform", "local")),
+                timeout_seconds=timeout_seconds,
+            )
+            follow_up_ran = True
+        effective_result = follow_up_completed or completed
+        single_stdout = "\n".join(
+            text
+            for text in [
+                (completed.stdout or "").strip(),
+                ((follow_up_completed.stdout or "").strip() if follow_up_completed else ""),
+            ]
+            if text
+        )
+        single_stderr = "\n".join(
+            text
+            for text in [
+                (completed.stderr or "").strip(),
+                ((follow_up_completed.stderr or "").strip() if follow_up_completed else ""),
+            ]
+            if text
+        )
+        if single_stdout:
+            stdout_parts.append(single_stdout)
+        if single_stderr:
+            stderr_parts.append(single_stderr)
+
+    if completed is None or effective_result is None:
+        record.result = ActionResultEnvelope(
+            ok=False,
+            error="No executable setup command was configured for this action.",
+            duration_ms=round((time.monotonic() - start) * 1000),
+            result_summary="Workspace action failed before launch.",
+            target_path=proposal.target_path,
+        )
+        record.executed_at = utc_now_iso()
+        return record
+
     duration_ms = round((time.monotonic() - start) * 1000)
+    stdout = "\n".join(part for part in stdout_parts if part)
+    stderr = "\n".join(part for part in stderr_parts if part)
     post_onboarding = (
         detect_onboarding_status(root)
         if surface == "setup" and spec.get("commandSurface") in {"setup.install", "setup.repair"}
         else {}
     )
     post_setup = post_onboarding.get("setupHealth", {}) if post_onboarding else {}
-    dependency_id = spec.get("dependencyId", "")
+    dependency_id = str(spec.get("dependencyId", "")).strip()
+    if dependency_id and dependency_id not in dependency_ids:
+        dependency_ids.insert(0, dependency_id)
     dependency_state = next(
         (
             item.get("stage", "")
@@ -280,31 +501,133 @@ def _run_action(
         ),
         "",
     )
+    dependency_stages = {
+        item_dependency_id: next(
+            (
+                item.get("stage", "")
+                for item in post_setup.get("dependencies", [])
+                if item.get("dependencyId") == item_dependency_id
+            ),
+            "",
+        )
+        for item_dependency_id in dependency_ids
+    }
+    if dependency_state and dependency_id:
+        dependency_stages[dependency_id] = dependency_state
     record.result = ActionResultEnvelope(
-        ok=completed.returncode == 0,
-        exit_code=completed.returncode,
-        stdout=(completed.stdout or "").strip(),
-        stderr=(completed.stderr or "").strip(),
+        ok=effective_result.returncode == 0,
+        exit_code=effective_result.returncode,
+        stdout=stdout,
+        stderr=stderr,
         duration_ms=duration_ms,
         payload={
             "workspaceActionId": spec.get("actionId", ""),
             "surface": surface,
             "commandSurface": spec.get("commandSurface", ""),
             "followUp": spec.get("followUp", ""),
+            "batchCommands": batch_commands,
+            "batchResults": batch_results,
+            "baseExitCode": completed.returncode,
+            "followUpRan": follow_up_ran,
+            "followUpExitCode": (
+                follow_up_completed.returncode if follow_up_completed is not None else None
+            ),
             "dependencyId": dependency_id,
+            "dependencyIds": dependency_ids,
+            "dependencyStages": dependency_stages,
             "setupHealth": post_setup,
             "onboarding": post_onboarding,
             "dependencyStage": dependency_state,
         },
         target_path=proposal.target_path,
         result_summary=(
-            f"{spec.get('label', proposal.title)} completed with exit code {completed.returncode}."
-            if not dependency_state
-            else f"{spec.get('label', proposal.title)} completed with exit code {completed.returncode}. {dependency_id} is now {dependency_state}."
+            _setup_batch_result_summary(
+                label=str(spec.get("label", proposal.title)),
+                batch_results=batch_results,
+                dependency_stages=dependency_stages,
+                effective_exit_code=effective_result.returncode,
+            )
+            if batch_results
+            else _setup_result_summary(
+                label=str(spec.get("label", proposal.title)),
+                dependency_id=dependency_id,
+                dependency_state=dependency_state,
+                base_exit_code=completed.returncode,
+                follow_up_ran=follow_up_ran,
+                follow_up_exit_code=(
+                    follow_up_completed.returncode if follow_up_completed is not None else None
+                ),
+                effective_exit_code=effective_result.returncode,
+            )
         ),
     )
     record.executed_at = utc_now_iso()
     return record
+
+
+def _setup_result_summary(
+    *,
+    label: str,
+    dependency_id: str,
+    dependency_state: str,
+    base_exit_code: int,
+    follow_up_ran: bool,
+    follow_up_exit_code: int | None,
+    effective_exit_code: int,
+) -> str:
+    if follow_up_ran and follow_up_exit_code is not None:
+        if follow_up_exit_code == 0:
+            suffix = " Follow-up setup command succeeded."
+        else:
+            suffix = (
+                f" Follow-up setup command failed with exit code {follow_up_exit_code}."
+            )
+    else:
+        suffix = ""
+    if not dependency_state:
+        return (
+            f"{label} completed with exit code {effective_exit_code}."
+            f"{suffix}"
+        )
+    return (
+        f"{label} completed with base exit code {base_exit_code}"
+        f"{' and follow-up exit code ' + str(follow_up_exit_code) if follow_up_ran else ''}. "
+        f"{dependency_id} is now {dependency_state}.{suffix}"
+    )
+
+
+def _setup_batch_result_summary(
+    *,
+    label: str,
+    batch_results: list[dict],
+    dependency_stages: dict[str, str],
+    effective_exit_code: int,
+) -> str:
+    if effective_exit_code != 0:
+        failed = next(
+            (
+                item
+                for item in batch_results
+                if int(item.get("effectiveExitCode", 0) or 0) != 0
+            ),
+            (batch_results[-1] if batch_results else {}),
+        )
+        failed_label = str(failed.get("label", "a setup step")) if failed else "a setup step"
+        failed_code = int(failed.get("effectiveExitCode", effective_exit_code) or effective_exit_code)
+        return f"{label} stopped during {failed_label} (exit code {failed_code})."
+    if dependency_stages:
+        pending = [
+            dependency_id
+            for dependency_id, stage in dependency_stages.items()
+            if stage != "healthy"
+        ]
+        if pending:
+            return (
+                f"{label} finished, but these services still need attention: "
+                f"{', '.join(pending)}."
+            )
+        return f"{label} finished and all targeted services are healthy."
+    return f"{label} completed."
 
 
 def _build_started_record(
@@ -399,6 +722,224 @@ def _build_proposal(
     return proposal
 
 
+def _configure_telegram_destination(root: Path) -> dict[str, object]:
+    destination, source = _discover_telegram_destination(root)
+    if not destination:
+        return {
+            "ok": False,
+            "destination": "",
+            "source": "",
+            "summary": "Telegram setup needs a destination before escalation can be enabled.",
+            "error": (
+                "No Telegram destination found. Set FLUXIO_TELEGRAM_DESTINATION or TELEGRAM_CHAT_ID, "
+                "then rerun One-click Telegram setup."
+            ),
+        }
+    _persist_telegram_destination(root, destination=destination, source=source)
+    updated_missions = _backfill_mission_telegram_destinations(root, destination)
+    return {
+        "ok": True,
+        "destination": destination,
+        "source": source,
+        "summary": (
+            "Telegram escalation destination is configured."
+            if updated_missions == 0
+            else f"Telegram escalation destination is configured and applied to {updated_missions} mission(s)."
+        ),
+        "error": "",
+    }
+
+
+def _discover_telegram_destination(root: Path) -> tuple[str, str]:
+    existing = load_telegram_destination(root)
+    if existing:
+        return existing, "settings"
+    for key in TELEGRAM_ENV_KEYS:
+        value = _normalize_telegram_destination(os.environ.get(key))
+        if value:
+            return value, f"env:{key}"
+    openclaw_destination, openclaw_source = _discover_openclaw_telegram_destination()
+    if openclaw_destination:
+        return openclaw_destination, openclaw_source
+    missions_path = root / ".agent_control" / "missions.json"
+    missions_payload = _load_json_list(missions_path)
+    for mission in missions_payload:
+        destination = _normalize_telegram_destination(
+            mission.get("escalation_policy", {}).get("destination")
+        )
+        if destination:
+            return destination, "missions"
+    return "", ""
+
+
+def _discover_openclaw_telegram_destination() -> tuple[str, str]:
+    config_candidates: list[Path] = []
+    seen_paths: set[str] = set()
+
+    explicit_config = str(os.environ.get("OPENCLAW_CONFIG_PATH", "")).strip()
+    if explicit_config:
+        candidate = Path(explicit_config).expanduser()
+        config_candidates.append(candidate)
+        seen_paths.add(str(candidate.resolve(strict=False)))
+
+    state_dirs: list[Path] = []
+    explicit_state = str(os.environ.get("OPENCLAW_STATE_DIR", "")).strip()
+    if explicit_state:
+        state_dirs.append(Path(explicit_state).expanduser())
+    state_dirs.append(Path.home() / ".openclaw")
+
+    for state_dir in state_dirs:
+        env_destination = _read_env_destination(state_dir / ".env")
+        if env_destination:
+            return env_destination, f"openclaw-env:{state_dir}"
+        candidate = state_dir / "openclaw.json"
+        resolved = str(candidate.resolve(strict=False))
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        config_candidates.append(candidate)
+
+    for config_path in config_candidates:
+        destination = _read_openclaw_destination(config_path)
+        if destination:
+            return destination, f"openclaw-config:{config_path}"
+    return "", ""
+
+
+def _read_env_destination(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() not in TELEGRAM_ENV_KEYS:
+            continue
+        normalized = _normalize_telegram_destination(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _read_openclaw_destination(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+
+    tools = payload.get("tools", {})
+    allow_from = tools.get("elevated", {}).get("allowFrom", {}) if isinstance(tools, dict) else {}
+    telegram_allow = allow_from.get("telegram") if isinstance(allow_from, dict) else None
+    if isinstance(telegram_allow, list):
+        for entry in telegram_allow:
+            normalized = _normalize_telegram_destination(entry)
+            if normalized:
+                return normalized
+
+    telegram_config = payload.get("telegram", {})
+    if isinstance(telegram_config, dict):
+        for key in ("destination", "chatId", "chat_id", "target", "userId", "user_id"):
+            normalized = _normalize_telegram_destination(telegram_config.get(key))
+            if normalized:
+                return normalized
+
+    channels = payload.get("channels", {})
+    if isinstance(channels, dict):
+        telegram_channel = channels.get("telegram", {})
+        if isinstance(telegram_channel, dict):
+            for key in ("destination", "chatId", "chat_id", "target"):
+                normalized = _normalize_telegram_destination(telegram_channel.get(key))
+                if normalized:
+                    return normalized
+
+    return ""
+
+
+def _normalize_telegram_destination(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        text = str(int(value))
+    else:
+        text = str(value).strip()
+    if not text:
+        return ""
+    if text.startswith(("'", '"')) and text.endswith(("'", '"')) and len(text) >= 2:
+        text = text[1:-1].strip()
+    return text
+
+
+def _persist_telegram_destination(root: Path, *, destination: str, source: str) -> None:
+    control_dir = root / ".agent_control"
+    control_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = control_dir / "telegram_settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "destination": destination,
+                "source": source,
+                "updated_at": utc_now_iso(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _backfill_mission_telegram_destinations(root: Path, destination: str) -> int:
+    missions_path = root / ".agent_control" / "missions.json"
+    missions = _load_json_list(missions_path)
+    if not missions:
+        return 0
+    updated_count = 0
+    changed = False
+    for mission in missions:
+        policy = mission.get("escalation_policy", {})
+        if not isinstance(policy, dict):
+            policy = {}
+        current_destination = str(policy.get("destination", "")).strip()
+        if current_destination:
+            continue
+        policy["channel"] = str(policy.get("channel", "telegram") or "telegram")
+        policy["enabled"] = True
+        policy["destination"] = destination
+        if not policy.get("triggers"):
+            policy["triggers"] = [
+                "blocked approval",
+                "missing setup step",
+                "verification failure",
+                "completion summary",
+            ]
+        mission["escalation_policy"] = policy
+        updated_count += 1
+        changed = True
+    if changed:
+        missions_path.parent.mkdir(parents=True, exist_ok=True)
+        missions_path.write_text(json.dumps(missions, indent=2), encoding="utf-8")
+    return updated_count
+
+
+def _load_json_list(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
 def _run_shell_action(
     *,
     command: str,
@@ -450,18 +991,33 @@ def _refresh_setup_result_payload(
     setup_health = onboarding.get("setupHealth", {})
     dependency_id = spec.get("dependencyId", "")
     missing = setup_health.get("missingDependencies", [])
-    dependency_stage = next(
-        (
-            item.get("stage", "")
-            for item in setup_health.get("dependencies", [])
-            if item.get("dependencyId") == dependency_id
-        ),
-        "",
-    )
     payload = dict(record.get("result", {}).get("payload", {}))
+    dependency_ids = [
+        str(item)
+        for item in payload.get("dependencyIds", [])
+        if str(item).strip()
+    ]
+    if dependency_id and dependency_id not in dependency_ids:
+        dependency_ids.insert(0, dependency_id)
+    dependency_stages = {
+        item_dependency_id: next(
+            (
+                item.get("stage", "")
+                for item in setup_health.get("dependencies", [])
+                if item.get("dependencyId") == item_dependency_id
+            ),
+            "",
+        )
+        for item_dependency_id in dependency_ids
+    }
+    dependency_stage = dependency_stages.get(str(dependency_id), "")
+    if not dependency_stage and len(dependency_stages) == 1:
+        dependency_stage = next(iter(dependency_stages.values()))
     payload["setupHealth"] = setup_health
     payload["onboarding"] = onboarding
     payload["dependencyStage"] = dependency_stage
+    payload["dependencyIds"] = dependency_ids
+    payload["dependencyStages"] = dependency_stages
     record["result"]["payload"] = payload
     if spec.get("commandSurface") == "setup.verify":
         record["result"]["ok"] = not missing
@@ -472,18 +1028,41 @@ def _refresh_setup_result_payload(
             else f"Setup still needs attention: {', '.join(missing)}."
         )
     else:
-        record["result"]["result_summary"] = (
-            f"{spec.get('label', 'Setup action')} completed with exit code {record['result'].get('exit_code', 0)}."
-            if not dependency_stage
-            else (
-                f"{spec.get('label', 'Setup action')} completed with exit code {record['result'].get('exit_code', 0)}. "
-                f"{dependency_id} is now {dependency_stage}."
+        result_payload = record.get("result", {}).get("payload", {})
+        if result_payload.get("batchResults"):
+            record["result"]["result_summary"] = _setup_batch_result_summary(
+                label=str(spec.get("label", "Setup action")),
+                batch_results=list(result_payload.get("batchResults", [])),
+                dependency_stages=dependency_stages,
+                effective_exit_code=int(record["result"].get("exit_code", 0) or 0),
             )
-        )
+        else:
+            record["result"]["result_summary"] = _setup_result_summary(
+                label=str(spec.get("label", "Setup action")),
+                dependency_id=str(dependency_id),
+                dependency_state=str(dependency_stage),
+                base_exit_code=int(result_payload.get("baseExitCode", record["result"].get("exit_code", 0)) or 0),
+                follow_up_ran=bool(result_payload.get("followUpRan", False)),
+                follow_up_exit_code=(
+                    int(result_payload["followUpExitCode"])
+                    if result_payload.get("followUpExitCode") is not None
+                    else None
+                ),
+                effective_exit_code=int(record["result"].get("exit_code", 0) or 0),
+            )
     histories = store.load_workspace_actions()
     entries = list(histories.get(history_key, []))
     if entries:
-        entries[-1] = record
+        record_action_id = str(record.get("action_id", "")).strip()
+        replaced = False
+        if record_action_id:
+            for index in range(len(entries) - 1, -1, -1):
+                if str(entries[index].get("action_id", "")).strip() == record_action_id:
+                    entries[index] = record
+                    replaced = True
+                    break
+        if not replaced:
+            entries[-1] = record
         histories[history_key] = entries
         store.workspace_actions_path.write_text(
             json.dumps(histories, indent=2),

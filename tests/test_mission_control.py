@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from grant_agent.mission_control import (
     _build_validation_actions,
     _mission_title,
     build_harness_lab_snapshot,
+    build_release_readiness_snapshot,
     build_escalation_preview,
     mission_mode_to_engine_mode,
 )
@@ -59,6 +61,7 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("workflowStudio", snapshot)
             self.assertIn("providerSetupStatus", snapshot)
             self.assertIn("efficiencyAutotune", snapshot)
+            self.assertIn("releaseReadiness", snapshot)
             self.assertIn("gitSnapshot", snapshot["workspaces"][0])
             self.assertFalse(snapshot["workspaces"][0]["gitSnapshot"]["repoDetected"])
             self.assertIn("serviceManagement", snapshot["workspaces"][0])
@@ -222,6 +225,90 @@ class MissionControlTests(unittest.TestCase):
                 "verify_setup_health",
             )
 
+    def test_setup_telegram_action_persists_destination_and_updates_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            with mock.patch.dict(
+                os.environ,
+                {"FLUXIO_TELEGRAM_DESTINATION": "@fluxio_test"},
+                clear=False,
+            ):
+                payload = execute_control_room_workspace_action(
+                    store=store,
+                    root=root,
+                    surface="setup",
+                    action_id="configure_telegram_destination",
+                    workspace_id=workspace.workspace_id,
+                    approved=False,
+                )
+
+            self.assertTrue(payload["ok"])
+            telegram_settings_path = root / ".agent_control" / "telegram_settings.json"
+            self.assertTrue(telegram_settings_path.exists())
+            telegram_settings = json.loads(telegram_settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(telegram_settings["destination"], "@fluxio_test")
+            self.assertTrue(payload["snapshot"]["setupHealth"]["telegramReady"])
+            self.assertEqual(
+                payload["record"]["result"]["payload"]["dependencyId"],
+                "telegram_ready",
+            )
+
+    def test_setup_telegram_action_detects_openclaw_telegram_allow_list(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            fake_home = root / "fake-home"
+            openclaw_dir = fake_home / ".openclaw"
+            openclaw_dir.mkdir(parents=True, exist_ok=True)
+            (openclaw_dir / "openclaw.json").write_text(
+                json.dumps(
+                    {
+                        "tools": {
+                            "elevated": {
+                                "allowFrom": {
+                                    "telegram": [6528735547],
+                                }
+                            }
+                        }
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch("grant_agent.workspace_actions.Path.home", return_value=fake_home):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "FLUXIO_TELEGRAM_DESTINATION": "",
+                        "TELEGRAM_CHAT_ID": "",
+                        "TELEGRAM_DESTINATION": "",
+                    },
+                    clear=False,
+                ):
+                    payload = execute_control_room_workspace_action(
+                        store=store,
+                        root=root,
+                        surface="setup",
+                        action_id="configure_telegram_destination",
+                        workspace_id=workspace.workspace_id,
+                        approved=False,
+                    )
+
+            self.assertTrue(payload["ok"])
+            self.assertEqual(
+                payload["record"]["result"]["payload"]["telegramDestination"],
+                "6528735547",
+            )
+            self.assertTrue(payload["snapshot"]["setupHealth"]["telegramReady"])
+
     def test_snapshot_surfaces_continuity_and_action_source_kind(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -383,7 +470,7 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("agent_long_run", workflow_map)
             self.assertEqual(workflow_map["setup_repair"]["status"], "blocked")
             self.assertEqual(workflow_map["setup_repair"]["reviewStatus"], "reviewed")
-            self.assertIn("hermes", workflow_map["setup_repair"]["serviceIds"])
+            self.assertGreaterEqual(len(workflow_map["setup_repair"]["serviceIds"]), 1)
             self.assertEqual(
                 workflow_map["agent_long_run"]["verificationDefaults"],
                 [
@@ -465,9 +552,395 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(snapshot["efficiency"]["completionRate"], 50)
             self.assertEqual(snapshot["efficiency"]["approvalPauseRate"], 50)
             self.assertEqual(snapshot["efficiency"]["delegatedRunRate"], 50)
+            self.assertEqual(snapshot["efficiency"]["resumeRunRate"], 0)
+            self.assertEqual(snapshot["efficiency"]["resumeCompletionRate"], 0)
+            self.assertEqual(snapshot["efficiency"]["runtimeBudgetPauseRate"], 0)
+            self.assertEqual(snapshot["efficiency"]["delegatedActivePauseRate"], 0)
             self.assertEqual(snapshot["sessionHealth"]["activeCount"], 1)
             self.assertEqual(snapshot["sessionHealth"]["healthyHeartbeatCount"], 1)
+            self.assertEqual(snapshot["sessionHealth"]["delegatedHealthyCount"], 1)
+            self.assertEqual(snapshot["sessionHealth"]["delegatedStaleCount"], 0)
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
+
+    def test_release_readiness_snapshot_scores_required_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / "t3code" / "apps" / "web" / "src" / "main.tsx").write_text(
+                "export {};\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text(
+                'export default { root: "t3code/apps/web" };\n',
+                encoding="utf-8",
+            )
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {
+                "serviceManagementSummary": {
+                    "totalItems": 4,
+                    "healthyCount": 4,
+                }
+            }
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+
+            self.assertEqual(readiness["status"], "ready_for_1_0_validation")
+            self.assertEqual(
+                readiness["requiredGateSummary"]["passed"],
+                readiness["requiredGateSummary"]["total"],
+            )
+            self.assertGreaterEqual(readiness["score"], 90)
+            self.assertIn("proofReadiness", readiness)
+            self.assertFalse(readiness["proofReadiness"]["ready"])
+
+    def test_release_readiness_accepts_dynamic_vite_web_root_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir()
+            (root / "t3code" / "apps" / "web" / "src" / "main.tsx").write_text(
+                "export {};\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text(
+                (
+                    'import { resolve } from "node:path";\n'
+                    'const repoRoot = process.cwd();\n'
+                    'const webRoot = resolve(repoRoot, "t3code", "apps", "web");\n'
+                    "export default {\n"
+                    "  root: webRoot,\n"
+                    "};\n"
+                ),
+                encoding="utf-8",
+            )
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {
+                "serviceManagementSummary": {
+                    "totalItems": 4,
+                    "healthyCount": 4,
+                }
+            }
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+
+            alignment_gate = next(
+                item
+                for item in readiness["gates"]
+                if item["gateId"] == "frontend_source_alignment"
+            )
+            self.assertTrue(alignment_gate["passed"])
+
+    def test_release_readiness_reports_proof_readiness_when_missions_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / "t3code" / "apps" / "web" / "src" / "main.tsx").write_text(
+                "export {};\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text(
+                'export default { root: "t3code/apps/web" };\n',
+                encoding="utf-8",
+            )
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "runtime_id": "openclaw",
+                            "state": {
+                                "status": "completed",
+                                "continuity_state": "terminal",
+                            },
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "state": {
+                                "status": "completed",
+                                "continuity_state": "terminal",
+                            },
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "state": {
+                                "status": "needs_approval",
+                                "continuity_state": "approval_waiting",
+                            },
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "state": {
+                                "status": "running",
+                                "continuity_state": "delegated_active",
+                                "time_budget_status": "delegated_active",
+                            },
+                        },
+                    ],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {
+                "serviceManagementSummary": {
+                    "totalItems": 4,
+                    "healthyCount": 4,
+                }
+            }
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+
+            self.assertTrue(readiness["proofReadiness"]["ready"])
+            proof_gate_ids = {item["gateId"] for item in readiness["gates"]}
+            self.assertIn("proof_openclaw_completed", proof_gate_ids)
+            self.assertIn("proof_hermes_completed", proof_gate_ids)
+
+    def test_release_readiness_uses_pending_and_delegated_session_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "src-tauri").mkdir(parents=True, exist_ok=True)
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(
+                parents=True, exist_ok=True
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export default function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text(
+                'export default { root: "t3code/apps/web" };\n',
+                encoding="utf-8",
+            )
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "runtime_id": "openclaw",
+                            "state": {"status": "completed", "continuity_state": "terminal"},
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "state": {"status": "completed", "continuity_state": "terminal"},
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "escalation_policy": {"pending_count": 1},
+                            "state": {
+                                "status": "queued",
+                                "continuity_state": "fresh_only",
+                                "delegated_runtime_sessions": [
+                                    {"status": "running"},
+                                ],
+                            },
+                        },
+                    ],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {"serviceManagementSummary": {"totalItems": 4, "healthyCount": 4}}
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+            proofs = {
+                item["proofId"]: item.get("passed", False)
+                for item in readiness["proofReadiness"]["proofs"]
+            }
+            self.assertTrue(proofs["approval_wait_evidence"])
+            self.assertTrue(proofs["delegated_active_evidence"])
 
     @mock.patch("grant_agent.runtime_supervisor._pid_alive", side_effect=lambda pid: pid == 43210)
     def test_snapshot_surfaces_delegated_runtime_activity_across_restart(

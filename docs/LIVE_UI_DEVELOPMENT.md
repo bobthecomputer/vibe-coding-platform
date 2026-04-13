@@ -4,7 +4,7 @@ Fluxio's desktop frontend now uses the official Tauri `devUrl` development flow 
 
 What this means in practice:
 
-- editing `desktop-ui/*.css` and JavaScript modules updates the running desktop app through Vite HMR
+- editing `t3code/apps/web/src/**/*` updates the running desktop app through Vite HMR + React Fast Refresh
 - editing some structural files still triggers a full page reload instead of state-preserving replacement
 - this is the correct Tauri development model for a desktop app backed by a frontend dev server
 - control-room mission state now refreshes on desktop-emitted change events, with live-sync polling kept as a fallback instead of the primary mechanism
@@ -14,7 +14,7 @@ Important distinction:
 
 - `HMR` means the browser or webview can replace changed modules without restarting the whole Tauri app
 - `Fast Refresh` is a framework-specific experience layered on top of HMR, most commonly in React
-- Fluxio currently uses plain module-driven JavaScript, so it has real HMR and live reload, but not React-style component-state Fast Refresh
+- Fluxio now uses a React entrypoint in `t3code/apps/web/src/main.tsx`, so Fast Refresh is active for most component edits
 
 Official references:
 
@@ -31,11 +31,13 @@ Official references:
 - `src-tauri/tauri.conf.json`
   - `beforeDevCommand` runs the Vite dev server
   - `devUrl` points the Tauri window at the live dev server
-  - `frontendDist` points packaged builds to `desktop-ui/dist`
-- `desktop-ui/index.html`
-  - exposes the workbench shell and topbar live-sync controls
-- `desktop-ui/app.js`
-  - handles preview fixtures, backend refresh, and live polling behavior
+  - `frontendDist` points packaged builds to `t3code/apps/web/dist`
+- `t3code/apps/web/index.html`
+  - mounts the React workbench root
+- `t3code/apps/web/src/main.tsx`
+  - bootstraps `FluxioApp` and imports shared desktop styles
+- `desktop-ui/FluxioDesktop.jsx`
+  - remains the shared workbench implementation consumed by `t3code/apps/web`
 
 ## Operator review loop
 

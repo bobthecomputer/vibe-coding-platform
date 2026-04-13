@@ -16,6 +16,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from grant_agent.cli import (
     bootstrap_project,
     cmd_control_room,
+    cmd_release_readiness,
     cmd_mission_action,
     cmd_mission_start,
     cmd_workspace_action,
@@ -30,6 +31,119 @@ class ReleaseAcceptanceTests(unittest.TestCase):
         with redirect_stdout(buffer):
             exit_code = command(argparse.Namespace(**kwargs))
         return exit_code, json.loads(buffer.getvalue())
+
+    def test_cli_release_readiness_returns_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            exit_code, payload = self._run_json_command(
+                cmd_release_readiness,
+                root=str(root),
+            )
+            self.assertEqual(exit_code, 0)
+            self.assertIn("releaseReadiness", payload)
+            self.assertIn("score", payload["releaseReadiness"])
+
+    def test_cli_mission_start_uses_saved_telegram_destination_when_flag_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir) / "vibe-coding-platform"
+            root.mkdir(parents=True)
+            bootstrap_project(root)
+            (root / "pyproject.toml").write_text("[project]\nname='fluxio-demo'\n", encoding="utf-8")
+            (root / "package.json").write_text('{"name":"fluxio-demo"}\n', encoding="utf-8")
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "telegram_settings.json").write_text(
+                json.dumps({"destination": "@fluxio_default"}, indent=2),
+                encoding="utf-8",
+            )
+            self._set_marker(root, "uv")
+            self._set_marker(root, "openclaw")
+            self._set_marker(root, "hermes")
+
+            with self._patch_acceptance_environment(root):
+                save_code, save_payload = self._run_json_command(
+                    cmd_workspace_save,
+                    root=str(root),
+                    name="Fluxio Workspace",
+                    path=str(root),
+                    default_runtime="openclaw",
+                    user_profile="experimental",
+                    workspace_id=None,
+                )
+                self.assertEqual(save_code, 0)
+                workspace_id = save_payload["workspace"]["workspace_id"]
+
+                start_code, start_payload = self._run_json_command(
+                    cmd_mission_start,
+                    root=str(root),
+                    workspace_id=workspace_id,
+                    runtime="openclaw",
+                    objective="Run with default telegram destination.",
+                    success_check=["Mission completes"],
+                    mode="autopilot",
+                    budget_hours=4,
+                    profile="experimental",
+                    escalation_destination="",
+                    run_until="pause_on_failure",
+                )
+                self.assertEqual(start_code, 0)
+                self.assertEqual(
+                    start_payload["mission"]["escalation_policy"]["destination"],
+                    "@fluxio_default",
+                )
+
+    def test_cli_acceptance_runtime_stack_action_installs_missing_runtimes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir) / "vibe-coding-platform"
+            root.mkdir(parents=True)
+            bootstrap_project(root)
+            (root / "pyproject.toml").write_text("[project]\nname='fluxio-demo'\n", encoding="utf-8")
+            (root / "package.json").write_text('{"name":"fluxio-demo"}\n', encoding="utf-8")
+            self._set_marker(root, "uv")
+            self._clear_marker(root, "openclaw")
+            self._clear_marker(root, "hermes")
+
+            with self._patch_acceptance_environment(root):
+                save_code, save_payload = self._run_json_command(
+                    cmd_workspace_save,
+                    root=str(root),
+                    name="Fluxio Workspace",
+                    path=str(root),
+                    default_runtime="openclaw",
+                    user_profile="experimental",
+                    workspace_id=None,
+                )
+                self.assertEqual(save_code, 0)
+                workspace_id = save_payload["workspace"]["workspace_id"]
+
+                control_code, control_payload = self._run_json_command(
+                    cmd_control_room,
+                    root=str(root),
+                )
+                self.assertEqual(control_code, 0)
+                action_ids = {
+                    item["actionId"]
+                    for item in control_payload["onboarding"]["setupHealth"]["repairActions"]
+                }
+                self.assertIn("install_runtime_stack", action_ids)
+
+                install_code, install_payload = self._run_json_command(
+                    cmd_workspace_action,
+                    root=str(root),
+                    surface="setup",
+                    action_id="install_runtime_stack",
+                    workspace_id=workspace_id,
+                    approved=False,
+                )
+                self.assertEqual(install_code, 0)
+                dependency_stages = install_payload["record"]["result"]["payload"]["dependencyStages"]
+                self.assertEqual(dependency_stages["openclaw"], "healthy")
+                self.assertEqual(dependency_stages["hermes"], "healthy")
+                auto_verify = install_payload["record"]["result"]["payload"]["autoVerify"]
+                self.assertFalse(auto_verify["ok"])
+                self.assertIn("First guided mission", auto_verify["missingDependencies"])
 
     def _write_connected_apps_config(self, root: pathlib.Path) -> None:
         (root / "config" / "connected_apps.json").write_text(

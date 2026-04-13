@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import json
 import sys
 import tempfile
 import textwrap
@@ -62,7 +63,7 @@ class RuntimeSupervisorTests(unittest.TestCase):
                     workspace=workspace,
                     source_step_id="step_delegate",
                 )
-                self.assertIn(session.status, {"launching", "running"})
+                self.assertIn(session.status, {"launching", "running", "completed"})
 
                 for _ in range(20):
                     time.sleep(0.15)
@@ -81,6 +82,9 @@ class RuntimeSupervisorTests(unittest.TestCase):
                 self.assertTrue(
                     any(item["kind"] == "session.heartbeat" for item in session.latest_events)
                 )
+                # Explicit shutdown avoids transient file locks on Windows temp cleanup.
+                supervisor.stop_session(session)
+                time.sleep(0.2)
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     def test_supervisor_handles_structured_approval_callbacks(
@@ -184,6 +188,65 @@ class RuntimeSupervisorTests(unittest.TestCase):
             self.assertTrue(session.approval_history)
             kinds = [item["kind"] for item in session.latest_events]
             self.assertTrue(any(kind in {"approval.request", "approval.resolved"} for kind in kinds))
+            # Explicit shutdown avoids transient file locks on Windows temp cleanup.
+            supervisor.stop_session(session)
+            time.sleep(0.2)
+
+    def test_refresh_session_keeps_tail_for_large_event_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            supervisor = DelegatedRuntimeSupervisor(root)
+            sessions_dir = root / ".agent_control" / "runtime_sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            session_path = sessions_dir / "delegate_perf.json"
+            events_path = sessions_dir / "delegate_perf.events.jsonl"
+            log_path = sessions_dir / "delegate_perf.log"
+            decision_path = sessions_dir / "delegate_perf.approval.json"
+            log_path.write_text("", encoding="utf-8")
+            event_lines = []
+            for index in range(120):
+                event_lines.append(
+                    json.dumps(
+                        {
+                            "event_id": f"evt_{index:03d}",
+                            "delegated_id": "delegate_perf",
+                            "runtime_id": "hermes",
+                            "kind": "runtime.output",
+                            "message": f"event {index}",
+                            "status": "running",
+                            "created_at": "2026-04-12T10:00:00+00:00",
+                            "data": {},
+                        }
+                    )
+                )
+            events_path.write_text("\n".join(event_lines) + "\n", encoding="utf-8")
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_perf",
+                        "runtime_id": "hermes",
+                        "launch_command": "python -V",
+                        "status": "completed",
+                        "detail": "Completed",
+                        "session_path": str(session_path),
+                        "workspace_root": str(root),
+                        "execution_root": str(root),
+                        "log_path": str(log_path),
+                        "events_path": str(events_path),
+                        "decision_path": str(decision_path),
+                        "source_step_id": "step_delegate",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            session = supervisor.refresh_session(str(session_path))
+
+            self.assertEqual(session.event_cursor, 120)
+            self.assertEqual(len(session.latest_events), 5)
+            self.assertEqual(session.latest_events[0]["message"], "event 115")
+            self.assertEqual(session.latest_events[-1]["message"], "event 119")
 
 
 if __name__ == "__main__":

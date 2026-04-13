@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import re
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
@@ -60,11 +61,14 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             detected=command is not None,
             command=command,
             version=version,
-            install_hint="Install in WSL2 or locally with `npm install -g openclaw@latest` then run `openclaw onboard --install-daemon`.",
+            install_hint=(
+                "Use Fluxio Setup -> Install OpenClaw for one-click install + onboarding, "
+                "or run `npm install -g openclaw@latest` then `openclaw onboard --install-daemon`."
+            ),
             doctor_summary=(
                 "OpenClaw is ready for mission routing."
                 if command
-                else "Install OpenClaw and complete onboarding before running phone-escalated missions."
+                else "Install OpenClaw with the setup one-click action before running phone-escalated missions."
             ),
             issues=issues,
             capabilities=self.list_capabilities(),
@@ -86,7 +90,10 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
         return {
-            "launch_command": f'openclaw agent --message "{mission.objective}" --thinking high',
+            "launch_command": self._mission_launch_command(
+                mission.mission_id,
+                mission.objective,
+            ),
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
         }
@@ -111,7 +118,10 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
         return {
-            "launch_command": f'openclaw agent --message "Resume mission {mission.mission_id}: {mission.objective}" --thinking high',
+            "launch_command": self._mission_launch_command(
+                mission.mission_id,
+                f"Resume mission {mission.mission_id}: {mission.objective}",
+            ),
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
         }
@@ -121,3 +131,11 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             "message": f"Stop requested for OpenClaw mission {mission.mission_id}.",
             "runtime_id": self.runtime_id,
         }
+
+    def _mission_launch_command(self, mission_id: str, objective: str) -> str:
+        session_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"fluxio_{mission_id}") or "fluxio"
+        escaped_objective = objective.replace('"', r"\"")
+        return (
+            f'openclaw agent --session-id {session_id} '
+            f'--message "{escaped_objective}" --thinking high --json'
+        )

@@ -62,14 +62,16 @@ python -m grant_agent.cli replay
 python -m grant_agent.cli story
 python -m grant_agent.cli export-openai-request --objective "Build auth" --output "openai_request.json"
 python -m grant_agent.cli evaluate
+python -m grant_agent.cli release-readiness
 ```
 
 ## Desktop (Tauri)
 
-The desktop app now includes a backend-complete overlay runtime (UI intentionally minimal):
+The desktop app now runs a single canonical frontend shell from the `t3code` tree:
 
 - `src-tauri/` for tray/overlay/runtime logic
-- `desktop-ui/` for lightweight placeholder UI
+- `t3code/apps/web/` for the live React workbench UI
+- `desktop-ui/` for shared view-model and shell components imported by the T3 web entrypoint
 
 Run:
 

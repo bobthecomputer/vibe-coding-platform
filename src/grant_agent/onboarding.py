@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -45,6 +46,11 @@ def _minimax_auth_label(mode: str) -> str:
 def _command_version(command_name: str, version_args: list[str] | None = None) -> dict:
     command = shutil.which(command_name)
     if not command:
+        # Hermes is frequently installed in WSL2 on Windows hosts.
+        if command_name == "hermes":
+            wsl_lookup = _command_version_from_wsl(command_name, version_args)
+            if wsl_lookup.get("installed"):
+                return wsl_lookup
         return {
             "installed": False,
             "command": None,
@@ -76,6 +82,62 @@ def _command_version(command_name: str, version_args: list[str] | None = None) -
         "command": command,
         "version": version_text,
         "details": "Installed and reachable.",
+    }
+
+
+def _command_version_from_wsl(command_name: str, version_args: list[str] | None = None) -> dict:
+    if os.name != "nt":
+        return {
+            "installed": False,
+            "command": None,
+            "version": None,
+            "details": f"{command_name} was not found on PATH.",
+        }
+
+    wsl = shutil.which("wsl")
+    if not wsl:
+        return {
+            "installed": False,
+            "command": None,
+            "version": None,
+            "details": (
+                f"{command_name} was not found on PATH, and WSL2 is not available for fallback detection."
+            ),
+        }
+
+    args = " ".join(shlex.quote(arg) for arg in (version_args or ["--version"]))
+    escaped_command = shlex.quote(command_name)
+    lookup = f"command -v {escaped_command} >/dev/null 2>&1 && {escaped_command} {args}"
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [wsl, "bash", "-lc", lookup],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "installed": False,
+            "command": None,
+            "version": None,
+            "details": f"WSL2 fallback lookup failed: {exc}",
+        }
+
+    if completed.returncode != 0:
+        return {
+            "installed": False,
+            "command": None,
+            "version": None,
+            "details": f"{command_name} was not found on PATH or inside WSL2.",
+        }
+
+    version_text = (completed.stdout or completed.stderr).strip() or None
+    return {
+        "installed": True,
+        "command": f"wsl:{command_name}",
+        "version": version_text,
+        "details": "Installed and reachable inside WSL2.",
     }
 
 
@@ -231,11 +293,11 @@ def _recommended_next_actions(
     if not checks["python"]["installed"]:
         status.append("Install Python 3.11+ for the Grant Agent core.")
     if not checks["uv"]["installed"]:
-        status.append("Install uv for faster Python environment management.")
+        status.append("Use Setup -> Install uv (one click), then run Verify setup health.")
     if not checks["openclaw"]["installed"]:
-        status.append("Install OpenClaw and complete onboarding.")
+        status.append("Use Setup -> Install OpenClaw (one click install + onboarding).")
     if not checks["hermes"]["installed"]:
-        status.append("Install Hermes inside WSL2 and run `hermes setup`.")
+        status.append("Use Setup -> Install Hermes (one click in WSL2, includes setup).")
     if (root / "src-tauri").exists() and (not shutil.which("cargo") or not shutil.which("rustc")):
         status.append("Install Rust and Cargo before relying on the packaged Tauri desktop path.")
     if not _workspace_count(root):
@@ -485,6 +547,10 @@ def _dependency_stage(
         return "failed"
     if latest_surface == "setup.auth" and latest_ok:
         return "healthy" if installed else "verify_pending"
+    if latest_surface == "setup.telegram" and latest_ok is False:
+        return "failed"
+    if latest_surface == "setup.telegram" and latest_ok:
+        return "healthy" if installed else "verify_pending"
     if latest_surface in {"setup.install", "setup.repair"} and latest_ok is False:
         return "failed"
     if latest_surface in {"setup.install", "setup.repair"} and latest_ok:
@@ -589,14 +655,20 @@ def _management_mode_for_dependency(dependency: dict) -> str:
 def _service_actions_for_dependency(dependency: dict) -> list[dict]:
     actions = []
     for action in dependency.get("repairActions", []):
-        if not action.get("command") and not action.get("followUp"):
+        if (
+            not action.get("command")
+            and not action.get("followUp")
+            and not action.get("batchCommands")
+        ):
             continue
         action_kind = str(action.get("kind", "")).strip().lower()
-        command_surface = (
-            "setup.install"
-            if action_kind == "install"
-            else ("setup.auth" if action_kind == "auth" else "setup.repair")
-        )
+        command_surface = str(action.get("commandSurface", "")).strip()
+        if not command_surface:
+            command_surface = (
+                "setup.install"
+                if action_kind == "install"
+                else ("setup.auth" if action_kind == "auth" else "setup.repair")
+            )
         actions.append(
             {
                 **action,
@@ -621,6 +693,97 @@ def _overall_install_state(dependencies: list[dict], installer_ready: bool) -> s
     if all(stage == "healthy" for stage in required_stages):
         return "verify_pending"
     return "missing"
+
+
+def _node_install_command(platform_name: str) -> str:
+    normalized = (platform_name or "").strip().lower()
+    if normalized == "windows":
+        return "winget install OpenJS.NodeJS.LTS"
+    if normalized == "darwin":
+        return "brew install node"
+    return "curl -fsSL https://fnm.vercel.app/install | bash && fnm install --lts"
+
+
+def _uv_install_command(platform_name: str) -> str:
+    normalized = (platform_name or "").strip().lower()
+    if normalized == "windows":
+        return "winget install --id=astral-sh.uv -e"
+    return "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+
+def _runtime_stack_repair_actions(
+    *,
+    checks: dict[str, dict],
+    openclaw_install: dict[str, str],
+    hermes_install: dict[str, str],
+    platform_name: str,
+) -> list[dict]:
+    batch_commands: list[dict] = []
+    if not checks["node"]["installed"]:
+        batch_commands.append(
+            {
+                "label": "Install Node LTS",
+                "dependencyId": "node",
+                "command": _node_install_command(platform_name),
+                "followUp": "",
+                "platform": platform_name,
+                "autoRunFollowUp": False,
+            }
+        )
+    if not checks["uv"]["installed"]:
+        batch_commands.append(
+            {
+                "label": "Install uv",
+                "dependencyId": "uv",
+                "command": _uv_install_command(platform_name),
+                "followUp": "",
+                "platform": platform_name,
+                "autoRunFollowUp": False,
+            }
+        )
+    if not checks["openclaw"]["installed"]:
+        batch_commands.append(
+            {
+                "label": "Install OpenClaw",
+                "dependencyId": "openclaw",
+                "command": openclaw_install.get("command", ""),
+                "followUp": openclaw_install.get("follow_up", ""),
+                "platform": platform_name,
+                "autoRunFollowUp": True,
+            }
+        )
+    if not checks["hermes"]["installed"]:
+        batch_commands.append(
+            {
+                "label": "Install Hermes",
+                "dependencyId": "hermes",
+                "command": hermes_install.get("command", ""),
+                "followUp": hermes_install.get("follow_up", ""),
+                "platform": "wsl2",
+                "autoRunFollowUp": True,
+            }
+        )
+    if not batch_commands:
+        return []
+    return [
+        {
+            "actionId": "install_runtime_stack",
+            "dependencyId": "runtime_stack",
+            "label": "Install runtime stack",
+            "description": "One click installs missing Node, uv, OpenClaw, and Hermes, then verifies health.",
+            "detail": "Installs all missing runtime prerequisites and re-checks setup blockers automatically.",
+            "kind": "install",
+            "platform": platform_name,
+            "batchCommands": batch_commands,
+            "autoRunFollowUp": True,
+            "autoRunVerify": True,
+            "serviceIds": [
+                item.get("dependencyId", "")
+                for item in batch_commands
+                if item.get("dependencyId")
+            ],
+        }
+    ]
 
 
 def _build_setup_health(
@@ -783,9 +946,10 @@ def _build_setup_health(
                 {
                     "actionId": "install_openclaw",
                     "label": "Install OpenClaw",
-                    "description": "Install the OpenClaw CLI and onboard the daemon.",
+                    "description": "One-click install and onboarding for OpenClaw.",
                     "command": openclaw_install.get("command", ""),
                     "followUp": openclaw_install.get("follow_up", ""),
+                    "autoRunFollowUp": True,
                     "kind": "install",
                     "platform": platform_name,
                 }
@@ -805,9 +969,10 @@ def _build_setup_health(
                 {
                     "actionId": "install_hermes",
                     "label": "Install Hermes",
-                    "description": "Install Hermes in WSL2, then finish setup.",
+                    "description": "One-click install inside WSL2 and run Hermes setup.",
                     "command": hermes_install.get("command", ""),
                     "followUp": hermes_install.get("follow_up", ""),
+                    "autoRunFollowUp": True,
                     "kind": "install",
                     "platform": "wsl2",
                 }
@@ -911,7 +1076,25 @@ def _build_setup_health(
                 if phone_ready
                 else "Add a Telegram destination so long unattended runs can escalate approvals."
             ),
-            "repairActions": [],
+            "repairActions": []
+            if phone_ready
+            else [
+                {
+                    "actionId": "configure_telegram_destination",
+                    "label": "One-click Telegram setup",
+                    "description": "Detect and save Telegram escalation destination for Fluxio missions.",
+                    "detail": (
+                        "Uses FLUXIO_TELEGRAM_DESTINATION, TELEGRAM_CHAT_ID, or an existing mission destination."
+                    ),
+                    "commandSurface": "setup.telegram",
+                    "followUp": (
+                        "If auto-detection cannot find a destination, set FLUXIO_TELEGRAM_DESTINATION and rerun this action."
+                    ),
+                    "kind": "repair",
+                    "platform": platform_name,
+                    "autoRunVerify": True,
+                }
+            ],
         },
         {
             "dependencyId": "guided_mission",
@@ -954,7 +1137,13 @@ def _build_setup_health(
         dependency["lastRepairAction"] = _last_action_summary(dependency["latestAction"])
         dependency["managementMode"] = _management_mode_for_dependency(dependency)
 
-    repair_actions = [
+    runtime_stack_actions = _runtime_stack_repair_actions(
+        checks=checks,
+        openclaw_install=openclaw_install,
+        hermes_install=hermes_install,
+        platform_name=platform_name,
+    )
+    repair_actions = runtime_stack_actions + [
         action
         for dependency in dependencies
         for action in dependency["repairActions"]
@@ -965,7 +1154,9 @@ def _build_setup_health(
         if dependency["required"] and dependency["stage"] != "healthy"
     ]
     filtered_repair_actions = [
-        action for action in repair_actions if action.get("command") or action.get("followUp")
+        action
+        for action in repair_actions
+        if action.get("command") or action.get("followUp") or action.get("batchCommands")
     ]
     environment_ready = all(
         dependency["stage"] == "healthy"
@@ -1014,6 +1205,9 @@ def _build_setup_health(
         for dependency in dependencies
         if dependency["serviceCategory"] != "workflow_gate"
     ]
+    summary_items = [
+        item for item in service_management if item.get("required", False)
+    ]
     return {
         "installState": _overall_install_state(dependencies, installer_ready),
         "environmentReady": environment_ready,
@@ -1027,18 +1221,20 @@ def _build_setup_health(
         "actionHistoryByDependency": history_by_dependency,
         "serviceManagement": service_management,
         "serviceManagementSummary": {
-            "totalItems": len(service_management),
+            "totalItems": len(summary_items),
             "healthyCount": sum(
-                1 for item in service_management if item["currentHealthStatus"] == "healthy"
+                1 for item in summary_items if item["currentHealthStatus"] == "healthy"
             ),
             "needsAttentionCount": sum(
-                1 for item in service_management if item["currentHealthStatus"] != "healthy"
+                1 for item in summary_items if item["currentHealthStatus"] != "healthy"
             ),
             "fluxioManagedCount": sum(
-                1 for item in service_management if item["managementMode"] == "fluxio_managed"
+                1 for item in summary_items if item["managementMode"] == "fluxio_managed"
             ),
             "externalCount": sum(
-                1 for item in service_management if item["managementMode"] == "externally_managed"
+                1
+                for item in summary_items
+                if item["managementMode"] == "externally_managed"
             ),
         },
         "blockerExplanations": next_actions,
@@ -1078,12 +1274,27 @@ def _launched_mission_count(root: Path) -> int:
 
 
 def _phone_destination_count(root: Path) -> int:
+    configured_destination = load_telegram_destination(root)
     missions = _load_control_list(root, "missions.json")
-    return sum(
+    mission_destinations = sum(
         1
         for mission in missions
         if mission.get("escalation_policy", {}).get("destination")
     )
+    return mission_destinations + (1 if configured_destination else 0)
+
+
+def load_telegram_destination(root: Path) -> str:
+    path = root / ".agent_control" / "telegram_settings.json"
+    if not path.exists():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("destination", "")).strip()
 
 
 def _load_control_list(root: Path, filename: str) -> list[dict]:

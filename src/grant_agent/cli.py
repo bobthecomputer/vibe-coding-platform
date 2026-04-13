@@ -42,6 +42,7 @@ from .memory import MemoryStore
 from .mission_control import (
     ControlRoomStore,
     build_harness_lab_snapshot,
+    build_release_readiness_snapshot,
     build_escalation_preview,
     default_docs_for_workspace,
     mission_mode_to_engine_mode,
@@ -50,7 +51,7 @@ from .mission_control import (
 )
 from .models import DelegatedRuntimeSession, ExecutionPolicy, ExecutionScope, MissionEvent
 from .modes import ModeRegistry
-from .onboarding import detect_onboarding_status
+from .onboarding import detect_onboarding_status, load_telegram_destination
 from .openai_adapter import build_responses_request, tools_from_skills
 from .persona import PersonaRegistry
 from .profiles import ProfileRegistry
@@ -812,6 +813,12 @@ def build_parser() -> argparse.ArgumentParser:
         "onboarding-status", help="Return Windows-first onboarding diagnostics"
     )
     onboarding_cmd.add_argument("--root", default=".", help="Project root path")
+
+    readiness_cmd = subparsers.add_parser(
+        "release-readiness",
+        help="Return Fluxio 1.0 readiness gates and progress score",
+    )
+    readiness_cmd.add_argument("--root", default=".", help="Project root path")
 
     workspace_cmd = subparsers.add_parser(
         "workspace-save", help="Create or update a managed workspace profile"
@@ -2603,6 +2610,27 @@ def cmd_onboarding_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_release_readiness(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    snapshot = store.build_snapshot()
+    onboarding = snapshot.get("onboarding", detect_onboarding_status(root))
+    setup_health = snapshot.get("setupHealth", onboarding.get("setupHealth", {}))
+    harness_lab = snapshot.get("harnessLab", build_harness_lab_snapshot(root))
+    readiness = build_release_readiness_snapshot(
+        root,
+        onboarding=onboarding,
+        setup_health=setup_health,
+        harness_lab=harness_lab,
+    )
+    payload = {
+        "workspaceRoot": str(root),
+        "releaseReadiness": readiness,
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def cmd_workspace_save(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
@@ -2654,6 +2682,7 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
 
     runtime_status = adapter.doctor(Path(workspace.root_path))
     verification_commands = detect_default_verification_commands(Path(workspace.root_path))
+    escalation_destination = str(args.escalation_destination or "").strip() or load_telegram_destination(root)
     mission = store.create_mission(
         workspace_id=workspace.workspace_id,
         runtime_id=args.runtime,
@@ -2663,7 +2692,7 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         verification_commands=verification_commands,
         max_runtime_seconds=max(3600, args.budget_hours * 3600),
         selected_profile=args.profile or workspace.user_profile,
-        escalation_destination=args.escalation_destination,
+        escalation_destination=escalation_destination,
         run_until_behavior=args.run_until,
         harness_id=workspace.preferred_harness,
     )
@@ -3073,6 +3102,9 @@ def main() -> int:
 
     if args.command == "onboarding-status":
         return cmd_onboarding_status(args)
+
+    if args.command == "release-readiness":
+        return cmd_release_readiness(args)
 
     if args.command == "workspace-save":
         return cmd_workspace_save(args)
