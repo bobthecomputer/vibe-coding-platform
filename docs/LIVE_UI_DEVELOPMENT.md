@@ -1,60 +1,52 @@
 # Live UI Development
 
-Fluxio's desktop frontend now uses the official Tauri `devUrl` development flow with a real Vite dev server.
+Fluxio now runs with a T3-owned shell and style system under `t3code/apps/web/src/fluxio/*`.
 
-What this means in practice:
+## What changed
 
-- editing `t3code/apps/web/src/**/*` updates the running desktop app through Vite HMR + React Fast Refresh
-- editing some structural files still triggers a full page reload instead of state-preserving replacement
-- this is the correct Tauri development model for a desktop app backed by a frontend dev server
-- control-room mission state now refreshes on desktop-emitted change events, with live-sync polling kept as a fallback instead of the primary mechanism
-- mission and delegated-runtime JSONL events are also pushed into the desktop UI as deltas so the activity feed and delegated lane can patch immediately before the next full snapshot refresh
+- `t3code/apps/web/src/fluxio/FluxioShell.jsx` now owns layout, state composition, and mission thread rendering.
+- `t3code/apps/web/src/fluxio/FluxioApp.tsx` now wraps the shell in a real error boundary with recoverable diagnostics.
+- `t3code/apps/web/src/fluxio/styles.css` now owns the visual system for the shell.
+- `desktop-ui/FluxioDesktop.jsx` is now a compatibility wrapper only.
+- `desktop-ui/styles.css` now imports the T3 shell stylesheet as a shim.
 
-Important distinction:
-
-- `HMR` means the browser or webview can replace changed modules without restarting the whole Tauri app
-- `Fast Refresh` is a framework-specific experience layered on top of HMR, most commonly in React
-- Fluxio now uses a React entrypoint in `t3code/apps/web/src/main.tsx`, so Fast Refresh is active for most component edits
-
-Official references:
-
-- Tauri develop docs: <https://v2.tauri.app/develop/>
-- Tauri config reference (`beforeDevCommand`, `devUrl`): <https://tauri.app/es/reference/config/>
-- Tauri frontend guide for Vite: <https://v2.tauri.app/start/frontend/vite/>
-- Vite HMR docs: <https://vite.dev/guide/features.html#hot-module-replacement>
+This removes split ownership between `t3code` and `desktop-ui` for the main app experience.
 
 ## Current local setup
 
 - `package.json`
-  - `npm run frontend:dev` starts Vite
-  - `npm run frontend:build` builds the desktop frontend bundle
+  - `npm run frontend:dev` starts Vite for `t3code/apps/web`
+  - `npm run frontend:build` builds `t3code/apps/web/dist`
 - `src-tauri/tauri.conf.json`
   - `beforeDevCommand` runs the Vite dev server
-  - `devUrl` points the Tauri window at the live dev server
+  - `devUrl` points Tauri at the live frontend
   - `frontendDist` points packaged builds to `t3code/apps/web/dist`
-- `t3code/apps/web/index.html`
-  - mounts the React workbench root
 - `t3code/apps/web/src/main.tsx`
-  - bootstraps `FluxioApp` and imports shared desktop styles
-- `desktop-ui/FluxioDesktop.jsx`
-  - remains the shared workbench implementation consumed by `t3code/apps/web`
+  - mounts `FluxioApp`
+  - imports `t3code/apps/web/src/fluxio/styles.css`
 
-## Operator review loop
+## Runtime review loop
 
-For product review, use this sequence:
+1. Run `npm run tauri:dev`.
+2. Use `Agent` mode for normal operator supervision.
+3. Switch to `Builder` mode and open the Builder drawer to access:
+   - fixture selection
+   - live-sync cadence
+   - feature-truth audit
+   - core-state audit
+4. Keep `Preview = Live Backend` for real mission validation.
+5. Use fixtures only for review states where backend mutation is undesirable.
 
-1. Run `npm run tauri:dev`
-2. Leave `Preview` on `Live Backend` when validating real mission state
-3. Switch `Preview` to a fixture when reviewing UI states without mutating backend data
-4. Use `Live Sync` for real supervision, or turn it off during visual design work
+## Live behavior notes
 
-The app now pauses polling when the window is backgrounded, then refreshes when it becomes visible again. That keeps the review loop live without wasting work while the desktop window is hidden.
-The top bar also shows whether the current feed is coming from push events, fallback polling, or fixture review.
+- Snapshot refresh still supports push events (`control-room://changed`, `control-room://delta`) plus optional polling fallback.
+- Polling suspends when the window is hidden and resumes on visibility restore.
+- Activity, runtime events, and proof deltas are shown in the mission thread and review drawers.
+- Render-time crashes now show a recoverable error panel with failing action context and boot diagnostics.
 
-For control-room data, "fully live" still has an engineering limit:
+Official references:
 
-- UI code edits can update immediately through HMR
-- backend mission state can refresh as soon as Fluxio detects file-backed state changes and emits a desktop event
-- a true zero-latency system would require every runtime and planner path to publish native structured events directly into the desktop app, not only persisted state transitions
-
-This repo is now on the right path: push first, polling second.
+- Tauri develop docs: <https://v2.tauri.app/develop/>
+- Tauri config reference: <https://tauri.app/es/reference/config/>
+- Tauri + Vite frontend guide: <https://v2.tauri.app/start/frontend/vite/>
+- Vite HMR docs: <https://vite.dev/guide/features.html#hot-module-replacement>
