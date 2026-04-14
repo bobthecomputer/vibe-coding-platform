@@ -2181,41 +2181,94 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       </header>
 
       <div className="fluxio-body">
-        <aside className="fluxio-utility-rail">
-          <div className="global-rail-top">
-            <GlobalRailButton
-              active={uiMode === "agent"}
-              icon="O"
-              label="Operator"
-              onClick={() => {
-                markAction("rail:operator");
-                setUiMode("agent");
-                setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
-              }}
-            />
-            <GlobalRailButton
-              active={activeDrawer === "skills"}
-              icon="S"
-              label="Skills"
-              onClick={() => {
-                markAction("rail:skills");
-                setUiMode("builder");
-                setSkillStudioFilter("all");
-                setActiveDrawer("skills");
-              }}
-            />
-            <GlobalRailButton
-              active={activeDrawer === "runtime"}
-              icon="R"
-              label="Runtime"
-              onClick={() => {
-                markAction("rail:runtime");
-                setUiMode("builder");
-                setActiveDrawer("runtime");
-              }}
-            />
+        <aside className="fluxio-sidebar">
+          <div className="fluxio-sidebar-scroll">
+            <section className="sidebar-surface-list">
+              <GlobalRailButton
+                active={uiMode === "agent"}
+                icon="O"
+                label="Operator"
+                onClick={() => {
+                  markAction("rail:operator");
+                  setUiMode("agent");
+                  setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
+                }}
+              />
+              <GlobalRailButton
+                active={activeDrawer === "skills"}
+                icon="S"
+                label="Skills"
+                onClick={() => {
+                  markAction("rail:skills");
+                  setUiMode("builder");
+                  setSkillStudioFilter("all");
+                  setActiveDrawer("skills");
+                }}
+              />
+              <GlobalRailButton
+                active={activeDrawer === "runtime"}
+                icon="R"
+                label="Runtime"
+                onClick={() => {
+                  markAction("rail:runtime");
+                  setUiMode("builder");
+                  setActiveDrawer("runtime");
+                }}
+              />
+            </section>
+
+            <section className="fluxio-nav-section">
+              <div className="fluxio-nav-heading">
+                <p className="eyebrow">Workspaces</p>
+                <ActionButton onClick={() => setShowWorkspaceDialog(true)}>Add</ActionButton>
+              </div>
+              <div className="fluxio-nav-list">
+                {workspaces.length > 0 ? (
+                  workspaces.map(item => (
+                    <NavItem
+                      active={item.workspace_id === selectedWorkspaceId}
+                      badge={item.runtimeStatus?.detected ? "Ready" : "Check"}
+                      icon="W"
+                      key={item.workspace_id}
+                      onClick={() => setSelectedWorkspaceId(item.workspace_id)}
+                      subtitle={item.root_path}
+                      title={item.name}
+                      tone={item.runtimeStatus?.detected ? "good" : "warn"}
+                    />
+                  ))
+                ) : (
+                  <p className="fluxio-empty-copy">Add one workspace to begin.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="fluxio-nav-section">
+              <div className="fluxio-nav-heading">
+                <p className="eyebrow">Missions</p>
+                <ActionButton onClick={openMissionDialog}>New</ActionButton>
+              </div>
+              <div className="fluxio-nav-list">
+                {missionOptions.length > 0 ? (
+                  missionOptions.map(item => (
+                    <NavItem
+                      active={item.mission_id === selectedMissionId}
+                      badge={titleizeToken(item.state?.status || "draft")}
+                      icon="M"
+                      key={item.mission_id}
+                      onClick={() => setSelectedMissionId(item.mission_id)}
+                      subtitle={runtimeLabel(item.runtime_id)}
+                      title={item.title || item.objective}
+                      tone={item.proof?.pending_approvals?.length ? "warn" : viewModel.topBar.liveStatus.tone}
+                    />
+                  ))
+                ) : (
+                  <p className="fluxio-empty-copy">Mission thread appears after first launch.</p>
+                )}
+              </div>
+            </section>
           </div>
-          <div className="global-rail-bottom">
+
+          <div className="fluxio-sidebar-bottom">
             <GlobalRailButton
               active={activeDrawer === "settings"}
               icon="G"
@@ -2228,58 +2281,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               subtle
             />
           </div>
-        </aside>
-
-        <aside className="fluxio-nav">
-          <section className="fluxio-nav-section">
-            <div className="fluxio-nav-heading">
-              <p className="eyebrow">Workspaces</p>
-              <ActionButton onClick={() => setShowWorkspaceDialog(true)}>Add</ActionButton>
-            </div>
-            <div className="fluxio-nav-list">
-              {workspaces.length > 0 ? (
-                workspaces.map(item => (
-                  <NavItem
-                    active={item.workspace_id === selectedWorkspaceId}
-                    badge={item.runtimeStatus?.detected ? "Ready" : "Check"}
-                    icon="W"
-                    key={item.workspace_id}
-                    onClick={() => setSelectedWorkspaceId(item.workspace_id)}
-                    subtitle={item.root_path}
-                    title={item.name}
-                    tone={item.runtimeStatus?.detected ? "good" : "warn"}
-                  />
-                ))
-              ) : (
-                <p className="fluxio-empty-copy">Add one workspace to begin.</p>
-              )}
-            </div>
-          </section>
-
-          <section className="fluxio-nav-section">
-            <div className="fluxio-nav-heading">
-              <p className="eyebrow">Missions</p>
-              <ActionButton onClick={openMissionDialog}>New</ActionButton>
-            </div>
-            <div className="fluxio-nav-list">
-              {missionOptions.length > 0 ? (
-                missionOptions.map(item => (
-                  <NavItem
-                    active={item.mission_id === selectedMissionId}
-                    badge={titleizeToken(item.state?.status || "draft")}
-                    icon="M"
-                    key={item.mission_id}
-                    onClick={() => setSelectedMissionId(item.mission_id)}
-                    subtitle={runtimeLabel(item.runtime_id)}
-                    title={item.title || item.objective}
-                    tone={item.proof?.pending_approvals?.length ? "warn" : viewModel.topBar.liveStatus.tone}
-                  />
-                ))
-              ) : (
-                <p className="fluxio-empty-copy">Mission thread appears after first launch.</p>
-              )}
-            </div>
-          </section>
         </aside>
 
         <main className="fluxio-main">
