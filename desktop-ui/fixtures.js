@@ -1,4 +1,4 @@
-const now = '2026-04-02T21:15:00Z';
+const now = '2026-04-14T10:30:00Z';
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -141,11 +141,11 @@ const baseSnapshot = {
       node: { installed: true, version: 'v24.2.0' },
       python: { installed: true, version: '3.13.2' },
       uv: { installed: true, version: '0.7.20' },
-      openclaw: { installed: true, version: '2026.2.15' },
-      hermes: { installed: true, version: '0.4.0' },
+      openclaw: { installed: true, version: '2026.4.14' },
+      hermes: { installed: true, version: 'v0.9.0' },
     },
     wsl: { installed: true, details: 'WSL2 detected and ready.' },
-    nextActions: ['Install Hermes inside WSL2 and run `hermes setup`.', 'Launch a first mission to unlock the planner timeline and proof surfaces.', 'Configure Telegram escalation before long unattended runs.'],
+    nextActions: ['Launch a first mission to unlock the planner timeline and proof surfaces.', 'Configure Telegram escalation before long unattended runs.', 'Review runtime lanes and connected app bridges in Builder after launch.'],
   },
   guidance: {
     profileChoices: [
@@ -165,34 +165,24 @@ const baseSnapshot = {
   },
   profiles,
   setupHealth: {
-    installState: 'install_available',
-    environmentReady: false,
-    installerReady: false,
+    installState: 'missing',
+    environmentReady: true,
+    installerReady: true,
     firstMissionLaunched: false,
     telegramReady: false,
-    missingDependencies: ['Hermes', 'First guided mission'],
+    missingDependencies: ['First guided mission'],
     dependencies: [
       { dependencyId: 'wsl2', label: 'WSL2', category: 'platform', required: true, installed: true, version: 'WSL2', details: 'WSL2 detected and ready.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
       { dependencyId: 'node', label: 'Node', category: 'runtime', required: true, installed: true, version: 'v24.2.0', details: 'Installed and reachable.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
       { dependencyId: 'python', label: 'Python', category: 'runtime', required: true, installed: true, version: '3.13.2', details: 'Installed and reachable.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
       { dependencyId: 'uv', label: 'uv', category: 'tooling', required: true, installed: true, version: '0.7.20', details: 'Installed and reachable.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
-      { dependencyId: 'openclaw', label: 'OpenClaw', category: 'agent_runtime', required: true, installed: true, version: '2026.2.15', details: 'Installed and reachable.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
-      { dependencyId: 'hermes', label: 'Hermes', category: 'agent_runtime', required: true, installed: false, version: '', details: 'Install Hermes in WSL2, then finish setup.', repairActions: [{ actionId: 'install_hermes', dependencyId: 'hermes', label: 'Install Hermes', description: 'Install Hermes in WSL2, then finish setup.', command: 'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash', followUp: 'hermes setup', kind: 'install', platform: 'wsl2' }], latestAction: {}, stage: 'install_available', blocked: true },
+      { dependencyId: 'openclaw', label: 'OpenClaw', category: 'agent_runtime', required: true, installed: true, version: '2026.4.14', details: 'Installed and verified against the latest npm release.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
+      { dependencyId: 'hermes', label: 'Hermes', category: 'agent_runtime', required: true, installed: true, version: 'v0.9.0', details: 'Installed in WSL2 and verified against the latest upstream release.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
       { dependencyId: 'tauri_prereqs', label: 'Tauri prerequisites', category: 'desktop', required: false, installed: true, version: 'stable', details: 'Rust and Cargo are available for Tauri builds.', repairActions: [], latestAction: {}, stage: 'healthy', blocked: false },
       { dependencyId: 'telegram_ready', label: 'Telegram escalation', category: 'readiness', required: false, installed: false, version: '', details: 'Add a Telegram destination so long unattended runs can escalate approvals.', repairActions: [], latestAction: {}, stage: 'missing', blocked: false },
       { dependencyId: 'guided_mission', label: 'First guided mission', category: 'readiness', required: true, installed: false, version: '', details: 'Finish setup by launching one real guided mission from Fluxio.', repairActions: [], latestAction: {}, stage: 'missing', blocked: true },
     ],
-    repairActions: [
-      {
-        actionId: 'install_hermes',
-        dependencyId: 'hermes',
-        label: 'Install Hermes',
-        description: 'Install Hermes in WSL2, then finish setup.',
-        command: 'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash',
-        followUp: 'hermes setup',
-        commandSurface: 'setup.install',
-      },
-    ],
+    repairActions: [],
     globalActions: [
       {
         actionId: 'verify_setup_health',
@@ -203,7 +193,7 @@ const baseSnapshot = {
     ],
     actionHistory: [],
     actionHistoryByDependency: {},
-    blockerExplanations: ['Install Hermes inside WSL2 and run `hermes setup`.'],
+    blockerExplanations: ['Launch one real guided mission from Fluxio.'],
   },
   skillLibrary: {
     recommendedPacks: [{ label: 'Repo Scan', execution_capable: true }],
@@ -263,11 +253,13 @@ const baseSnapshot = {
     ],
     connectedSessions: [
       {
+        session_id: 'bridge_oratio_viva',
         app_id: 'oratio-viva',
         app_name: 'Oratio Viva',
         status: 'connected',
         bridge_health: 'healthy',
         handshake_status: 'connected',
+        bridge_transport: 'http',
         active_tasks: [],
         context_preview: [{ summary: '3 voice engines detected in oratio-viva-ui 0.1.0' }],
         latest_task_result: {
@@ -278,14 +270,17 @@ const baseSnapshot = {
           { capability_key: 'task.run', status: 'granted' },
           { capability_key: 'context.read', status: 'granted' },
         ],
+        notes: ['Bridge session is live and available for follow-on orchestration.'],
         last_seen_at: now,
       },
       {
+        session_id: 'bridge_mind_tower',
         app_id: 'mind-tower',
         app_name: 'Mind Tower',
         status: 'connected',
         bridge_health: 'healthy',
         handshake_status: 'connected',
+        bridge_transport: 'http',
         active_tasks: [],
         context_preview: [{ summary: '42 admin files and 2 service modules detected.' }],
         latest_task_result: {
@@ -300,14 +295,17 @@ const baseSnapshot = {
           { capability_key: 'context.read', status: 'granted' },
           { capability_key: 'approval.callback', status: 'review' },
         ],
+        notes: ['Bridge session is healthy and can push approval-aware follow-ups.'],
         last_seen_at: now,
       },
       {
+        session_id: 'bridge_solantir_terminal',
         app_id: 'solantir-terminal',
         app_name: 'Solantir Terminal',
         status: 'follow_on_manifest',
         bridge_health: 'manifest_only',
         handshake_status: 'manifest_loaded',
+        bridge_transport: 'ipc',
         active_tasks: [],
         latest_task_result: {
           label: 'Refresh watchlist',
@@ -318,6 +316,7 @@ const baseSnapshot = {
           { capability_key: 'context.read', status: 'granted' },
           { capability_key: 'approval.request', status: 'review' },
         ],
+        notes: ['Still held in manifest-only follow-on review.'],
         last_seen_at: now,
       },
     ],
@@ -338,16 +337,28 @@ baseSnapshot.workspaces[0].serviceManagement = [
     details: 'WSL2 detected and ready.',
   },
   {
+    serviceId: 'openclaw',
+    label: 'OpenClaw',
+    serviceCategory: 'runtime',
+    installSource: 'npm',
+    currentHealthStatus: 'healthy',
+    lastVerificationResult: 'passed',
+    lastRepairAction: {},
+    managementMode: 'fluxio_managed',
+    version: '2026.4.14',
+    details: 'Installed and aligned with the latest npm release.',
+  },
+  {
     serviceId: 'hermes',
     label: 'Hermes',
     serviceCategory: 'runtime',
     installSource: 'wsl_script',
-    currentHealthStatus: 'install_available',
-    lastVerificationResult: 'blocked',
+    currentHealthStatus: 'healthy',
+    lastVerificationResult: 'passed',
     lastRepairAction: {},
     managementMode: 'fluxio_managed',
-    version: '',
-    details: 'Install Hermes in WSL2, then finish setup.',
+    version: 'v0.9.0',
+    details: 'Installed in WSL2 and aligned with the latest upstream release.',
   },
   {
     serviceId: 'filesystem_mcp',
@@ -375,10 +386,10 @@ baseSnapshot.workspaces[0].serviceManagement = [
   },
 ];
 baseSnapshot.workspaces[0].serviceManagementSummary = {
-  totalItems: 4,
-  healthyCount: 2,
-  needsAttentionCount: 2,
-  runtimeCount: 1,
+  totalItems: 5,
+  healthyCount: 4,
+  needsAttentionCount: 1,
+  runtimeCount: 2,
   toolServerCount: 1,
   bridgeCount: 1,
 };
@@ -410,16 +421,29 @@ baseSnapshot.setupHealth.serviceManagement = [
     required: true,
   },
   {
+    serviceId: 'openclaw',
+    label: 'OpenClaw',
+    serviceCategory: 'runtime',
+    installSource: 'npm',
+    currentHealthStatus: 'healthy',
+    lastVerificationResult: 'passed',
+    lastRepairAction: {},
+    managementMode: 'fluxio_managed',
+    version: '2026.4.14',
+    details: 'Installed and aligned with the latest npm release.',
+    required: true,
+  },
+  {
     serviceId: 'hermes',
     label: 'Hermes',
     serviceCategory: 'runtime',
     installSource: 'wsl_script',
-    currentHealthStatus: 'install_available',
-    lastVerificationResult: 'blocked',
+    currentHealthStatus: 'healthy',
+    lastVerificationResult: 'passed',
     lastRepairAction: {},
     managementMode: 'fluxio_managed',
-    version: '',
-    details: 'Install Hermes in WSL2, then finish setup.',
+    version: 'v0.9.0',
+    details: 'Installed in WSL2 and aligned with the latest upstream release.',
     required: true,
   },
   {
@@ -437,10 +461,10 @@ baseSnapshot.setupHealth.serviceManagement = [
   },
 ];
 baseSnapshot.setupHealth.serviceManagementSummary = {
-  totalItems: 4,
-  healthyCount: 2,
-  needsAttentionCount: 2,
-  fluxioManagedCount: 4,
+  totalItems: 5,
+  healthyCount: 4,
+  needsAttentionCount: 1,
+  fluxioManagedCount: 5,
   externalCount: 0,
 };
 baseSnapshot.skillLibrary.managementSummary = {
@@ -587,6 +611,13 @@ const liveReviewFixture = (() => {
         { role: 'planner', provider: 'openai', model: 'gpt-5.4', budget_class: 'premium', explanation: 'Better planning quality.' },
         { role: 'executor', provider: 'openai', model: 'gpt-5.4-mini', budget_class: 'efficient', explanation: 'Cheaper execution.' },
       ],
+      effectiveRouteContract: {
+        roles: [
+          { role: 'planner', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'workspace_override', reason: 'Keep approval planning explicit.' },
+          { role: 'executor', provider: 'openai', model: 'gpt-5.4-mini', budgetClass: 'efficient', effort: 'medium', source: 'workspace_override', reason: 'Execution stays cheaper during UI iteration.' },
+          { role: 'verifier', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'profile_default', reason: 'Verification still uses the stronger route.' },
+        ],
+      },
       action_history: [
         {
           action_id: 'action_live_1',
@@ -617,16 +648,22 @@ const liveReviewFixture = (() => {
       ],
       delegated_runtime_sessions: [
         {
+          delegated_id: 'delegated_live_review',
           runtime_id: 'openclaw',
           status: 'waiting_for_approval',
           last_event: 'Approve delegated deploy simulation?',
           detail: 'Delegated runtime is waiting for approval.',
+          heartbeat_status: 'healthy',
+          heartbeat_age_seconds: 18,
+          execution_target: 'isolated_worktree',
+          execution_root: 'C:/Users/paul/Projects/.fluxio-worktrees-vibe/live-review',
+          execution_target_detail: 'Isolated worktree review lane for desktop UI changes.',
           updated_at: now,
           pending_approval: { prompt: 'Approve delegated deploy simulation?' },
           approval_history: [],
           latest_events: [
-            { kind: 'runtime.phase', message: 'Deploy simulation reached approval gate.' },
-            { kind: 'approval.request', message: 'Approve delegated deploy simulation?' },
+            { event_id: 'evt_live_review_1', kind: 'runtime.phase', message: 'Deploy simulation reached approval gate.', status: 'running' },
+            { event_id: 'evt_live_review_2', kind: 'approval.request', message: 'Approve delegated deploy simulation?', status: 'waiting' },
           ],
         },
       ],
@@ -749,6 +786,13 @@ const verificationFailureFixture = (() => {
         { role: 'planner', provider: 'openai', model: 'gpt-5.4', budget_class: 'premium', explanation: 'Broader diagnosis benefits from stronger planning.' },
         { role: 'verifier', provider: 'openai', model: 'gpt-5.4', budget_class: 'premium', explanation: 'Verification quality matters here.' },
       ],
+      effectiveRouteContract: {
+        roles: [
+          { role: 'planner', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'profile_default', reason: 'Broader diagnosis benefits from stronger planning.' },
+          { role: 'executor', provider: 'openai', model: 'gpt-5.4-mini', budgetClass: 'efficient', effort: 'medium', source: 'profile_default', reason: 'Execution stays efficient during diagnosis.' },
+          { role: 'verifier', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'workspace_override', reason: 'Verification quality matters here.' },
+        ],
+      },
       action_history: [
         {
           action_id: 'action_fail_1',
@@ -850,6 +894,13 @@ const approvalResumedFixture = (() => {
       route_configs: [
         { role: 'planner', provider: 'openai', model: 'gpt-5.4', budget_class: 'premium', explanation: 'Planner keeps the resumed mission coherent.' },
       ],
+      effectiveRouteContract: {
+        roles: [
+          { role: 'planner', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'profile_default', reason: 'Planner keeps the resumed mission coherent.' },
+          { role: 'executor', provider: 'openai', model: 'gpt-5.4-mini', budgetClass: 'efficient', effort: 'medium', source: 'workspace_override', reason: 'Execution stays lighter for resumed follow-through.' },
+          { role: 'verifier', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'profile_default', reason: 'Verification still uses the premium route.' },
+        ],
+      },
       action_history: [
         {
           action_id: 'action_resume_1',
@@ -861,18 +912,24 @@ const approvalResumedFixture = (() => {
       ],
       delegated_runtime_sessions: [
         {
+          delegated_id: 'delegated_approval_resumed',
           runtime_id: 'hermes',
           status: 'completed',
           last_event: 'Delegated lane resumed after approval and finished cleanly.',
           detail: 'Delegated lane completed while the desktop was away.',
+          heartbeat_status: 'healthy',
+          heartbeat_age_seconds: 7,
+          execution_target: 'workspace_root',
+          execution_root: 'C:/Users/paul/Projects/vibe-coding-platform',
+          execution_target_detail: 'Workspace-root resume lane under Hermes supervision.',
           updated_at: now,
           pending_approval: {},
           approval_history: [
             { status: 'approved', resolved_by: 'operator', resolved_at: now },
           ],
           latest_events: [
-            { kind: 'approval.resolved', message: 'Delegated approval approved by operator.' },
-            { kind: 'session.completed', message: 'Delegated lane resumed after approval and finished cleanly.' },
+            { event_id: 'evt_resume_1', kind: 'approval.resolved', message: 'Delegated approval approved by operator.', status: 'approved' },
+            { event_id: 'evt_resume_2', kind: 'session.completed', message: 'Delegated lane resumed after approval and finished cleanly.', status: 'completed' },
           ],
         },
       ],
@@ -950,6 +1007,13 @@ const longRunResumedFixture = (() => {
       route_configs: [
         { role: 'planner', provider: 'openai', model: 'gpt-5.4', budget_class: 'premium', explanation: 'Stronger planner for long unattended loops.' },
       ],
+      effectiveRouteContract: {
+        roles: [
+          { role: 'planner', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'profile_default', reason: 'Long unattended loops benefit from stronger planning.' },
+          { role: 'executor', provider: 'openai', model: 'gpt-5.4-mini', budgetClass: 'efficient', effort: 'medium', source: 'workspace_override', reason: 'Execution can stay efficient over long runs.' },
+          { role: 'verifier', provider: 'openai', model: 'gpt-5.4', budgetClass: 'premium', effort: 'high', source: 'profile_default', reason: 'Verification remains premium for unattended completion.' },
+        ],
+      },
       action_history: [
         {
           action_id: 'action_long_1',
@@ -961,16 +1025,22 @@ const longRunResumedFixture = (() => {
       ],
       delegated_runtime_sessions: [
         {
+          delegated_id: 'delegated_long_run',
           runtime_id: 'openclaw',
           status: 'running',
           last_event: 'Preparing the final proof summary and completion report.',
           detail: 'Delegated lane is still running.',
+          heartbeat_status: 'healthy',
+          heartbeat_age_seconds: 23,
+          execution_target: 'isolated_worktree',
+          execution_root: 'C:/Users/paul/Projects/vibe-coding-platform',
+          execution_target_detail: 'Long-run summary lane in an isolated worktree.',
           updated_at: now,
           pending_approval: {},
           approval_history: [],
           latest_events: [
-            { kind: 'runtime.phase', message: 'Verification passed and the lane moved into summary mode.' },
-            { kind: 'runtime.output', message: 'Preparing the final proof summary and completion report.' },
+            { event_id: 'evt_long_run_1', kind: 'runtime.phase', message: 'Verification passed and the lane moved into summary mode.', status: 'running' },
+            { event_id: 'evt_long_run_2', kind: 'runtime.output', message: 'Preparing the final proof summary and completion report.', status: 'running' },
           ],
         },
       ],

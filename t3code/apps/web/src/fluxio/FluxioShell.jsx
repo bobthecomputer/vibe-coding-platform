@@ -213,6 +213,7 @@ function TranscriptMessage({ item }) {
       fluxio: "Fluxio",
       operator: "Operator",
       runtime: "Runtime",
+      bridge: "Bridge",
       queue: "Needs attention",
       system: "System",
     }[role] ||
@@ -223,6 +224,7 @@ function TranscriptMessage({ item }) {
       fluxio: "◎",
       operator: "◉",
       runtime: "◇",
+      bridge: "⌁",
       queue: "!",
       system: "·",
     }[role] ||
@@ -817,7 +819,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [mission, uiMode]);
 
   useEffect(() => {
-    if (uiMode === "agent" && ["builder", "skills", "runtime", "settings"].includes(activeDrawer)) {
+    if (uiMode === "agent" && ["builder", "skills", "runtime", "profiles", "settings"].includes(activeDrawer)) {
       setActiveDrawer("context");
     }
   }, [activeDrawer, uiMode]);
@@ -1401,18 +1403,38 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       workspace?.user_profile,
     ],
   );
-  const runtimeTruth = useMemo(
-    () => [
+  const runtimeTruth = useMemo(() => {
+    const items = [
       openClawRuntimeActive
         ? openClawStatus?.connected
           ? "OpenClaw gateway connected"
           : "OpenClaw gateway not connected"
         : `Mission runtime: ${runtimeLabel(mission?.runtime_id || workspace?.default_runtime || "openclaw")}`,
       data.openClawHasToken ? "Gateway token stored" : "Gateway token missing",
-      "Runtime stack can now surface install, repair, and update actions from Builder.",
-    ],
-    [data.openClawHasToken, mission?.runtime_id, openClawRuntimeActive, openClawStatus?.connected, workspace?.default_runtime],
-  );
+    ];
+
+    if (delegatedSessions.length > 0) {
+      items.push(
+        `${delegatedSessions.length} delegated runtime lane${delegatedSessions.length > 1 ? "s" : ""} visible in-thread`,
+      );
+    }
+    if (bridgeSessions.length > 0) {
+      items.push(
+        `${bridgeSessions.length} connected app bridge${bridgeSessions.length > 1 ? "s" : ""} reporting`,
+      );
+    }
+
+    items.push("Builder can install, repair, and update runtimes without leaving the shell.");
+    return items;
+  }, [
+    bridgeSessions.length,
+    data.openClawHasToken,
+    delegatedSessions.length,
+    mission?.runtime_id,
+    openClawRuntimeActive,
+    openClawStatus?.connected,
+    workspace?.default_runtime,
+  ]);
 
   const agentTranscript = useMemo(() => {
     const items = [];
@@ -1482,9 +1504,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
 
     for (const session of delegatedSessions) {
+      const delegatedMessageId =
+        session.delegated_id ||
+        `${session.runtime_id || "runtime"}-${session.updated_at || session.last_event || "session"}`;
       items.push({
-        id: `delegated-${session.delegated_id}`,
+        id: `delegated-${delegatedMessageId}`,
         role: "runtime",
+        roleLabel: runtimeLabel(session.runtime_id),
         roleIcon: "◇",
         label: `${runtimeLabel(session.runtime_id)} lane`,
         title: session.detail || session.last_event || `${runtimeLabel(session.runtime_id)} session ${titleizeToken(session.status || "active")}`,
@@ -1500,18 +1526,79 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           session.execution_target ? titleizeToken(session.execution_target) : "",
         ].filter(Boolean),
       });
+
+      for (const [index, event] of [...(Array.isArray(session.latest_events) ? session.latest_events : [])]
+        .slice(-2)
+        .reverse()
+        .entries()) {
+        items.push({
+          id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
+          role: "runtime",
+          roleLabel: runtimeLabel(session.runtime_id),
+          roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
+          label: titleizeToken(event.kind || "runtime event"),
+          title: event.message || "Runtime event",
+          detail:
+            event.detail ||
+            session.execution_target_detail ||
+            "Delegated runtime supervision is still flowing into the thread.",
+          tone:
+            event.status === "failed"
+              ? "bad"
+              : /approval|blocked|stale/i.test(`${event.kind || ""} ${event.message || ""}`)
+                ? "warn"
+                : "neutral",
+          chips: [
+            session.status ? titleizeToken(session.status) : "",
+            session.execution_target ? titleizeToken(session.execution_target) : "",
+            event.status ? titleizeToken(event.status) : "",
+          ].filter(Boolean),
+        });
+      }
     }
 
     for (const message of data.openClawMessages) {
       items.push({
         id: `openclaw-${message.id}`,
         role: "runtime",
+        roleLabel: "OpenClaw",
         roleIcon: "◇",
         label: "OpenClaw",
         title: message.detail,
         detail: message.meta || "Gateway message",
         meta: timestampLabel(message.createdAt),
         tone: message.tone || "neutral",
+      });
+    }
+
+    for (const session of bridgeSessions.slice(0, 3)) {
+      items.push({
+        id: `bridge-${session.session_id || session.app_id}`,
+        role: "bridge",
+        roleLabel: session.app_name || "Connected app",
+        roleIcon: "⌁",
+        label: `${session.app_name || session.app_id} bridge`,
+        title:
+          session.latest_task_result?.label ||
+          `${titleizeToken(session.status || "connected")} bridge session`,
+        detail:
+          session.latest_task_result?.resultSummary ||
+          session.notes?.[0] ||
+          "Bridge session is connected and reporting.",
+        meta: timestampLabel(session.last_seen_at),
+        tone:
+          session.bridge_health === "healthy"
+            ? "neutral"
+            : session.bridge_health === "manifest_only"
+              ? "warn"
+              : "bad",
+        chips: [
+          session.bridge_transport ? titleizeToken(session.bridge_transport) : "",
+          session.bridge_health ? titleizeToken(session.bridge_health) : "",
+          Array.isArray(session.active_tasks) && session.active_tasks.length > 0
+            ? `${session.active_tasks.length} active`
+            : "",
+        ].filter(Boolean),
       });
     }
 
@@ -1531,6 +1618,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
     return items;
   }, [
+    bridgeSessions,
     data.openClawMessages,
     data.pendingApprovals,
     data.pendingQuestions,
