@@ -13,6 +13,30 @@ from grant_agent.runtimes.openclaw import OpenClawRuntimeAdapter
 
 
 class RuntimeAdapterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.openclaw_latest_patcher = mock.patch(
+            "grant_agent.runtimes.openclaw.latest_openclaw_release",
+            return_value={
+                "version": "2026.4.14",
+                "sourceUrl": "https://www.npmjs.com/package/openclaw",
+            },
+        )
+        self.hermes_latest_patcher = mock.patch(
+            "grant_agent.runtimes.hermes.latest_hermes_release",
+            return_value={
+                "version": "v0.9.0",
+                "sourceUrl": "https://github.com/NousResearch/hermes-agent/blob/main/RELEASE_v0.9.0.md",
+            },
+        )
+        self.openclaw_latest_patcher.start()
+        self.hermes_latest_patcher.start()
+
+    def tearDown(self) -> None:
+        self.hermes_latest_patcher.stop()
+        self.openclaw_latest_patcher.stop()
+        super().tearDown()
+
     @mock.patch("grant_agent.runtimes.openclaw.subprocess.run")
     @mock.patch("grant_agent.runtimes.openclaw.shutil.which")
     def test_openclaw_adapter_detects_runtime(
@@ -27,6 +51,8 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertTrue(status.detected)
         self.assertEqual(status.version, "2026.2.15")
+        self.assertEqual(status.latest_version, "2026.4.14")
+        self.assertTrue(status.update_available)
         self.assertGreaterEqual(len(status.capabilities), 1)
 
     @mock.patch("grant_agent.runtimes.hermes.shutil.which")
@@ -66,7 +92,8 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertTrue(status.detected)
         self.assertEqual(status.command, "wsl:hermes")
-        self.assertIn("WSL2", status.doctor_summary)
+        self.assertTrue(status.update_available)
+        self.assertIn("latest upstream release", status.doctor_summary)
 
     def test_openclaw_launch_uses_session_id_and_json_output(self) -> None:
         adapter = OpenClawRuntimeAdapter()
@@ -93,6 +120,16 @@ class RuntimeAdapterTests(unittest.TestCase):
         command = str(launch["launch_command"])
         self.assertTrue(command.startswith("wsl bash -lc "))
         self.assertIn('hermes chat -q \\"Run from WSL\\" -Q', command)
+
+    @mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes")
+    def test_hermes_update_prefers_native_command_when_available(
+        self, which_mock: mock.Mock
+    ) -> None:
+        adapter = HermesRuntimeAdapter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            update = adapter.update(pathlib.Path(temp_dir))
+
+        self.assertEqual(update["command"], "hermes update")
 
 
 if __name__ == "__main__":

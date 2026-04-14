@@ -96,6 +96,10 @@ class RuntimeInstallStatus:
     detected: bool
     command: str | None = None
     version: str | None = None
+    latest_version: str | None = None
+    update_available: bool = False
+    update_command: str | None = None
+    update_source_url: str | None = None
     install_hint: str | None = None
     doctor_summary: str = ""
     issues: list[str] = field(default_factory=list)

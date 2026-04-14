@@ -6,6 +6,11 @@ import re
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
+from ..runtime_updates import (
+    compare_version_tokens,
+    latest_openclaw_release,
+    normalize_openclaw_version,
+)
 from .base import AgentRuntimeAdapter
 
 
@@ -49,11 +54,21 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
                     timeout=8,
                     check=False,
                 )
-                version = (completed.stdout or completed.stderr).strip() or None
+                version = normalize_openclaw_version(
+                    (completed.stdout or completed.stderr).strip() or None
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 issues.append(f"Unable to read OpenClaw version: {exc}")
         else:
             issues.append("OpenClaw CLI was not found on PATH.")
+
+        latest_release = latest_openclaw_release()
+        latest_version = latest_release.get("version") or None
+        update_available = bool(
+            command and version and latest_version and compare_version_tokens(version, latest_version) < 0
+        )
+        if update_available and latest_version:
+            issues.append(f"OpenClaw is behind the latest npm release ({latest_version}).")
 
         return RuntimeInstallStatus(
             runtime_id=self.runtime_id,
@@ -61,12 +76,20 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             detected=command is not None,
             command=command,
             version=version,
+            latest_version=latest_version,
+            update_available=update_available,
+            update_command=self.update(workspace_root).get("command", "") if command else "",
+            update_source_url=latest_release.get("sourceUrl") or None,
             install_hint=(
                 "Use Fluxio Setup -> Install OpenClaw for one-click install + onboarding, "
                 "or run `npm install -g openclaw@latest` then `openclaw onboard --install-daemon`."
             ),
             doctor_summary=(
-                "OpenClaw is ready for mission routing."
+                (
+                    f"OpenClaw is installed, but the latest npm release is {latest_version}."
+                    if update_available and latest_version
+                    else "OpenClaw is ready for mission routing."
+                )
                 if command
                 else "Install OpenClaw with the setup one-click action before running phone-escalated missions."
             ),
@@ -85,6 +108,12 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         if status.detected and not status.version:
             status.issues.append("OpenClaw responded, but version output was empty.")
         return status
+
+    def update(self, workspace_root: Path) -> dict[str, str]:
+        return {
+            "command": "npm install -g openclaw@latest",
+            "follow_up": "openclaw onboard --install-daemon",
+        }
 
     def start_mission(
         self, mission: Mission, workspace: WorkspaceProfile

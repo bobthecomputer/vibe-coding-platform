@@ -32,6 +32,7 @@ const LIVE_SYNC_OPTIONS = [
   { value: "15", label: "15s" },
   { value: "30", label: "30s" },
 ];
+const DEFAULT_OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:8765";
 
 const DEFAULT_WORKSPACE_FORM = {
   name: "",
@@ -79,6 +80,24 @@ const EXECUTION_TARGET_OPTIONS = [
   { value: "profile_default", label: "Profile Default" },
   { value: "workspace_root", label: "Workspace Root" },
   { value: "isolated_worktree", label: "Isolated Worktree" },
+];
+const ROUTE_ROLE_OPTIONS = ["planner", "executor", "verifier"];
+const MODEL_PROVIDER_OPTIONS = [
+  { value: "openai", label: "OpenAI" },
+  { value: "anthropic", label: "Anthropic" },
+  { value: "openrouter", label: "OpenRouter" },
+];
+const MODEL_EFFORT_OPTIONS = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
+const ROUTE_MODEL_OPTIONS = [
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "codex",
+  "claude-sonnet-4.5",
+  "claude-opus-4.1",
 ];
 
 function hasTauriBackend() {
@@ -186,6 +205,54 @@ function ThreadSection({ item }) {
   );
 }
 
+function TranscriptMessage({ item }) {
+  const role = item.role || "fluxio";
+  const roleLabel =
+    item.roleLabel ||
+    {
+      fluxio: "Fluxio",
+      operator: "Operator",
+      runtime: "Runtime",
+      queue: "Needs attention",
+      system: "System",
+    }[role] ||
+    "Fluxio";
+  const roleIcon =
+    item.roleIcon ||
+    {
+      fluxio: "◎",
+      operator: "◉",
+      runtime: "◇",
+      queue: "!",
+      system: "·",
+    }[role] ||
+    "·";
+
+  return (
+    <article className={`agent-message role-${role} ${toneClass(item.tone || "neutral")} ${item.emphasis ? "emphasis" : ""}`.trim()}>
+      <div className="agent-message-top">
+        <div className="agent-message-role">
+          <span aria-hidden="true" className="agent-message-avatar">{roleIcon}</span>
+          <strong>{roleLabel}</strong>
+        </div>
+        {item.meta ? <span>{item.meta}</span> : null}
+      </div>
+      {item.label ? <p className="agent-message-label">{item.label}</p> : null}
+      {item.title ? <h3>{item.title}</h3> : null}
+      {item.detail ? <p>{item.detail}</p> : null}
+      {item.chips?.length ? (
+        <div className="agent-message-chips">
+          {item.chips.map(chip => (
+            <span className="mini-pill muted" key={`${item.id}-${chip}`}>
+              {chip}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function DrawerToggle({ active, label, count, tone, onClick }) {
   return (
     <button className={`drawer-toggle ${active ? "active" : ""}`.trim()} onClick={onClick} type="button">
@@ -254,6 +321,8 @@ function listLabel(value) {
 }
 
 function profileFormFromWorkspace(workspace, fallbackProfile) {
+  const overrides = Array.isArray(workspace?.route_overrides) ? workspace.route_overrides : [];
+  const existingByRole = new Map(overrides.map(item => [String(item.role || "").toLowerCase(), item]));
   return {
     userProfile: workspace?.user_profile || fallbackProfile || "builder",
     preferredHarness: workspace?.preferred_harness || "fluxio_hybrid",
@@ -262,6 +331,23 @@ function profileFormFromWorkspace(workspace, fallbackProfile) {
     minimaxAuthMode: workspace?.minimax_auth_mode || "none",
     commitMessageStyle: workspace?.commit_message_style || "scoped",
     executionTargetPreference: workspace?.execution_target_preference || "profile_default",
+    routeOverrides: ROUTE_ROLE_OPTIONS.map(role => {
+      const item = existingByRole.get(role) || {};
+      return {
+        role,
+        provider: item.provider || "openai",
+        model: item.model || "",
+        effort: item.effort || (role === "executor" ? "medium" : "high"),
+      };
+    }),
+  };
+}
+
+function createSessionEntry(entry) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    createdAt: new Date().toISOString(),
+    ...entry,
   };
 }
 
@@ -312,6 +398,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [skillStudioQuery, setSkillStudioQuery] = useState("");
   const [telegramChatId, setTelegramChatId] = useState(storedChatId);
   const [telegramBotToken, setTelegramBotToken] = useState("");
+  const [openClawGatewayUrl, setOpenClawGatewayUrl] = useState(DEFAULT_OPENCLAW_GATEWAY_URL);
+  const [openClawGatewayToken, setOpenClawGatewayToken] = useState("");
   const [lastPushReason, setLastPushReason] = useState("");
   const [liveSyncSuspended, setLiveSyncSuspended] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -325,6 +413,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     pendingQuestions: [],
     telegramReady: false,
     previewMeta: null,
+    openClawStatus: null,
+    openClawHasToken: false,
+    openClawMessages: [],
   });
 
   const mountedRef = useRef(true);
@@ -370,20 +461,25 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             setPreviewMode("live");
             return;
           }
-          setData({
+          setData(current => ({
+            ...current,
             snapshot: fixturePayload.snapshot,
             onboarding: fixturePayload.onboarding,
             pendingApprovals: fixturePayload.pendingApprovals,
             pendingQuestions: fixturePayload.pendingQuestions,
             telegramReady: fixturePayload.telegramReady,
             previewMeta: fixturePayload.meta,
-          });
+            openClawStatus: null,
+            openClawHasToken: false,
+            openClawMessages: [],
+          }));
           return;
         }
 
         if (!hasTauriBackend()) {
           const fallbackPayload = buildFixtureSnapshot("live_review");
-          setData({
+          setData(current => ({
+            ...current,
             snapshot: fallbackPayload.snapshot,
             onboarding: fallbackPayload.onboarding,
             pendingApprovals: fallbackPayload.pendingApprovals,
@@ -395,11 +491,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               description:
                 "Tauri backend is unavailable, so Fluxio is showing a local supervision fixture.",
             },
-          });
+            openClawStatus: null,
+            openClawHasToken: false,
+            openClawMessages: [],
+          }));
           return;
         }
 
-        const [snapshot, onboarding, pendingApprovals, pendingQuestions, telegramReady] =
+        const [
+          snapshot,
+          onboarding,
+          pendingApprovals,
+          pendingQuestions,
+          telegramReady,
+          openClawStatus,
+          openClawHasToken,
+        ] =
           await Promise.all([
             callBackend(
               "get_control_room_snapshot_command",
@@ -414,20 +521,25 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             callBackend("list_pending_approvals"),
             callBackend("list_pending_questions"),
             callBackend("has_telegram_bot_token_command"),
+            callBackend("get_openclaw_status"),
+            callBackend("has_openclaw_gateway_token"),
           ]);
 
         if (!mountedRef.current) {
           return;
         }
 
-        setData({
+        setData(current => ({
+          ...current,
           snapshot,
           onboarding,
           pendingApprovals: Array.isArray(pendingApprovals) ? pendingApprovals : [],
           pendingQuestions: Array.isArray(pendingQuestions) ? pendingQuestions : [],
           telegramReady: Boolean(telegramReady),
           previewMeta: null,
-        });
+          openClawStatus: openClawStatus || null,
+          openClawHasToken: Boolean(openClawHasToken),
+        }));
 
         if (reason !== "initialize") {
           setLastPushReason(reason);
@@ -503,6 +615,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
     let unlistenChanged = null;
     let unlistenDelta = null;
+    let unlistenOpenClawStatus = null;
+    let unlistenOpenClawMessage = null;
 
     void listen("control-room://changed", event => {
       const reason = event?.payload?.reason || "backend-event";
@@ -524,12 +638,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       })
       .catch(() => undefined);
 
+    void listen("openclaw://status", event => {
+      setData(current => ({
+        ...current,
+        openClawStatus: event?.payload || current.openClawStatus,
+      }));
+    })
+      .then(unlisten => {
+        unlistenOpenClawStatus = unlisten;
+      })
+      .catch(() => undefined);
+
+    void listen("openclaw://message", event => {
+      const content = event?.payload?.content;
+      if (!content) {
+        return;
+      }
+      setData(current => ({
+        ...current,
+        openClawMessages: [
+          ...current.openClawMessages,
+          createSessionEntry({
+            title: "OpenClaw message",
+            detail: String(content),
+            meta: "Gateway message",
+            tone: "neutral",
+          }),
+        ].slice(-16),
+      }));
+    })
+      .then(unlisten => {
+        unlistenOpenClawMessage = unlisten;
+      })
+      .catch(() => undefined);
+
     return () => {
       if (typeof unlistenChanged === "function") {
         unlistenChanged();
       }
       if (typeof unlistenDelta === "function") {
         unlistenDelta();
+      }
+      if (typeof unlistenOpenClawStatus === "function") {
+        unlistenOpenClawStatus();
+      }
+      if (typeof unlistenOpenClawMessage === "function") {
+        unlistenOpenClawMessage();
       }
     };
   }, [previewMode, refreshAll]);
@@ -650,6 +804,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   ]);
 
   useEffect(() => {
+    const gatewayUrl = data.openClawStatus?.gatewayUrl;
+    if (gatewayUrl) {
+      setOpenClawGatewayUrl(gatewayUrl);
+    }
+  }, [data.openClawStatus?.gatewayUrl]);
+
+  useEffect(() => {
     if (!mission && uiMode === "agent") {
       setActiveDrawer("context");
     }
@@ -766,6 +927,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             userProfile: workspaceProfileForm.userProfile,
             preferredHarness: workspaceProfileForm.preferredHarness,
             routingStrategy: workspaceProfileForm.routingStrategy,
+            routeOverrides: workspaceProfileForm.routeOverrides
+              .filter(item => item.model.trim())
+              .map(item => ({
+                role: item.role,
+                provider: item.provider,
+                model: item.model.trim(),
+                effort: item.effort,
+              })),
             autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
             minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
             commitMessageStyle: workspaceProfileForm.commitMessageStyle,
@@ -1029,6 +1198,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     setActiveDrawer("proof");
   }, [markAction, openMissionDialog, runMissionAction, viewModel.topBar.primaryAction]);
 
+  const appendOperatorEntry = useCallback(
+    entry => {
+      setOperatorNotes(current => [createSessionEntry(entry), ...current]);
+    },
+    [],
+  );
+
   const handleOperatorNote = useCallback(
     event => {
       event.preventDefault();
@@ -1036,22 +1212,126 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
       markAction("composer:add-note");
-      setOperatorNotes(current => [
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          title: "Operator note",
-          detail: operatorDraft.trim(),
-          meta: "Local note",
-          tone: "neutral",
-          createdAt: new Date().toISOString(),
-        },
-        ...current,
-      ]);
+      appendOperatorEntry({
+        title: "Operator note",
+        detail: operatorDraft.trim(),
+        meta: "Local note",
+        tone: "neutral",
+        channel: "note",
+      });
       setOperatorDraft("");
       pushToast("Operator note added to this session.", "info");
     },
-    [markAction, operatorDraft, pushToast],
+    [appendOperatorEntry, markAction, operatorDraft, pushToast],
   );
+
+  const handleAgentFollowUp = useCallback(async () => {
+    if (!operatorDraft.trim()) {
+      pushToast("Write a follow-up first.", "warn");
+      return;
+    }
+    if (mission?.runtime_id !== "openclaw") {
+      pushToast("Live follow-up is currently wired for OpenClaw missions only.", "warn");
+      return;
+    }
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot send runtime follow-ups.", "warn");
+      return;
+    }
+
+    markAction("composer:send-follow-up");
+    try {
+      await callBackend(
+        "send_openclaw_message",
+        { payload: { message: operatorDraft.trim() } },
+        { throwOnError: true },
+      );
+      appendOperatorEntry({
+        title: "Operator follow-up",
+        detail: operatorDraft.trim(),
+        meta: "Sent to OpenClaw",
+        tone: "neutral",
+        channel: "followup",
+      });
+      setOperatorDraft("");
+      pushToast("Follow-up sent to OpenClaw.", "info");
+    } catch (error) {
+      pushToast(`OpenClaw follow-up failed: ${error}`, "error");
+    }
+  }, [appendOperatorEntry, markAction, mission?.runtime_id, operatorDraft, previewMode, pushToast]);
+
+  const handleOpenClawConnect = useCallback(async () => {
+    markAction("runtime:openclaw-connect");
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
+      return;
+    }
+    try {
+      await callBackend(
+        "connect_openclaw_gateway",
+        { payload: { gatewayUrl: openClawGatewayUrl.trim() || null } },
+        { throwOnError: true },
+      );
+      pushToast("OpenClaw gateway connect requested.", "info");
+      await refreshAll("openclaw-connect");
+    } catch (error) {
+      pushToast(`OpenClaw connect failed: ${error}`, "error");
+    }
+  }, [markAction, openClawGatewayUrl, previewMode, pushToast, refreshAll]);
+
+  const handleOpenClawDisconnect = useCallback(async () => {
+    markAction("runtime:openclaw-disconnect");
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
+      return;
+    }
+    try {
+      await callBackend("disconnect_openclaw_gateway", undefined, { throwOnError: true });
+      pushToast("OpenClaw gateway disconnected.", "info");
+      await refreshAll("openclaw-disconnect");
+    } catch (error) {
+      pushToast(`OpenClaw disconnect failed: ${error}`, "error");
+    }
+  }, [markAction, previewMode, pushToast, refreshAll]);
+
+  const handleOpenClawSaveToken = useCallback(async () => {
+    markAction("runtime:openclaw-save-token");
+    if (!openClawGatewayToken.trim()) {
+      pushToast("Paste a gateway token first.", "warn");
+      return;
+    }
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
+      return;
+    }
+    try {
+      await callBackend(
+        "save_openclaw_gateway_token",
+        { token: openClawGatewayToken.trim() },
+        { throwOnError: true },
+      );
+      setOpenClawGatewayToken("");
+      pushToast("OpenClaw gateway token saved.", "info");
+      await refreshAll("openclaw-token-save");
+    } catch (error) {
+      pushToast(`OpenClaw token save failed: ${error}`, "error");
+    }
+  }, [markAction, openClawGatewayToken, previewMode, pushToast, refreshAll]);
+
+  const handleOpenClawClearToken = useCallback(async () => {
+    markAction("runtime:openclaw-clear-token");
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
+      return;
+    }
+    try {
+      await callBackend("clear_openclaw_gateway_token", undefined, { throwOnError: true });
+      pushToast("OpenClaw gateway token cleared.", "info");
+      await refreshAll("openclaw-token-clear");
+    } catch (error) {
+      pushToast(`OpenClaw token clear failed: ${error}`, "error");
+    }
+  }, [markAction, previewMode, pushToast, refreshAll]);
 
   const composerEvents = useMemo(
     () =>
@@ -1069,6 +1349,126 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     () => [...composerEvents, ...(viewModel.thread.events || [])].slice(0, 24),
     [composerEvents, viewModel.thread.events],
   );
+
+  const openClawRuntimeActive = mission?.runtime_id === "openclaw";
+  const openClawStatus = data.openClawStatus;
+  const runtimeTruth = useMemo(
+    () => [
+      openClawRuntimeActive
+        ? openClawStatus?.connected
+          ? "OpenClaw gateway connected"
+          : "OpenClaw gateway not connected"
+        : `Mission runtime: ${runtimeLabel(mission?.runtime_id || workspace?.default_runtime || "openclaw")}`,
+      data.openClawHasToken ? "Gateway token stored" : "Gateway token missing",
+      "Runtime stack can now surface install, repair, and update actions from Builder.",
+    ],
+    [data.openClawHasToken, mission?.runtime_id, openClawRuntimeActive, openClawStatus?.connected, workspace?.default_runtime],
+  );
+
+  const agentTranscript = useMemo(() => {
+    const items = [];
+
+    if (mission) {
+      items.push({
+        id: "agent-contract",
+        role: "fluxio",
+        roleIcon: "◎",
+        label: "Agent contract",
+        title: "This view stays on the mission conversation.",
+        detail:
+          "You can follow the run, answer boundaries, and send follow-ups without carrying builder-only controls all the time.",
+        chips: ["Calmer layout", "Inline follow-up", "Builder chrome hidden"],
+        tone: "neutral",
+        emphasis: true,
+      });
+    }
+
+    for (const item of viewModel.thread.sections || []) {
+      items.push({
+        id: `section-${item.id}`,
+        role: "fluxio",
+        roleIcon: "◎",
+        label: item.label,
+        title: item.body,
+        detail: item.detail,
+        tone: item.tone || "neutral",
+      });
+    }
+
+    for (const approval of data.pendingApprovals.slice(0, 3)) {
+      items.push({
+        id: `approval-${approval.approval_id || approval.request_id || approval.title}`,
+        role: "queue",
+        roleIcon: "!",
+        label: "Approval boundary",
+        title: approval.title || approval.summary || "Approval required",
+        detail: approval.reason || approval.detail || "Fluxio is waiting on an explicit operator decision.",
+        tone: "warn",
+      });
+    }
+
+    for (const question of data.pendingQuestions.slice(0, 3)) {
+      items.push({
+        id: `question-${question.question_id || question.request_id || question.prompt}`,
+        role: "queue",
+        roleIcon: "?",
+        label: "Question",
+        title: question.prompt || question.title || "Clarification needed",
+        detail: question.detail || question.context || "Answering this helps the mission continue.",
+        tone: "warn",
+      });
+    }
+
+    for (const note of [...operatorNotes].reverse()) {
+      items.push({
+        id: `operator-${note.id}`,
+        role: "operator",
+        roleIcon: "◉",
+        label: note.channel === "followup" ? "Follow-up sent" : "Operator note",
+        title: note.detail,
+        detail: note.meta,
+        meta: timestampLabel(note.createdAt),
+        tone: note.tone || "neutral",
+      });
+    }
+
+    for (const message of data.openClawMessages) {
+      items.push({
+        id: `openclaw-${message.id}`,
+        role: "runtime",
+        roleIcon: "◇",
+        label: "OpenClaw",
+        title: message.detail,
+        detail: message.meta || "Gateway message",
+        meta: timestampLabel(message.createdAt),
+        tone: message.tone || "neutral",
+      });
+    }
+
+    for (const event of (viewModel.thread.events || []).slice(0, 6)) {
+      const runtimeLike = ["runtime", "activity"].includes(event.kind);
+      items.push({
+        id: `event-${event.kind}-${event.title}-${event.meta}`,
+        role: runtimeLike ? "runtime" : "system",
+        roleIcon: runtimeLike ? "◇" : "·",
+        label: titleizeToken(event.kind || "event"),
+        title: event.title,
+        detail: event.detail,
+        meta: timestampLabel(event.meta),
+        tone: event.tone || "neutral",
+      });
+    }
+
+    return items;
+  }, [
+    data.openClawMessages,
+    data.pendingApprovals,
+    data.pendingQuestions,
+    mission,
+    operatorNotes,
+    viewModel.thread.events,
+    viewModel.thread.sections,
+  ]);
 
   const drawerItems = useMemo(() => {
     const items = [
@@ -1114,6 +1514,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       },
     ];
     if (uiMode === "builder") {
+      items.push({
+        id: "profiles",
+        label: "Profiles",
+        count: viewModel.drawers.builder.profileStudio.profileRows.length,
+        tone: "neutral",
+      });
       items.push({
         id: "builder",
         label: "Builder",
@@ -1319,6 +1725,60 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           </header>
 
           <section className="drawer-block">
+            <h3>OpenClaw gateway</h3>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Gateway</span>
+                <strong>{openClawStatus?.connected ? "Connected" : "Disconnected"}</strong>
+                <p>{openClawStatus?.gatewayUrl || openClawGatewayUrl || DEFAULT_OPENCLAW_GATEWAY_URL}</p>
+              </article>
+              <article className="context-item">
+                <span>Queued outbound</span>
+                <strong>{openClawStatus?.queuedOutbound ?? 0}</strong>
+                <p>{openClawStatus?.reconnectAttempt ? `Reconnect ${openClawStatus.reconnectAttempt}` : "No reconnect pressure"}</p>
+              </article>
+              <article className="context-item">
+                <span>Gateway token</span>
+                <strong>{data.openClawHasToken ? "Stored" : "Missing"}</strong>
+                <p>{openClawStatus?.lastError || "No gateway error reported."}</p>
+              </article>
+            </div>
+
+            <Field label="Gateway URL">
+              <input
+                onChange={event => setOpenClawGatewayUrl(event.target.value)}
+                placeholder={DEFAULT_OPENCLAW_GATEWAY_URL}
+                value={openClawGatewayUrl}
+              />
+            </Field>
+            <Field label="Gateway token">
+              <input
+                onChange={event => setOpenClawGatewayToken(event.target.value)}
+                placeholder={data.openClawHasToken ? "Token stored in keyring" : "Paste a gateway token"}
+                type="password"
+                value={openClawGatewayToken}
+              />
+            </Field>
+            <div className="drawer-actions">
+              <ActionButton onClick={() => void handleOpenClawConnect()} variant="primary">
+                Connect gateway
+              </ActionButton>
+              <ActionButton onClick={() => void handleOpenClawDisconnect()}>
+                Disconnect
+              </ActionButton>
+              <ActionButton onClick={() => void handleOpenClawSaveToken()}>
+                Save token
+              </ActionButton>
+              <ActionButton onClick={() => void handleOpenClawClearToken()}>
+                Clear token
+              </ActionButton>
+            </div>
+            <p className="drawer-footnote">
+              Gateway messaging is live in this app. Builder now surfaces install, repair, and update actions for Hermes and OpenClaw when the backend detects version drift.
+            </p>
+          </section>
+
+          <section className="drawer-block">
             <h3>Core runtimes</h3>
             <div className="drawer-list">
               {primaryRuntimeServices.length > 0 ? (
@@ -1329,6 +1789,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p>
                       {service.status}
                       {service.version ? ` · ${service.version}` : ""}
+                      {service.latestVersion ? ` → ${service.latestVersion}` : ""}
                     </p>
                     <p>{service.details || service.managementMode}</p>
                     {service.actions.length > 0 ? (
@@ -1369,7 +1830,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ) : (
                 <article className="drawer-card">
                   <strong>Message bridge visibility is still partial.</strong>
-                  <p>Telegram state is exposed today. iMessage and mobile bridge specifics need backend support before this shell can manage them honestly.</p>
+                  <p>Telegram state is exposed today. iMessage and deeper mobile bridge specifics still need backend support before this shell can manage them honestly.</p>
                 </article>
               )}
             </div>
@@ -1388,6 +1849,226 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   </ActionButton>
                 )),
               ).slice(0, 4)}
+            </div>
+          </section>
+        </section>
+      );
+    }
+
+    if (activeDrawer === "profiles") {
+      return (
+        <section className="drawer-panel">
+          <header>
+            <h2>Profiles and routing</h2>
+            <p>Shape workspace behavior, routing, and execution defaults from one profile surface.</p>
+          </header>
+
+          <section className="drawer-block">
+            <div className="field-row">
+              <Field label="Workspace profile">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      userProfile: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.userProfile}
+                >
+                  {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
+                    option => (
+                      <option key={option} value={option}>
+                        {titleizeToken(option)}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </Field>
+              <Field label="Preferred harness">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      preferredHarness: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.preferredHarness}
+                >
+                  {PREFERRED_HARNESS_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <div className="field-row">
+              <Field label="Routing strategy">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      routingStrategy: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.routingStrategy}
+                >
+                  {ROUTING_STRATEGY_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Execution target">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      executionTargetPreference: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.executionTargetPreference}
+                >
+                  {EXECUTION_TARGET_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <label className="check-field">
+              <input
+                checked={workspaceProfileForm.autoOptimizeRouting}
+                onChange={event =>
+                  setWorkspaceProfileForm(current => ({
+                    ...current,
+                    autoOptimizeRouting: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>Enable deterministic routing auto-optimize when enough local runs exist.</span>
+            </label>
+
+            <div className="drawer-actions">
+              <ActionButton onClick={() => void saveWorkspacePolicy()} variant="primary">
+                Save profile policy
+              </ActionButton>
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Current behavior</h3>
+            <div className="drawer-list compact">
+              {viewModel.drawers.builder.profileStudio.behavior.map(item => (
+                <article className="drawer-card" key={`profile-surface-${item.label}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </article>
+              ))}
+            </div>
+            <p className="drawer-footnote">
+              Routing strategy is real and saved at workspace level. Builder now exposes per-role overrides for planner, executor, and verifier when you need to pin specific models.
+            </p>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Per-role model routes</h3>
+            <div className="route-override-grid">
+              {workspaceProfileForm.routeOverrides.map(item => (
+                <article className="drawer-card route-override-card" key={`route-override-${item.role}`}>
+                  <span>{titleizeToken(item.role)}</span>
+                  <div className="field-row">
+                    <Field label="Provider">
+                      <select
+                        onChange={event =>
+                          setWorkspaceProfileForm(current => ({
+                            ...current,
+                            routeOverrides: current.routeOverrides.map(entry =>
+                              entry.role === item.role
+                                ? { ...entry, provider: event.target.value }
+                                : entry,
+                            ),
+                          }))
+                        }
+                        value={item.provider}
+                      >
+                        {MODEL_PROVIDER_OPTIONS.map(option => (
+                          <option key={`${item.role}-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Effort">
+                      <select
+                        onChange={event =>
+                          setWorkspaceProfileForm(current => ({
+                            ...current,
+                            routeOverrides: current.routeOverrides.map(entry =>
+                              entry.role === item.role
+                                ? { ...entry, effort: event.target.value }
+                                : entry,
+                            ),
+                          }))
+                        }
+                        value={item.effort}
+                      >
+                        {MODEL_EFFORT_OPTIONS.map(option => (
+                          <option key={`${item.role}-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                  <Field label="Model">
+                    <input
+                      list={`route-models-${item.role}`}
+                      onChange={event =>
+                        setWorkspaceProfileForm(current => ({
+                          ...current,
+                          routeOverrides: current.routeOverrides.map(entry =>
+                            entry.role === item.role
+                              ? { ...entry, model: event.target.value }
+                              : entry,
+                          ),
+                        }))
+                      }
+                      placeholder={item.role === "executor" ? "gpt-5.4-mini" : "gpt-5.4"}
+                      value={item.model}
+                    />
+                  </Field>
+                  <datalist id={`route-models-${item.role}`}>
+                    {ROUTE_MODEL_OPTIONS.map(option => (
+                      <option key={`${item.role}-${option}`} value={option} />
+                    ))}
+                  </datalist>
+                </article>
+              ))}
+            </div>
+            <p className="drawer-footnote">
+              Leave a role blank to keep using the routing strategy default. Planner, executor, and verifier overrides are saved into workspace policy and forwarded to the harness.
+            </p>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Available contracts</h3>
+            <div className="drawer-list">
+              {viewModel.drawers.builder.profileStudio.profileRows.map(item => (
+                <article className={`drawer-card ${toneClass(item.tone)}`} key={`profile-contract-${item.id}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.description}</strong>
+                  <p>
+                    {item.approval} approvals · {item.autonomy} autonomy · {item.visibility} visibility
+                  </p>
+                  <p>{item.density} density</p>
+                </article>
+              ))}
             </div>
           </section>
         </section>
@@ -2146,6 +2827,17 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               onClick={() => {
                 markAction(`mode:${mode}`);
                 setUiMode(mode);
+                if (mode === "builder") {
+                  setActiveDrawer(current =>
+                    ["builder", "skills", "runtime", "profiles", "proof", "queue", "settings"].includes(
+                      current,
+                    )
+                      ? current
+                      : "builder",
+                  );
+                  return;
+                }
+                setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
               }}
               role="tab"
               type="button"
@@ -2186,7 +2878,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <section className="sidebar-surface-list">
               <GlobalRailButton
                 active={uiMode === "agent"}
-                icon="O"
+                icon="◎"
                 label="Operator"
                 onClick={() => {
                   markAction("rail:operator");
@@ -2194,27 +2886,47 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
                 }}
               />
-              <GlobalRailButton
-                active={activeDrawer === "skills"}
-                icon="S"
-                label="Skills"
-                onClick={() => {
-                  markAction("rail:skills");
-                  setUiMode("builder");
-                  setSkillStudioFilter("all");
-                  setActiveDrawer("skills");
-                }}
-              />
-              <GlobalRailButton
-                active={activeDrawer === "runtime"}
-                icon="R"
-                label="Runtime"
-                onClick={() => {
-                  markAction("rail:runtime");
-                  setUiMode("builder");
-                  setActiveDrawer("runtime");
-                }}
-              />
+              {uiMode === "builder" ? (
+                <>
+                  <GlobalRailButton
+                    active={activeDrawer === "builder"}
+                    icon="⌘"
+                    label="Builder"
+                    onClick={() => {
+                      markAction("rail:builder");
+                      setActiveDrawer("builder");
+                    }}
+                  />
+                  <GlobalRailButton
+                    active={activeDrawer === "skills"}
+                    icon="✦"
+                    label="Skills"
+                    onClick={() => {
+                      markAction("rail:skills");
+                      setSkillStudioFilter("all");
+                      setActiveDrawer("skills");
+                    }}
+                  />
+                  <GlobalRailButton
+                    active={activeDrawer === "runtime"}
+                    icon="◇"
+                    label="Runtime"
+                    onClick={() => {
+                      markAction("rail:runtime");
+                      setActiveDrawer("runtime");
+                    }}
+                  />
+                  <GlobalRailButton
+                    active={activeDrawer === "profiles"}
+                    icon="◫"
+                    label="Profiles"
+                    onClick={() => {
+                      markAction("rail:profiles");
+                      setActiveDrawer("profiles");
+                    }}
+                  />
+                </>
+              ) : null}
             </section>
 
             <section className="fluxio-nav-section">
@@ -2228,7 +2940,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <NavItem
                       active={item.workspace_id === selectedWorkspaceId}
                       badge={item.runtimeStatus?.detected ? "Ready" : "Check"}
-                      icon="W"
+                      icon="▣"
                       key={item.workspace_id}
                       onClick={() => setSelectedWorkspaceId(item.workspace_id)}
                       subtitle={item.root_path}
@@ -2253,7 +2965,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <NavItem
                       active={item.mission_id === selectedMissionId}
                       badge={titleizeToken(item.state?.status || "draft")}
-                      icon="M"
+                      icon="◆"
                       key={item.mission_id}
                       onClick={() => setSelectedMissionId(item.mission_id)}
                       subtitle={runtimeLabel(item.runtime_id)}
@@ -2271,7 +2983,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           <div className="fluxio-sidebar-bottom">
             <GlobalRailButton
               active={activeDrawer === "settings"}
-              icon="G"
+              icon="⚙"
               label="Settings"
               onClick={() => {
                 markAction("rail:settings");
@@ -2285,57 +2997,319 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
         <main className="fluxio-main">
           {!mission ? (
-            <section className="fluxio-empty">
-              <section className={`mode-story mode-${uiMode}`}>
-                <strong>{uiMode === "agent" ? "Agent mode keeps launch calm." : "Builder mode keeps controls visible."}</strong>
-                <p>
-                  {uiMode === "agent"
-                    ? "Use the left navigation to pick a workspace or mission. Setup surfaces stay on the right only until launch begins."
-                    : "Skills, runtime management, and validation stay reachable while you shape the workspace."}
-                </p>
+            uiMode === "builder" ? (
+              <section className="builder-shell builder-launch-shell">
+              <header className="builder-head">
+                <div>
+                  <p className="eyebrow">Builder workbench</p>
+                  <h1>{viewModel.emptyState.title}</h1>
+                  <p>{viewModel.emptyState.summary}</p>
+                </div>
+                  <div className="builder-head-actions">
+                    <ActionButton
+                      onClick={() => {
+                        if (workspaces.length === 0) {
+                          setShowWorkspaceDialog(true);
+                          return;
+                        }
+                        openMissionDialog();
+                      }}
+                      variant="primary"
+                    >
+                      {viewModel.emptyState.launchEntryLabel}
+                    </ActionButton>
+                    <ActionButton onClick={() => setActiveDrawer("profiles")}>Profiles</ActionButton>
+                  </div>
+                </header>
+
+                <section className="mode-story mode-builder">
+                  <strong>Builder mode is the control workbench.</strong>
+                  <p>Use it to shape runtime policy, routing, services, and proof review. The tradeoff is more density and more operational detail.</p>
+                </section>
+
+                <div className="builder-workbench-grid">
+                  <section className="builder-primary-column">
+                    <article className="builder-panel builder-panel-hero">
+                      <p className="eyebrow">Launch readiness</p>
+                      <h2>{viewModel.emptyState.confidenceLabel}</h2>
+                      <p>{viewModel.emptyState.confidencePhase}</p>
+                      <div className="empty-confidence">
+                        <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
+                        <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
+                      </div>
+                      <ul>
+                        {viewModel.emptyState.readiness.map(item => (
+                          <li key={`builder-readiness-${item}`}>{item}</li>
+                        ))}
+                      </ul>
+                      <div className="drawer-actions">
+                        {quickSetupActions.map(action => (
+                          <ActionButton
+                            key={`builder-empty-${action.actionId}`}
+                            onClick={() => void runWorkspaceAction("setup", action.actionId)}
+                          >
+                            {action.label}
+                          </ActionButton>
+                        ))}
+                      </div>
+                    </article>
+
+                    <article className="builder-panel">
+                      <div className="section-header">
+                        <div className="section-title-block">
+                          <p className="eyebrow">Road to 100%</p>
+                          <h2>{viewModel.drawers.builder.qualityRoadmap.headline}</h2>
+                        </div>
+                      </div>
+                      <div className="roadmap-grid">
+                        {viewModel.drawers.builder.qualityRoadmap.tracks.slice(0, 4).map(item => (
+                          <article className={`roadmap-item ${toneClass(item.tone)}`} key={`empty-roadmap-${item.id}`}>
+                            <span>{titleizeToken(item.state)}</span>
+                            <strong>{item.label}</strong>
+                            <p>{item.detail}</p>
+                            <ActionButton onClick={() => void handleQualityRoadmapAction(item)}>
+                              {item.suggestedAction || "Open"}
+                            </ActionButton>
+                          </article>
+                        ))}
+                      </div>
+                    </article>
+                  </section>
+
+                  <aside className="builder-secondary-column">
+                    <article className="builder-panel">
+                      <p className="eyebrow">Profiles</p>
+                      <h3>{titleizeToken(workspaceProfileForm.userProfile)}</h3>
+                      <p>{viewModel.drawers.builder.profileStudio.behavior[0]?.value || "No profile selected."}</p>
+                      <ActionButton onClick={() => setActiveDrawer("profiles")}>Open profiles</ActionButton>
+                    </article>
+
+                    <article className="builder-panel">
+                      <p className="eyebrow">Runtime</p>
+                      <h3>
+                        {viewModel.drawers.builder.serviceStudio.summary.healthyCount}/
+                        {viewModel.drawers.builder.serviceStudio.summary.totalItems} healthy
+                      </h3>
+                      <p>
+                        {viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} service(s) need attention.
+                      </p>
+                      <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime</ActionButton>
+                    </article>
+
+                    <article className="builder-panel">
+                      <p className="eyebrow">Skills</p>
+                      <h3>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready</h3>
+                      <p>{viewModel.drawers.builder.skillStudio.nextQualityActions[0] || "Skill quality is stable."}</p>
+                      <ActionButton onClick={() => setActiveDrawer("skills")}>Open skills</ActionButton>
+                    </article>
+                  </aside>
+                </div>
               </section>
-              <p className="eyebrow">Readiness</p>
-              <h1>{viewModel.emptyState.title}</h1>
-              <p>{viewModel.emptyState.summary}</p>
-              <div className="empty-confidence">
-                <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
-                  {viewModel.emptyState.confidenceLabel}
-                </strong>
-                <p>{viewModel.emptyState.confidencePhase}</p>
-                <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
-                <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
-              </div>
-              <ul>
-                {viewModel.emptyState.readiness.map(item => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-              <div className="fluxio-empty-actions">
-                <ActionButton
-                  onClick={() => {
-                    if (workspaces.length === 0) {
-                      setShowWorkspaceDialog(true);
-                      return;
-                    }
-                    openMissionDialog();
-                  }}
-                  variant="primary"
-                >
-                  {viewModel.emptyState.launchEntryLabel}
-                </ActionButton>
-                {quickSetupActions.map(action => (
+            ) : (
+              <section className="fluxio-empty agent-shell">
+                <section className="mode-story mode-agent">
+                  <strong>Agent mode keeps launch calm.</strong>
+                  <p>Pick a workspace, launch a mission, and keep the UI focused on the thread instead of the tooling.</p>
+                </section>
+                <p className="eyebrow">Readiness</p>
+                <h1>{viewModel.emptyState.title}</h1>
+                <p>{viewModel.emptyState.summary}</p>
+                <div className="empty-confidence">
+                  <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
+                    {viewModel.emptyState.confidenceLabel}
+                  </strong>
+                  <p>{viewModel.emptyState.confidencePhase}</p>
+                  <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
+                  <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
+                </div>
+                <ul>
+                  {viewModel.emptyState.readiness.map(item => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+                <div className="fluxio-empty-actions">
                   <ActionButton
-                    key={action.actionId}
-                    onClick={() => void runWorkspaceAction("setup", action.actionId)}
+                    onClick={() => {
+                      if (workspaces.length === 0) {
+                        setShowWorkspaceDialog(true);
+                        return;
+                      }
+                      openMissionDialog();
+                    }}
+                    variant="primary"
                   >
-                    {action.label}
+                    {viewModel.emptyState.launchEntryLabel}
                   </ActionButton>
-                ))}
+                  {quickSetupActions.map(action => (
+                    <ActionButton
+                      key={action.actionId}
+                      onClick={() => void runWorkspaceAction("setup", action.actionId)}
+                    >
+                      {action.label}
+                    </ActionButton>
+                  ))}
+                </div>
+              </section>
+            )
+          ) : uiMode === "builder" ? (
+            <section className="builder-shell">
+              <header className="builder-head">
+                <div>
+                  <p className="eyebrow">Builder workbench</p>
+                  <h1>{viewModel.thread.title}</h1>
+                  <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
+                </div>
+                <div className="builder-head-actions">
+                  <ActionButton onClick={() => setActiveDrawer("proof")} variant="primary">
+                    Proof review
+                  </ActionButton>
+                  <ActionButton onClick={() => setActiveDrawer("queue")}>Queue</ActionButton>
+                  <ActionButton onClick={() => setActiveDrawer("runtime")}>Runtime</ActionButton>
+                </div>
+              </header>
+
+              <section className="mode-story mode-builder">
+                <strong>Builder keeps deep controls visible.</strong>
+                <p>Routing, services, skills, and proof stay available here because this view is for shaping the system, not just following the run.</p>
+              </section>
+
+              <div className="builder-workbench-grid">
+                <section className="builder-primary-column">
+                  <article className="builder-panel builder-panel-hero">
+                    <p className="eyebrow">Mission state</p>
+                    <div className="thread-chip-row">
+                      {viewModel.thread.chips.map(item => (
+                        <StatusPill key={`builder-chip-${item.label}`} tone={item.tone}>
+                          {item.label}
+                        </StatusPill>
+                      ))}
+                      <StatusPill strong tone={viewModel.thread.status.tone}>
+                        {viewModel.thread.status.label}
+                      </StatusPill>
+                    </div>
+                    <p>{viewModel.drawers.builder.confidence.label}</p>
+                    <div className="milestone-strip">
+                      {viewModel.drawers.builder.confidence.milestones.slice(0, 3).map(item => (
+                        <article className="milestone-card" key={`builder-milestone-${item.id}`}>
+                          <span>{item.label}</span>
+                          <strong>{item.percent}%</strong>
+                          <p>{item.detail}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="builder-panel">
+                    <div className="section-header">
+                      <div className="section-title-block">
+                        <p className="eyebrow">Thread insight</p>
+                        <h2>Mission supervision</h2>
+                      </div>
+                    </div>
+                    <div className="builder-thread-list">
+                      {viewModel.thread.sections.slice(0, 5).map(item => (
+                        <article className={`builder-thread-item ${toneClass(item.tone || "neutral")}`} key={`builder-thread-${item.id}`}>
+                          <span>{item.label}</span>
+                          <strong>{item.body}</strong>
+                          {item.detail ? <p>{item.detail}</p> : null}
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="builder-panel">
+                    <div className="section-header">
+                      <div className="section-title-block">
+                        <p className="eyebrow">Transcript</p>
+                        <h2>Recent activity</h2>
+                      </div>
+                    </div>
+                    <div className="thread-event-list">
+                      {threadEvents.slice(0, 6).map(item => (
+                        <article className={`thread-event ${toneClass(item.tone || "neutral")}`} key={`builder-event-${item.kind}-${item.title}-${item.meta}`}>
+                          <div className="thread-event-top">
+                            <span>{titleizeToken(item.kind || "event")}</span>
+                            <span>{timestampLabel(item.meta)}</span>
+                          </div>
+                          <strong>{item.title}</strong>
+                          {item.detail ? <p>{item.detail}</p> : null}
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+
+                  <form className="builder-note-panel" onSubmit={handleOperatorNote}>
+                    <label htmlFor="builder-thread-note">Builder note</label>
+                    <textarea
+                      id="builder-thread-note"
+                      onChange={event => setOperatorDraft(event.target.value)}
+                      placeholder="Capture a runtime note, builder observation, or next technical move."
+                      value={operatorDraft}
+                    />
+                    <div className="thread-composer-actions">
+                      <ActionButton type="submit" variant="primary">
+                        Save note
+                      </ActionButton>
+                      <ActionButton onClick={() => setActiveDrawer("builder")} type="button">
+                        Open builder drawer
+                      </ActionButton>
+                    </div>
+                  </form>
+                </section>
+
+                <aside className="builder-secondary-column">
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Profiles</p>
+                    <h3>{titleizeToken(workspaceProfileForm.userProfile)}</h3>
+                    <p>{viewModel.drawers.builder.profileStudio.behavior[0]?.value || "No profile policy yet."}</p>
+                    <div className="builder-inline-list">
+                      {viewModel.drawers.builder.profileStudio.behavior.slice(1, 4).map(item => (
+                        <span key={`behavior-${item.label}`}>{item.label}: {item.value}</span>
+                      ))}
+                    </div>
+                    <ActionButton onClick={() => setActiveDrawer("profiles")}>Open profiles</ActionButton>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Runtime</p>
+                    <h3>{viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} need attention</h3>
+                    <div className="builder-inline-list">
+                      {viewModel.drawers.builder.serviceStudio.urgent.slice(0, 3).map(item => (
+                        <span key={`service-${item.serviceId}`}>{item.label}: {item.status}</span>
+                      ))}
+                    </div>
+                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime</ActionButton>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Skills</p>
+                    <h3>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready</h3>
+                    <p>{viewModel.drawers.builder.skillStudio.nextQualityActions[0] || "Skill quality is stable."}</p>
+                    <ActionButton onClick={() => setActiveDrawer("skills")}>Open skills</ActionButton>
+                  </article>
+
+                  <article className="builder-panel">
+                    <p className="eyebrow">Workflow</p>
+                    <h3>
+                      {viewModel.drawers.builder.workflowStudio.recommended?.label ||
+                        "Workflow recommendation pending"}
+                    </h3>
+                    <p>
+                      {viewModel.drawers.builder.workflowStudio.recommended?.description ||
+                        "Open the builder drawer for workflow details."}
+                    </p>
+                    <div className="builder-inline-list">
+                      <span>Gap: {viewModel.drawers.builder.qualityRoadmap.gap}%</span>
+                      <span>Release: {viewModel.drawers.builder.confidence.releaseStatus}</span>
+                    </div>
+                    <ActionButton onClick={() => setActiveDrawer("builder")}>Open builder</ActionButton>
+                  </article>
+                </aside>
               </div>
             </section>
           ) : (
-            <section className="thread-shell">
-              <header className="thread-head">
+            <section className="thread-shell agent-shell">
+              <header className="thread-head agent-thread-head">
                 <p className="eyebrow">Mission thread</p>
                 <h1>{viewModel.thread.title}</h1>
                 <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
@@ -2354,80 +3328,42 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </div>
               </header>
 
-              <section className={`mode-story mode-${uiMode}`}>
-                <strong>
-                  {uiMode === "agent"
-                    ? "Agent mode stays on the thread."
-                    : "Builder mode keeps review and control surfaces open."}
-                </strong>
+              <section className="mode-story mode-agent">
+                <strong>Agent mode is the mission conversation.</strong>
                 <p>
-                  {uiMode === "agent"
-                    ? showPersistentDrawer
-                      ? "You are still in launch/setup stage, so the right rail is visible for configuration."
-                      : "The right rail is hidden during active execution to keep attention on the mission lane."
-                    : "Use Builder to inspect skills, runtime services, proof, and workflow readiness without leaving the shell."}
+                  {showPersistentDrawer
+                    ? "You are still in launch or setup, so the right rail stays available long enough to finish configuration."
+                    : "The right rail drops away during active execution so you can just read the run, answer boundaries, and send follow-ups."}
                 </p>
               </section>
 
-              <div className="thread-lane">
-                {viewModel.thread.sections.map(item => (
-                  <ThreadSection item={item} key={item.id} />
+              <section className="agent-runtime-strip">
+                {runtimeTruth.map(item => (
+                  <article className="agent-runtime-item" key={item}>
+                    <span>Runtime truth</span>
+                    <strong>{item}</strong>
+                  </article>
                 ))}
-              </div>
+              </section>
 
-              {uiMode === "builder" ? (
-                <section className="builder-inline">
-                  <article className="builder-inline-card">
-                    <p className="eyebrow">Release confidence</p>
-                    <h3>{viewModel.drawers.builder.confidence.label}</h3>
-                    <p>{viewModel.drawers.builder.confidence.phase}</p>
-                    <div className="milestone-strip">
-                      {viewModel.drawers.builder.confidence.milestones.map(item => (
-                        <article className="milestone-card" key={item.id}>
-                          <span>{item.label}</span>
-                          <strong>{item.percent}%</strong>
-                          <p>{item.detail}</p>
-                        </article>
-                      ))}
-                    </div>
-                  </article>
+              <section className="agent-transcript-shell">
+                <div className="agent-transcript-head">
+                  <p className="eyebrow">Conversation</p>
+                  <span>
+                    {previewLabel(previewMode, data.previewMeta)}
+                    {lastPushReason ? ` · ${lastPushReason}` : ""}
+                  </span>
+                </div>
+                <div className="agent-transcript">
+                  {agentTranscript.map(item => (
+                    <TranscriptMessage item={item} key={item.id} />
+                  ))}
+                </div>
+              </section>
 
-                  <article className="builder-inline-card">
-                    <p className="eyebrow">Workflow studio</p>
-                    <h3>
-                      {viewModel.drawers.builder.workflowStudio.recommended?.label ||
-                        "Workflow recommendation pending"}
-                    </h3>
-                    <p>
-                      {viewModel.drawers.builder.workflowStudio.recommended?.description ||
-                        "Select a recipe in the Builder drawer."}
-                    </p>
-                    <p>
-                      {viewModel.drawers.builder.qualityRoadmap.headline}
-                      {` · Gap ${viewModel.drawers.builder.qualityRoadmap.gap}%`}
-                    </p>
-                    {viewModel.drawers.builder.workflowStudio.recommended ? (
-                      <div className="builder-inline-list">
-                        <span>
-                          Audience:{" "}
-                          {viewModel.drawers.builder.workflowStudio.recommended.audience}
-                        </span>
-                        <span>
-                          Runtime:{" "}
-                          {viewModel.drawers.builder.workflowStudio.recommended.runtimeChoice}
-                        </span>
-                        <span>
-                          Status: {viewModel.drawers.builder.workflowStudio.recommended.status}
-                        </span>
-                      </div>
-                    ) : null}
-                  </article>
-                </section>
-              ) : null}
-
-              <section className="thread-proof-inline">
+              <section className="thread-proof-inline agent-proof-inline">
                 <div className="thread-proof-head">
-                  <p className="eyebrow">Proof deltas</p>
+                  <p className="eyebrow">Proof and review</p>
                   <ActionButton
                     onClick={() => {
                       if (!showPersistentDrawer) {
@@ -2436,7 +3372,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       setActiveDrawer("proof");
                     }}
                   >
-                    Open review
+                    Open proof review
                   </ActionButton>
                 </div>
                 <div className="thread-proof-items">
@@ -2448,39 +3384,26 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </div>
               </section>
 
-              <section className="thread-events">
-                <div className="thread-events-head">
-                  <p className="eyebrow">Activity transcript</p>
-                  <span>
-                    {previewLabel(previewMode, data.previewMeta)}
-                    {lastPushReason ? ` · ${lastPushReason}` : ""}
-                  </span>
-                </div>
-                <div className="thread-event-list">
-                  {threadEvents.map(item => (
-                    <article className={`thread-event ${toneClass(item.tone || "neutral")}`} key={`${item.kind}-${item.title}-${item.meta}`}>
-                      <div className="thread-event-top">
-                        <span>{titleizeToken(item.kind || "event")}</span>
-                        <span>{timestampLabel(item.meta)}</span>
-                      </div>
-                      <strong>{item.title}</strong>
-                      {item.detail ? <p>{item.detail}</p> : null}
-                    </article>
-                  ))}
-                </div>
-              </section>
-
-              <form className="thread-composer" onSubmit={handleOperatorNote}>
-                <label htmlFor="thread-note">Operator note</label>
+              <form className="thread-composer agent-composer agent-chat-composer" onSubmit={event => event.preventDefault()}>
+                <label htmlFor="thread-note">Follow-up or note</label>
                 <textarea
                   id="thread-note"
                   onChange={event => setOperatorDraft(event.target.value)}
-                  placeholder={viewModel.thread.composerPlaceholder}
+                  placeholder={
+                    openClawRuntimeActive
+                      ? "Send a direct follow-up to the runtime, or keep a local operator note."
+                      : viewModel.thread.composerPlaceholder
+                  }
                   value={operatorDraft}
                 />
                 <div className="thread-composer-actions">
-                  <ActionButton type="submit" variant="primary">
-                    Add note
+                  {openClawRuntimeActive ? (
+                    <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
+                      Send to agent
+                    </ActionButton>
+                  ) : null}
+                  <ActionButton onClick={handleOperatorNote} type="button" variant={openClawRuntimeActive ? undefined : "primary"}>
+                    Save note
                   </ActionButton>
                   <ActionButton
                     onClick={() => {

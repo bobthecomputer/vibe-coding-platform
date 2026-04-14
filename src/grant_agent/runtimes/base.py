@@ -23,6 +23,10 @@ class AgentRuntimeAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update(self, workspace_root: Path) -> dict[str, str]:
+        raise NotImplementedError
+
+    @abstractmethod
     def start_mission(
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:

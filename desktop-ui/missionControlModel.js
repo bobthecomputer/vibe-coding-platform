@@ -708,8 +708,17 @@ function deriveServiceStudio(workspace, setupHealth) {
         tone,
         managementMode: titleizeToken(item?.managementMode || "externally_managed"),
         required: Boolean(item?.required),
-        details: item?.details || "",
+        details: [
+          item?.details || "",
+          item?.updateAvailable && item?.latestVersion
+            ? `Latest ${item.latestVersion}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
         version: item?.version || "",
+        latestVersion: item?.latestVersion || "",
+        updateAvailable: Boolean(item?.updateAvailable),
         actions,
       };
     })

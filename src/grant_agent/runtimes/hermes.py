@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
+from ..runtime_updates import compare_version_tokens, latest_hermes_release, normalize_hermes_version
 from .base import AgentRuntimeAdapter
 
 
@@ -38,7 +39,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
 
     def detect(self, workspace_root: Path) -> RuntimeInstallStatus:
         command = shutil.which("hermes")
-        version = None
+        version_output = None
         detected_in_wsl = False
         issues: list[str] = []
         if command:
@@ -51,16 +52,32 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                     timeout=8,
                     check=False,
                 )
-                version = (completed.stdout or completed.stderr).strip() or None
+                version_output = (completed.stdout or completed.stderr).strip() or None
             except Exception as exc:  # pragma: no cover - defensive
                 issues.append(f"Unable to read Hermes version: {exc}")
         else:
-            version = self._wsl_hermes_version()
-            if version is not None:
+            version_output = self._wsl_hermes_version()
+            if version_output is not None:
                 command = "wsl:hermes"
                 detected_in_wsl = True
             else:
                 issues.append("Hermes CLI was not found on PATH or inside WSL2.")
+
+        version = normalize_hermes_version(version_output)
+        latest_release = latest_hermes_release()
+        latest_version = latest_release.get("version") or None
+        update_available = False
+        if command and version_output:
+            update_available = "update available" in version_output.lower()
+        if (
+            command
+            and version
+            and latest_version
+            and compare_version_tokens(version, latest_version) < 0
+        ):
+            update_available = True
+        if update_available and latest_version:
+            issues.append(f"Hermes is behind the latest upstream release ({latest_version}).")
 
         return RuntimeInstallStatus(
             runtime_id=self.runtime_id,
@@ -68,6 +85,10 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             detected=command is not None,
             command=command,
             version=version,
+            latest_version=latest_version,
+            update_available=update_available,
+            update_command=self.update(workspace_root).get("command", "") if command else "",
+            update_source_url=latest_release.get("sourceUrl") or None,
             install_hint=(
                 "Use Fluxio Setup -> Install Hermes for one-click WSL2 install + setup, "
                 "or run `curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash` "
@@ -75,9 +96,19 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             ),
             doctor_summary=(
                 (
-                    "Hermes is ready for mission routing through WSL2."
-                    if detected_in_wsl
-                    else "Hermes is ready for mission routing."
+                    (
+                        f"Hermes is installed in WSL2, but the latest upstream release is {latest_version}."
+                        if update_available and latest_version and detected_in_wsl
+                        else (
+                            f"Hermes is installed, but the latest upstream release is {latest_version}."
+                            if update_available and latest_version
+                            else (
+                                "Hermes is ready for mission routing through WSL2."
+                                if detected_in_wsl
+                                else "Hermes is ready for mission routing."
+                            )
+                        )
+                    )
                 )
                 if command
                 else "Install Hermes from setup (one-click WSL2 flow) before using the runtime."
@@ -97,6 +128,22 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         if status.detected and not status.version:
             status.issues.append("Hermes responded, but version output was empty.")
         return status
+
+    def update(self, workspace_root: Path) -> dict[str, str]:
+        if shutil.which("hermes"):
+            return {
+                "command": "hermes update",
+                "follow_up": "hermes --version",
+            }
+        if self._wsl_hermes_available():
+            return {
+                "command": 'wsl bash -lc "hermes update"',
+                "follow_up": 'wsl bash -lc "hermes --version"',
+            }
+        return {
+            "command": "hermes update",
+            "follow_up": "hermes --version",
+        }
 
     def start_mission(
         self, mission: Mission, workspace: WorkspaceProfile

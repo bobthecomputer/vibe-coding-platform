@@ -12,6 +12,30 @@ from grant_agent.onboarding import _command_version, detect_onboarding_status
 
 
 class OnboardingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.openclaw_latest_patcher = mock.patch(
+            "grant_agent.onboarding.latest_openclaw_release",
+            return_value={
+                "version": "2026.2.15",
+                "sourceUrl": "https://www.npmjs.com/package/openclaw",
+            },
+        )
+        self.hermes_latest_patcher = mock.patch(
+            "grant_agent.onboarding.latest_hermes_release",
+            return_value={
+                "version": "v0.4.0",
+                "sourceUrl": "https://github.com/NousResearch/hermes-agent/blob/main/RELEASE_v0.4.0.md",
+            },
+        )
+        self.openclaw_latest_patcher.start()
+        self.hermes_latest_patcher.start()
+
+    def tearDown(self) -> None:
+        self.hermes_latest_patcher.stop()
+        self.openclaw_latest_patcher.stop()
+        super().tearDown()
+
     @mock.patch("grant_agent.onboarding.subprocess.run")
     @mock.patch("grant_agent.onboarding.shutil.which")
     @mock.patch("grant_agent.onboarding.os.name", "nt")
@@ -104,8 +128,76 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(hermes["stage"], "install_available")
         self.assertEqual(hermes["serviceCategory"], "runtime")
         self.assertEqual(hermes["installSource"], "wsl_script")
-        self.assertEqual(hermes["currentHealthStatus"], "install_available")
-        self.assertEqual(hermes["lastVerificationResult"], "blocked")
+
+    @mock.patch("grant_agent.onboarding.detect_wsl_status")
+    @mock.patch("grant_agent.onboarding._command_version")
+    def test_detect_onboarding_status_surfaces_runtime_updates(
+        self,
+        command_version: mock.Mock,
+        detect_wsl_status: mock.Mock,
+    ) -> None:
+        detect_wsl_status.return_value = {
+            "required": True,
+            "installed": True,
+            "default_version": 2,
+            "details": "WSL2 ready",
+        }
+        self.openclaw_latest_patcher.stop()
+        self.hermes_latest_patcher.stop()
+        self.openclaw_latest_patcher = mock.patch(
+            "grant_agent.onboarding.latest_openclaw_release",
+            return_value={
+                "version": "2026.4.14",
+                "sourceUrl": "https://www.npmjs.com/package/openclaw",
+            },
+        )
+        self.hermes_latest_patcher = mock.patch(
+            "grant_agent.onboarding.latest_hermes_release",
+            return_value={
+                "version": "v0.9.0",
+                "sourceUrl": "https://github.com/NousResearch/hermes-agent/blob/main/RELEASE_v0.9.0.md",
+            },
+        )
+        self.openclaw_latest_patcher.start()
+        self.hermes_latest_patcher.start()
+        command_version.side_effect = [
+            {"installed": True, "command": "node", "version": "v22", "details": "ok"},
+            {"installed": True, "command": "python", "version": "3.13", "details": "ok"},
+            {"installed": True, "command": "uv", "version": "0.9", "details": "ok"},
+            {"installed": True, "command": "openclaw", "version": "2026.2.15", "details": "ok"},
+            {"installed": True, "command": "wsl:hermes", "version": "Hermes Agent v0.4.0", "details": "ok"},
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "profiles.json").write_text(
+                """
+                {
+                  "default_profile": "builder",
+                  "profiles": {
+                    "builder": {"description": "Builder", "ui": {"motion": "standard"}, "agent": {"execution_scope": "isolated", "approval_mode": "tiered", "explanation_depth": "medium", "delegation_aggressiveness": "balanced"}}
+                  }
+                }
+                """,
+                encoding="utf-8",
+            )
+            status = detect_onboarding_status(root)
+
+        openclaw = next(
+            item for item in status["setupHealth"]["dependencies"] if item["dependencyId"] == "openclaw"
+        )
+        hermes = next(
+            item for item in status["setupHealth"]["dependencies"] if item["dependencyId"] == "hermes"
+        )
+        self.assertEqual(openclaw["stage"], "update_available")
+        self.assertEqual(hermes["stage"], "update_available")
+        self.assertEqual(openclaw["repairActions"][0]["actionId"], "update_openclaw")
+        self.assertEqual(hermes["repairActions"][0]["actionId"], "update_hermes")
+        self.assertEqual(hermes["currentHealthStatus"], "update_available")
+        self.assertEqual(hermes["lastVerificationResult"], "outdated")
         self.assertEqual(hermes["managementMode"], "fluxio_managed")
         runtime_stack = next(
             item
@@ -113,8 +205,10 @@ class OnboardingTests(unittest.TestCase):
             if item["actionId"] == "install_runtime_stack"
         )
         self.assertTrue(runtime_stack["autoRunVerify"])
-        self.assertEqual(len(runtime_stack["batchCommands"]), 1)
-        self.assertEqual(runtime_stack["batchCommands"][0]["dependencyId"], "hermes")
+        self.assertEqual(
+            [item["dependencyId"] for item in runtime_stack["batchCommands"]],
+            ["openclaw", "hermes"],
+        )
         self.assertIn("serviceManagement", status["setupHealth"])
         self.assertIn("serviceManagementSummary", status["setupHealth"])
         minimax_auth = next(

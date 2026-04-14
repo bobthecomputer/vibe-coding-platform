@@ -1612,11 +1612,21 @@ def _build_workspace_service_management(
             "label": runtime_status.get("label", runtime_id),
             "serviceCategory": "runtime",
             "installSource": existing.get("installSource", "system_path"),
-            "currentHealthStatus": "healthy" if runtime_status.get("detected") else "missing",
-            "lastVerificationResult": "passed" if runtime_status.get("detected") else "blocked",
+            "currentHealthStatus": (
+                "update_available"
+                if runtime_status.get("update_available")
+                else ("healthy" if runtime_status.get("detected") else "missing")
+            ),
+            "lastVerificationResult": (
+                "outdated"
+                if runtime_status.get("update_available")
+                else ("passed" if runtime_status.get("detected") else "blocked")
+            ),
             "lastRepairAction": existing.get("lastRepairAction", {}),
             "managementMode": existing.get("managementMode", "externally_managed"),
             "version": runtime_status.get("version") or existing.get("version", ""),
+            "latestVersion": runtime_status.get("latest_version") or existing.get("latestVersion", ""),
+            "updateAvailable": runtime_status.get("update_available", existing.get("updateAvailable", False)),
             "details": runtime_status.get("doctor_summary") or existing.get("details", ""),
             "serviceActions": existing.get("serviceActions", []),
             "verifyAction": existing.get("verifyAction", {}),

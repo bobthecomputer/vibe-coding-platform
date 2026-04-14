@@ -10,6 +10,13 @@ from pathlib import Path
 
 from .models import GuidanceCard, ImprovementQueueItem, OnboardingProgress, TutorialStep
 from .profiles import ProfileRegistry
+from .runtime_updates import (
+    compare_version_tokens,
+    latest_hermes_release,
+    latest_openclaw_release,
+    normalize_hermes_version,
+    normalize_openclaw_version,
+)
 from .runtimes import runtime_adapter_map
 
 MINIMAX_GLOBAL_OPENCLAW_DOCS = "https://platform.minimax.io/docs/token-plan/openclaw"
@@ -218,6 +225,44 @@ def detect_onboarding_status(root: Path) -> dict:
         "openclaw": _command_version("openclaw"),
         "hermes": _command_version("hermes"),
     }
+    if checks["openclaw"].get("version"):
+        checks["openclaw"]["version"] = normalize_openclaw_version(checks["openclaw"]["version"])
+    if checks["hermes"].get("version"):
+        checks["hermes"]["version"] = normalize_hermes_version(checks["hermes"]["version"])
+    openclaw_latest = latest_openclaw_release()
+    if checks["openclaw"].get("installed"):
+        current_version = normalize_openclaw_version(checks["openclaw"].get("version") or "")
+        latest_version = str(openclaw_latest.get("version") or "").strip()
+        update_available = bool(
+            current_version and latest_version and compare_version_tokens(current_version, latest_version) < 0
+        )
+        checks["openclaw"]["latestVersion"] = latest_version
+        checks["openclaw"]["updateAvailable"] = update_available
+        checks["openclaw"]["updateSourceUrl"] = openclaw_latest.get("sourceUrl") or ""
+        if update_available and latest_version:
+            checks["openclaw"]["details"] = f"Installed, but latest npm release is {latest_version}."
+    hermes_latest = latest_hermes_release()
+    if checks["hermes"].get("installed"):
+        current_version = normalize_hermes_version(checks["hermes"].get("version") or "")
+        latest_version = str(hermes_latest.get("version") or "").strip()
+        update_available = (
+            "update available" in current_version.lower()
+            or bool(
+                current_version and latest_version and compare_version_tokens(current_version, latest_version) < 0
+            )
+        )
+        checks["hermes"]["latestVersion"] = latest_version
+        checks["hermes"]["updateAvailable"] = update_available
+        checks["hermes"]["updateSourceUrl"] = hermes_latest.get("sourceUrl") or ""
+        if update_available and latest_version:
+            location = (
+                " inside WSL2"
+                if str(checks["hermes"].get("command", "")).startswith("wsl:")
+                else ""
+            )
+            checks["hermes"]["details"] = (
+                f"Hermes is installed{location}, but latest upstream release is {latest_version}."
+            )
     profile_registry = ProfileRegistry(root / "config" / "profiles.json")
     next_actions = _recommended_next_actions(root, checks, wsl)
     setup_health = _build_setup_health(
@@ -555,8 +600,10 @@ def _dependency_stage(
         return "failed"
     if latest_surface in {"setup.install", "setup.repair"} and latest_ok:
         if installed and latest_verify_time >= latest_action_time:
-            return "healthy"
+            return "update_available" if dependency.get("updateAvailable") else "healthy"
         return "verify_pending"
+    if installed and dependency.get("updateAvailable"):
+        return "update_available"
     if installed:
         return "healthy"
     if dependency.get("repairActions"):
@@ -615,6 +662,8 @@ def _verification_result_for_dependency(
     verify_ok = latest_verify.get("result", {}).get("ok")
     if stage == "healthy":
         return "passed" if latest_verify else "not_run"
+    if stage == "update_available":
+        return "outdated"
     if stage == "verify_pending":
         return "pending"
     if verify_ok is False and dependency.get("required"):
@@ -686,6 +735,8 @@ def _overall_install_state(dependencies: list[dict], installer_ready: bool) -> s
         return "healthy"
     if "failed" in required_stages:
         return "failed"
+    if "update_available" in required_stages:
+        return "update_available"
     if "verify_pending" in required_stages:
         return "verify_pending"
     if "install_available" in required_stages:
@@ -716,6 +767,8 @@ def _runtime_stack_repair_actions(
     checks: dict[str, dict],
     openclaw_install: dict[str, str],
     hermes_install: dict[str, str],
+    openclaw_update: dict[str, str],
+    hermes_update: dict[str, str],
     platform_name: str,
 ) -> list[dict]:
     batch_commands: list[dict] = []
@@ -752,6 +805,17 @@ def _runtime_stack_repair_actions(
                 "autoRunFollowUp": True,
             }
         )
+    elif checks["openclaw"].get("updateAvailable"):
+        batch_commands.append(
+            {
+                "label": "Update OpenClaw",
+                "dependencyId": "openclaw",
+                "command": openclaw_update.get("command", ""),
+                "followUp": openclaw_update.get("follow_up", ""),
+                "platform": platform_name,
+                "autoRunFollowUp": True,
+            }
+        )
     if not checks["hermes"]["installed"]:
         batch_commands.append(
             {
@@ -763,16 +827,27 @@ def _runtime_stack_repair_actions(
                 "autoRunFollowUp": True,
             }
         )
+    elif checks["hermes"].get("updateAvailable"):
+        batch_commands.append(
+            {
+                "label": "Update Hermes",
+                "dependencyId": "hermes",
+                "command": hermes_update.get("command", ""),
+                "followUp": hermes_update.get("follow_up", ""),
+                "platform": "wsl2",
+                "autoRunFollowUp": True,
+            }
+        )
     if not batch_commands:
         return []
     return [
         {
             "actionId": "install_runtime_stack",
             "dependencyId": "runtime_stack",
-            "label": "Install runtime stack",
-            "description": "One click installs missing Node, uv, OpenClaw, and Hermes, then verifies health.",
-            "detail": "Installs all missing runtime prerequisites and re-checks setup blockers automatically.",
-            "kind": "install",
+            "label": "Repair runtime stack",
+            "description": "One click installs missing runtimes and updates stale Hermes/OpenClaw versions, then verifies health.",
+            "detail": "Installs or updates the tracked runtime stack and re-checks setup blockers automatically.",
+            "kind": "repair",
             "platform": platform_name,
             "batchCommands": batch_commands,
             "autoRunFollowUp": True,
@@ -808,6 +883,8 @@ def _build_setup_health(
     adapters = runtime_adapter_map()
     openclaw_install = adapters["openclaw"].install()
     hermes_install = adapters["hermes"].install()
+    openclaw_update = adapters["openclaw"].update(root)
+    hermes_update = adapters["hermes"].update(root)
     platform_name = platform.system().lower()
     workspace_contract = _primary_workspace_contract(root)
     minimax_auth_mode = str(
@@ -939,8 +1016,31 @@ def _build_setup_health(
             "required": True,
             "installed": bool(checks["openclaw"]["installed"]),
             "version": checks["openclaw"].get("version") or "",
-            "details": checks["openclaw"].get("details", ""),
-            "repairActions": []
+            "latestVersion": checks["openclaw"].get("latestVersion") or "",
+            "updateAvailable": bool(checks["openclaw"].get("updateAvailable")),
+            "details": (
+                (
+                    f"{checks['openclaw'].get('details', '')} Latest npm release: {checks['openclaw'].get('latestVersion', '')}."
+                    if checks["openclaw"].get("latestVersion")
+                    else checks["openclaw"].get("details", "")
+                ).strip()
+            ),
+            "repairActions": (
+                [
+                    {
+                        "actionId": "update_openclaw",
+                        "label": "Update OpenClaw",
+                        "description": "Upgrade OpenClaw to the latest npm release and rerun onboarding.",
+                        "command": openclaw_update.get("command", ""),
+                        "followUp": openclaw_update.get("follow_up", ""),
+                        "autoRunFollowUp": True,
+                        "kind": "repair",
+                        "platform": platform_name,
+                    }
+                ]
+                if checks["openclaw"].get("updateAvailable")
+                else []
+            )
             if checks["openclaw"]["installed"]
             else [
                 {
@@ -962,8 +1062,31 @@ def _build_setup_health(
             "required": True,
             "installed": bool(checks["hermes"]["installed"]),
             "version": checks["hermes"].get("version") or "",
-            "details": checks["hermes"].get("details", ""),
-            "repairActions": []
+            "latestVersion": checks["hermes"].get("latestVersion") or "",
+            "updateAvailable": bool(checks["hermes"].get("updateAvailable")),
+            "details": (
+                (
+                    f"{checks['hermes'].get('details', '')} Latest upstream release: {checks['hermes'].get('latestVersion', '')}."
+                    if checks["hermes"].get("latestVersion")
+                    else checks["hermes"].get("details", "")
+                ).strip()
+            ),
+            "repairActions": (
+                [
+                    {
+                        "actionId": "update_hermes",
+                        "label": "Update Hermes",
+                        "description": "Run Hermes self-update and verify the installed version.",
+                        "command": hermes_update.get("command", ""),
+                        "followUp": hermes_update.get("follow_up", ""),
+                        "autoRunFollowUp": True,
+                        "kind": "repair",
+                        "platform": "wsl2" if str(checks["hermes"].get("command", "")).startswith("wsl:") else platform_name,
+                    }
+                ]
+                if checks["hermes"].get("updateAvailable")
+                else []
+            )
             if checks["hermes"]["installed"]
             else [
                 {
@@ -1141,6 +1264,8 @@ def _build_setup_health(
         checks=checks,
         openclaw_install=openclaw_install,
         hermes_install=hermes_install,
+        openclaw_update=openclaw_update,
+        hermes_update=hermes_update,
         platform_name=platform_name,
     )
     repair_actions = runtime_stack_actions + [
@@ -1197,6 +1322,8 @@ def _build_setup_health(
             "lastRepairAction": dependency["lastRepairAction"],
             "managementMode": dependency["managementMode"],
             "version": dependency.get("version", ""),
+            "latestVersion": dependency.get("latestVersion", ""),
+            "updateAvailable": dependency.get("updateAvailable", False),
             "details": dependency.get("details", ""),
             "required": dependency.get("required", False),
             "serviceActions": _service_actions_for_dependency(dependency),
