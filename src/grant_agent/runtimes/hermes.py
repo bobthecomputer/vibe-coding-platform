@@ -66,9 +66,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         version = normalize_hermes_version(version_output)
         latest_release = latest_hermes_release()
         latest_version = latest_release.get("version") or None
+        release_comparison_available = bool(command and version and latest_version)
         update_available = False
-        if command and version_output:
-            update_available = "update available" in version_output.lower()
         if (
             command
             and version
@@ -76,6 +75,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             and compare_version_tokens(version, latest_version) < 0
         ):
             update_available = True
+        elif command and version_output and not release_comparison_available:
+            update_available = "update available" in version_output.lower()
         if update_available and latest_version:
             issues.append(f"Hermes is behind the latest upstream release ({latest_version}).")
 

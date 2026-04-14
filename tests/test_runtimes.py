@@ -95,6 +95,26 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertTrue(status.update_available)
         self.assertIn("latest upstream release", status.doctor_summary)
 
+    @mock.patch("grant_agent.runtimes.hermes.subprocess.run")
+    @mock.patch("grant_agent.runtimes.hermes.shutil.which")
+    def test_hermes_adapter_prefers_release_version_over_stale_commit_warning(
+        self,
+        which_mock: mock.Mock,
+        run_mock: mock.Mock,
+    ) -> None:
+        which_mock.return_value = "hermes"
+        run_mock.return_value = mock.Mock(
+            stdout="Hermes Agent v0.9.0 (2026.4.13)\nUpdate available: 1563 commits behind\n",
+            stderr="",
+        )
+
+        adapter = HermesRuntimeAdapter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status = adapter.doctor(pathlib.Path(temp_dir))
+
+        self.assertEqual(status.version, "v0.9.0")
+        self.assertFalse(status.update_available)
+
     def test_openclaw_launch_uses_session_id_and_json_output(self) -> None:
         adapter = OpenClawRuntimeAdapter()
         mission = mock.Mock(mission_id="mission_abcd1234", objective='Fix "quote" handling')

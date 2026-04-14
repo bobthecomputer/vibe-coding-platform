@@ -1195,6 +1195,10 @@ textarea {
   gap: 10px;
 }
 
+.runtime-event-mini-list {
+  margin-top: 0;
+}
+
 .confidence-headline {
   display: flex;
   align-items: baseline;

@@ -245,12 +245,12 @@ def detect_onboarding_status(root: Path) -> dict:
     if checks["hermes"].get("installed"):
         current_version = normalize_hermes_version(checks["hermes"].get("version") or "")
         latest_version = str(hermes_latest.get("version") or "").strip()
-        update_available = (
-            "update available" in current_version.lower()
-            or bool(
-                current_version and latest_version and compare_version_tokens(current_version, latest_version) < 0
-            )
+        release_comparison_available = bool(current_version and latest_version)
+        update_available = bool(
+            current_version and latest_version and compare_version_tokens(current_version, latest_version) < 0
         )
+        if not release_comparison_available:
+            update_available = "update available" in str(checks["hermes"].get("version") or "").lower()
         checks["hermes"]["latestVersion"] = latest_version
         checks["hermes"]["updateAvailable"] = update_available
         checks["hermes"]["updateSourceUrl"] = hermes_latest.get("sourceUrl") or ""

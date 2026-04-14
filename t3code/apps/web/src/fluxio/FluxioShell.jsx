@@ -1352,6 +1352,55 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const openClawRuntimeActive = mission?.runtime_id === "openclaw";
   const openClawStatus = data.openClawStatus;
+  const delegatedSessions = useMemo(
+    () => (Array.isArray(mission?.delegated_runtime_sessions) ? mission.delegated_runtime_sessions : []),
+    [mission?.delegated_runtime_sessions],
+  );
+  const bridgeSessions = useMemo(
+    () => (Array.isArray(snapshot?.bridgeLab?.connectedSessions) ? snapshot.bridgeLab.connectedSessions : []),
+    [snapshot?.bridgeLab?.connectedSessions],
+  );
+  const effectiveRouteRows = useMemo(
+    () => (Array.isArray(mission?.effectiveRouteContract?.roles) ? mission.effectiveRouteContract.roles : []),
+    [mission?.effectiveRouteContract?.roles],
+  );
+  const missionRuntimeContract = useMemo(
+    () =>
+      mission
+        ? [
+            {
+              label: "Runtime",
+              value: runtimeLabel(mission?.runtime_id),
+            },
+            {
+              label: "Profile",
+              value: titleizeToken(mission?.selected_profile || workspace?.user_profile || profileId),
+            },
+            {
+              label: "Mode",
+              value: titleizeToken(mission?.run_budget?.mode || mission?.missionLoop?.timeBudget?.mode || "autopilot"),
+            },
+            {
+              label: "Run until",
+              value: titleizeToken(
+                mission?.missionLoop?.timeBudget?.runUntilBehavior ||
+                  mission?.run_budget?.run_until_behavior ||
+                  "pause_on_failure",
+              ),
+            },
+            {
+              label: "Harness",
+              value: titleizeToken(mission?.harness_id || workspace?.preferred_harness || "fluxio_hybrid"),
+            },
+          ]
+        : [],
+    [
+      mission,
+      profileId,
+      workspace?.preferred_harness,
+      workspace?.user_profile,
+    ],
+  );
   const runtimeTruth = useMemo(
     () => [
       openClawRuntimeActive
@@ -1432,6 +1481,27 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       });
     }
 
+    for (const session of delegatedSessions) {
+      items.push({
+        id: `delegated-${session.delegated_id}`,
+        role: "runtime",
+        roleIcon: "◇",
+        label: `${runtimeLabel(session.runtime_id)} lane`,
+        title: session.detail || session.last_event || `${runtimeLabel(session.runtime_id)} session ${titleizeToken(session.status || "active")}`,
+        detail:
+          session.heartbeat_status === "stale"
+            ? "Heartbeat is stale. Builder runtime view can inspect the lane in detail."
+            : session.execution_target_detail || session.execution_root || "Delegated runtime lane is being supervised from Fluxio.",
+        meta: timestampLabel(session.updated_at),
+        tone: session.heartbeat_status === "stale" ? "warn" : session.status === "failed" ? "bad" : "neutral",
+        chips: [
+          titleizeToken(session.status || "unknown"),
+          session.heartbeat_status ? `Heartbeat ${titleizeToken(session.heartbeat_status)}` : "",
+          session.execution_target ? titleizeToken(session.execution_target) : "",
+        ].filter(Boolean),
+      });
+    }
+
     for (const message of data.openClawMessages) {
       items.push({
         id: `openclaw-${message.id}`,
@@ -1464,6 +1534,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     data.openClawMessages,
     data.pendingApprovals,
     data.pendingQuestions,
+    delegatedSessions,
     mission,
     operatorNotes,
     viewModel.thread.events,
@@ -1815,6 +1886,87 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             </div>
           </section>
 
+          {mission ? (
+            <section className="drawer-block">
+              <h3>Mission execution contract</h3>
+              <div className="context-grid compact-metrics">
+                {missionRuntimeContract.map(item => (
+                  <article className="context-item" key={`runtime-contract-${item.label}`}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </article>
+                ))}
+              </div>
+              <div className="drawer-list">
+                {effectiveRouteRows.length > 0 ? (
+                  effectiveRouteRows.map(item => (
+                    <article className="drawer-card" key={`route-contract-${item.role}`}>
+                      <span>{titleizeToken(item.role)}</span>
+                      <strong>
+                        {titleizeToken(item.provider)} · {item.model}
+                      </strong>
+                      <p>
+                        {titleizeToken(item.source || "profile_default")}
+                        {item.effort ? ` · ${titleizeToken(item.effort)} effort` : ""}
+                        {item.budgetClass ? ` · ${titleizeToken(item.budgetClass)}` : ""}
+                      </p>
+                      {item.reason ? <p>{item.reason}</p> : null}
+                    </article>
+                  ))
+                ) : (
+                  <article className="drawer-card">
+                    <strong>No effective route contract reported yet.</strong>
+                    <p>Once the mission resolves planner, executor, and verifier routes, they will appear here.</p>
+                  </article>
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="drawer-block">
+            <h3>Delegated runtime lanes</h3>
+            <div className="drawer-list">
+              {delegatedSessions.length > 0 ? (
+                delegatedSessions.map(session => (
+                  <article
+                    className={`drawer-card ${toneClass(session.heartbeat_status === "stale" ? "warn" : session.status === "failed" ? "bad" : "neutral")}`}
+                    key={`delegated-session-${session.delegated_id}`}
+                  >
+                    <span>{runtimeLabel(session.runtime_id)}</span>
+                    <strong>{titleizeToken(session.status || "unknown")}</strong>
+                    <p>{session.detail || session.last_event || "Delegated runtime lane is active."}</p>
+                    <div className="pill-row">
+                      <span className="mini-pill">{session.heartbeat_status ? `Heartbeat ${titleizeToken(session.heartbeat_status)}` : "No heartbeat"}</span>
+                      {session.execution_target ? (
+                        <span className="mini-pill muted">{titleizeToken(session.execution_target)}</span>
+                      ) : null}
+                      {typeof session.heartbeat_age_seconds === "number" ? (
+                        <span className="mini-pill muted">{session.heartbeat_age_seconds}s ago</span>
+                      ) : null}
+                    </div>
+                    <p>{session.execution_target_detail || session.execution_root || session.workspace_root || "Execution root not reported."}</p>
+                    {Array.isArray(session.latest_events) && session.latest_events.length > 0 ? (
+                      <div className="drawer-list compact runtime-event-mini-list">
+                        {session.latest_events.slice(-3).reverse().map(event => (
+                          <article className="drawer-card" key={`runtime-event-${session.delegated_id}-${event.event_id || event.message}`}>
+                            <span>{titleizeToken(event.kind || "runtime")}</span>
+                            <strong>{event.message || "Runtime event"}</strong>
+                            {event.status ? <p>{titleizeToken(event.status)}</p> : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>No delegated runtime lane is active.</strong>
+                  <p>When Hermes or OpenClaw is actively executing, heartbeat, last event, and execution target will show here.</p>
+                </article>
+              )}
+            </div>
+          </section>
+
           <section className="drawer-block">
             <h3>Messaging and bridge surfaces</h3>
             <div className="drawer-list">
@@ -1834,6 +1986,42 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </article>
               )}
             </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Connected apps and mobile bridges</h3>
+            <div className="drawer-list">
+              {bridgeSessions.length > 0 ? (
+                bridgeSessions.map(session => (
+                  <article className={`drawer-card ${toneClass(session.bridge_health === "healthy" ? "good" : "warn")}`} key={`bridge-session-${session.session_id}`}>
+                    <span>{session.app_name || session.app_id}</span>
+                    <strong>
+                      {titleizeToken(session.status || "unknown")}
+                      {session.bridge_transport ? ` · ${titleizeToken(session.bridge_transport)}` : ""}
+                    </strong>
+                    <p>{titleizeToken(session.bridge_health || "unknown")} bridge health</p>
+                    {Array.isArray(session.notes) && session.notes.length > 0 ? <p>{session.notes[0]}</p> : null}
+                    {Array.isArray(session.active_tasks) && session.active_tasks.length > 0 ? (
+                      <div className="pill-row">
+                        {session.active_tasks.slice(0, 3).map(item => (
+                          <span className="mini-pill muted" key={`bridge-task-${session.session_id}-${item}`}>
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>No connected app bridge is reporting yet.</strong>
+                  <p>Bridge Lab data will appear here when connected apps expose live session or follow-on bridge state.</p>
+                </article>
+              )}
+            </div>
+            <p className="drawer-footnote">
+              Hermes does not yet have an OpenClaw-style dedicated Tauri gateway in this shell. Its live supervision currently comes through delegated runtime sessions and connected-app bridge snapshots.
+            </p>
           </section>
 
           <section className="drawer-block">
