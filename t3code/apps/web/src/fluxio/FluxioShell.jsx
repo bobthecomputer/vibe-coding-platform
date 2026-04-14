@@ -192,6 +192,30 @@ function DrawerToggle({ active, label, count, tone, onClick }) {
   );
 }
 
+function TopbarShortcut({ active = false, label, onClick, tone = "neutral" }) {
+  return (
+    <button
+      className={`topbar-shortcut ${active ? "active" : ""} ${toneClass(tone)}`.trim()}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function GlobalRailButton({ active = false, label, onClick, subtle = false }) {
+  return (
+    <button
+      className={`global-rail-button ${active ? "active" : ""} ${subtle ? "subtle" : ""}`.trim()}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
 function missionActionAvailable(mission, action) {
   if (!mission) {
     return false;
@@ -601,18 +625,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   ]);
 
   useEffect(() => {
-    if (viewModel.drawers.queue.urgent) {
-      setActiveDrawer("queue");
-      return;
-    }
-    if (uiMode === "builder" && activeDrawer !== "builder") {
-      setActiveDrawer("builder");
-      return;
-    }
     if (!mission && uiMode === "agent") {
       setActiveDrawer("context");
     }
-  }, [activeDrawer, mission, uiMode, viewModel.drawers.queue.urgent]);
+  }, [mission, uiMode]);
 
   useEffect(() => {
     if (uiMode === "agent" && activeDrawer === "builder") {
@@ -1046,6 +1062,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         count: viewModel.drawers.context.count,
         tone: "neutral",
       },
+      {
+        id: "settings",
+        label: "Settings",
+        count: 0,
+        tone: "neutral",
+      },
     ];
     if (uiMode === "builder") {
       items.push({
@@ -1115,6 +1137,72 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       );
     }
 
+    if (activeDrawer === "settings") {
+      return (
+        <section className="drawer-panel">
+          <header>
+            <p className="eyebrow">Settings</p>
+            <h2>Workspace and app controls</h2>
+            <p>Put operational settings here instead of scattering them across the shell.</p>
+          </header>
+
+          <section className="drawer-block">
+            <h3>App view</h3>
+            <Field label="Preview">
+              <select onChange={event => setPreviewMode(event.target.value)} value={previewMode}>
+                {FIXTURE_OPTIONS.map(option => (
+                  <option key={option.id} value={option.id}>
+                    {option.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Live sync">
+              <select onChange={event => setLiveSyncSeconds(event.target.value)} value={liveSyncSeconds}>
+                {LIVE_SYNC_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <p className="drawer-footnote">
+              {previewLabel(previewMode, data.previewMeta)}
+              {lastPushReason ? ` · Last push ${lastPushReason}` : ""}
+            </p>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Workspace defaults</h3>
+            <div className="context-grid">
+              {viewModel.drawers.builder.profileStudio.workspacePolicy.map(item => (
+                <article className="context-item" key={`settings-${item.label}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </article>
+              ))}
+            </div>
+            <div className="drawer-actions">
+              <ActionButton onClick={() => setActiveDrawer("builder")} variant="primary">
+                Open builder controls
+              </ActionButton>
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Escalation</h3>
+            <p>{data.telegramReady ? "Telegram ready" : "Telegram not configured"}</p>
+            <div className="drawer-actions">
+              <ActionButton onClick={() => setShowEscalationDialog(true)} variant="primary">
+                Configure
+              </ActionButton>
+              <ActionButton onClick={() => void handleSendTestPing()}>Send test ping</ActionButton>
+            </div>
+          </section>
+        </section>
+      );
+    }
+
     if (activeDrawer === "builder" && uiMode === "builder") {
       const skillQuery = skillStudioQuery.trim().toLowerCase();
       const skillMatchesQuery = item =>
@@ -1149,8 +1237,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       return (
         <section className="drawer-panel">
           <header>
-            <p className="eyebrow">Builder review</p>
-            <h2>Confidence and control surfaces</h2>
+            <h2>Confidence and operations</h2>
             <p>{viewModel.drawers.builder.liveSurface.note}</p>
           </header>
 
@@ -1743,35 +1830,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   return (
     <div className="fluxio-shell" data-mode={uiMode} data-profile={profileId}>
       <header className="fluxio-topbar">
-        <Field className="fluxio-control" label="Workspace">
-          <select
-            aria-label="Select workspace"
-            onChange={event => setSelectedWorkspaceId(event.target.value || null)}
-            value={selectedWorkspaceId || ""}
-          >
-            {workspaces.length === 0 ? <option value="">No workspace</option> : null}
-            {workspaces.map(item => (
-              <option key={item.workspace_id} value={item.workspace_id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field className="fluxio-control" label="Mission">
-          <select
-            aria-label="Select mission"
-            onChange={event => setSelectedMissionId(event.target.value || null)}
-            value={selectedMissionId || ""}
-          >
-            {missionOptions.length === 0 ? <option value="">No mission</option> : null}
-            {missionOptions.map(item => (
-              <option key={item.mission_id} value={item.mission_id}>
-                {item.title || item.objective}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="topbar-context">
+          <strong>{mission?.title || mission?.objective || workspace?.name || "Fluxio workspace"}</strong>
+          <span>{workspace?.name || "Select a workspace"}</span>
+        </div>
 
         <div aria-label="Fluxio mode" className="fluxio-mode" role="tablist">
           {["agent", "builder"].map(mode => (
@@ -1791,6 +1853,19 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ))}
         </div>
 
+        <div className="topbar-shortcuts">
+          <TopbarShortcut
+            active={activeDrawer === "builder"}
+            label="Views"
+            onClick={() => {
+              markAction("open:view-builder");
+              setUiMode("builder");
+              setActiveDrawer("builder");
+            }}
+            tone="neutral"
+          />
+        </div>
+
         <div className="topbar-confidence">
           <span>1.0 confidence</span>
           <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
@@ -1803,7 +1878,78 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         </ActionButton>
       </header>
 
+      <section className="fluxio-selector-row">
+        <label className="trail-select">
+          <span>Workspace</span>
+          <select
+            aria-label="Select workspace"
+            onChange={event => setSelectedWorkspaceId(event.target.value || null)}
+            value={selectedWorkspaceId || ""}
+          >
+            {workspaces.length === 0 ? <option value="">No workspace</option> : null}
+            {workspaces.map(item => (
+              <option key={item.workspace_id} value={item.workspace_id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span aria-hidden="true" className="trail-arrow">
+          &gt;
+        </span>
+        <label className="trail-select mission">
+          <span>Mission</span>
+          <select
+            aria-label="Select mission"
+            onChange={event => setSelectedMissionId(event.target.value || null)}
+            value={selectedMissionId || ""}
+          >
+            {missionOptions.length === 0 ? <option value="">No mission</option> : null}
+            {missionOptions.map(item => (
+              <option key={item.mission_id} value={item.mission_id}>
+                {item.title || item.objective}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
       <div className="fluxio-body">
+        <aside className="fluxio-utility-rail">
+          <div className="global-rail-top">
+            <GlobalRailButton
+              active={uiMode === "agent"}
+              label="Operator"
+              onClick={() => {
+                markAction("rail:operator");
+                setUiMode("agent");
+                setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
+              }}
+            />
+            <GlobalRailButton
+              active={uiMode === "builder" && activeDrawer === "builder"}
+              label="Skills"
+              onClick={() => {
+                markAction("rail:skills");
+                setUiMode("builder");
+                setSkillStudioFilter("all");
+                setActiveDrawer("builder");
+              }}
+            />
+          </div>
+          <div className="global-rail-bottom">
+            <GlobalRailButton
+              active={activeDrawer === "settings"}
+              label="Settings"
+              onClick={() => {
+                markAction("rail:settings");
+                setActiveDrawer("settings");
+              }}
+              subtle
+            />
+          </div>
+        </aside>
+
         <aside className="fluxio-nav">
           <section className="fluxio-nav-section">
             <div className="fluxio-nav-heading">
@@ -2057,6 +2203,31 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               />
             ))}
           </div>
+          {viewModel.drawers.queue.urgent && activeDrawer !== "queue" ? (
+            <section className="drawer-priority">
+              <div className="drawer-priority-head">
+                <div>
+                  <p className="eyebrow">Queue Spotlight</p>
+                  <strong>{viewModel.drawers.queue.items[0]?.title || "Queue needs attention"}</strong>
+                </div>
+                <StatusPill strong tone="warn">
+                  {viewModel.drawers.queue.count} pending
+                </StatusPill>
+              </div>
+              <p>{viewModel.drawers.queue.items[0]?.reason || viewModel.drawers.queue.recommendation.reason}</p>
+              <div className="drawer-actions">
+                <ActionButton onClick={() => setActiveDrawer("queue")} variant="primary">
+                  Review queue
+                </ActionButton>
+                <ActionButton
+                  disabled={!missionActionAvailable(mission, "resume")}
+                  onClick={() => void runMissionAction("resume", "Mission resume requested.")}
+                >
+                  Resume mission
+                </ActionButton>
+              </div>
+            </section>
+          ) : null}
           <div className="drawer-content">{renderDrawerPanel()}</div>
         </aside>
       </div>
