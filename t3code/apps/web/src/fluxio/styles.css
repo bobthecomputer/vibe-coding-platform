@@ -120,7 +120,7 @@ textarea {
 
 .fluxio-topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
@@ -130,6 +130,40 @@ textarea {
 
 .fluxio-control {
   min-width: 0;
+}
+
+.topbar-app {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.app-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.app-menu-glyph,
+.app-menu-button {
+  min-height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 8px;
+}
+
+.app-menu-glyph {
+  width: 28px;
+  font-weight: 700;
+}
+
+.app-menu-glyph:hover,
+.app-menu-button:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
 }
 
 .topbar-context {
@@ -231,11 +265,19 @@ textarea {
   grid-template-columns: 72px 248px minmax(0, 1fr) 402px;
 }
 
+.fluxio-shell[data-drawer="collapsed"][data-mode="agent"] .fluxio-body {
+  grid-template-columns: 72px 248px minmax(0, 1fr);
+}
+
+.fluxio-shell[data-drawer="collapsed"][data-mode="builder"] .fluxio-body {
+  grid-template-columns: 72px 248px minmax(0, 1fr);
+}
+
 .fluxio-utility-rail {
   display: grid;
   grid-template-rows: 1fr auto;
-  gap: 14px;
-  padding: 12px 8px;
+  gap: 10px;
+  padding: 10px 8px;
   border-right: 1px solid var(--line);
   background: #18181a;
 }
@@ -247,15 +289,29 @@ textarea {
 }
 
 .global-rail-button {
-  min-height: 42px;
+  min-height: 46px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
+  display: grid;
+  justify-items: start;
+  gap: 3px;
   text-align: left;
-  padding: 0 10px;
+  padding: 8px 10px;
   font-size: 12px;
   font-weight: 600;
+}
+
+.global-rail-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1;
 }
 
 .global-rail-button:hover {
@@ -330,6 +386,26 @@ textarea {
   gap: 8px;
 }
 
+.fluxio-nav-item-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.nav-item-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
 .fluxio-nav-item p,
 .fluxio-empty-copy {
   margin: 6px 0 0;
@@ -346,51 +422,32 @@ textarea {
     #17171a;
 }
 
-.fluxio-selector-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px 10px;
-  border-bottom: 1px solid var(--line);
-  background: #18181a;
-}
-
-.trail-select {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.trail-select span {
-  color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.trail-select select {
-  min-width: 280px;
-  border-radius: 999px;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: #232327;
-  padding-inline: 14px 30px;
-}
-
-.trail-select.mission select {
-  min-width: 360px;
-}
-
-.trail-arrow {
-  color: rgba(255, 255, 255, 0.34);
-  font-size: 16px;
-  font-weight: 700;
-}
-
 .fluxio-empty,
 .thread-shell {
   display: grid;
   gap: 14px;
+}
+
+.mode-story {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #1a1a1d;
+  padding: 12px 14px;
+}
+
+.mode-story strong {
+  font-size: 13px;
+}
+
+.mode-story p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.mode-story.mode-builder {
+  border-color: rgba(142, 203, 111, 0.22);
 }
 
 .fluxio-error-screen {
@@ -1046,7 +1103,7 @@ textarea {
   }
 
   .fluxio-topbar {
-    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
   }
 
   .builder-inline {
@@ -1057,12 +1114,8 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .trail-select select {
-    min-width: 220px;
-  }
-
-  .trail-select.mission select {
-    min-width: 280px;
+  .app-menu {
+    flex-wrap: wrap;
   }
 }
 
@@ -1110,8 +1163,8 @@ textarea {
     text-align: left;
   }
 
-  .fluxio-selector-row {
-    flex-wrap: wrap;
+  .fluxio-shell[data-drawer="collapsed"] .fluxio-body {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1139,25 +1192,5 @@ textarea {
   .topbar-shortcuts {
     flex-wrap: wrap;
     justify-self: start;
-  }
-
-  .fluxio-selector-row {
-    align-items: stretch;
-  }
-
-  .trail-arrow {
-    display: none;
-  }
-
-  .trail-select,
-  .trail-select select,
-  .trail-select.mission select {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .trail-select {
-    display: grid;
-    gap: 4px;
   }
 }

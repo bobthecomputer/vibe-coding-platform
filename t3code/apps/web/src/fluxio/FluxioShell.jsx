@@ -150,7 +150,7 @@ function ToastHost({ items }) {
   );
 }
 
-function NavItem({ active = false, title, subtitle, onClick, tone = "neutral", badge }) {
+function NavItem({ active = false, title, subtitle, onClick, tone = "neutral", badge, icon = null }) {
   return (
     <button
       className={`fluxio-nav-item ${active ? "active" : ""}`.trim()}
@@ -158,7 +158,10 @@ function NavItem({ active = false, title, subtitle, onClick, tone = "neutral", b
       type="button"
     >
       <div className="fluxio-nav-item-top">
-        <strong>{title}</strong>
+        <div className="fluxio-nav-item-title">
+          {icon ? <span aria-hidden="true" className="nav-item-icon">{icon}</span> : null}
+          <strong>{title}</strong>
+        </div>
         <span className={toneClass(tone)}>{badge || titleizeToken(tone)}</span>
       </div>
       {subtitle ? <p>{subtitle}</p> : null}
@@ -204,14 +207,23 @@ function TopbarShortcut({ active = false, label, onClick, tone = "neutral" }) {
   );
 }
 
-function GlobalRailButton({ active = false, label, onClick, subtle = false }) {
+function MenuButton({ label, onClick }) {
+  return (
+    <button className="app-menu-button" onClick={onClick} type="button">
+      {label}
+    </button>
+  );
+}
+
+function GlobalRailButton({ active = false, icon = null, label, onClick, subtle = false }) {
   return (
     <button
       className={`global-rail-button ${active ? "active" : ""} ${subtle ? "subtle" : ""}`.trim()}
       onClick={onClick}
       type="button"
     >
-      {label}
+      {icon ? <span aria-hidden="true" className="global-rail-icon">{icon}</span> : null}
+      <span>{label}</span>
     </button>
   );
 }
@@ -593,6 +605,19 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     () => [...(setupHealth.repairActions || []), ...(setupHealth.globalActions || [])].slice(0, 3),
     [setupHealth.globalActions, setupHealth.repairActions],
   );
+  const missionStatus = mission?.state?.status || "";
+  const showPersistentDrawer =
+    uiMode === "builder" || !mission || ["draft", "queued", "needs_approval", "blocked"].includes(missionStatus);
+  const focusedRuntimeServices = useMemo(() => {
+    const services = viewModel.drawers.builder.serviceStudio.services || [];
+    const byNeedle = needle =>
+      services.filter(item => needle.test(`${item.serviceId} ${item.label} ${item.details}`));
+    return {
+      hermes: byNeedle(/hermes/i),
+      openClaw: byNeedle(/openclaw|open claw|opencode/i),
+      bridges: byNeedle(/telegram|bridge|message|imessage|sms/i),
+    };
+  }, [viewModel.drawers.builder.serviceStudio.services]);
 
   useEffect(() => {
     setWorkspaceProfileForm(profileFormFromWorkspace(workspace, profileId));
@@ -631,7 +656,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [mission, uiMode]);
 
   useEffect(() => {
-    if (uiMode === "agent" && activeDrawer === "builder") {
+    if (uiMode === "agent" && ["builder", "skills", "runtime", "settings"].includes(activeDrawer)) {
       setActiveDrawer("context");
     }
   }, [activeDrawer, uiMode]);
@@ -800,12 +825,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           await runWorkspaceActionSpec(serviceAction);
           return;
         }
+        setUiMode("builder");
+        setActiveDrawer("runtime");
         pushToast("No service repair action is currently available.", "warn");
         return;
       }
       if (actionKind === "skill") {
         setSkillStudioFilter("needs_attention");
-        setActiveDrawer("builder");
+        setUiMode("builder");
+        setActiveDrawer("skills");
         return;
       }
       if (actionKind === "workflow") {
@@ -1063,6 +1091,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         tone: "neutral",
       },
       {
+        id: "skills",
+        label: "Skills",
+        count: viewModel.drawers.builder.skillStudio.summary.needsTestCount,
+        tone:
+          viewModel.drawers.builder.skillStudio.summary.needsTestCount > 0 ? "warn" : "neutral",
+      },
+      {
+        id: "runtime",
+        label: "Runtime",
+        count: viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount,
+        tone:
+          viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount > 0
+            ? "warn"
+            : "neutral",
+      },
+      {
         id: "settings",
         label: "Settings",
         count: 0,
@@ -1133,6 +1177,219 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               </ul>
             </section>
           ))}
+        </section>
+      );
+    }
+
+    if (activeDrawer === "skills") {
+      const filteredRecommendedSkills = viewModel.drawers.builder.skillStudio.recommended.filter(
+        item => item.label.toLowerCase().includes(skillStudioQuery.trim().toLowerCase()) || item.description.toLowerCase().includes(skillStudioQuery.trim().toLowerCase()),
+      );
+      const filteredCuratedSkills = viewModel.drawers.builder.skillStudio.curated.filter(item => {
+        const query = skillStudioQuery.trim().toLowerCase();
+        const matchesQuery =
+          !query ||
+          item.label.toLowerCase().includes(query) ||
+          (item.description || "").toLowerCase().includes(query);
+        if (!matchesQuery) {
+          return false;
+        }
+        if (skillStudioFilter === "recommended") {
+          return item.installed;
+        }
+        if (skillStudioFilter === "needs_attention") {
+          return !item.installed || item.testStatus !== "Reviewed";
+        }
+        return true;
+      });
+
+      return (
+        <section className="drawer-panel">
+          <header>
+            <h2>Skills</h2>
+            <p>Install, review, and route the packs that actually support operator work.</p>
+          </header>
+
+          <section className="drawer-block">
+            <div className="skill-toolbar">
+              <Field label="Filter">
+                <select onChange={event => setSkillStudioFilter(event.target.value)} value={skillStudioFilter}>
+                  <option value="all">All packs</option>
+                  <option value="recommended">Installed</option>
+                  <option value="needs_attention">Needs attention</option>
+                </select>
+              </Field>
+              <Field label="Find skill pack">
+                <input
+                  onChange={event => setSkillStudioQuery(event.target.value)}
+                  placeholder="Search by label or note"
+                  value={skillStudioQuery}
+                />
+              </Field>
+            </div>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Reviewed reusable</span>
+                <strong>
+                  {viewModel.drawers.builder.skillStudio.summary.reviewedReusableCount}/
+                  {viewModel.drawers.builder.skillStudio.summary.totalSkills}
+                </strong>
+              </article>
+              <article className="context-item">
+                <span>Execution ready</span>
+                <strong>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount}</strong>
+              </article>
+              <article className="context-item">
+                <span>Need tests</span>
+                <strong>{viewModel.drawers.builder.skillStudio.summary.needsTestCount}</strong>
+              </article>
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Recommended packs</h3>
+            <div className="drawer-list">
+              {filteredRecommendedSkills.length > 0 ? (
+                filteredRecommendedSkills.map(item => (
+                  <article className={`drawer-card ${toneClass(item.tone)}`} key={`recommended-${item.id}`}>
+                    <span>{item.originType}</span>
+                    <strong>{item.label}</strong>
+                    <p>{item.description}</p>
+                    <div className="pill-row">
+                      <span className="mini-pill">{item.status}</span>
+                      <span className="mini-pill muted">{item.installed ? "Installed" : "Not installed"}</span>
+                      <span className="mini-pill muted">
+                        {item.executionCapable ? "Execution" : "Guidance only"}
+                      </span>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>No recommended pack matches this filter.</strong>
+                </article>
+              )}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Curated library</h3>
+            <div className="drawer-list">
+              {filteredCuratedSkills.length > 0 ? (
+                filteredCuratedSkills.map(item => (
+                  <article className={`drawer-card ${toneClass(item.tone)}`} key={`curated-${item.id}`}>
+                    <span>{item.originType}</span>
+                    <strong>{item.label}</strong>
+                    <p>{item.status}</p>
+                    <div className="pill-row">
+                      <span className="mini-pill">{item.testStatus}</span>
+                      <span className="mini-pill muted">{item.usageCount} uses</span>
+                      <span className="mini-pill muted">{item.helpedCount} helped</span>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>No curated pack matches this filter.</strong>
+                </article>
+              )}
+            </div>
+            <p className="drawer-footnote">{viewModel.drawers.builder.skillStudio.capabilitiesNote}</p>
+          </section>
+        </section>
+      );
+    }
+
+    if (activeDrawer === "runtime") {
+      const primaryRuntimeServices = [
+        ...focusedRuntimeServices.hermes,
+        ...focusedRuntimeServices.openClaw.filter(
+          item => !focusedRuntimeServices.hermes.some(existing => existing.serviceId === item.serviceId),
+        ),
+      ];
+      const bridgeServices = focusedRuntimeServices.bridges.filter(
+        item => !primaryRuntimeServices.some(existing => existing.serviceId === item.serviceId),
+      );
+
+      return (
+        <section className="drawer-panel">
+          <header>
+            <h2>Runtime and integrations</h2>
+            <p>Keep Hermes, OpenClaw, and bridge surfaces manageable from one focused review panel.</p>
+          </header>
+
+          <section className="drawer-block">
+            <h3>Core runtimes</h3>
+            <div className="drawer-list">
+              {primaryRuntimeServices.length > 0 ? (
+                primaryRuntimeServices.map(service => (
+                  <article className={`drawer-card ${toneClass(service.tone)}`} key={`runtime-${service.serviceId}`}>
+                    <span>{service.category}</span>
+                    <strong>{service.label}</strong>
+                    <p>
+                      {service.status}
+                      {service.version ? ` · ${service.version}` : ""}
+                    </p>
+                    <p>{service.details || service.managementMode}</p>
+                    {service.actions.length > 0 ? (
+                      <div className="drawer-actions">
+                        {service.actions.slice(0, 3).map(action => (
+                          <ActionButton
+                            key={`${service.serviceId}-${action.actionId}`}
+                            onClick={() => void runWorkspaceActionSpec(action)}
+                          >
+                            {action.label}
+                          </ActionButton>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>Hermes and OpenClaw are not surfaced by the backend yet.</strong>
+                  <p>Once those services report through control-room service management, they will appear here.</p>
+                </article>
+              )}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Messaging and bridge surfaces</h3>
+            <div className="drawer-list">
+              {bridgeServices.length > 0 ? (
+                bridgeServices.map(service => (
+                  <article className={`drawer-card ${toneClass(service.tone)}`} key={`bridge-${service.serviceId}`}>
+                    <span>{service.category}</span>
+                    <strong>{service.label}</strong>
+                    <p>{service.status}</p>
+                    <p>{service.details || "Bridge surface available."}</p>
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>Message bridge visibility is still partial.</strong>
+                  <p>Telegram state is exposed today. iMessage and mobile bridge specifics need backend support before this shell can manage them honestly.</p>
+                </article>
+              )}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Setup controls</h3>
+            <div className="drawer-actions">
+              {viewModel.drawers.builder.serviceStudio.services.flatMap(service =>
+                service.actions.slice(0, 1).map(action => (
+                  <ActionButton
+                    key={`${service.serviceId}-${action.actionId}-setup`}
+                    onClick={() => void runWorkspaceActionSpec(action)}
+                  >
+                    {action.label}
+                  </ActionButton>
+                )),
+              ).slice(0, 4)}
+            </div>
+          </section>
         </section>
       );
     }
@@ -1828,11 +2085,56 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   };
 
   return (
-    <div className="fluxio-shell" data-mode={uiMode} data-profile={profileId}>
+    <div
+      className="fluxio-shell"
+      data-drawer={showPersistentDrawer ? "open" : "collapsed"}
+      data-mode={uiMode}
+      data-profile={profileId}
+    >
       <header className="fluxio-topbar">
-        <div className="topbar-context">
-          <strong>{mission?.title || mission?.objective || workspace?.name || "Fluxio workspace"}</strong>
-          <span>{workspace?.name || "Select a workspace"}</span>
+        <div className="topbar-app">
+          <div className="app-menu">
+            <button aria-label="Fluxio menu" className="app-menu-glyph" type="button">
+              +
+            </button>
+            <MenuButton label="File" onClick={() => setShowWorkspaceDialog(true)} />
+            <MenuButton
+              label="Edit"
+              onClick={() => {
+                if (workspaces.length === 0) {
+                  setShowWorkspaceDialog(true);
+                  return;
+                }
+                openMissionDialog();
+              }}
+            />
+            <MenuButton
+              label="View"
+              onClick={() => {
+                setUiMode("builder");
+                setActiveDrawer("builder");
+              }}
+            />
+            <MenuButton
+              label="Window"
+              onClick={() => {
+                setUiMode("builder");
+                setActiveDrawer("runtime");
+              }}
+            />
+            <MenuButton
+              label="Help"
+              onClick={() => {
+                setUiMode("agent");
+                setActiveDrawer("context");
+              }}
+            />
+          </div>
+
+          <div className="topbar-context">
+            <strong>{mission?.title || mission?.objective || workspace?.name || "Fluxio workspace"}</strong>
+            <span>{workspace?.name || "Select a workspace"}</span>
+          </div>
         </div>
 
         <div aria-label="Fluxio mode" className="fluxio-mode" role="tablist">
@@ -1855,7 +2157,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
         <div className="topbar-shortcuts">
           <TopbarShortcut
-            active={activeDrawer === "builder"}
+            active={uiMode === "builder"}
             label="Views"
             onClick={() => {
               markAction("open:view-builder");
@@ -1878,47 +2180,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         </ActionButton>
       </header>
 
-      <section className="fluxio-selector-row">
-        <label className="trail-select">
-          <span>Workspace</span>
-          <select
-            aria-label="Select workspace"
-            onChange={event => setSelectedWorkspaceId(event.target.value || null)}
-            value={selectedWorkspaceId || ""}
-          >
-            {workspaces.length === 0 ? <option value="">No workspace</option> : null}
-            {workspaces.map(item => (
-              <option key={item.workspace_id} value={item.workspace_id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span aria-hidden="true" className="trail-arrow">
-          &gt;
-        </span>
-        <label className="trail-select mission">
-          <span>Mission</span>
-          <select
-            aria-label="Select mission"
-            onChange={event => setSelectedMissionId(event.target.value || null)}
-            value={selectedMissionId || ""}
-          >
-            {missionOptions.length === 0 ? <option value="">No mission</option> : null}
-            {missionOptions.map(item => (
-              <option key={item.mission_id} value={item.mission_id}>
-                {item.title || item.objective}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
-
       <div className="fluxio-body">
         <aside className="fluxio-utility-rail">
           <div className="global-rail-top">
             <GlobalRailButton
               active={uiMode === "agent"}
+              icon="O"
               label="Operator"
               onClick={() => {
                 markAction("rail:operator");
@@ -1927,22 +2194,35 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               }}
             />
             <GlobalRailButton
-              active={uiMode === "builder" && activeDrawer === "builder"}
+              active={activeDrawer === "skills"}
+              icon="S"
               label="Skills"
               onClick={() => {
                 markAction("rail:skills");
                 setUiMode("builder");
                 setSkillStudioFilter("all");
-                setActiveDrawer("builder");
+                setActiveDrawer("skills");
+              }}
+            />
+            <GlobalRailButton
+              active={activeDrawer === "runtime"}
+              icon="R"
+              label="Runtime"
+              onClick={() => {
+                markAction("rail:runtime");
+                setUiMode("builder");
+                setActiveDrawer("runtime");
               }}
             />
           </div>
           <div className="global-rail-bottom">
             <GlobalRailButton
               active={activeDrawer === "settings"}
+              icon="G"
               label="Settings"
               onClick={() => {
                 markAction("rail:settings");
+                setUiMode("builder");
                 setActiveDrawer("settings");
               }}
               subtle
@@ -1962,6 +2242,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   <NavItem
                     active={item.workspace_id === selectedWorkspaceId}
                     badge={item.runtimeStatus?.detected ? "Ready" : "Check"}
+                    icon="W"
                     key={item.workspace_id}
                     onClick={() => setSelectedWorkspaceId(item.workspace_id)}
                     subtitle={item.root_path}
@@ -1986,6 +2267,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   <NavItem
                     active={item.mission_id === selectedMissionId}
                     badge={titleizeToken(item.state?.status || "draft")}
+                    icon="M"
                     key={item.mission_id}
                     onClick={() => setSelectedMissionId(item.mission_id)}
                     subtitle={runtimeLabel(item.runtime_id)}
@@ -2003,6 +2285,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         <main className="fluxio-main">
           {!mission ? (
             <section className="fluxio-empty">
+              <section className={`mode-story mode-${uiMode}`}>
+                <strong>{uiMode === "agent" ? "Agent mode keeps launch calm." : "Builder mode keeps controls visible."}</strong>
+                <p>
+                  {uiMode === "agent"
+                    ? "Use the left navigation to pick a workspace or mission. Setup surfaces stay on the right only until launch begins."
+                    : "Skills, runtime management, and validation stay reachable while you shape the workspace."}
+                </p>
+              </section>
               <p className="eyebrow">Readiness</p>
               <h1>{viewModel.emptyState.title}</h1>
               <p>{viewModel.emptyState.summary}</p>
@@ -2063,6 +2353,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </div>
               </header>
 
+              <section className={`mode-story mode-${uiMode}`}>
+                <strong>
+                  {uiMode === "agent"
+                    ? "Agent mode stays on the thread."
+                    : "Builder mode keeps review and control surfaces open."}
+                </strong>
+                <p>
+                  {uiMode === "agent"
+                    ? showPersistentDrawer
+                      ? "You are still in launch/setup stage, so the right rail is visible for configuration."
+                      : "The right rail is hidden during active execution to keep attention on the mission lane."
+                    : "Use Builder to inspect skills, runtime services, proof, and workflow readiness without leaving the shell."}
+                </p>
+              </section>
+
               <div className="thread-lane">
                 {viewModel.thread.sections.map(item => (
                   <ThreadSection item={item} key={item.id} />
@@ -2122,7 +2427,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               <section className="thread-proof-inline">
                 <div className="thread-proof-head">
                   <p className="eyebrow">Proof deltas</p>
-                  <ActionButton onClick={() => setActiveDrawer("proof")}>Open drawer</ActionButton>
+                  <ActionButton
+                    onClick={() => {
+                      if (!showPersistentDrawer) {
+                        setUiMode("builder");
+                      }
+                      setActiveDrawer("proof");
+                    }}
+                  >
+                    Open review
+                  </ActionButton>
                 </div>
                 <div className="thread-proof-items">
                   {viewModel.thread.proofItems.map(item => (
@@ -2167,7 +2481,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   <ActionButton type="submit" variant="primary">
                     Add note
                   </ActionButton>
-                  <ActionButton onClick={() => setActiveDrawer("queue")} type="button">
+                  <ActionButton
+                    onClick={() => {
+                      if (!showPersistentDrawer) {
+                        setUiMode("builder");
+                      }
+                      setActiveDrawer("queue");
+                    }}
+                    type="button"
+                  >
                     Review queue
                   </ActionButton>
                   <ActionButton
@@ -2190,46 +2512,48 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           )}
         </main>
 
-        <aside className={`fluxio-drawer ${activeDrawer ? "open" : ""}`.trim()}>
-          <div className="drawer-toggle-row">
-            {drawerItems.map(item => (
-              <DrawerToggle
-                active={activeDrawer === item.id}
-                count={item.count}
-                key={item.id}
-                label={item.label}
-                onClick={() => setActiveDrawer(item.id)}
-                tone={item.tone}
-              />
-            ))}
-          </div>
-          {viewModel.drawers.queue.urgent && activeDrawer !== "queue" ? (
-            <section className="drawer-priority">
-              <div className="drawer-priority-head">
-                <div>
-                  <p className="eyebrow">Queue Spotlight</p>
-                  <strong>{viewModel.drawers.queue.items[0]?.title || "Queue needs attention"}</strong>
+        {showPersistentDrawer ? (
+          <aside className={`fluxio-drawer ${activeDrawer ? "open" : ""}`.trim()}>
+            <div className="drawer-toggle-row">
+              {drawerItems.map(item => (
+                <DrawerToggle
+                  active={activeDrawer === item.id}
+                  count={item.count}
+                  key={item.id}
+                  label={item.label}
+                  onClick={() => setActiveDrawer(item.id)}
+                  tone={item.tone}
+                />
+              ))}
+            </div>
+            {viewModel.drawers.queue.urgent && activeDrawer !== "queue" ? (
+              <section className="drawer-priority">
+                <div className="drawer-priority-head">
+                  <div>
+                    <p className="eyebrow">Queue Spotlight</p>
+                    <strong>{viewModel.drawers.queue.items[0]?.title || "Queue needs attention"}</strong>
+                  </div>
+                  <StatusPill strong tone="warn">
+                    {viewModel.drawers.queue.count} pending
+                  </StatusPill>
                 </div>
-                <StatusPill strong tone="warn">
-                  {viewModel.drawers.queue.count} pending
-                </StatusPill>
-              </div>
-              <p>{viewModel.drawers.queue.items[0]?.reason || viewModel.drawers.queue.recommendation.reason}</p>
-              <div className="drawer-actions">
-                <ActionButton onClick={() => setActiveDrawer("queue")} variant="primary">
-                  Review queue
-                </ActionButton>
-                <ActionButton
-                  disabled={!missionActionAvailable(mission, "resume")}
-                  onClick={() => void runMissionAction("resume", "Mission resume requested.")}
-                >
-                  Resume mission
-                </ActionButton>
-              </div>
-            </section>
-          ) : null}
-          <div className="drawer-content">{renderDrawerPanel()}</div>
-        </aside>
+                <p>{viewModel.drawers.queue.items[0]?.reason || viewModel.drawers.queue.recommendation.reason}</p>
+                <div className="drawer-actions">
+                  <ActionButton onClick={() => setActiveDrawer("queue")} variant="primary">
+                    Review queue
+                  </ActionButton>
+                  <ActionButton
+                    disabled={!missionActionAvailable(mission, "resume")}
+                    onClick={() => void runMissionAction("resume", "Mission resume requested.")}
+                  >
+                    Resume mission
+                  </ActionButton>
+                </div>
+              </section>
+            ) : null}
+            <div className="drawer-content">{renderDrawerPanel()}</div>
+          </aside>
+        ) : null}
       </div>
 
       <Modal
