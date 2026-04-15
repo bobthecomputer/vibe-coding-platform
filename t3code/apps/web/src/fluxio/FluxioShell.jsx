@@ -157,6 +157,15 @@ function timestampLabel(value) {
   return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function timeValue(value) {
+  if (!value) {
+    return Number.NaN;
+  }
+  const parsed = new Date(value);
+  const ms = parsed.getTime();
+  return Number.isNaN(ms) ? Number.NaN : ms;
+}
+
 function ToastHost({ items }) {
   return (
     <div aria-atomic="true" aria-live="polite" className="toast-host">
@@ -242,6 +251,12 @@ function TranscriptMessage({ item }) {
       {item.label ? <p className="agent-message-label">{item.label}</p> : null}
       {item.title ? <h3>{item.title}</h3> : null}
       {item.detail ? <p>{item.detail}</p> : null}
+      {item.technicalDetail ? (
+        <details className="agent-message-details">
+          <summary>{item.technicalSummary || "Technical detail"}</summary>
+          <p>{item.technicalDetail}</p>
+        </details>
+      ) : null}
       {item.chips?.length ? (
         <div className="agent-message-chips">
           {item.chips.map(chip => (
@@ -400,6 +415,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       title: row.message || "Mission event",
       detail: deltaDetail(row),
       meta: timestampLabel(row.timestamp || payload.detectedAt),
+      timestampRaw: row.timestamp || payload.detectedAt,
       tone:
         kind === "mission.approval"
           ? "warn"
@@ -441,6 +457,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       title: row.message || "Runtime event",
       detail: deltaDetail(row),
       meta: timestampLabel(row.created_at || payload.detectedAt),
+      timestampRaw: row.created_at || payload.detectedAt,
       tone:
         row.status === "failed"
           ? "bad"
@@ -1678,38 +1695,88 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     currentDelegatedSessionsRef.current = delegatedSessions;
   }, [delegatedSessions]);
 
+  const agentContextDigest = useMemo(() => {
+    const sectionById = new Map((viewModel.thread.sections || []).map(item => [item.id, item]));
+    return [
+      {
+        label: "Current task",
+        value: sectionById.get("current-task")?.body || viewModel.thread.summary,
+        note: sectionById.get("current-task")?.detail || "",
+      },
+      {
+        label: "Known state",
+        value: sectionById.get("known-state")?.body || "",
+        note: sectionById.get("known-state")?.detail || "",
+      },
+      {
+        label: "Assumptions",
+        value: sectionById.get("assumptions")?.body || "",
+        note: sectionById.get("assumptions")?.detail || "",
+      },
+      {
+        label: "Operator boundary",
+        value:
+          sectionById.get("needs-input")?.body ||
+          (data.pendingApprovals.length > 0
+            ? "Approval required before the mission can continue."
+            : data.pendingQuestions.length > 0
+              ? "Fluxio needs an operator answer."
+              : "No active operator boundary."),
+        note: sectionById.get("needs-input")?.detail || "",
+      },
+    ].filter(item => item.value || item.note);
+  }, [
+    data.pendingApprovals.length,
+    data.pendingQuestions.length,
+    viewModel.thread.sections,
+    viewModel.thread.summary,
+  ]);
+
   const agentTranscript = useMemo(() => {
     const items = [];
+    const timelineTurns = [];
+    const sectionById = new Map((viewModel.thread.sections || []).map(item => [item.id, item]));
+    const currentTask = sectionById.get("current-task");
+    const knownState = sectionById.get("known-state");
+    const assumptions = sectionById.get("assumptions");
 
     if (mission) {
       items.push({
-        id: "agent-contract",
+        id: "agent-mission",
         role: "fluxio",
         roleIcon: "◎",
-        label: "Agent contract",
-        title: "This view stays on the mission conversation.",
-        detail:
-          "You can follow the run, answer boundaries, and send follow-ups without carrying builder-only controls all the time.",
-        chips: ["Calmer layout", "Inline follow-up", "Builder chrome hidden"],
+        label: "Mission",
+        title: viewModel.thread.objective || viewModel.thread.title,
+        detail: viewModel.thread.summary,
+        technicalSummary: "Mission context",
+        technicalDetail: [knownState?.detail, assumptions?.detail].filter(Boolean).join(" · "),
+        chips: [
+          runtimeLabel(mission?.runtime_id),
+          titleizeToken(mission?.state?.status || "active"),
+          mission?.missionLoop?.continuityState
+            ? titleizeToken(mission.missionLoop.continuityState)
+            : "",
+        ].filter(Boolean),
         tone: "neutral",
         emphasis: true,
       });
-    }
-
-    for (const item of viewModel.thread.sections || []) {
-      items.push({
-        id: `section-${item.id}`,
-        role: "fluxio",
-        roleIcon: "◎",
-        label: item.label,
-        title: item.body,
-        detail: item.detail,
-        tone: item.tone || "neutral",
-      });
+      if (currentTask?.body) {
+        items.push({
+          id: "agent-current-task",
+          role: "fluxio",
+          roleIcon: "◎",
+          label: "Current task",
+          title: currentTask.body,
+          detail: currentTask.detail,
+          technicalSummary: knownState?.label || "Known state",
+          technicalDetail: [knownState?.body, assumptions?.body].filter(Boolean).join(" · "),
+          tone: mission?.state?.status === "running" ? "good" : "neutral",
+        });
+      }
     }
 
     for (const approval of data.pendingApprovals.slice(0, 3)) {
-      items.push({
+      timelineTurns.push({
         id: `approval-${approval.approval_id || approval.request_id || approval.title}`,
         role: "queue",
         roleIcon: "!",
@@ -1717,11 +1784,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         title: approval.title || approval.summary || "Approval required",
         detail: approval.reason || approval.detail || "Fluxio is waiting on an explicit operator decision.",
         tone: "warn",
+        sortValue: Number.POSITIVE_INFINITY,
+        sortOrder: timelineTurns.length,
       });
     }
 
     for (const question of data.pendingQuestions.slice(0, 3)) {
-      items.push({
+      timelineTurns.push({
         id: `question-${question.question_id || question.request_id || question.prompt}`,
         role: "queue",
         roleIcon: "?",
@@ -1729,11 +1798,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         title: question.prompt || question.title || "Clarification needed",
         detail: question.detail || question.context || "Answering this helps the mission continue.",
         tone: "warn",
+        sortValue: Number.POSITIVE_INFINITY,
+        sortOrder: timelineTurns.length,
       });
     }
 
-    for (const note of [...operatorNotes].reverse()) {
-      items.push({
+    for (const note of operatorNotes) {
+      timelineTurns.push({
         id: `operator-${note.id}`,
         role: "operator",
         roleIcon: "◉",
@@ -1742,42 +1813,57 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         detail: note.meta,
         meta: timestampLabel(note.createdAt),
         tone: note.tone || "neutral",
+        sortValue: timeValue(note.createdAt),
+        sortOrder: timelineTurns.length,
       });
     }
 
     for (const event of liveControlEvents) {
-      items.push(event);
+      timelineTurns.push({
+        ...event,
+        sortValue: timeValue(event.timestampRaw),
+        sortOrder: timelineTurns.length,
+      });
     }
 
     for (const session of delegatedSessions) {
       const delegatedMessageId =
         session.delegated_id ||
         `${session.runtime_id || "runtime"}-${session.updated_at || session.last_event || "session"}`;
-      items.push({
-        id: `delegated-${delegatedMessageId}`,
-        role: "runtime",
-        roleLabel: runtimeLabel(session.runtime_id),
-        roleIcon: "◇",
-        label: `${runtimeLabel(session.runtime_id)} lane`,
-        title: session.detail || session.last_event || `${runtimeLabel(session.runtime_id)} session ${titleizeToken(session.status || "active")}`,
-        detail:
-          session.heartbeat_status === "stale"
-            ? "Heartbeat is stale. Builder runtime view can inspect the lane in detail."
-            : session.execution_target_detail || session.execution_root || "Delegated runtime lane is being supervised from Fluxio.",
-        meta: timestampLabel(session.updated_at),
-        tone: session.heartbeat_status === "stale" ? "warn" : session.status === "failed" ? "bad" : "neutral",
-        chips: [
-          titleizeToken(session.status || "unknown"),
-          session.heartbeat_status ? `Heartbeat ${titleizeToken(session.heartbeat_status)}` : "",
-          session.execution_target ? titleizeToken(session.execution_target) : "",
-        ].filter(Boolean),
-      });
+      const latestEvents = Array.isArray(session.latest_events) ? session.latest_events : [];
+      if (latestEvents.length === 0) {
+        timelineTurns.push({
+          id: `delegated-${delegatedMessageId}`,
+          role: "runtime",
+          roleLabel: runtimeLabel(session.runtime_id),
+          roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
+          label: `${runtimeLabel(session.runtime_id)} lane`,
+          title:
+            session.detail ||
+            session.last_event ||
+            `${runtimeLabel(session.runtime_id)} session ${titleizeToken(session.status || "active")}`,
+          detail:
+            session.heartbeat_status === "stale"
+              ? "Heartbeat is stale. Builder runtime view can inspect the lane in detail."
+              : session.execution_target_detail || session.execution_root || "Delegated runtime lane is being supervised from Fluxio.",
+          meta: timestampLabel(session.updated_at),
+          tone:
+            session.heartbeat_status === "stale"
+              ? "warn"
+              : session.status === "failed"
+                ? "bad"
+                : "neutral",
+          chips: [
+            titleizeToken(session.status || "unknown"),
+            session.execution_target ? titleizeToken(session.execution_target) : "",
+          ].filter(Boolean),
+          sortValue: timeValue(session.updated_at),
+          sortOrder: timelineTurns.length,
+        });
+      }
 
-      for (const [index, event] of [...(Array.isArray(session.latest_events) ? session.latest_events : [])]
-        .slice(-2)
-        .reverse()
-        .entries()) {
-        items.push({
+      for (const [index, event] of latestEvents.slice(-4).entries()) {
+        timelineTurns.push({
           id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
           role: "runtime",
           roleLabel: runtimeLabel(session.runtime_id),
@@ -1799,12 +1885,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             session.execution_target ? titleizeToken(session.execution_target) : "",
             event.status ? titleizeToken(event.status) : "",
           ].filter(Boolean),
+          sortValue: timeValue(event.created_at || session.updated_at),
+          sortOrder: timelineTurns.length,
         });
       }
     }
 
     for (const message of data.openClawMessages) {
-      items.push({
+      timelineTurns.push({
         id: `openclaw-${message.id}`,
         role: "runtime",
         roleLabel: "OpenClaw",
@@ -1814,11 +1902,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         detail: message.meta || "Gateway message",
         meta: timestampLabel(message.createdAt),
         tone: message.tone || "neutral",
+        sortValue: timeValue(message.createdAt),
+        sortOrder: timelineTurns.length,
       });
     }
 
     for (const session of bridgeSessions.slice(0, 3)) {
-      items.push({
+      timelineTurns.push({
         id: `bridge-${session.session_id || session.app_id}`,
         role: "bridge",
         roleLabel: session.app_name || "Connected app",
@@ -1845,12 +1935,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             ? `${session.active_tasks.length} active`
             : "",
         ].filter(Boolean),
+        sortValue: timeValue(session.last_seen_at),
+        sortOrder: timelineTurns.length,
       });
     }
 
     for (const event of (viewModel.thread.events || []).slice(0, 6)) {
       const runtimeLike = ["runtime", "activity"].includes(event.kind);
-      items.push({
+      timelineTurns.push({
         id: `event-${event.kind}-${event.title}-${event.meta}`,
         role: runtimeLike ? "runtime" : "system",
         roleIcon: runtimeLike ? "◇" : "·",
@@ -1859,11 +1951,43 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         detail: event.detail,
         meta: timestampLabel(event.meta),
         tone: event.tone || "neutral",
+        sortValue: timeValue(event.meta),
+        sortOrder: timelineTurns.length,
       });
     }
 
+    const sortedTurns = timelineTurns
+      .filter(item => item.title || item.detail)
+      .sort((left, right) => {
+        const leftHasTime = Number.isFinite(left.sortValue);
+        const rightHasTime = Number.isFinite(right.sortValue);
+        if (leftHasTime && rightHasTime && left.sortValue !== right.sortValue) {
+          return left.sortValue - right.sortValue;
+        }
+        if (leftHasTime !== rightHasTime) {
+          return leftHasTime ? -1 : 1;
+        }
+        return left.sortOrder - right.sortOrder;
+      })
+      .map(({ sortOrder, sortValue, ...item }) => item);
+
+    if (sortedTurns.length === 0 && mission) {
+      sortedTurns.push({
+        id: "agent-waiting",
+        role: "system",
+        roleIcon: "·",
+        label: "Waiting",
+        title: "The mission is waiting for the next turn.",
+        detail: "Follow-ups, runtime output, approvals, and proof changes will land here as the run progresses.",
+        tone: "neutral",
+      });
+    }
+
+    items.push(...sortedTurns);
+
     return items;
   }, [
+    agentContextDigest,
     bridgeSessions,
     data.openClawMessages,
     data.pendingApprovals,
@@ -1874,6 +1998,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     operatorNotes,
     viewModel.thread.events,
     viewModel.thread.sections,
+    viewModel.thread.summary,
+    viewModel.thread.title,
+    viewModel.thread.objective,
   ]);
 
   const drawerItems = useMemo(() => {
