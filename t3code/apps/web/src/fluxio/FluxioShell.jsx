@@ -100,6 +100,11 @@ const ROUTE_MODEL_OPTIONS = [
   "claude-opus-4.1",
 ];
 
+const AGENT_BLOCKER_DRAWER_IDS = ["queue", "proof", "context"];
+const AGENT_BUILDER_ONLY_DRAWERS = ["builder", "skills", "runtime", "profiles", "settings"];
+const AGENT_BLOCKER_STATUSES = ["needs_approval", "blocked", "verification_failed"];
+const AGENT_QUEUED_PAUSE_STATES = ["queued", "resume_available"];
+
 function hasTauriBackend() {
   return Boolean(globalThis.window?.__TAURI__ || globalThis.window?.__TAURI_INTERNALS__);
 }
@@ -164,6 +169,37 @@ function timeValue(value) {
   const parsed = new Date(value);
   const ms = parsed.getTime();
   return Number.isNaN(ms) ? Number.NaN : ms;
+}
+
+function asList(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function boundaryTimestamp(boundary) {
+  return (
+    boundary?.created_at ||
+    boundary?.createdAt ||
+    boundary?.requested_at ||
+    boundary?.requestedAt ||
+    boundary?.updated_at ||
+    boundary?.updatedAt ||
+    boundary?.timestamp ||
+    ""
+  );
+}
+
+function isHeartbeatRuntimeKind(kind) {
+  return String(kind || "").toLowerCase() === "session.heartbeat";
+}
+
+function isProcessRuntimeKind(kind) {
+  return ["runtime.output", "runtime.stdout", "runtime.stderr"].includes(
+    String(kind || "").toLowerCase(),
+  );
+}
+
+function isIgnorableAgentRuntimeEvent(event) {
+  return isHeartbeatRuntimeKind(event?.kind);
 }
 
 function ToastHost({ items }) {
@@ -240,7 +276,9 @@ function TranscriptMessage({ item }) {
     "·";
 
   return (
-    <article className={`agent-message role-${role} ${toneClass(item.tone || "neutral")} ${item.emphasis ? "emphasis" : ""}`.trim()}>
+    <article
+      className={`agent-message role-${role} ${toneClass(item.tone || "neutral")} ${item.emphasis ? "emphasis" : ""} ${item.processMessage ? "process-message" : ""}`.trim()}
+    >
       <div className="agent-message-top">
         <div className="agent-message-role">
           <span aria-hidden="true" className="agent-message-avatar">{roleIcon}</span>
@@ -441,6 +479,9 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       return null;
     }
     const kind = row.kind || "runtime.event";
+    const processMessage = isProcessRuntimeKind(kind);
+    const heartbeat = isHeartbeatRuntimeKind(kind);
+    const detail = deltaDetail(row);
     return {
       id: `runtime-${delegatedId || mission.mission_id}-${row.event_id || row.created_at || payload.detectedAt}-${kind}`,
       kind,
@@ -453,9 +494,19 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           : row.runtime_id === "hermes"
             ? "⬢"
             : "◇",
-      label: titleizeToken(kind),
+      label: processMessage
+        ? "Process message"
+        : heartbeat
+          ? "Runtime heartbeat"
+          : titleizeToken(kind),
       title: row.message || "Runtime event",
-      detail: deltaDetail(row),
+      detail:
+        detail ||
+        (processMessage
+          ? `${runtimeLabel(row.runtime_id || mission.runtime_id)} emitted process output.`
+          : heartbeat
+            ? "Heartbeat telemetry from the delegated runtime lane."
+            : ""),
       meta: timestampLabel(row.created_at || payload.detectedAt),
       timestampRaw: row.created_at || payload.detectedAt,
       tone:
@@ -464,6 +515,12 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           : /approval|waiting/i.test(`${kind} ${row.status || ""}`)
             ? "warn"
             : "neutral",
+      processMessage,
+      heartbeat,
+      emphasis:
+        processMessage ||
+        row.status === "failed" ||
+        /approval|blocked|error/i.test(`${kind} ${row.message || ""}`),
       chips: [
         row.runtime_id ? runtimeLabel(row.runtime_id) : "",
         row.status ? titleizeToken(row.status) : "",
@@ -899,8 +956,51 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [setupHealth.globalActions, setupHealth.repairActions],
   );
   const missionStatus = mission?.state?.status || "";
-  const showPersistentDrawer =
-    uiMode === "builder" || !mission || ["draft", "queued", "needs_approval", "blocked"].includes(missionStatus);
+  const agentBlockedState = useMemo(() => {
+    const approvalCount = asList(mission?.proof?.pending_approvals).length + asList(data.pendingApprovals).length;
+    const questionCount = asList(data.pendingQuestions).length;
+    const verificationFailureCount = asList(mission?.state?.verification_failures).length;
+    const continuityState =
+      mission?.missionLoop?.continuityState ||
+      mission?.missionLoop?.timeBudget?.status ||
+      mission?.missionLoop?.time_budget?.status ||
+      "";
+    const hasApprovalBoundary = approvalCount > 0;
+    const hasQuestionBoundary = questionCount > 0;
+    const hasVerificationFailure =
+      verificationFailureCount > 0 || missionStatus === "verification_failed";
+    const hasBlockedMissionState = AGENT_BLOCKER_STATUSES.includes(missionStatus);
+    const hasQueuedPauseState =
+      AGENT_QUEUED_PAUSE_STATES.includes(missionStatus) ||
+      AGENT_QUEUED_PAUSE_STATES.includes(continuityState);
+    const isBlocked = Boolean(
+      mission &&
+        (hasApprovalBoundary ||
+          hasQuestionBoundary ||
+          hasVerificationFailure ||
+          hasBlockedMissionState ||
+          hasQueuedPauseState),
+    );
+
+    return {
+      approvalCount,
+      questionCount,
+      verificationFailureCount,
+      hasApprovalBoundary,
+      hasQuestionBoundary,
+      hasVerificationFailure,
+      hasBlockedMissionState,
+      hasQueuedPauseState,
+      isBlocked,
+      defaultDrawer:
+        hasApprovalBoundary || hasQuestionBoundary ? "queue" : hasVerificationFailure ? "proof" : "context",
+    };
+  }, [data.pendingApprovals, data.pendingQuestions, mission, missionStatus]);
+  const agentVisibleDrawers = useMemo(
+    () => AGENT_BLOCKER_DRAWER_IDS,
+    [],
+  );
+  const showPersistentDrawer = uiMode === "builder" || agentBlockedState.isBlocked;
   const focusedRuntimeServices = useMemo(() => {
     const services = viewModel.drawers.builder.serviceStudio.services || [];
     const byNeedle = needle =>
@@ -956,10 +1056,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [mission, uiMode]);
 
   useEffect(() => {
-    if (uiMode === "agent" && ["builder", "skills", "runtime", "profiles", "settings"].includes(activeDrawer)) {
-      setActiveDrawer("context");
+    if (uiMode === "agent" && AGENT_BUILDER_ONLY_DRAWERS.includes(activeDrawer)) {
+      setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : "context");
     }
-  }, [activeDrawer, uiMode]);
+  }, [activeDrawer, agentBlockedState.defaultDrawer, agentBlockedState.isBlocked, uiMode]);
+
+  useEffect(() => {
+    if (uiMode === "agent" && agentBlockedState.isBlocked) {
+      setActiveDrawer(agentBlockedState.defaultDrawer);
+    }
+  }, [agentBlockedState.defaultDrawer, agentBlockedState.isBlocked, uiMode]);
 
   const runMissionAction = useCallback(
     async (action, successMessage) => {
@@ -1096,12 +1202,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       workspaceId: workspace?.workspace_id || current.workspaceId || "",
       runtime: mission?.runtime_id || workspace?.default_runtime || current.runtime,
       profile: mission?.selected_profile || workspace?.user_profile || profileId,
+      objective:
+        !mission && operatorDraft.trim() && !current.objective.trim()
+          ? operatorDraft.trim()
+          : current.objective,
     }));
     setShowMissionDialog(true);
   }, [
     markAction,
+    mission,
     mission?.runtime_id,
     mission?.selected_profile,
+    operatorDraft,
     profileId,
     workspace?.default_runtime,
     workspace?.user_profile,
@@ -1479,23 +1591,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
   }, [markAction, previewMode, pushToast, refreshAll]);
 
-  const composerEvents = useMemo(
-    () =>
-      operatorNotes.map(note => ({
-        kind: "note",
-        title: note.title,
-        detail: note.detail,
-        tone: note.tone,
-        meta: timestampLabel(note.createdAt),
-      })),
-    [operatorNotes],
-  );
-
-  const threadEvents = useMemo(
-    () => [...liveControlEvents, ...composerEvents, ...(viewModel.thread.events || [])].slice(0, 24),
-    [composerEvents, liveControlEvents, viewModel.thread.events],
-  );
-
   const openClawRuntimeActive = mission?.runtime_id === "openclaw";
   const openClawStatus = data.openClawStatus;
   const delegatedSessions = useMemo(
@@ -1547,6 +1642,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       workspace?.user_profile,
     ],
   );
+  const builderBoard = viewModel.drawers.builder.board;
   const builderStudioCards = useMemo(
     () => [
       {
@@ -1606,58 +1702,171 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [delegatedSessions]);
 
   const agentTranscript = useMemo(() => {
-    const items = [];
     const timelineTurns = [];
-    const sectionById = new Map((viewModel.thread.sections || []).map(item => [item.id, item]));
-
-    for (const approval of data.pendingApprovals.slice(0, 3)) {
+    const seenTurnKeys = new Set();
+    const pushTurn = item => {
+      if (!item || (!item.title && !item.detail)) {
+        return;
+      }
+      const timestampRaw = item.timestampRaw || "";
+      const dedupeKey =
+        item.dedupeKey ||
+        [
+          item.role || "",
+          item.label || "",
+          item.title || "",
+          item.detail || "",
+          timestampRaw,
+        ].join("|");
+      if (seenTurnKeys.has(dedupeKey)) {
+        return;
+      }
+      seenTurnKeys.add(dedupeKey);
       timelineTurns.push({
-        id: `approval-${approval.approval_id || approval.request_id || approval.title}`,
+        ...item,
+        timestampRaw,
+        sortValue: Number.isFinite(item.sortValue) ? item.sortValue : timeValue(timestampRaw),
+        sortOrder: timelineTurns.length,
+      });
+    };
+
+    for (const approval of asList(mission?.proof?.pending_approvals).slice(0, 3)) {
+      pushTurn({
+        id: `mission-proof-approval-${approval}`,
+        dedupeKey: `approval:${approval}`,
         role: "queue",
+        roleLabel: "Needs attention",
         roleIcon: "!",
         label: "Approval boundary",
-        title: approval.title || approval.summary || "Approval required",
-        detail: approval.reason || approval.detail || "Fluxio is waiting on an explicit operator decision.",
+        title: approval,
+        detail: "Fluxio is waiting on an explicit operator decision.",
         tone: "warn",
         sortValue: Number.POSITIVE_INFINITY,
-        sortOrder: timelineTurns.length,
       });
     }
 
-    for (const question of data.pendingQuestions.slice(0, 3)) {
-      timelineTurns.push({
-        id: `question-${question.question_id || question.request_id || question.prompt}`,
+    for (const approval of asList(data.pendingApprovals).slice(0, 3)) {
+      const timestampRaw = boundaryTimestamp(approval);
+      const title =
+        typeof approval === "string"
+          ? approval
+          : approval?.title || approval?.summary || approval?.reason || "Approval required";
+      pushTurn({
+        id: `approval-${approval?.approval_id || approval?.request_id || title}`,
+        dedupeKey: `approval:${title}`,
         role: "queue",
+        roleLabel: "Needs attention",
+        roleIcon: "!",
+        label: "Approval boundary",
+        title,
+        detail:
+          approval?.reason ||
+          approval?.detail ||
+          approval?.context ||
+          "Fluxio is waiting on an explicit operator decision.",
+        meta: timestampLabel(timestampRaw),
+        timestampRaw,
+        tone: "warn",
+        sortValue: Number.isFinite(timeValue(timestampRaw)) ? timeValue(timestampRaw) : Number.POSITIVE_INFINITY,
+      });
+    }
+
+    for (const question of asList(data.pendingQuestions).slice(0, 3)) {
+      const timestampRaw = boundaryTimestamp(question);
+      const title =
+        typeof question === "string"
+          ? question
+          : question?.prompt || question?.question || question?.title || "Clarification needed";
+      pushTurn({
+        id: `question-${question?.question_id || question?.request_id || title}`,
+        dedupeKey: `question:${title}`,
+        role: "queue",
+        roleLabel: "Needs attention",
         roleIcon: "?",
         label: "Question",
-        title: question.prompt || question.title || "Clarification needed",
-        detail: question.detail || question.context || "Answering this helps the mission continue.",
+        title,
+        detail:
+          question?.detail ||
+          question?.summary ||
+          question?.context ||
+          "Answering this helps the mission continue.",
+        meta: timestampLabel(timestampRaw),
+        timestampRaw,
         tone: "warn",
+        sortValue: Number.isFinite(timeValue(timestampRaw)) ? timeValue(timestampRaw) : Number.POSITIVE_INFINITY,
+      });
+    }
+
+    for (const failure of asList(mission?.state?.verification_failures).slice(0, 3)) {
+      pushTurn({
+        id: `verification-${failure}`,
+        dedupeKey: `verification:${failure}`,
+        role: "system",
+        roleLabel: "Fluxio",
+        roleIcon: "·",
+        label: "Verification failure",
+        title: failure,
+        detail: mission?.proof?.summary || "Verification failed and needs operator review.",
+        tone: "bad",
         sortValue: Number.POSITIVE_INFINITY,
-        sortOrder: timelineTurns.length,
       });
     }
 
     for (const note of operatorNotes) {
-      timelineTurns.push({
+      pushTurn({
         id: `operator-${note.id}`,
+        dedupeKey: `operator:${note.id}`,
         role: "operator",
         roleIcon: "◉",
         label: note.channel === "followup" ? "Follow-up sent" : "Operator note",
         title: note.detail,
         detail: note.meta,
         meta: timestampLabel(note.createdAt),
+        timestampRaw: note.createdAt,
         tone: note.tone || "neutral",
-        sortValue: timeValue(note.createdAt),
-        sortOrder: timelineTurns.length,
+      });
+    }
+
+    for (const action of asList(mission?.action_history).slice(-6)) {
+      const actionKind = action?.proposal?.kind || action?.action_id || "action";
+      const actionGatePending = action?.gate?.status === "pending";
+      const actionRuntimeLike =
+        action?.proposal?.sourceKind === "delegated" ||
+        /runtime|delegate|test|verify|command/i.test(actionKind);
+      const actionResult =
+        action?.result?.result_summary ||
+        action?.result?.error ||
+        action?.result?.stdout ||
+        "Mission action recorded.";
+      pushTurn({
+        id: `action-${action?.action_id || actionKind}-${action?.executed_at || actionResult}`,
+        dedupeKey: `action:${action?.action_id || actionKind}:${action?.executed_at || actionResult}`,
+        role: actionGatePending ? "queue" : actionRuntimeLike ? "runtime" : "system",
+        roleLabel:
+          actionGatePending
+            ? "Needs attention"
+            : actionRuntimeLike
+              ? runtimeLabel(mission?.runtime_id)
+              : "Fluxio",
+        roleIcon:
+          actionGatePending ? "!" : actionRuntimeLike ? (mission?.runtime_id === "hermes" ? "⬢" : "◇") : "·",
+        label: actionGatePending ? "Approval boundary" : titleizeToken(actionKind),
+        title: action?.proposal?.title || action?.action_id || "Mission action",
+        detail: actionResult,
+        technicalDetail:
+          action?.result?.stdout && action?.result?.stdout !== actionResult
+            ? action.result.stdout
+            : "",
+        meta: timestampLabel(action?.executed_at),
+        timestampRaw: action?.executed_at,
+        tone: action?.result?.error ? "bad" : actionGatePending ? "warn" : "neutral",
       });
     }
 
     for (const event of liveControlEvents) {
-      timelineTurns.push({
+      pushTurn({
         ...event,
-        sortValue: timeValue(event.timestampRaw),
-        sortOrder: timelineTurns.length,
+        dedupeKey: `live:${event.role || ""}:${event.kind || ""}:${event.title || ""}:${event.timestampRaw || ""}`,
       });
     }
 
@@ -1665,10 +1874,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       const delegatedMessageId =
         session.delegated_id ||
         `${session.runtime_id || "runtime"}-${session.updated_at || session.last_event || "session"}`;
-      const latestEvents = Array.isArray(session.latest_events) ? session.latest_events : [];
-      if (latestEvents.length === 0) {
-        timelineTurns.push({
+      const latestEvents = asList(session.latest_events);
+      const meaningfulEvents = latestEvents.filter(event => !isIgnorableAgentRuntimeEvent(event));
+      if (meaningfulEvents.length === 0) {
+        pushTurn({
           id: `delegated-${delegatedMessageId}`,
+          dedupeKey: `delegated:${delegatedMessageId}`,
           role: "runtime",
           roleLabel: runtimeLabel(session.runtime_id),
           roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
@@ -1680,71 +1891,116 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           detail:
             session.heartbeat_status === "stale"
               ? "Heartbeat is stale. Builder runtime view can inspect the lane in detail."
-              : session.execution_target_detail || session.execution_root || "Delegated runtime lane is being supervised from Fluxio.",
+              : session.execution_target_detail ||
+                session.execution_root ||
+                "Delegated runtime lane is being supervised from Fluxio.",
           meta: timestampLabel(session.updated_at),
+          timestampRaw: session.updated_at,
           tone:
             session.heartbeat_status === "stale"
               ? "warn"
               : session.status === "failed"
                 ? "bad"
                 : "neutral",
+          emphasis: session.status === "failed" || session.heartbeat_status === "stale",
           chips: [
             titleizeToken(session.status || "unknown"),
             session.execution_target ? titleizeToken(session.execution_target) : "",
           ].filter(Boolean),
-          sortValue: timeValue(session.updated_at),
-          sortOrder: timelineTurns.length,
         });
       }
 
-      for (const [index, event] of latestEvents.slice(-4).entries()) {
-        timelineTurns.push({
+      for (const [index, event] of meaningfulEvents.slice(-4).entries()) {
+        const processMessage = isProcessRuntimeKind(event.kind);
+        pushTurn({
           id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
+          dedupeKey: `delegated-event:${delegatedMessageId}:${event.event_id || event.message || index}`,
           role: "runtime",
           roleLabel: runtimeLabel(session.runtime_id),
           roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
-          label: titleizeToken(event.kind || "runtime event"),
+          label: processMessage ? "Process message" : titleizeToken(event.kind || "runtime event"),
           title: event.message || "Runtime event",
           detail:
             event.detail ||
-            session.execution_target_detail ||
-            "Delegated runtime supervision is still flowing into the thread.",
+            (processMessage
+              ? session.execution_target_detail || "Delegated runtime process output."
+              : session.execution_target_detail ||
+                "Delegated runtime supervision is still flowing into the thread."),
+          meta: timestampLabel(event.created_at || session.updated_at),
+          timestampRaw: event.created_at || session.updated_at,
           tone:
             event.status === "failed"
               ? "bad"
               : /approval|blocked|stale/i.test(`${event.kind || ""} ${event.message || ""}`)
                 ? "warn"
                 : "neutral",
+          processMessage,
+          emphasis:
+            processMessage ||
+            event.status === "failed" ||
+            /approval|blocked|error/i.test(`${event.kind || ""} ${event.message || ""}`),
           chips: [
             session.status ? titleizeToken(session.status) : "",
             session.execution_target ? titleizeToken(session.execution_target) : "",
             event.status ? titleizeToken(event.status) : "",
           ].filter(Boolean),
-          sortValue: timeValue(event.created_at || session.updated_at),
-          sortOrder: timelineTurns.length,
         });
       }
     }
 
+    for (const activity of asList(snapshot.activity).slice(0, 6)) {
+      const kind = activity?.kind || "activity";
+      const role = /bridge|app/i.test(kind)
+        ? "bridge"
+        : /approval|question/i.test(kind)
+          ? "queue"
+          : /runtime|delegate|verification|activity/i.test(kind)
+            ? "runtime"
+            : "system";
+      pushTurn({
+        id: `activity-${kind}-${activity?.timestamp || activity?.message}`,
+        dedupeKey: `activity:${kind}:${activity?.message || ""}:${activity?.timestamp || ""}`,
+        role,
+        roleLabel:
+          role === "bridge"
+            ? "Bridge"
+            : role === "queue"
+              ? "Needs attention"
+              : role === "runtime"
+                ? "Runtime"
+                : "Fluxio",
+        roleIcon: role === "bridge" ? "⌁" : role === "queue" ? "!" : role === "runtime" ? "◇" : "·",
+        label: titleizeToken(kind),
+        title: activity?.message || "Activity update",
+        detail: activity?.detail || "",
+        meta: timestampLabel(activity?.timestamp),
+        timestampRaw: activity?.timestamp,
+        tone: role === "queue" ? "warn" : activity?.tone || "neutral",
+      });
+    }
+
     for (const message of data.openClawMessages) {
-      timelineTurns.push({
+      pushTurn({
         id: `openclaw-${message.id}`,
+        dedupeKey: `openclaw:${message.id || message.createdAt || message.detail}`,
         role: "runtime",
         roleLabel: "OpenClaw",
         roleIcon: "◇",
-        label: "OpenClaw",
+        label: "Process message",
         title: message.detail,
         detail: message.meta || "Gateway message",
         meta: timestampLabel(message.createdAt),
+        timestampRaw: message.createdAt,
         tone: message.tone || "neutral",
-        sortValue: timeValue(message.createdAt),
-        sortOrder: timelineTurns.length,
+        processMessage: true,
+        emphasis: true,
       });
     }
 
     for (const session of bridgeSessions.slice(0, 3)) {
-      timelineTurns.push({
+      pushTurn({
         id: `bridge-${session.session_id || session.app_id}`,
+        dedupeKey: `bridge:${session.session_id || session.app_id}:${session.last_seen_at || ""}`,
         role: "bridge",
         roleLabel: session.app_name || "Connected app",
         roleIcon: "⌁",
@@ -1757,6 +2013,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           session.notes?.[0] ||
           "Bridge session is connected and reporting.",
         meta: timestampLabel(session.last_seen_at),
+        timestampRaw: session.last_seen_at,
         tone:
           session.bridge_health === "healthy"
             ? "neutral"
@@ -1770,24 +2027,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             ? `${session.active_tasks.length} active`
             : "",
         ].filter(Boolean),
-        sortValue: timeValue(session.last_seen_at),
-        sortOrder: timelineTurns.length,
-      });
-    }
-
-    for (const event of (viewModel.thread.events || []).slice(0, 6)) {
-      const runtimeLike = ["runtime", "activity"].includes(event.kind);
-      timelineTurns.push({
-        id: `event-${event.kind}-${event.title}-${event.meta}`,
-        role: runtimeLike ? "runtime" : "system",
-        roleIcon: runtimeLike ? "◇" : "·",
-        label: titleizeToken(event.kind || "event"),
-        title: event.title,
-        detail: event.detail,
-        meta: timestampLabel(event.meta),
-        tone: event.tone || "neutral",
-        sortValue: timeValue(event.meta),
-        sortOrder: timelineTurns.length,
       });
     }
 
@@ -1803,24 +2042,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           return leftHasTime ? -1 : 1;
         }
         return left.sortOrder - right.sortOrder;
-      })
-      .map(({ sortOrder, sortValue, ...item }) => item);
-
-    if (sortedTurns.length === 0 && mission) {
-      sortedTurns.push({
-        id: "agent-waiting",
-        role: "system",
-        roleIcon: "·",
-        label: "Waiting",
-        title: "The mission is waiting for the next turn.",
-        detail: "Follow-ups, runtime output, approvals, and proof changes will land here as the run progresses.",
-        tone: "neutral",
       });
-    }
 
-    items.push(...sortedTurns);
-
-    return items;
+    return sortedTurns
+      .filter(item => !item.heartbeat)
+      .map(({ sortOrder, sortValue, ...item }) => item);
   }, [
     bridgeSessions,
     data.openClawMessages,
@@ -1830,9 +2056,26 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     liveControlEvents,
     mission,
     operatorNotes,
-    viewModel.thread.events,
-    viewModel.thread.sections,
+    snapshot.activity,
   ]);
+  const agentHasTurns = agentTranscript.length > 0;
+  const agentIdleState = !mission ? "no-mission" : agentHasTurns ? "active" : "no-turns";
+  const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Fluxio workspace";
+  const agentComposerLabel = !mission ? "Mission prompt" : "Follow-up or note";
+  const agentComposerPlaceholder = !mission
+    ? workspaces.length > 0
+      ? "Describe the next mission you want Fluxio to run."
+      : "Add a workspace, then describe the next mission you want Fluxio to run."
+    : openClawRuntimeActive
+      ? "Send a direct follow-up to the runtime, or keep a local operator note."
+      : viewModel.thread.composerPlaceholder;
+  const handleAgentIdlePrimaryAction = useCallback(() => {
+    if (workspaces.length === 0) {
+      setShowWorkspaceDialog(true);
+      return;
+    }
+    openMissionDialog();
+  }, [openMissionDialog, workspaces.length]);
 
   const drawerItems = useMemo(() => {
     const items = [
@@ -1893,6 +2136,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
     return items;
   }, [uiMode, viewModel]);
+  const visibleDrawerItems = useMemo(
+    () =>
+      uiMode === "builder"
+        ? drawerItems
+        : drawerItems.filter(item => agentVisibleDrawers.includes(item.id)),
+    [agentVisibleDrawers, drawerItems, uiMode],
+  );
 
   const renderDrawerPanel = () => {
     if (activeDrawer === "queue") {
@@ -3288,7 +3538,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               label="Help"
               onClick={() => {
                 setUiMode("agent");
-                setActiveDrawer("context");
+                setActiveDrawer(agentBlockedState.defaultDrawer);
               }}
             />
           </div>
@@ -3318,7 +3568,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   );
                   return;
                 }
-                setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
+                setActiveDrawer(agentBlockedState.defaultDrawer);
               }}
               role="tab"
               type="button"
@@ -3364,7 +3614,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 onClick={() => {
                   markAction("rail:operator");
                   setUiMode("agent");
-                  setActiveDrawer(viewModel.drawers.queue.urgent ? "queue" : "context");
+                  setActiveDrawer(agentBlockedState.defaultDrawer);
                 }}
               />
               {uiMode === "builder" ? (
@@ -3587,49 +3837,28 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </div>
               </section>
             ) : (
-              <section className="fluxio-empty agent-shell">
-                <section className="mode-story mode-agent">
-                  <strong>Agent mode keeps launch calm.</strong>
-                  <p>Pick a workspace, launch a mission, and keep the UI focused on the thread instead of the tooling.</p>
-                </section>
-                <p className="eyebrow">Readiness</p>
-                <h1>{viewModel.emptyState.title}</h1>
-                <p>{viewModel.emptyState.summary}</p>
-                <div className="empty-confidence">
-                  <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
-                    {viewModel.emptyState.confidenceLabel}
-                  </strong>
-                  <p>{viewModel.emptyState.confidencePhase}</p>
-                  <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
-                  <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
-                </div>
-                <ul>
-                  {viewModel.emptyState.readiness.map(item => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-                <div className="fluxio-empty-actions">
-                  <ActionButton
-                    onClick={() => {
-                      if (workspaces.length === 0) {
-                        setShowWorkspaceDialog(true);
-                        return;
-                      }
-                      openMissionDialog();
-                    }}
-                    variant="primary"
-                  >
-                    {viewModel.emptyState.launchEntryLabel}
-                  </ActionButton>
-                  {quickSetupActions.map(action => (
-                    <ActionButton
-                      key={action.actionId}
-                      onClick={() => void runWorkspaceAction("setup", action.actionId)}
-                    >
-                      {action.label}
+              <section className="thread-shell agent-shell agent-idle-shell">
+                <header className="thread-head agent-thread-head agent-title-head">
+                  <h1>{agentCenterTitle}</h1>
+                </header>
+
+                <form
+                  className="thread-composer agent-composer agent-chat-composer agent-idle-composer"
+                  onSubmit={event => event.preventDefault()}
+                >
+                  <label htmlFor="thread-note-idle">{agentComposerLabel}</label>
+                  <textarea
+                    id="thread-note-idle"
+                    onChange={event => setOperatorDraft(event.target.value)}
+                    placeholder={agentComposerPlaceholder}
+                    value={operatorDraft}
+                  />
+                  <div className="thread-composer-actions">
+                    <ActionButton onClick={handleAgentIdlePrimaryAction} type="button" variant="primary">
+                      {workspaces.length > 0 ? "Launch mission" : "Add workspace"}
                     </ActionButton>
-                  ))}
-                </div>
+                  </div>
+                </form>
               </section>
             )
           ) : uiMode === "builder" ? (
@@ -3672,69 +3901,164 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
               <div className="builder-workbench-grid">
                 <section className="builder-primary-column">
-                  <article className="builder-panel builder-panel-hero">
-                    <p className="eyebrow">Build posture</p>
-                    <div className="thread-chip-row">
-                      {viewModel.thread.chips.map(item => (
-                        <StatusPill key={`builder-chip-${item.label}`} tone={item.tone}>
-                          {item.label}
-                        </StatusPill>
-                      ))}
-                      <StatusPill strong tone={viewModel.thread.status.tone}>
-                        {viewModel.thread.status.label}
-                      </StatusPill>
+                  <article className="builder-panel builder-panel-hero builder-command-deck">
+                    <div className="builder-command-head">
+                      <div className="builder-command-copy">
+                        <p className="eyebrow">{builderBoard.headline}</p>
+                        <div className="thread-chip-row">
+                          {viewModel.thread.chips.map(item => (
+                            <StatusPill key={`builder-chip-${item.label}`} tone={item.tone}>
+                              {item.label}
+                            </StatusPill>
+                          ))}
+                          <StatusPill strong tone={viewModel.thread.status.tone}>
+                            {viewModel.thread.status.label}
+                          </StatusPill>
+                        </div>
+                        <h2>{viewModel.drawers.builder.confidence.label}</h2>
+                        <p>{builderBoard.summary}</p>
+                      </div>
+
+                      <div className="builder-board-metrics">
+                        {builderBoard.metrics.map(item => (
+                          <article className={`builder-metric-card ${toneClass(item.tone)}`} key={item.id}>
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                            <p>{item.detail}</p>
+                          </article>
+                        ))}
+                      </div>
                     </div>
-                    <h2>{viewModel.drawers.builder.confidence.label}</h2>
-                    <p>Builder keeps the operational controls up front so you can intervene, tune, or verify without leaving the mission context.</p>
-                    <div className="milestone-strip">
-                      {viewModel.drawers.builder.confidence.milestones.slice(0, 3).map(item => (
-                        <article className="milestone-card" key={`builder-milestone-${item.id}`}>
-                          <span>{item.label}</span>
-                          <strong>{item.percent}%</strong>
-                          <p>{item.detail}</p>
-                        </article>
-                      ))}
+
+                    <div className="drawer-actions">
+                      <ActionButton onClick={() => setActiveDrawer("runtime")} variant="primary">
+                        Runtime studio
+                      </ActionButton>
+                      <ActionButton onClick={() => setActiveDrawer("queue")}>Queue review</ActionButton>
+                      <ActionButton onClick={() => setActiveDrawer("proof")}>Proof review</ActionButton>
                     </div>
                   </article>
 
                   <article className="builder-panel">
                     <div className="section-header">
                       <div className="section-title-block">
-                        <p className="eyebrow">Mission supervision</p>
-                        <h2>Control surfaces in context</h2>
+                        <p className="eyebrow">Active conversations</p>
+                        <h2>All live mission threads</h2>
                       </div>
                     </div>
-                    <div className="builder-thread-list">
-                      {viewModel.thread.sections.slice(0, 5).map(item => (
-                        <article className={`builder-thread-item ${toneClass(item.tone || "neutral")}`} key={`builder-thread-${item.id}`}>
-                          <span>{item.label}</span>
-                          <strong>{item.body}</strong>
-                          {item.detail ? <p>{item.detail}</p> : null}
-                        </article>
-                      ))}
-                    </div>
+                    {builderBoard.activeConversations.length > 0 ? (
+                      <div className="builder-conversation-grid">
+                        {builderBoard.activeConversations.map(item => (
+                          <button
+                            className={`builder-conversation-card ${toneClass(item.tone)} ${item.selected ? "active" : ""}`.trim()}
+                            key={item.missionId}
+                            onClick={() => setSelectedMissionId(item.missionId)}
+                            type="button"
+                          >
+                            <div className="builder-conversation-top">
+                              <div>
+                                <span>{item.runtime}</span>
+                                <h3>{item.title}</h3>
+                              </div>
+                              <StatusPill strong tone={item.blocked ? "warn" : item.tone}>
+                                {item.statusLabel}
+                              </StatusPill>
+                            </div>
+                            <p>{item.current}</p>
+                            <div className="builder-conversation-meta">
+                              {item.pendingApprovals > 0 ? (
+                                <span>{item.pendingApprovals} approval{item.pendingApprovals === 1 ? "" : "s"}</span>
+                              ) : null}
+                              {item.verificationFailures > 0 ? (
+                                <span>{item.verificationFailures} verification issue{item.verificationFailures === 1 ? "" : "s"}</span>
+                              ) : null}
+                              {item.delegatedSessions > 0 ? (
+                                <span>{item.delegatedSessions} delegated lane{item.delegatedSessions === 1 ? "" : "s"}</span>
+                              ) : null}
+                              {!item.pendingApprovals && !item.verificationFailures && !item.delegatedSessions ? (
+                                <span>No active blocker</span>
+                              ) : null}
+                            </div>
+                            <div className="builder-conversation-foot">
+                              <span>Next: {item.next}</span>
+                              <span>{item.updatedAt ? timestampLabel(item.updatedAt) : item.selected ? "Selected" : "Focus thread"}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="fluxio-empty-copy">
+                        No active conversations yet. Launch a mission and Builder will track every live thread here.
+                      </p>
+                    )}
                   </article>
 
-                  <article className="builder-panel">
-                    <div className="section-header">
-                      <div className="section-title-block">
-                        <p className="eyebrow">Runtime ledger</p>
-                        <h2>Recent activity and supervision</h2>
+                  <div className="builder-board-grid">
+                    <article className="builder-panel">
+                      <div className="section-header">
+                        <div className="section-title-block">
+                          <p className="eyebrow">What Happens Next</p>
+                          <h2>Predicted checkpoints across live threads</h2>
+                        </div>
                       </div>
-                    </div>
-                    <div className="thread-event-list">
-                      {threadEvents.slice(0, 6).map(item => (
-                        <article className={`thread-event ${toneClass(item.tone || "neutral")}`} key={`builder-event-${item.kind}-${item.title}-${item.meta}`}>
-                          <div className="thread-event-top">
-                            <span>{titleizeToken(item.kind || "event")}</span>
-                            <span>{timestampLabel(item.meta)}</span>
-                          </div>
-                          <strong>{item.title}</strong>
-                          {item.detail ? <p>{item.detail}</p> : null}
-                        </article>
-                      ))}
-                    </div>
-                  </article>
+                      {builderBoard.nextUp.length > 0 ? (
+                        <div className="builder-digest-list">
+                          {builderBoard.nextUp.map(item => (
+                            <button
+                              className={`builder-digest-item ${toneClass(item.tone)} ${item.selected ? "active" : ""}`.trim()}
+                              key={`next-${item.missionId}`}
+                              onClick={() => setSelectedMissionId(item.missionId)}
+                              type="button"
+                            >
+                              <div className="builder-digest-top">
+                                <span>{item.runtime}</span>
+                                <span>{item.updatedAt ? timestampLabel(item.updatedAt) : item.statusLabel}</span>
+                              </div>
+                              <strong>{item.title}</strong>
+                              <p>{item.summary}</p>
+                              {item.detail ? <p className="builder-digest-detail">{item.detail}</p> : null}
+                              <div className="builder-digest-meta">
+                                <span>{item.statusLabel}</span>
+                                <span>{item.selected ? "Current thread" : "Open thread"}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="fluxio-empty-copy">
+                          Launch a mission to see predicted checkpoints and queued follow-up work.
+                        </p>
+                      )}
+                    </article>
+
+                    <article className="builder-panel">
+                      <div className="section-header">
+                        <div className="section-title-block">
+                          <p className="eyebrow">While You Were Away</p>
+                          <h2>Recent mission and runtime movement</h2>
+                        </div>
+                      </div>
+                      {builderBoard.whileAway.length > 0 ? (
+                        <div className="builder-digest-list">
+                          {builderBoard.whileAway.map(item => (
+                            <article className={`builder-digest-item ${toneClass(item.tone)}`} key={item.id}>
+                              <div className="builder-digest-top">
+                                <span>{item.label}</span>
+                                <span>{item.timestamp ? timestampLabel(item.timestamp) : ""}</span>
+                              </div>
+                              <strong>{item.missionTitle}</strong>
+                              <p>{item.message}</p>
+                              {item.detail ? <p className="builder-digest-detail">{item.detail}</p> : null}
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="fluxio-empty-copy">
+                          Activity summaries will appear here as missions, approvals, and runtime events land.
+                        </p>
+                      )}
+                    </article>
+                  </div>
 
                   <form className="builder-note-panel" onSubmit={handleOperatorNote}>
                     <label htmlFor="builder-thread-note">Builder note</label>
@@ -3756,6 +4080,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </section>
 
                 <aside className="builder-secondary-column">
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Selected thread</p>
+                    <h3>{builderBoard.selectedFocus?.title || viewModel.thread.title}</h3>
+                    <div className="builder-inline-list">
+                      <span>Current: {builderBoard.selectedFocus?.current || "No active focus."}</span>
+                      <span>Next: {builderBoard.selectedFocus?.next || "Awaiting next checkpoint."}</span>
+                      <span>Last movement: {builderBoard.selectedFocus?.lastMovement || "No movement recorded."}</span>
+                    </div>
+                    <p>{builderBoard.selectedFocus?.proof || viewModel.thread.summary}</p>
+                    <ActionButton onClick={() => setActiveDrawer("context")}>Open context</ActionButton>
+                  </article>
+
                   <article className="builder-panel builder-panel-focus">
                     <p className="eyebrow">Profiles</p>
                     <h3>{titleizeToken(workspaceProfileForm.userProfile)}</h3>
@@ -3779,13 +4115,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime</ActionButton>
                   </article>
 
-                  <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Skills</p>
-                    <h3>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready</h3>
-                    <p>{viewModel.drawers.builder.skillStudio.nextQualityActions[0] || "Skill quality is stable."}</p>
-                    <ActionButton onClick={() => setActiveDrawer("skills")}>Open skills</ActionButton>
-                  </article>
-
                   <article className="builder-panel">
                     <p className="eyebrow">Workflow</p>
                     <h3>
@@ -3807,35 +4136,30 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             </section>
           ) : (
             <section className="thread-shell agent-shell">
-              <header className="thread-head agent-thread-head agent-conversation-head">
-                <h1>{viewModel.thread.title}</h1>
-                <div className="agent-thread-meta">
-                  <span>{workspace?.name || "Workspace"}</span>
-                  <span>{viewModel.thread.status.label}</span>
-                  <span>{previewLabel(previewMode, data.previewMeta)}</span>
-                  {lastPushReason ? <span>{lastPushReason}</span> : null}
-                </div>
+              <header className="thread-head agent-thread-head agent-title-head">
+                <h1>{agentCenterTitle}</h1>
               </header>
 
-              <section className="agent-chat-stage">
-                <section className="agent-transcript-shell">
-                  <div className="agent-transcript">
-                    {agentTranscript.map(item => (
-                      <TranscriptMessage item={item} key={item.id} />
-                    ))}
-                  </div>
-                </section>
+              <section className={`agent-chat-stage ${agentIdleState === "no-turns" ? "agent-chat-stage-empty" : ""}`.trim()}>
+                {agentHasTurns ? (
+                  <section className="agent-transcript-shell">
+                    <div className="agent-transcript">
+                      {agentTranscript.map(item => (
+                        <TranscriptMessage item={item} key={item.id} />
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
 
-                <form className="thread-composer agent-composer agent-chat-composer" onSubmit={event => event.preventDefault()}>
-                  <label htmlFor="thread-note">Follow-up or note</label>
+                <form
+                  className={`thread-composer agent-composer agent-chat-composer ${agentIdleState === "no-turns" ? "agent-idle-composer" : ""}`.trim()}
+                  onSubmit={event => event.preventDefault()}
+                >
+                  <label htmlFor="thread-note">{agentComposerLabel}</label>
                   <textarea
                     id="thread-note"
                     onChange={event => setOperatorDraft(event.target.value)}
-                    placeholder={
-                      openClawRuntimeActive
-                        ? "Send a direct follow-up to the runtime, or keep a local operator note."
-                        : viewModel.thread.composerPlaceholder
-                    }
+                    placeholder={agentComposerPlaceholder}
                     value={operatorDraft}
                   />
                   <div className="thread-composer-actions">
@@ -3844,20 +4168,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </ActionButton>
                     <ActionButton onClick={handleOperatorNote} type="button">
                       Save note
-                    </ActionButton>
-                    <ActionButton
-                      disabled={!missionActionAvailable(mission, "pause")}
-                      onClick={() => void runMissionAction("pause", "Mission pause requested.")}
-                      type="button"
-                    >
-                      Pause
-                    </ActionButton>
-                    <ActionButton
-                      disabled={!missionActionAvailable(mission, "resume")}
-                      onClick={() => void runMissionAction("resume", "Mission resume requested.")}
-                      type="button"
-                    >
-                      Resume
                     </ActionButton>
                   </div>
                 </form>
@@ -3869,7 +4179,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         {showPersistentDrawer ? (
           <aside className={`fluxio-drawer ${activeDrawer ? "open" : ""}`.trim()}>
             <div className="drawer-toggle-row">
-              {drawerItems.map(item => (
+              {visibleDrawerItems.map(item => (
                 <DrawerToggle
                   active={activeDrawer === item.id}
                   count={item.count}

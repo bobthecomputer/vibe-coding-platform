@@ -1250,6 +1250,273 @@ function deriveRemaining(mission) {
   return "Unknown";
 }
 
+function timeValue(value) {
+  if (!value) {
+    return Number.NaN;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function latestTimestamp(...values) {
+  let best = "";
+  let bestValue = Number.NEGATIVE_INFINITY;
+  for (const value of values.flat()) {
+    const score = timeValue(value);
+    if (Number.isFinite(score) && score >= bestValue) {
+      best = String(value);
+      bestValue = score;
+    }
+  }
+  return best;
+}
+
+function isTerminalMissionStatus(status) {
+  return ["completed", "failed", "cancelled", "stopped"].includes(
+    String(status || "").toLowerCase(),
+  );
+}
+
+function latestMeaningfulDelegatedEvent(mission) {
+  for (const session of asList(mission?.delegated_runtime_sessions).slice().reverse()) {
+    const event = asList(session?.latest_events)
+      .slice()
+      .reverse()
+      .find(item => item?.message && item?.kind !== "session.heartbeat");
+    if (event) {
+      return event;
+    }
+  }
+  return null;
+}
+
+function deriveMissionLatestTimestamp(mission) {
+  return latestTimestamp(
+    mission?.updated_at,
+    mission?.state?.updated_at,
+    mission?.missionLoop?.updatedAt,
+    asList(mission?.action_history).map(item => item?.executed_at),
+    asList(mission?.plan_revisions).map(item => item?.created_at),
+    asList(mission?.delegated_runtime_sessions).map(item => item?.updated_at),
+  );
+}
+
+function deriveMissionLastMovement(mission) {
+  const latestAction = asList(mission?.action_history).slice(-1)[0];
+  if (latestAction?.result?.result_summary || latestAction?.proposal?.title) {
+    return (
+      latestAction?.result?.result_summary ||
+      latestAction?.result?.error ||
+      latestAction?.proposal?.title
+    );
+  }
+  const delegatedEvent = latestMeaningfulDelegatedEvent(mission);
+  if (delegatedEvent?.message) {
+    return delegatedEvent.message;
+  }
+  return (
+    mission?.state?.last_plan_summary ||
+    mission?.missionLoop?.continuityDetail ||
+    mission?.proof?.summary ||
+    "Waiting for the next mission movement."
+  );
+}
+
+function missionNeedsAttention(mission) {
+  return Boolean(
+    asList(mission?.proof?.pending_approvals).length > 0 ||
+      asList(mission?.state?.verification_failures).length > 0 ||
+      ["needs_approval", "blocked", "verification_failed", "queued"].includes(
+        mission?.state?.status || "",
+      ),
+  );
+}
+
+function activityTone(activity) {
+  const kind = String(activity?.kind || "").toLowerCase();
+  const action = String(activity?.metadata?.action || "").toLowerCase();
+  const message = `${kind} ${activity?.message || ""}`;
+  if (/failed|error|verification_failed/.test(message)) {
+    return "bad";
+  }
+  if (kind === "approval.request" || kind === "mission.queued" || /approval|blocked|queued/.test(message)) {
+    return "warn";
+  }
+  if (action === "complete" || /completed|healthy|ready/.test(message)) {
+    return "good";
+  }
+  return "neutral";
+}
+
+function deriveActivityDetail(activity, missionById) {
+  const metadata = activity?.metadata || {};
+  const missionTitle =
+    missionById.get(activity?.mission_id)?.title ||
+    missionById.get(activity?.mission_id)?.objective ||
+    "";
+  const blockingMissionTitle =
+    missionById.get(metadata.blockingMissionId)?.title ||
+    missionById.get(metadata.blockingMissionId)?.objective ||
+    metadata.blockingMissionId ||
+    "";
+  return uniq([
+    missionTitle,
+    metadata.runtimeId ? runtimeLabel(metadata.runtimeId) : metadata.runtime_id ? runtimeLabel(metadata.runtime_id) : "",
+    metadata.queuePosition ? `Queue ${metadata.queuePosition}` : "",
+    metadata.action ? `Action ${titleizeToken(metadata.action)}` : "",
+    metadata.autopilotStatus ? titleizeToken(metadata.autopilotStatus) : "",
+    blockingMissionTitle ? `Blocked by ${blockingMissionTitle}` : "",
+  ]).join(" · ");
+}
+
+function deriveBuilderBoard({ mission, workspace, snapshot, confidence }) {
+  const workspaceId = workspace?.workspace_id || "";
+  const missions = asList(snapshot?.missions).filter(item =>
+    workspaceId ? item?.workspace_id === workspaceId : true,
+  );
+  const missionById = new Map(missions.map(item => [item?.mission_id, item]));
+  const activeMissions = missions.filter(item => !isTerminalMissionStatus(item?.state?.status));
+  const blockedCount = activeMissions.filter(item => missionNeedsAttention(item)).length;
+  const delegatedLaneCount = activeMissions.reduce(
+    (total, item) =>
+      total +
+      asList(item?.delegated_runtime_sessions).filter(
+        session => !["completed", "failed", "stopped"].includes(session?.status || ""),
+      ).length,
+    0,
+  );
+  const runtimeCount = new Set(activeMissions.map(item => item?.runtime_id).filter(Boolean)).size;
+  const selectedMissionId = mission?.mission_id || "";
+  const productionHarness =
+    snapshot?.harnessLab?.productionHarness || workspace?.preferred_harness || "fluxio_hybrid";
+
+  const activeConversations = activeMissions
+    .slice()
+    .sort((left, right) => {
+      const delta = timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left));
+      if (Number.isFinite(delta) && delta !== 0) {
+        return delta;
+      }
+      return String(left?.title || left?.objective || "").localeCompare(
+        String(right?.title || right?.objective || ""),
+      );
+    })
+    .map(item => {
+      const status = item?.state?.status || item?.missionLoop?.continuityState || "active";
+      return {
+        missionId: item?.mission_id || "",
+        title: item?.title || item?.objective || "Mission",
+        runtime: runtimeLabel(item?.runtime_id),
+        statusLabel: titleizeToken(status),
+        tone: missionStatusTone(item?.state?.status),
+        selected: item?.mission_id === selectedMissionId,
+        blocked: missionNeedsAttention(item),
+        current: deriveCurrentTask(item),
+        next: deriveNextCheckpoint(item),
+        lastMovement: deriveMissionLastMovement(item),
+        updatedAt: deriveMissionLatestTimestamp(item),
+        pendingApprovals: asList(item?.proof?.pending_approvals).length,
+        verificationFailures: asList(item?.state?.verification_failures).length,
+        delegatedSessions: asList(item?.delegated_runtime_sessions).filter(
+          session => !["completed", "failed", "stopped"].includes(session?.status || ""),
+        ).length,
+      };
+    });
+
+  const whileAway = asList(snapshot?.activity)
+    .filter(item => {
+      if (!item?.mission_id) {
+        return true;
+      }
+      const missionRow = missionById.get(item.mission_id);
+      return workspaceId ? missionRow?.workspace_id === workspaceId : true;
+    })
+    .slice(0, 10)
+    .map((item, index) => ({
+      id: `${item?.mission_id || "workspace"}-${item?.timestamp || index}-${item?.kind || "activity"}`,
+      missionId: item?.mission_id || "",
+      missionTitle:
+        missionById.get(item?.mission_id)?.title ||
+        missionById.get(item?.mission_id)?.objective ||
+        "Workspace activity",
+      label: titleizeToken(item?.kind || "activity"),
+      message: item?.message || "Activity update",
+      detail: deriveActivityDetail(item, missionById),
+      tone: activityTone(item),
+      timestamp: item?.timestamp || "",
+    }));
+
+  const nextUpSource = activeConversations.length > 0 ? activeConversations : [];
+  const nextUp = nextUpSource.slice(0, 8).map(item => ({
+    missionId: item.missionId,
+    title: item.title,
+    statusLabel: item.statusLabel,
+    runtime: item.runtime,
+    summary: item.next,
+    detail: item.blocked ? item.lastMovement : item.current,
+    tone: item.blocked ? "warn" : item.tone,
+    updatedAt: item.updatedAt,
+    selected: item.selected,
+  }));
+
+  const summary =
+    activeConversations.length > 0
+      ? `${activeConversations.length} active conversation${activeConversations.length === 1 ? "" : "s"} across ${Math.max(runtimeCount, 1)} runtime lane${Math.max(runtimeCount, 1) === 1 ? "" : "s"}. ${blockedCount > 0 ? `${blockedCount} need operator attention.` : "No operator block is active right now."}`
+      : "No active conversations. Builder stays ready for launch, runtime tuning, and review.";
+
+  return {
+    headline:
+      activeConversations.length > 0
+        ? "Builder command deck"
+        : "Builder readiness deck",
+    summary,
+    metrics: [
+      {
+        id: "active",
+        label: "Active conversations",
+        value: `${activeConversations.length}`,
+        detail: activeConversations.length > 0 ? "Visible in the control board" : "Launch a mission to start the board",
+        tone: activeConversations.length > 0 ? "good" : "neutral",
+      },
+      {
+        id: "blocked",
+        label: "Need attention",
+        value: `${blockedCount}`,
+        detail: blockedCount > 0 ? "Approvals, queue, or verification boundaries are open" : "No active blockers",
+        tone: blockedCount > 0 ? "warn" : "good",
+      },
+      {
+        id: "delegated",
+        label: "Delegated lanes",
+        value: `${delegatedLaneCount}`,
+        detail: delegatedLaneCount > 0 ? "Hermes/OpenClaw sessions in flight" : "No live delegated lane right now",
+        tone: delegatedLaneCount > 0 ? "neutral" : "warn",
+      },
+      {
+        id: "harness",
+        label: "Production harness",
+        value: titleizeToken(productionHarness),
+        detail: snapshot?.harnessLab?.recommendation || confidence.phase,
+        tone: confidence.tone,
+      },
+    ],
+    activeConversations,
+    whileAway,
+    nextUp,
+    selectedFocus: mission
+      ? {
+          missionId: mission.mission_id,
+          title: mission.title || mission.objective || "Mission",
+          current: deriveCurrentTask(mission),
+          next: deriveNextCheckpoint(mission),
+          lastMovement: deriveMissionLastMovement(mission),
+          proof: deriveVerificationSummary(mission),
+          updatedAt: deriveMissionLatestTimestamp(mission),
+        }
+      : null,
+  };
+}
+
 export function buildRecentRuns(snapshot) {
   const missionRuns = asList(snapshot?.missions)
     .slice()
@@ -1317,6 +1584,7 @@ export function buildMissionControlModel({
     workflowStudio,
     builderOps,
   });
+  const builderBoard = deriveBuilderBoard({ mission, workspace, snapshot, confidence });
   const proofTone =
     asList(mission?.state?.verification_failures).length > 0
       ? "bad"
@@ -1554,6 +1822,7 @@ export function buildMissionControlModel({
         featureTruth,
         stateAudit,
         events: events.slice(0, 10),
+        board: builderBoard,
         mode: uiMode,
       },
     },
