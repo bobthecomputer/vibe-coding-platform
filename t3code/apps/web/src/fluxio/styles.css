@@ -456,6 +456,69 @@ textarea {
   letter-spacing: 0.06em;
 }
 
+.builder-sidebar-metrics,
+.builder-sidebar-nexus-list {
+  display: grid;
+  gap: 8px;
+}
+
+.builder-sidebar-card,
+.builder-sidebar-nexus,
+.builder-sidebar-bridge {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 72%),
+    #202025;
+  padding: 12px;
+}
+
+.builder-sidebar-card span,
+.builder-sidebar-nexus span,
+.builder-sidebar-bridge span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.builder-sidebar-card strong,
+.builder-sidebar-nexus strong,
+.builder-sidebar-bridge strong {
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.builder-sidebar-card p,
+.builder-sidebar-nexus p,
+.builder-sidebar-bridge p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+button.builder-sidebar-nexus {
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+button.builder-sidebar-nexus:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.builder-sidebar-nexus em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
 .fluxio-main {
   overflow: auto;
   scrollbar-gutter: stable;
@@ -872,6 +935,13 @@ button.builder-digest-item:hover {
   color: var(--muted);
 }
 
+button.builder-thread-item {
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
 .builder-note-panel {
   display: grid;
   gap: 8px;
@@ -1216,6 +1286,92 @@ button.builder-digest-item:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.agent-message.highlighted {
+  border-color: rgba(142, 203, 111, 0.36);
+  box-shadow: 0 0 0 1px rgba(142, 203, 111, 0.14), 0 14px 34px rgba(0, 0, 0, 0.2);
+}
+
+.agent-message.pinned {
+  border-color: rgba(245, 158, 11, 0.26);
+}
+
+.agent-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.agent-message-actions .action-btn {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.agent-nexus-strip {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 860px);
+  margin: 0 auto;
+}
+
+.agent-nexus-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-nexus-chip {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 72%),
+    #1d1d22;
+  color: var(--text);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.agent-nexus-chip.pinned {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.agent-nexus-chip span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.agent-nexus-chip strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.agent-control-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-control-strip {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 12px;
+}
+
+.agent-control-strip p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .builder-inline {
@@ -1851,6 +2007,10 @@ button.builder-digest-item:hover {
   .agent-runtime-strip {
     grid-template-columns: 1fr;
   }
+
+  .agent-control-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1120px) {
@@ -1936,7 +2096,8 @@ button.builder-digest-item:hover {
   }
 
   .builder-studio-ribbon,
-  .context-grid.compact-metrics {
+  .context-grid.compact-metrics,
+  .agent-control-grid {
     grid-template-columns: 1fr;
   }
 

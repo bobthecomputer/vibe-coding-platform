@@ -199,6 +199,14 @@ function isProcessRuntimeKind(kind) {
   );
 }
 
+function isTraceRuntimeKind(kind) {
+  const normalized = String(kind || "").toLowerCase();
+  return (
+    isProcessRuntimeKind(normalized) ||
+    ["runtime.phase", "runtime.plan", "runtime.thinking", "runtime.reasoning"].includes(normalized)
+  );
+}
+
 function isIgnorableAgentRuntimeEvent(event) {
   return isHeartbeatRuntimeKind(event?.kind);
 }
@@ -272,7 +280,16 @@ function ThreadSection({ item }) {
   );
 }
 
-function TranscriptMessage({ item }) {
+function TranscriptMessage({
+  item,
+  highlighted = false,
+  pinned = false,
+  showTrace = false,
+  onPinNexus = () => {},
+  onSteer = () => {},
+  onMemory = () => {},
+  onValidate = () => {},
+}) {
   const role = item.role || "fluxio";
   const roleLabel =
     item.roleLabel ||
@@ -299,7 +316,8 @@ function TranscriptMessage({ item }) {
 
   return (
     <article
-      className={`agent-message role-${role} ${toneClass(item.tone || "neutral")} ${item.emphasis ? "emphasis" : ""} ${item.processMessage ? "process-message" : ""}`.trim()}
+      className={`agent-message role-${role} ${toneClass(item.tone || "neutral")} ${item.emphasis ? "emphasis" : ""} ${item.processMessage ? "process-message" : ""} ${highlighted ? "highlighted" : ""} ${pinned ? "pinned" : ""}`.trim()}
+      id={item.id}
     >
       <div className="agent-message-top">
         <div className="agent-message-role">
@@ -312,7 +330,7 @@ function TranscriptMessage({ item }) {
       {item.title ? <h3>{item.title}</h3> : null}
       {item.detail ? <p>{item.detail}</p> : null}
       {item.technicalDetail ? (
-        <details className="agent-message-details">
+        <details className="agent-message-details" open={showTrace}>
           <summary>{item.technicalSummary || "Technical detail"}</summary>
           <p>{item.technicalDetail}</p>
         </details>
@@ -326,6 +344,22 @@ function TranscriptMessage({ item }) {
           ))}
         </div>
       ) : null}
+      <div className="agent-message-actions">
+        {(item.role === "queue" || item.tone === "bad" || item.processMessage) ? (
+          <ActionButton onClick={() => onValidate(item)} type="button">
+            Validate
+          </ActionButton>
+        ) : null}
+        <ActionButton onClick={() => onSteer(item)} type="button">
+          Steer
+        </ActionButton>
+        <ActionButton onClick={() => onMemory(item)} type="button">
+          Memory
+        </ActionButton>
+        <ActionButton onClick={() => onPinNexus(item.id)} type="button">
+          {pinned ? "Unpin nexus" : "Pin nexus"}
+        </ActionButton>
+      </div>
     </article>
   );
 }
@@ -533,7 +567,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       return null;
     }
     const kind = row.kind || "runtime.event";
-    const processMessage = isProcessRuntimeKind(kind);
+    const processMessage = isTraceRuntimeKind(kind);
     const heartbeat = isHeartbeatRuntimeKind(kind);
     const detail = deltaDetail(row);
     return {
@@ -1324,8 +1358,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Select a workspace before saving route controls.", "warn");
       return;
     }
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Route controls are staged in preview mode.", "info");
+      return;
+    }
     await saveWorkspacePolicy();
-  }, [agentRouteRole, markAction, pushToast, saveWorkspacePolicy, workspace]);
+  }, [agentRouteRole, markAction, previewMode, pushToast, saveWorkspacePolicy, workspace]);
 
   const focusTranscriptTurn = useCallback(turnId => {
     if (!turnId) {
@@ -1679,11 +1717,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       if (mission && agentRuntimeFocus !== "all") {
         steeringLines.push(`Runtime preference: ${runtimeLabel(agentRuntimeFocus)}.`);
       }
-      if (selectedAgentRoute.model.trim()) {
+      const selectedRoute =
+        workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {};
+      const effectiveRoute =
+        asList(mission?.effectiveRouteContract?.roles).find(item => item.role === agentRouteRole) ||
+        {};
+      const routeChanged =
+        (selectedRoute.provider || "openai") !== (effectiveRoute.provider || "openai") ||
+        (selectedRoute.model || "").trim() !== (effectiveRoute.model || "").trim() ||
+        (selectedRoute.effort || "default") !== (effectiveRoute.effort || "default");
+      if (routeChanged && selectedRoute.model?.trim()) {
         steeringLines.push(
-          `Route preference for ${titleizeToken(agentRouteRole)}: ${titleizeToken(selectedAgentRoute.provider)} / ${selectedAgentRoute.model.trim()}${
-            selectedAgentRoute.effort && selectedAgentRoute.effort !== "default"
-              ? ` / ${selectedAgentRoute.effort}`
+          `Route preference for ${titleizeToken(agentRouteRole)}: ${titleizeToken(selectedRoute.provider)} / ${selectedRoute.model.trim()}${
+            selectedRoute.effort && selectedRoute.effort !== "default"
+              ? ` / ${selectedRoute.effort}`
               : ""
           }.`,
         );
@@ -1691,7 +1738,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       const composedFollowUp =
         steeringLines.length > 0 ? `${steeringLines.join(" ")}\n\n${followUp}` : followUp;
       let sentLive = false;
-      if (mission.runtime_id === "openclaw" && openClawStatus?.connected) {
+      if (mission.runtime_id === "openclaw" && data.openClawStatus?.connected) {
         try {
           await callBackend(
             "send_openclaw_message",
@@ -1719,13 +1766,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     data.openClawStatus?.connected,
     markAction,
     mission,
-    openClawStatus?.connected,
     operatorDraft,
     previewMode,
     pushToast,
-    selectedAgentRoute.effort,
-    selectedAgentRoute.model,
-    selectedAgentRoute.provider,
+    workspaceProfileForm.routeOverrides,
+    mission?.effectiveRouteContract?.roles,
   ]);
 
   const handleOpenClawConnect = useCallback(async () => {
@@ -1997,15 +2042,30 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       })),
     [snapshot?.runtimes],
   );
+  const bridgeSummary = useMemo(() => {
+    const connected = bridgeSessions.filter(item => item?.status === "connected").length;
+    const callbackReady = bridgeSessions.filter(item => item?.approval_callback).length;
+    return {
+      connected,
+      callbackReady,
+      totalApps: asList(snapshot?.bridgeLab?.discoveredApps).length,
+      recommendation:
+        snapshot?.bridgeLab?.recommendation ||
+        "Bridge hand-offs between runtimes and connected apps will appear here.",
+    };
+  }, [bridgeSessions, snapshot?.bridgeLab?.discoveredApps, snapshot?.bridgeLab?.recommendation]);
   const selectedAgentRoute = useMemo(
-    () =>
-      workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {
+    () => {
+      const explicit = workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {};
+      const effective = effectiveRouteRows.find(item => item.role === agentRouteRole) || {};
+      return {
         role: agentRouteRole,
-        provider: "openai",
-        model: "",
-        effort: "default",
-      },
-    [agentRouteRole, workspaceProfileForm.routeOverrides],
+        provider: explicit.provider || effective.provider || "openai",
+        model: explicit.model || effective.model || "",
+        effort: explicit.effort || effective.effort || "default",
+      };
+    },
+    [agentRouteRole, effectiveRouteRows, workspaceProfileForm.routeOverrides],
   );
   const activeEffectiveRoute = useMemo(
     () =>
@@ -2177,7 +2237,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         `${session.runtime_id || "runtime"}-${session.updated_at || session.last_event || "session"}`;
       const latestEvents = asList(session.latest_events);
       const meaningfulEvents = latestEvents.filter(
-        event => isProcessRuntimeKind(event.kind) || event.status === "failed",
+        event => isTraceRuntimeKind(event.kind) || event.status === "failed",
       );
       if (meaningfulEvents.length === 0 && (session.status === "failed" || session.heartbeat_status === "stale")) {
         pushTurn({
@@ -2215,7 +2275,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
 
       for (const [index, event] of meaningfulEvents.slice(-4).entries()) {
-        const processMessage = isProcessRuntimeKind(event.kind);
+        const processMessage = isTraceRuntimeKind(event.kind);
         pushTurn({
           id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
           dedupeKey: `delegated-event:${delegatedMessageId}:${event.event_id || event.message || index}`,
@@ -3990,57 +4050,170 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ) : null}
             </section>
 
-            <section className="fluxio-nav-section">
-              <div className="fluxio-nav-heading">
-                <p className="eyebrow">Workspaces</p>
-                <ActionButton onClick={() => setShowWorkspaceDialog(true)}>Add</ActionButton>
-              </div>
-              <div className="fluxio-nav-list">
-                {workspaces.length > 0 ? (
-                  workspaces.map(item => (
-                    <NavItem
-                      active={item.workspace_id === selectedWorkspaceId}
-                      badge={item.runtimeStatus?.detected ? "Ready" : "Check"}
-                      icon="▣"
-                      key={item.workspace_id}
-                      onClick={() => setSelectedWorkspaceId(item.workspace_id)}
-                      subtitle={item.root_path}
-                      title={item.name}
-                      tone={item.runtimeStatus?.detected ? "good" : "warn"}
-                    />
-                  ))
-                ) : (
-                  <p className="fluxio-empty-copy">Add one workspace to begin.</p>
-                )}
-              </div>
-            </section>
+            {uiMode === "builder" ? (
+              <>
+                <section className="fluxio-nav-section">
+                  <div className="fluxio-nav-heading">
+                    <p className="eyebrow">Board</p>
+                    <ActionButton onClick={openMissionDialog}>Launch</ActionButton>
+                  </div>
+                  <div className="builder-sidebar-metrics">
+                    {builderBoard.metrics.slice(0, 3).map(item => (
+                      <article className={`builder-sidebar-card ${toneClass(item.tone)}`} key={`builder-rail-${item.id}`}>
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                        <p>{item.detail}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
 
-            <section className="fluxio-nav-section">
-              <div className="fluxio-nav-heading">
-                <p className="eyebrow">Missions</p>
-                <ActionButton onClick={openMissionDialog}>New</ActionButton>
-              </div>
-              <div className="fluxio-nav-list">
-                {missionOptions.length > 0 ? (
-                  missionNavItems.map(item => (
-                    <NavItem
-                      active={item.missionId === selectedMissionId}
-                      badge={item.badge}
-                      context={item.context}
-                      icon="◆"
-                      key={item.missionId}
-                      onClick={() => setSelectedMissionId(item.missionId)}
-                      stats={item.stats}
-                      subtitle={item.subtitle}
-                      title={item.title}
-                      tone={item.tone}
-                    />
-                  ))
-                ) : (
-                  <p className="fluxio-empty-copy">Mission thread appears after first launch.</p>
-                )}
-              </div>
-            </section>
+                <section className="fluxio-nav-section">
+                  <div className="fluxio-nav-heading">
+                    <p className="eyebrow">Roots</p>
+                  </div>
+                  <div className="fluxio-nav-list">
+                    {builderRootItems.length > 0 ? (
+                      builderRootItems.map(item => (
+                        <NavItem
+                          active={item.workspaceId === selectedWorkspaceId}
+                          badge={item.folderLabel || "root"}
+                          context={item.path}
+                          icon="▣"
+                          key={`builder-root-${item.workspaceId}`}
+                          onClick={() => setSelectedWorkspaceId(item.workspaceId)}
+                          stats={[
+                            item.activeCount > 0
+                              ? { label: "threads", value: item.activeCount, tone: "good" }
+                              : null,
+                            item.blockedCount > 0
+                              ? { label: "blocked", value: item.blockedCount, tone: "warn" }
+                              : null,
+                            item.delegatedCount > 0
+                              ? { label: "lanes", value: item.delegatedCount, tone: "good" }
+                              : null,
+                          ].filter(Boolean)}
+                          subtitle={item.activeCount > 0 ? "Conversation root" : "Workspace root"}
+                          title={item.title}
+                          tone={item.tone}
+                        />
+                      ))
+                    ) : (
+                      <p className="fluxio-empty-copy">Workspace roots will appear once Builder has projects to supervise.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="fluxio-nav-section">
+                  <div className="fluxio-nav-heading">
+                    <p className="eyebrow">Nexuses</p>
+                    <ActionButton onClick={() => setActiveDrawer("context")}>Open</ActionButton>
+                  </div>
+                  <div className="builder-sidebar-nexus-list">
+                    {builderNexusItems.length > 0 ? (
+                      builderNexusItems.map(item => (
+                        <button
+                          className={`builder-sidebar-nexus ${toneClass(item.tone)}`.trim()}
+                          key={item.id}
+                          onClick={() => {
+                            if (item.missionId) {
+                              setSelectedMissionId(item.missionId);
+                            }
+                            setActiveDrawer(item.tone === "bad" ? "proof" : "context");
+                          }}
+                          type="button"
+                        >
+                          <span>{item.label}</span>
+                          <strong>{item.title}</strong>
+                          <p>{item.reason}</p>
+                          <em>{item.folderLabel || item.workspaceName}</em>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="fluxio-empty-copy">Important operator decisions will collect here.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="fluxio-nav-section">
+                  <div className="fluxio-nav-heading">
+                    <p className="eyebrow">Bridge</p>
+                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Inspect</ActionButton>
+                  </div>
+                  <article className="builder-sidebar-bridge">
+                    <span>Hermes ↔ OpenClaw bridge</span>
+                    <strong>{bridgeSummary.connected} live app bridge{bridgeSummary.connected === 1 ? "" : "s"}</strong>
+                    <p>{bridgeSummary.recommendation}</p>
+                    <div className="fluxio-nav-stats">
+                      <span className="fluxio-nav-stat tone-good">
+                        <strong>{bridgeSummary.callbackReady}</strong>
+                        <em>callbacks</em>
+                      </span>
+                      <span className="fluxio-nav-stat tone-neutral">
+                        <strong>{bridgeSummary.totalApps}</strong>
+                        <em>apps</em>
+                      </span>
+                    </div>
+                  </article>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="fluxio-nav-section">
+                  <div className="fluxio-nav-heading">
+                    <p className="eyebrow">Workspaces</p>
+                    <ActionButton onClick={() => setShowWorkspaceDialog(true)}>Add</ActionButton>
+                  </div>
+                  <div className="fluxio-nav-list">
+                    {workspaceNavItems.length > 0 ? (
+                      workspaceNavItems.map(item => (
+                        <NavItem
+                          active={item.workspaceId === selectedWorkspaceId}
+                          badge={item.badge}
+                          context={item.context}
+                          icon="▣"
+                          key={item.workspaceId}
+                          onClick={() => setSelectedWorkspaceId(item.workspaceId)}
+                          stats={item.stats}
+                          subtitle={item.subtitle}
+                          title={item.title}
+                          tone={item.tone}
+                        />
+                      ))
+                    ) : (
+                      <p className="fluxio-empty-copy">Add one workspace to begin.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="fluxio-nav-section">
+                  <div className="fluxio-nav-heading">
+                    <p className="eyebrow">Missions</p>
+                    <ActionButton onClick={openMissionDialog}>New</ActionButton>
+                  </div>
+                  <div className="fluxio-nav-list">
+                    {missionOptions.length > 0 ? (
+                      missionNavItems.map(item => (
+                        <NavItem
+                          active={item.missionId === selectedMissionId}
+                          badge={item.badge}
+                          context={item.context}
+                          icon="◆"
+                          key={item.missionId}
+                          onClick={() => setSelectedMissionId(item.missionId)}
+                          stats={item.stats}
+                          subtitle={item.subtitle}
+                          title={item.title}
+                          tone={item.tone}
+                        />
+                      ))
+                    ) : (
+                      <p className="fluxio-empty-copy">Mission thread appears after first launch.</p>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
           </div>
 
           <div className="fluxio-sidebar-bottom">
@@ -4178,6 +4351,80 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   className="thread-composer agent-composer agent-chat-composer agent-idle-composer"
                   onSubmit={event => event.preventDefault()}
                 >
+                  <div className="agent-control-grid">
+                    <Field label="Launch runtime">
+                      <select
+                        onChange={event =>
+                          setMissionForm(current => ({ ...current, runtime: event.target.value }))
+                        }
+                        value={missionForm.runtime}
+                      >
+                        {runtimeOptions.map(option => (
+                          <option key={`idle-runtime-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Route role">
+                      <select onChange={event => setAgentRouteRole(event.target.value)} value={agentRouteRole}>
+                        {ROUTE_ROLE_OPTIONS.map(option => (
+                          <option key={`idle-role-${option}`} value={option}>
+                            {titleizeToken(option)}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Provider">
+                      <select
+                        onChange={event => handleAgentRouteFieldChange("provider", event.target.value)}
+                        value={selectedAgentRoute.provider}
+                      >
+                        {MODEL_PROVIDER_OPTIONS.map(option => (
+                          <option key={`idle-provider-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Model">
+                      <input
+                        list="agent-route-models-idle"
+                        onChange={event => handleAgentRouteFieldChange("model", event.target.value)}
+                        placeholder="Profile default"
+                        value={selectedAgentRoute.model}
+                      />
+                      <datalist id="agent-route-models-idle">
+                        {ROUTE_MODEL_OPTIONS.map(option => (
+                          <option key={`idle-model-${option}`} value={option} />
+                        ))}
+                      </datalist>
+                    </Field>
+                    <Field label="Reasoning">
+                      <select
+                        onChange={event => handleAgentRouteFieldChange("effort", event.target.value)}
+                        value={selectedAgentRoute.effort || "default"}
+                      >
+                        {MODEL_EFFORT_OPTIONS.map(option => (
+                          <option key={`idle-effort-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                  <div className="agent-control-strip">
+                    <p>{agentRuntimeHint}</p>
+                    <div className="thread-chip-row">
+                      <span className="mini-pill muted">{agentRouteStatus}</span>
+                      <span className="mini-pill muted">{titleizeToken(agentRouteRole)} route</span>
+                    </div>
+                    <div className="thread-composer-actions">
+                      <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
+                        Apply route
+                      </ActionButton>
+                    </div>
+                  </div>
                   <label htmlFor="thread-note-idle">{agentComposerLabel}</label>
                   <textarea
                     id="thread-note-idle"
@@ -4197,39 +4444,17 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <section className="builder-shell">
               <header className="builder-head builder-studio-head">
                 <div>
-                  <p className="eyebrow">Builder studio</p>
+                  <p className="eyebrow">Conversation command board</p>
                   <h1>{viewModel.thread.title}</h1>
-                  <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
+                  <p>{builderBoard.summary}</p>
                 </div>
                 <div className="builder-head-actions">
-                  <ActionButton onClick={() => setActiveDrawer("runtime")} variant="primary">
-                    Runtime studio
+                  <ActionButton onClick={() => setActiveDrawer("builder")} variant="primary">
+                    Open panel
                   </ActionButton>
-                  <ActionButton onClick={() => setActiveDrawer("skills")}>Skill studio</ActionButton>
-                  <ActionButton onClick={() => setActiveDrawer("proof")}>Proof review</ActionButton>
+                  <ActionButton onClick={openMissionDialog}>Launch mission</ActionButton>
                 </div>
               </header>
-
-              <section className="mode-story mode-builder">
-                <strong>Builder is the control studio.</strong>
-                <p>Use this view when you want to shape the system itself: routing, runtime maintenance, skills, release truth, and deeper inspection stay visible on purpose.</p>
-              </section>
-
-              <section className="builder-studio-ribbon">
-                {builderStudioCards.map(card => (
-                  <button
-                    className={`builder-studio-card ${toneClass(card.tone)}`.trim()}
-                    key={card.id}
-                    onClick={() => setActiveDrawer(card.id)}
-                    type="button"
-                  >
-                    <span>{card.eyebrow}</span>
-                    <strong>{card.title}</strong>
-                    <p>{card.detail}</p>
-                    <em>{card.meta}</em>
-                  </button>
-                ))}
-              </section>
 
               <div className="builder-workbench-grid">
                 <section className="builder-primary-column">
@@ -4250,9 +4475,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                             </div>
                             <h2>{builderPrimaryConversation.title}</h2>
                             <p>{builderPrimaryConversation.current}</p>
-                            {builderPrimaryConversation.executionPath ? (
-                              <p className="builder-conversation-path">{builderPrimaryConversation.executionPath}</p>
-                            ) : null}
+                            <p className="builder-conversation-path">
+                              {builderPrimaryConversation.workspaceName}
+                              {builderPrimaryConversation.executionPath ? ` · ${builderPrimaryConversation.executionPath}` : ""}
+                            </p>
                             <div className="builder-primary-summary">
                               <article className="builder-summary-card">
                                 <span>Current point</span>
@@ -4291,8 +4517,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                           Focus thread
                         </ActionButton>
                       ) : null}
-                      <ActionButton onClick={() => setActiveDrawer("runtime")} variant="primary">
-                        Runtime studio
+                      <ActionButton onClick={() => setActiveDrawer("builder")} variant="primary">
+                        Command panel
                       </ActionButton>
                       <ActionButton onClick={() => setActiveDrawer("queue")}>Queue review</ActionButton>
                       <ActionButton onClick={() => setActiveDrawer("proof")}>Proof review</ActionButton>
@@ -4318,7 +4544,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                           >
                             <div className="builder-conversation-top">
                               <div>
-                                <span>{item.runtime}</span>
+                                <span>{item.runtime} · {item.workspaceName}</span>
                                 <h3>{item.title}</h3>
                               </div>
                               <StatusPill strong tone={item.blocked ? "warn" : item.tone}>
@@ -4326,7 +4552,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                               </StatusPill>
                             </div>
                             <p>{item.current}</p>
-                            {item.executionPath ? <p className="builder-conversation-path">{item.executionPath}</p> : null}
+                            {item.executionPath ? (
+                              <p className="builder-conversation-path">
+                                {item.folderLabel ? `${item.folderLabel} · ` : ""}
+                                {item.executionPath}
+                              </p>
+                            ) : null}
                             <div className="builder-conversation-meta">
                               {item.pendingApprovals > 0 ? (
                                 <span>{item.pendingApprovals} approval{item.pendingApprovals === 1 ? "" : "s"}</span>
@@ -4445,6 +4676,31 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
                 <aside className="builder-secondary-column">
                   <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Nexuses</p>
+                    <h3>{builderNexusItems.length} decision point{builderNexusItems.length === 1 ? "" : "s"}</h3>
+                    <p>Jump back to the moments that most likely changed direction, risk, or final output.</p>
+                    <div className="builder-thread-list">
+                      {builderNexusItems.slice(0, 4).map(item => (
+                        <button
+                          className={`builder-thread-item ${toneClass(item.tone)}`.trim()}
+                          key={`nexus-${item.id}`}
+                          onClick={() => {
+                            if (item.missionId) {
+                              setSelectedMissionId(item.missionId);
+                            }
+                            setActiveDrawer(item.tone === "bad" ? "proof" : "context");
+                          }}
+                          type="button"
+                        >
+                          <span>{item.label}</span>
+                          <strong>{item.title}</strong>
+                          <p>{item.reason}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
                     <p className="eyebrow">Harnesses</p>
                     <h3>{titleizeToken(workspaceProfileForm.preferredHarness)}</h3>
                     <div className="builder-inline-list">
@@ -4463,7 +4719,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       <ActionButton onClick={() => void applyPreferredHarness("legacy_autonomous_engine")}>
                         Use Legacy Harness
                       </ActionButton>
+                      <ActionButton onClick={() => setActiveDrawer("runtime")} type="button">
+                        Compare both
+                      </ActionButton>
                     </div>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Runtime bridge</p>
+                    <h3>{bridgeSummary.connected} live bridge{bridgeSummary.connected === 1 ? "" : "s"}</h3>
+                    <p>{bridgeSummary.recommendation}</p>
+                    <div className="builder-inline-list">
+                      <span>{bridgeSummary.callbackReady} approval callback{bridgeSummary.callbackReady === 1 ? "" : "s"} ready</span>
+                      <span>{bridgeSummary.totalApps} connected app definition{bridgeSummary.totalApps === 1 ? "" : "s"}</span>
+                      <span>Use Builder to compare Hermes and OpenClaw bridge hand-offs.</span>
+                    </div>
+                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime bridge</ActionButton>
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
@@ -4477,29 +4748,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </div>
                     <ActionButton onClick={() => setActiveDrawer("skills")}>Open skill studio</ActionButton>
                   </article>
-
-                  <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Profiles</p>
-                    <h3>{titleizeToken(workspaceProfileForm.userProfile)}</h3>
-                    <p>{viewModel.drawers.builder.profileStudio.behavior[0]?.value || "No profile policy yet."}</p>
-                    <div className="builder-inline-list">
-                      {viewModel.drawers.builder.profileStudio.behavior.slice(1, 4).map(item => (
-                        <span key={`behavior-${item.label}`}>{item.label}: {item.value}</span>
-                      ))}
-                    </div>
-                    <ActionButton onClick={() => setActiveDrawer("profiles")}>Open profiles</ActionButton>
-                  </article>
-
-                  <article className="builder-panel">
-                    <p className="eyebrow">Runtime</p>
-                    <h3>{viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} need attention</h3>
-                    <div className="builder-inline-list">
-                      {viewModel.drawers.builder.serviceStudio.urgent.slice(0, 3).map(item => (
-                        <span key={`service-${item.serviceId}`}>{item.label}: {item.status}</span>
-                      ))}
-                    </div>
-                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime</ActionButton>
-                  </article>
                 </aside>
               </div>
             </section>
@@ -4509,12 +4757,44 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <h1>{agentCenterTitle}</h1>
               </header>
 
+              {agentNexusTurns.length > 0 ? (
+                <section className="agent-nexus-strip">
+                  <div className="section-title-block">
+                    <p className="eyebrow">Nexuses</p>
+                    <h2>Jump back to the decisions that changed the mission</h2>
+                  </div>
+                  <div className="agent-nexus-row">
+                    {agentNexusTurns.map(item => (
+                      <button
+                        className={`agent-nexus-chip ${toneClass(item.tone || "neutral")} ${pinnedNexusIds.includes(item.id) ? "pinned" : ""}`.trim()}
+                        key={`agent-nexus-${item.id}`}
+                        onClick={() => focusTranscriptTurn(item.id)}
+                        type="button"
+                      >
+                        <span>{item.label || item.roleLabel || "Nexus"}</span>
+                        <strong>{item.title}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
               <section className={`agent-chat-stage ${agentIdleState === "no-turns" ? "agent-chat-stage-empty" : ""}`.trim()}>
                 {agentHasTurns ? (
                   <section className="agent-transcript-shell">
                     <div className="agent-transcript">
-                      {agentTranscript.map(item => (
-                        <TranscriptMessage item={item} key={item.id} />
+                      {agentVisibleTranscript.map(item => (
+                        <TranscriptMessage
+                          highlighted={highlightedTurnId === item.id}
+                          item={item}
+                          key={item.id}
+                          onMemory={handleAgentMemoryFromTurn}
+                          onPinNexus={togglePinnedNexus}
+                          onSteer={handleAgentSteerFromTurn}
+                          onValidate={handleAgentValidateTurn}
+                          pinned={pinnedNexusIds.includes(item.id)}
+                          showTrace={showThinkingTrace}
+                        />
                       ))}
                     </div>
                   </section>
@@ -4524,6 +4804,91 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   className={`thread-composer agent-composer agent-chat-composer ${agentIdleState === "no-turns" ? "agent-idle-composer" : ""}`.trim()}
                   onSubmit={event => event.preventDefault()}
                 >
+                  <div className="agent-control-grid">
+                    <Field label="Runtime focus">
+                      <select
+                        onChange={event => setAgentRuntimeFocus(event.target.value)}
+                        value={agentRuntimeSelectValue}
+                      >
+                        <option value="all">All traces</option>
+                        {runtimeOptions.map(option => (
+                          <option key={`agent-runtime-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Route role">
+                      <select onChange={event => setAgentRouteRole(event.target.value)} value={agentRouteRole}>
+                        {ROUTE_ROLE_OPTIONS.map(option => (
+                          <option key={`agent-role-${option}`} value={option}>
+                            {titleizeToken(option)}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Provider">
+                      <select
+                        onChange={event => handleAgentRouteFieldChange("provider", event.target.value)}
+                        value={selectedAgentRoute.provider}
+                      >
+                        {MODEL_PROVIDER_OPTIONS.map(option => (
+                          <option key={`agent-provider-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Model">
+                      <input
+                        list="agent-route-models-live"
+                        onChange={event => handleAgentRouteFieldChange("model", event.target.value)}
+                        placeholder="Profile default"
+                        value={selectedAgentRoute.model}
+                      />
+                      <datalist id="agent-route-models-live">
+                        {ROUTE_MODEL_OPTIONS.map(option => (
+                          <option key={`agent-model-${option}`} value={option} />
+                        ))}
+                      </datalist>
+                    </Field>
+                    <Field label="Reasoning">
+                      <select
+                        onChange={event => handleAgentRouteFieldChange("effort", event.target.value)}
+                        value={selectedAgentRoute.effort || "default"}
+                      >
+                        {MODEL_EFFORT_OPTIONS.map(option => (
+                          <option key={`agent-effort-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                  <div className="agent-control-strip">
+                    <p>{agentRuntimeHint}</p>
+                    <div className="thread-chip-row">
+                      <span className="mini-pill muted">{agentRouteStatus}</span>
+                      <span className="mini-pill muted">
+                        {latestThinkingTurn
+                          ? `${latestThinkingTurn.roleLabel || "Runtime"} thinking`
+                          : mission?.state?.status === "running"
+                            ? "Awaiting the next runtime thought"
+                            : "No live thinking trace right now"}
+                      </span>
+                      <span className="mini-pill muted">
+                        {agentThinkingTurns.length} trace moment{agentThinkingTurns.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="thread-composer-actions">
+                      <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
+                        Apply route
+                      </ActionButton>
+                      <ActionButton onClick={() => setShowThinkingTrace(current => !current)} type="button">
+                        {showThinkingTrace ? "Hide trace" : "Show trace"}
+                      </ActionButton>
+                    </div>
+                  </div>
                   <label htmlFor="thread-note">{agentComposerLabel}</label>
                   <textarea
                     id="thread-note"
