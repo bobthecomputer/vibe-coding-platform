@@ -438,7 +438,7 @@ textarea {
 }
 
 .agent-shell {
-  max-width: 920px;
+  max-width: 980px;
   margin-inline: auto;
 }
 
@@ -458,6 +458,13 @@ textarea {
   padding: 16px 18px;
 }
 
+.builder-studio-head {
+  border-color: rgba(142, 203, 111, 0.22);
+  background:
+    linear-gradient(180deg, rgba(142, 203, 111, 0.08), transparent 65%),
+    #1d1d21;
+}
+
 .builder-head h1 {
   margin: 4px 0 0;
   font-size: 24px;
@@ -474,6 +481,65 @@ textarea {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.builder-studio-ribbon {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.builder-studio-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 62%),
+    #1c1c20;
+  padding: 14px;
+  text-align: left;
+  color: var(--text);
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.builder-studio-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.builder-studio-card span,
+.builder-studio-card em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.builder-studio-card strong {
+  font-size: 15px;
+}
+
+.builder-studio-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.builder-studio-card.tone-warn {
+  border-color: rgba(245, 158, 11, 0.22);
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent 68%),
+    #211d19;
+}
+
+.builder-studio-card.tone-good {
+  border-color: rgba(142, 203, 111, 0.22);
+  background:
+    linear-gradient(180deg, rgba(142, 203, 111, 0.08), transparent 68%),
+    #1a1f1a;
 }
 
 .builder-workbench-grid {

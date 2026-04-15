@@ -1563,6 +1563,113 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     workspace?.default_runtime,
   ]);
 
+  const agentStatusItems = useMemo(() => {
+    if (!mission) {
+      return [];
+    }
+
+    const waitingValue =
+      data.pendingApprovals.length > 0
+        ? `${data.pendingApprovals.length} approval${data.pendingApprovals.length > 1 ? "s" : ""}`
+        : data.pendingQuestions.length > 0
+          ? `${data.pendingQuestions.length} question${data.pendingQuestions.length > 1 ? "s" : ""}`
+          : "No blockers";
+
+    const liveValue =
+      delegatedSessions.length > 0
+        ? `${delegatedSessions.length} delegated lane${delegatedSessions.length > 1 ? "s" : ""}`
+        : bridgeSessions.length > 0
+          ? `${bridgeSessions.length} connected bridge${bridgeSessions.length > 1 ? "s" : ""}`
+          : openClawRuntimeActive && openClawStatus?.connected
+            ? "Gateway connected"
+            : isRefreshing
+              ? "Refreshing"
+              : "Stable";
+
+    return [
+      {
+        label: "Runtime",
+        value: runtimeLabel(mission?.runtime_id || workspace?.default_runtime || "openclaw"),
+      },
+      {
+        label: "Waiting",
+        value: waitingValue,
+      },
+      {
+        label: "Live",
+        value: liveValue,
+      },
+      {
+        label: "Proof",
+        value:
+          viewModel.thread.proofItems?.length > 0
+            ? `${viewModel.thread.proofItems.length} review item${viewModel.thread.proofItems.length > 1 ? "s" : ""}`
+            : "No proof deltas",
+      },
+    ];
+  }, [
+    bridgeSessions.length,
+    data.pendingApprovals.length,
+    data.pendingQuestions.length,
+    delegatedSessions.length,
+    isRefreshing,
+    mission,
+    openClawRuntimeActive,
+    openClawStatus?.connected,
+    viewModel.thread.proofItems,
+    workspace?.default_runtime,
+  ]);
+
+  const builderStudioCards = useMemo(
+    () => [
+      {
+        id: "runtime",
+        eyebrow: "Runtime studio",
+        title: "Hermes and OpenClaw",
+        detail: "Update runtimes, inspect service drift, and repair failing bridges without leaving the shell.",
+        meta: `${viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} need attention · ${viewModel.drawers.builder.serviceStudio.availableActionCount} actions`,
+        tone:
+          viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount > 0 ? "warn" : "good",
+      },
+      {
+        id: "skills",
+        eyebrow: "Skill studio",
+        title: "Reusable capability packs",
+        detail: "Review skill coverage, tighten quality, and keep execution-ready packs visible.",
+        meta: `${viewModel.drawers.builder.skillStudio.summary.executionReadyCount} ready · ${viewModel.drawers.builder.skillStudio.summary.needsTestCount} need tests`,
+        tone:
+          viewModel.drawers.builder.skillStudio.summary.needsTestCount > 0 ? "warn" : "neutral",
+      },
+      {
+        id: "profiles",
+        eyebrow: "Routing studio",
+        title: "Profiles and model routes",
+        detail: "Pin planner, executor, and verifier behavior when the default profile is not enough.",
+        meta: `${viewModel.drawers.builder.profileStudio.profileRows.length} profiles · ${effectiveRouteRows.length} active route role${effectiveRouteRows.length === 1 ? "" : "s"}`,
+        tone: "neutral",
+      },
+      {
+        id: "proof",
+        eyebrow: "Review studio",
+        title: "Proof, queue, and release truth",
+        detail: "Audit what is ready, what is secondary, and what still needs explicit operator review.",
+        meta: `${viewModel.drawers.builder.reviewCount} review surface${viewModel.drawers.builder.reviewCount === 1 ? "" : "s"} · ${viewModel.drawers.builder.confidence.score}% confidence`,
+        tone: viewModel.drawers.builder.confidence.tone,
+      },
+    ],
+    [
+      effectiveRouteRows.length,
+      viewModel.drawers.builder.confidence.score,
+      viewModel.drawers.builder.confidence.tone,
+      viewModel.drawers.builder.profileStudio.profileRows.length,
+      viewModel.drawers.builder.reviewCount,
+      viewModel.drawers.builder.serviceStudio.availableActionCount,
+      viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount,
+      viewModel.drawers.builder.skillStudio.summary.executionReadyCount,
+      viewModel.drawers.builder.skillStudio.summary.needsTestCount,
+    ],
+  );
+
   useEffect(() => {
     currentMissionRef.current = mission;
   }, [mission]);
@@ -3295,7 +3402,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               <GlobalRailButton
                 active={uiMode === "agent"}
                 icon="◎"
-                label="Operator"
+                label="Agent"
                 onClick={() => {
                   markAction("rail:operator");
                   setUiMode("agent");
@@ -3569,30 +3676,46 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             )
           ) : uiMode === "builder" ? (
             <section className="builder-shell">
-              <header className="builder-head">
+              <header className="builder-head builder-studio-head">
                 <div>
-                  <p className="eyebrow">Builder workbench</p>
+                  <p className="eyebrow">Builder studio</p>
                   <h1>{viewModel.thread.title}</h1>
                   <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
                 </div>
                 <div className="builder-head-actions">
-                  <ActionButton onClick={() => setActiveDrawer("proof")} variant="primary">
-                    Proof review
+                  <ActionButton onClick={() => setActiveDrawer("runtime")} variant="primary">
+                    Runtime studio
                   </ActionButton>
-                  <ActionButton onClick={() => setActiveDrawer("queue")}>Queue</ActionButton>
-                  <ActionButton onClick={() => setActiveDrawer("runtime")}>Runtime</ActionButton>
+                  <ActionButton onClick={() => setActiveDrawer("skills")}>Skill studio</ActionButton>
+                  <ActionButton onClick={() => setActiveDrawer("proof")}>Proof review</ActionButton>
                 </div>
               </header>
 
               <section className="mode-story mode-builder">
-                <strong>Builder keeps deep controls visible.</strong>
-                <p>Routing, services, skills, and proof stay available here because this view is for shaping the system, not just following the run.</p>
+                <strong>Builder is the control studio.</strong>
+                <p>Use this view when you want to shape the system itself: routing, runtime maintenance, skills, release truth, and deeper inspection stay visible on purpose.</p>
+              </section>
+
+              <section className="builder-studio-ribbon">
+                {builderStudioCards.map(card => (
+                  <button
+                    className={`builder-studio-card ${toneClass(card.tone)}`.trim()}
+                    key={card.id}
+                    onClick={() => setActiveDrawer(card.id)}
+                    type="button"
+                  >
+                    <span>{card.eyebrow}</span>
+                    <strong>{card.title}</strong>
+                    <p>{card.detail}</p>
+                    <em>{card.meta}</em>
+                  </button>
+                ))}
               </section>
 
               <div className="builder-workbench-grid">
                 <section className="builder-primary-column">
                   <article className="builder-panel builder-panel-hero">
-                    <p className="eyebrow">Mission state</p>
+                    <p className="eyebrow">Build posture</p>
                     <div className="thread-chip-row">
                       {viewModel.thread.chips.map(item => (
                         <StatusPill key={`builder-chip-${item.label}`} tone={item.tone}>
@@ -3603,7 +3726,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         {viewModel.thread.status.label}
                       </StatusPill>
                     </div>
-                    <p>{viewModel.drawers.builder.confidence.label}</p>
+                    <h2>{viewModel.drawers.builder.confidence.label}</h2>
+                    <p>Builder keeps the operational controls up front so you can intervene, tune, or verify without leaving the mission context.</p>
                     <div className="milestone-strip">
                       {viewModel.drawers.builder.confidence.milestones.slice(0, 3).map(item => (
                         <article className="milestone-card" key={`builder-milestone-${item.id}`}>
@@ -3618,8 +3742,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   <article className="builder-panel">
                     <div className="section-header">
                       <div className="section-title-block">
-                        <p className="eyebrow">Thread insight</p>
-                        <h2>Mission supervision</h2>
+                        <p className="eyebrow">Mission supervision</p>
+                        <h2>Control surfaces in context</h2>
                       </div>
                     </div>
                     <div className="builder-thread-list">
@@ -3636,8 +3760,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   <article className="builder-panel">
                     <div className="section-header">
                       <div className="section-title-block">
-                        <p className="eyebrow">Transcript</p>
-                        <h2>Recent activity</h2>
+                        <p className="eyebrow">Runtime ledger</p>
+                        <h2>Recent activity and supervision</h2>
                       </div>
                     </div>
                     <div className="thread-event-list">
@@ -3659,7 +3783,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <textarea
                       id="builder-thread-note"
                       onChange={event => setOperatorDraft(event.target.value)}
-                      placeholder="Capture a runtime note, builder observation, or next technical move."
+                      placeholder="Capture a technical observation, routing decision, or runtime intervention plan."
                       value={operatorDraft}
                     />
                     <div className="thread-composer-actions">
@@ -3725,127 +3849,145 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             </section>
           ) : (
             <section className="thread-shell agent-shell">
-              <header className="thread-head agent-thread-head">
-                <p className="eyebrow">Mission thread</p>
+              <header className="thread-head agent-thread-head agent-conversation-head">
+                <p className="eyebrow">Agent conversation</p>
                 <h1>{viewModel.thread.title}</h1>
                 <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
-                <div className="thread-chip-row">
-                  {viewModel.thread.chips.map(item => (
-                    <StatusPill key={item.label} tone={item.tone}>
-                      {item.label}
-                    </StatusPill>
+                <div className="agent-status-grid">
+                  {agentStatusItems.map(item => (
+                    <article className="agent-status-card" key={item.label}>
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </article>
                   ))}
-                  <StatusPill strong tone={viewModel.thread.status.tone}>
-                    {viewModel.thread.status.label}
-                  </StatusPill>
-                  <StatusPill tone="neutral">
-                    {isRefreshing ? "Refreshing" : "Stable"}
-                  </StatusPill>
                 </div>
               </header>
 
-              <section className="mode-story mode-agent">
-                <strong>Agent mode is the mission conversation.</strong>
-                <p>
-                  {showPersistentDrawer
-                    ? "You are still in launch or setup, so the right rail stays available long enough to finish configuration."
-                    : "The right rail drops away during active execution so you can just read the run, answer boundaries, and send follow-ups."}
-                </p>
-              </section>
-
-              <section className="agent-runtime-strip">
-                {runtimeTruth.map(item => (
-                  <article className="agent-runtime-item" key={item}>
-                    <span>Runtime truth</span>
-                    <strong>{item}</strong>
-                  </article>
-                ))}
-              </section>
-
-              <section className="agent-transcript-shell">
-                <div className="agent-transcript-head">
-                  <p className="eyebrow">Conversation</p>
-                  <span>
-                    {previewLabel(previewMode, data.previewMeta)}
-                    {lastPushReason ? ` · ${lastPushReason}` : ""}
-                  </span>
-                </div>
-                <div className="agent-transcript">
-                  {agentTranscript.map(item => (
-                    <TranscriptMessage item={item} key={item.id} />
-                  ))}
-                </div>
-              </section>
-
-              <section className="thread-proof-inline agent-proof-inline">
-                <div className="thread-proof-head">
-                  <p className="eyebrow">Proof and review</p>
-                  <ActionButton
-                    onClick={() => {
-                      if (!showPersistentDrawer) {
+              <section className="agent-chat-stage">
+                <div className="agent-chat-toolbar">
+                  <div className="agent-chat-toolbar-copy">
+                    <p className="eyebrow">Live thread</p>
+                    <span>
+                      {previewLabel(previewMode, data.previewMeta)}
+                      {lastPushReason ? ` · ${lastPushReason}` : ""}
+                    </span>
+                  </div>
+                  <div className="agent-chat-toolbar-actions">
+                    <ActionButton
+                      onClick={() => {
+                        if (!showPersistentDrawer) {
+                          setUiMode("builder");
+                        }
+                        setActiveDrawer("proof");
+                      }}
+                    >
+                      Proof
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => {
                         setUiMode("builder");
-                      }
-                      setActiveDrawer("proof");
-                    }}
-                  >
-                    Open proof review
-                  </ActionButton>
+                        setActiveDrawer("builder");
+                      }}
+                    >
+                      Builder
+                    </ActionButton>
+                  </div>
                 </div>
-                <div className="thread-proof-items">
-                  {viewModel.thread.proofItems.map(item => (
-                    <span className="proof-pill" key={item}>
-                      {listLabel(item)}
+
+                {showPersistentDrawer ? (
+                  <div className="agent-launch-banner">
+                    Setup and review stay visible only until launch stabilizes. After that, Agent mode drops back to the conversation.
+                  </div>
+                ) : null}
+
+                <div className="agent-presence-row">
+                  {runtimeTruth.slice(0, 3).map(item => (
+                    <span className="agent-presence-pill" key={item}>
+                      {item}
                     </span>
                   ))}
                 </div>
-              </section>
 
-              <form className="thread-composer agent-composer agent-chat-composer" onSubmit={event => event.preventDefault()}>
-                <label htmlFor="thread-note">Follow-up or note</label>
-                <textarea
-                  id="thread-note"
-                  onChange={event => setOperatorDraft(event.target.value)}
-                  placeholder={
-                    openClawRuntimeActive
-                      ? "Send a direct follow-up to the runtime, or keep a local operator note."
-                      : viewModel.thread.composerPlaceholder
-                  }
-                  value={operatorDraft}
-                />
-                <div className="thread-composer-actions">
-                  <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
-                    Send to agent
-                  </ActionButton>
-                  <ActionButton onClick={handleOperatorNote} type="button">
-                    Save note
-                  </ActionButton>
-                  <ActionButton
-                    onClick={() => {
-                      if (!showPersistentDrawer) {
-                        setUiMode("builder");
-                      }
-                      setActiveDrawer("queue");
-                    }}
-                    type="button"
-                  >
-                    Review queue
-                  </ActionButton>
-                  <ActionButton
-                    disabled={!missionActionAvailable(mission, "pause")}
-                    onClick={() => void runMissionAction("pause", "Mission pause requested.")}
-                    type="button"
-                  >
-                    Pause
-                  </ActionButton>
-                  <ActionButton
-                    disabled={!missionActionAvailable(mission, "resume")}
-                    onClick={() => void runMissionAction("resume", "Mission resume requested.")}
-                    type="button"
-                  >
-                    Resume
-                  </ActionButton>
+                <section className="agent-transcript-shell">
+                  <div className="agent-transcript">
+                    {agentTranscript.map(item => (
+                      <TranscriptMessage item={item} key={item.id} />
+                    ))}
+                  </div>
+                </section>
+
+                <div className="agent-proof-summary">
+                  <div>
+                    <p className="eyebrow">Review posture</p>
+                    <strong>{viewModel.thread.status.label}</strong>
+                    <span>
+                      {viewModel.thread.proofItems.length > 0
+                        ? `${viewModel.thread.proofItems.length} proof item${viewModel.thread.proofItems.length > 1 ? "s" : ""} ready to review`
+                        : "No proof deltas are waiting right now."}
+                    </span>
+                  </div>
+                  <div className="agent-proof-summary-actions">
+                    <ActionButton
+                      onClick={() => {
+                        if (!showPersistentDrawer) {
+                          setUiMode("builder");
+                        }
+                        setActiveDrawer("queue");
+                      }}
+                      type="button"
+                    >
+                      Queue
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => {
+                        if (!showPersistentDrawer) {
+                          setUiMode("builder");
+                        }
+                        setActiveDrawer("proof");
+                      }}
+                      type="button"
+                    >
+                      Open proof
+                    </ActionButton>
+                  </div>
                 </div>
-              </form>
+
+                <form className="thread-composer agent-composer agent-chat-composer" onSubmit={event => event.preventDefault()}>
+                  <label htmlFor="thread-note">Follow-up or note</label>
+                  <textarea
+                    id="thread-note"
+                    onChange={event => setOperatorDraft(event.target.value)}
+                    placeholder={
+                      openClawRuntimeActive
+                        ? "Send a direct follow-up to the runtime, or keep a local operator note."
+                        : viewModel.thread.composerPlaceholder
+                    }
+                    value={operatorDraft}
+                  />
+                  <div className="thread-composer-actions">
+                    <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
+                      Send to agent
+                    </ActionButton>
+                    <ActionButton onClick={handleOperatorNote} type="button">
+                      Save note
+                    </ActionButton>
+                    <ActionButton
+                      disabled={!missionActionAvailable(mission, "pause")}
+                      onClick={() => void runMissionAction("pause", "Mission pause requested.")}
+                      type="button"
+                    >
+                      Pause
+                    </ActionButton>
+                    <ActionButton
+                      disabled={!missionActionAvailable(mission, "resume")}
+                      onClick={() => void runMissionAction("resume", "Mission resume requested.")}
+                      type="button"
+                    >
+                      Resume
+                    </ActionButton>
+                  </div>
+                </form>
+              </section>
             </section>
           )}
         </main>
