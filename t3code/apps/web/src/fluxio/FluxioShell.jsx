@@ -88,6 +88,7 @@ const MODEL_PROVIDER_OPTIONS = [
   { value: "openrouter", label: "OpenRouter" },
 ];
 const MODEL_EFFORT_OPTIONS = [
+  { value: "default", label: "Default" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
@@ -214,7 +215,17 @@ function ToastHost({ items }) {
   );
 }
 
-function NavItem({ active = false, title, subtitle, onClick, tone = "neutral", badge, icon = null }) {
+function NavItem({
+  active = false,
+  title,
+  subtitle,
+  context = "",
+  stats = [],
+  onClick,
+  tone = "neutral",
+  badge,
+  icon = null,
+}) {
   return (
     <button
       className={`fluxio-nav-item ${active ? "active" : ""}`.trim()}
@@ -229,6 +240,17 @@ function NavItem({ active = false, title, subtitle, onClick, tone = "neutral", b
         <span className={toneClass(tone)}>{badge || titleizeToken(tone)}</span>
       </div>
       {subtitle ? <p>{subtitle}</p> : null}
+      {context ? <p className="fluxio-nav-context">{context}</p> : null}
+      {stats.length > 0 ? (
+        <div className="fluxio-nav-stats">
+          {stats.map(item => (
+            <span className={`fluxio-nav-stat ${toneClass(item.tone)}`} key={`${title}-${item.label}`}>
+              <strong>{item.value}</strong>
+              <em>{item.label}</em>
+            </span>
+          ))}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -375,6 +397,37 @@ function listLabel(value) {
   return String(value);
 }
 
+function pathLeaf(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  const parts = text.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || text;
+}
+
+function saveableRouteOverrides(routeOverrides) {
+  return asList(routeOverrides)
+    .filter(item => item?.model?.trim())
+    .map(item => ({
+      role: item.role,
+      provider: item.provider,
+      model: item.model.trim(),
+      ...(item.effort && item.effort !== "default" ? { effort: item.effort } : {}),
+    }));
+}
+
+function updateRouteOverride(routeOverrides, role, patch) {
+  return asList(routeOverrides).map(item =>
+    item.role === role
+      ? {
+          ...item,
+          ...patch,
+        }
+      : item,
+  );
+}
+
 function profileFormFromWorkspace(workspace, fallbackProfile) {
   const overrides = Array.isArray(workspace?.route_overrides) ? workspace.route_overrides : [];
   const existingByRole = new Map(overrides.map(item => [String(item.role || "").toLowerCase(), item]));
@@ -392,7 +445,7 @@ function profileFormFromWorkspace(workspace, fallbackProfile) {
         role,
         provider: item.provider || "openai",
         model: item.model || "",
-        effort: item.effort || (role === "executor" ? "medium" : "high"),
+        effort: item.effort || "default",
       };
     }),
   };
@@ -437,6 +490,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       id: `mission-${row.mission_id}-${row.timestamp || payload.detectedAt}-${kind}-${row.message || "event"}`,
       kind,
       role: kind === "mission.follow_up" ? "operator" : kind === "mission.approval" ? "queue" : "system",
+      runtimeId: row.metadata?.runtimeId || row.metadata?.runtime_id || "",
       roleLabel:
         kind === "mission.follow_up"
           ? "Operator"
@@ -486,6 +540,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       id: `runtime-${delegatedId || mission.mission_id}-${row.event_id || row.created_at || payload.detectedAt}-${kind}`,
       kind,
       role: kind === "operator.followup" ? "operator" : "runtime",
+      runtimeId: row.runtime_id || mission.runtime_id,
       roleLabel:
         kind === "operator.followup" ? "Operator" : runtimeLabel(row.runtime_id || mission.runtime_id),
       roleIcon:
@@ -515,6 +570,11 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           : /approval|waiting/i.test(`${kind} ${row.status || ""}`)
             ? "warn"
             : "neutral",
+      technicalDetail:
+        processMessage && detail && detail !== row.message
+          ? detail
+          : row?.metadata?.trace || row?.data?.trace || "",
+      technicalSummary: processMessage ? "Thinking trace" : "",
       processMessage,
       heartbeat,
       emphasis:
@@ -583,10 +643,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [lastPushReason, setLastPushReason] = useState("");
   const [liveSyncSuspended, setLiveSyncSuspended] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeDrawer, setActiveDrawer] = useState("context");
+  const [activeDrawer, setActiveDrawer] = useState(null);
   const [operatorDraft, setOperatorDraft] = useState("");
   const [operatorNotes, setOperatorNotes] = useState([]);
   const [liveControlEvents, setLiveControlEvents] = useState([]);
+  const [agentRouteRole, setAgentRouteRole] = useState("executor");
+  const [agentRuntimeFocus, setAgentRuntimeFocus] = useState("all");
+  const [showThinkingTrace, setShowThinkingTrace] = useState(true);
+  const [pinnedNexusIds, setPinnedNexusIds] = useState([]);
+  const [highlightedTurnId, setHighlightedTurnId] = useState("");
   const [data, setData] = useState({
     snapshot: null,
     onboarding: null,
@@ -1000,7 +1065,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     () => AGENT_BLOCKER_DRAWER_IDS,
     [],
   );
-  const showPersistentDrawer = uiMode === "builder" || agentBlockedState.isBlocked;
+  const showPersistentDrawer =
+    Boolean(activeDrawer) && (uiMode === "builder" || agentBlockedState.isBlocked);
   const focusedRuntimeServices = useMemo(() => {
     const services = viewModel.drawers.builder.serviceStudio.services || [];
     const byNeedle = needle =>
@@ -1043,6 +1109,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   ]);
 
   useEffect(() => {
+    if (mission?.mission_id) {
+      setAgentRuntimeFocus("all");
+      return;
+    }
+    setAgentRuntimeFocus(missionForm.runtime || "openclaw");
+  }, [mission?.mission_id, missionForm.runtime]);
+
+  useEffect(() => {
     const gatewayUrl = data.openClawStatus?.gatewayUrl;
     if (gatewayUrl) {
       setOpenClawGatewayUrl(gatewayUrl);
@@ -1051,13 +1125,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   useEffect(() => {
     if (!mission && uiMode === "agent") {
-      setActiveDrawer("context");
+      setActiveDrawer(null);
     }
   }, [mission, uiMode]);
 
   useEffect(() => {
     if (uiMode === "agent" && AGENT_BUILDER_ONLY_DRAWERS.includes(activeDrawer)) {
-      setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : "context");
+      setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : null);
     }
   }, [activeDrawer, agentBlockedState.defaultDrawer, agentBlockedState.isBlocked, uiMode]);
 
@@ -1172,14 +1246,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             userProfile: workspaceProfileForm.userProfile,
             preferredHarness: workspaceProfileForm.preferredHarness,
             routingStrategy: workspaceProfileForm.routingStrategy,
-            routeOverrides: workspaceProfileForm.routeOverrides
-              .filter(item => item.model.trim())
-              .map(item => ({
-                role: item.role,
-                provider: item.provider,
-                model: item.model.trim(),
-                effort: item.effort,
-              })),
+            routeOverrides: saveableRouteOverrides(workspaceProfileForm.routeOverrides),
             autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
             minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
             commitMessageStyle: workspaceProfileForm.commitMessageStyle,
@@ -1194,6 +1261,121 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast(`Workspace policy save failed: ${error}`, "error");
     }
   }, [markAction, previewMode, pushToast, refreshAll, workspace, workspaceProfileForm]);
+
+  const applyPreferredHarness = useCallback(
+    async nextHarness => {
+      if (!nextHarness) {
+        return;
+      }
+      markAction(`workspace:harness:${nextHarness}`);
+      setWorkspaceProfileForm(current => ({ ...current, preferredHarness: nextHarness }));
+      if (!workspace) {
+        pushToast("Select a workspace first.", "warn");
+        return;
+      }
+      if (previewMode !== "live" || !hasTauriBackend()) {
+        pushToast(`Harness preference staged as ${titleizeToken(nextHarness)} in preview mode.`, "info");
+        return;
+      }
+
+      try {
+        await callBackend(
+          "save_workspace_profile_command",
+          {
+            payload: {
+              root: null,
+              workspaceId: workspace.workspace_id,
+              name: workspace.name,
+              path: workspace.root_path,
+              defaultRuntime: workspace.default_runtime,
+              userProfile: workspaceProfileForm.userProfile,
+              preferredHarness: nextHarness,
+              routingStrategy: workspaceProfileForm.routingStrategy,
+              routeOverrides: saveableRouteOverrides(workspaceProfileForm.routeOverrides),
+              autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
+              minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
+              commitMessageStyle: workspaceProfileForm.commitMessageStyle,
+              executionTargetPreference: workspaceProfileForm.executionTargetPreference,
+            },
+          },
+          { throwOnError: true },
+        );
+        pushToast(`Harness switched to ${titleizeToken(nextHarness)}.`, "info");
+        await refreshAll(`workspace-harness-${nextHarness}`);
+      } catch (error) {
+        pushToast(`Harness switch failed: ${error}`, "error");
+      }
+    },
+    [markAction, previewMode, pushToast, refreshAll, workspace, workspaceProfileForm],
+  );
+
+  const handleAgentRouteFieldChange = useCallback((field, value) => {
+    setWorkspaceProfileForm(current => ({
+      ...current,
+      routeOverrides: updateRouteOverride(current.routeOverrides, agentRouteRole, {
+        [field]: value,
+      }),
+    }));
+  }, [agentRouteRole]);
+
+  const handleAgentRouteSave = useCallback(async () => {
+    markAction(`agent:route-save:${agentRouteRole}`);
+    if (!workspace) {
+      pushToast("Select a workspace before saving route controls.", "warn");
+      return;
+    }
+    await saveWorkspacePolicy();
+  }, [agentRouteRole, markAction, pushToast, saveWorkspacePolicy, workspace]);
+
+  const focusTranscriptTurn = useCallback(turnId => {
+    if (!turnId) {
+      return;
+    }
+    setHighlightedTurnId(turnId);
+    window.requestAnimationFrame(() => {
+      document.getElementById(turnId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
+
+  const togglePinnedNexus = useCallback(turnId => {
+    if (!turnId) {
+      return;
+    }
+    setPinnedNexusIds(current =>
+      current.includes(turnId) ? current.filter(item => item !== turnId) : [...current, turnId],
+    );
+  }, []);
+
+  const handleAgentSteerFromTurn = useCallback(item => {
+    const prefix = item?.meta ? `From ${item.meta}` : "From this step";
+    setHighlightedTurnId(item?.id || "");
+    setOperatorDraft(
+      `${prefix}: ${item?.title || "revisit this decision"}.\nDo this differently: `,
+    );
+    document.getElementById("thread-note")?.focus();
+  }, []);
+
+  const handleAgentMemoryFromTurn = useCallback(item => {
+    setHighlightedTurnId(item?.id || "");
+    setOperatorDraft(
+      `Memory correction for ${item?.title || "this step"}:\nThis was not okay because \nNext time do this instead: `,
+    );
+    document.getElementById("thread-note")?.focus();
+  }, []);
+
+  const handleAgentValidateTurn = useCallback(item => {
+    markAction(`agent:validate:${item?.id || "turn"}`);
+    setHighlightedTurnId(item?.id || "");
+    if (item?.role === "queue" || /approval/i.test(`${item?.label || ""} ${item?.title || ""}`)) {
+      setActiveDrawer("queue");
+      return;
+    }
+    if (item?.tone === "bad" || /verification|failed|error/i.test(`${item?.label || ""} ${item?.title || ""}`)) {
+      setActiveDrawer("proof");
+      return;
+    }
+    setActiveDrawer("context");
+  }, [markAction]);
 
   const openMissionDialog = useCallback(() => {
     markAction("open:mission-dialog");
@@ -1493,12 +1675,27 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
     markAction("composer:send-follow-up");
     try {
+      const steeringLines = [];
+      if (mission && agentRuntimeFocus !== "all") {
+        steeringLines.push(`Runtime preference: ${runtimeLabel(agentRuntimeFocus)}.`);
+      }
+      if (selectedAgentRoute.model.trim()) {
+        steeringLines.push(
+          `Route preference for ${titleizeToken(agentRouteRole)}: ${titleizeToken(selectedAgentRoute.provider)} / ${selectedAgentRoute.model.trim()}${
+            selectedAgentRoute.effort && selectedAgentRoute.effort !== "default"
+              ? ` / ${selectedAgentRoute.effort}`
+              : ""
+          }.`,
+        );
+      }
+      const composedFollowUp =
+        steeringLines.length > 0 ? `${steeringLines.join(" ")}\n\n${followUp}` : followUp;
       let sentLive = false;
       if (mission.runtime_id === "openclaw" && openClawStatus?.connected) {
         try {
           await callBackend(
             "send_openclaw_message",
-            { payload: { message: followUp } },
+            { payload: { message: composedFollowUp } },
             { throwOnError: true },
           );
           sentLive = true;
@@ -1508,7 +1705,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
       await callBackend(
         "send_control_room_mission_follow_up_command",
-        { payload: { missionId: mission.mission_id, message: followUp, root: null } },
+        { payload: { missionId: mission.mission_id, message: composedFollowUp, root: null } },
         { throwOnError: true },
       );
       setOperatorDraft("");
@@ -1516,7 +1713,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     } catch (error) {
       pushToast(`Mission follow-up failed: ${error}`, "error");
     }
-  }, [data.openClawStatus?.connected, markAction, mission, operatorDraft, previewMode, pushToast]);
+  }, [
+    agentRouteRole,
+    agentRuntimeFocus,
+    data.openClawStatus?.connected,
+    markAction,
+    mission,
+    openClawStatus?.connected,
+    operatorDraft,
+    previewMode,
+    pushToast,
+    selectedAgentRoute.effort,
+    selectedAgentRoute.model,
+    selectedAgentRoute.provider,
+  ]);
 
   const handleOpenClawConnect = useCallback(async () => {
     markAction("runtime:openclaw-connect");
@@ -1643,6 +1853,176 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     ],
   );
   const builderBoard = viewModel.drawers.builder.board;
+  const workspaceById = useMemo(
+    () => new Map(workspaces.map(item => [item.workspace_id, item])),
+    [workspaces],
+  );
+  const workspaceNavItems = useMemo(
+    () =>
+      workspaces.map(item => {
+        const workspaceMissionRows = missions.filter(entry => entry?.workspace_id === item.workspace_id);
+        const activeCount = workspaceMissionRows.filter(
+          entry => !["completed", "failed"].includes(entry?.state?.status || ""),
+        ).length;
+        const blockedCount = workspaceMissionRows.filter(
+          entry =>
+            asList(entry?.proof?.pending_approvals).length > 0 ||
+            asList(entry?.state?.verification_failures).length > 0 ||
+            ["needs_approval", "blocked", "verification_failed", "queued"].includes(
+              entry?.state?.status || "",
+            ),
+        ).length;
+        return {
+          workspaceId: item.workspace_id,
+          title: item.name,
+          subtitle: `${runtimeLabel(item.default_runtime)} default`,
+          context: item.root_path,
+          tone: blockedCount > 0 ? "warn" : item.runtimeStatus?.detected ? "good" : "warn",
+          badge: pathLeaf(item.root_path) || titleizeToken(item.workspace_type || "workspace"),
+          stats: [
+            activeCount > 0 ? { label: "threads", value: activeCount, tone: "good" } : null,
+            blockedCount > 0 ? { label: "blocked", value: blockedCount, tone: "warn" } : null,
+          ].filter(Boolean),
+        };
+      }),
+    [missions, workspaces],
+  );
+  const missionNavItems = useMemo(
+    () =>
+      missionOptions.map(item => {
+        const ownerWorkspace = workspaceById.get(item.workspace_id) || null;
+        const executionPath =
+          item?.delegated_runtime_sessions?.find(session => session?.execution_root)?.execution_root ||
+          item?.execution_scope?.execution_root ||
+          item?.state?.execution_scope?.execution_root ||
+          ownerWorkspace?.root_path ||
+          "";
+        const approvalCount = asList(item?.proof?.pending_approvals).length;
+        const verificationCount = asList(item?.state?.verification_failures).length;
+        const delegatedCount = asList(item?.delegated_runtime_sessions).filter(
+          session => !["completed", "failed", "stopped"].includes(session?.status || ""),
+        ).length;
+        const queuedCount = ["queued", "needs_approval", "blocked"].includes(item?.state?.status || "")
+          ? 1
+          : 0;
+        const tone =
+          verificationCount > 0
+            ? "bad"
+            : approvalCount > 0 || queuedCount > 0
+              ? "warn"
+              : delegatedCount > 0 || item?.state?.status === "running"
+                ? "good"
+                : "neutral";
+        return {
+          missionId: item.mission_id,
+          title: item.title || item.objective,
+          subtitle: `${runtimeLabel(item.runtime_id)} · ${titleizeToken(item.state?.status || "draft")}`,
+          context: executionPath,
+          tone,
+          badge:
+            pathLeaf(executionPath) ||
+            pathLeaf(ownerWorkspace?.root_path) ||
+            titleizeToken(item.state?.status || "draft"),
+          stats: [
+            approvalCount > 0 ? { label: "approvals", value: approvalCount, tone: "warn" } : null,
+            verificationCount > 0 ? { label: "failures", value: verificationCount, tone: "bad" } : null,
+            delegatedCount > 0 ? { label: "lanes", value: delegatedCount, tone: "good" } : null,
+            queuedCount > 0 && approvalCount === 0
+              ? { label: "queued", value: queuedCount, tone: "warn" }
+              : null,
+          ].filter(Boolean),
+        };
+      }),
+    [missionOptions, workspaceById],
+  );
+  const builderRootItems = useMemo(() => builderBoard.roots || [], [builderBoard.roots]);
+  const builderNexusItems = useMemo(() => builderBoard.nexuses || [], [builderBoard.nexuses]);
+  const builderPrimaryConversation = useMemo(
+    () =>
+      builderBoard.activeConversations.find(item => item.selected) ||
+      builderBoard.activeConversations.find(item => item.blocked) ||
+      builderBoard.activeConversations[0] ||
+      null,
+    [builderBoard.activeConversations],
+  );
+  const builderSecondaryConversations = useMemo(
+    () =>
+      builderBoard.activeConversations.filter(
+        item => item.missionId !== builderPrimaryConversation?.missionId,
+      ),
+    [builderBoard.activeConversations, builderPrimaryConversation?.missionId],
+  );
+  const topbarStatus = useMemo(() => {
+    if (uiMode === "builder") {
+      return {
+        label: "Builder focus",
+        value:
+          builderBoard.activeConversations.length > 0
+            ? `${builderBoard.activeConversations.length} active conversation${builderBoard.activeConversations.length === 1 ? "" : "s"}`
+            : "No active conversations",
+        tone:
+          builderBoard.activeConversations.length > 0
+            ? builderBoard.activeConversations.some(item => item.blocked)
+              ? "warn"
+              : "good"
+            : "neutral",
+      };
+    }
+    if (agentBlockedState.isBlocked) {
+      return {
+        label: "Blocker state",
+        value: viewModel.topBar.liveStatus.label,
+        tone: viewModel.topBar.liveStatus.tone,
+      };
+    }
+    return {
+      label: mission ? "Mission state" : "Workspace state",
+      value: mission ? viewModel.topBar.liveStatus.label : setupHealth.environmentReady ? "Environment ready" : "Needs setup",
+      tone: mission ? viewModel.topBar.liveStatus.tone : setupHealth.environmentReady ? "good" : "warn",
+    };
+  }, [
+    agentBlockedState.isBlocked,
+    builderBoard.activeConversations,
+    mission,
+    setupHealth.environmentReady,
+    uiMode,
+    viewModel.topBar.liveStatus.label,
+    viewModel.topBar.liveStatus.tone,
+  ]);
+  const runtimeOptions = useMemo(
+    () =>
+      asList(snapshot?.runtimes).map(item => ({
+        value: item.runtime_id,
+        label: item.label || runtimeLabel(item.runtime_id),
+      })),
+    [snapshot?.runtimes],
+  );
+  const selectedAgentRoute = useMemo(
+    () =>
+      workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {
+        role: agentRouteRole,
+        provider: "openai",
+        model: "",
+        effort: "default",
+      },
+    [agentRouteRole, workspaceProfileForm.routeOverrides],
+  );
+  const activeEffectiveRoute = useMemo(
+    () =>
+      effectiveRouteRows.find(item => item.role === agentRouteRole) || {
+        role: agentRouteRole,
+        provider: selectedAgentRoute.provider,
+        model: selectedAgentRoute.model,
+        effort: selectedAgentRoute.effort,
+      },
+    [
+      agentRouteRole,
+      effectiveRouteRows,
+      selectedAgentRoute.effort,
+      selectedAgentRoute.model,
+      selectedAgentRoute.provider,
+    ],
+  );
   const builderStudioCards = useMemo(
     () => [
       {
@@ -1730,88 +2110,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       });
     };
 
-    for (const approval of asList(mission?.proof?.pending_approvals).slice(0, 3)) {
-      pushTurn({
-        id: `mission-proof-approval-${approval}`,
-        dedupeKey: `approval:${approval}`,
-        role: "queue",
-        roleLabel: "Needs attention",
-        roleIcon: "!",
-        label: "Approval boundary",
-        title: approval,
-        detail: "Fluxio is waiting on an explicit operator decision.",
-        tone: "warn",
-        sortValue: Number.POSITIVE_INFINITY,
-      });
-    }
-
-    for (const approval of asList(data.pendingApprovals).slice(0, 3)) {
-      const timestampRaw = boundaryTimestamp(approval);
-      const title =
-        typeof approval === "string"
-          ? approval
-          : approval?.title || approval?.summary || approval?.reason || "Approval required";
-      pushTurn({
-        id: `approval-${approval?.approval_id || approval?.request_id || title}`,
-        dedupeKey: `approval:${title}`,
-        role: "queue",
-        roleLabel: "Needs attention",
-        roleIcon: "!",
-        label: "Approval boundary",
-        title,
-        detail:
-          approval?.reason ||
-          approval?.detail ||
-          approval?.context ||
-          "Fluxio is waiting on an explicit operator decision.",
-        meta: timestampLabel(timestampRaw),
-        timestampRaw,
-        tone: "warn",
-        sortValue: Number.isFinite(timeValue(timestampRaw)) ? timeValue(timestampRaw) : Number.POSITIVE_INFINITY,
-      });
-    }
-
-    for (const question of asList(data.pendingQuestions).slice(0, 3)) {
-      const timestampRaw = boundaryTimestamp(question);
-      const title =
-        typeof question === "string"
-          ? question
-          : question?.prompt || question?.question || question?.title || "Clarification needed";
-      pushTurn({
-        id: `question-${question?.question_id || question?.request_id || title}`,
-        dedupeKey: `question:${title}`,
-        role: "queue",
-        roleLabel: "Needs attention",
-        roleIcon: "?",
-        label: "Question",
-        title,
-        detail:
-          question?.detail ||
-          question?.summary ||
-          question?.context ||
-          "Answering this helps the mission continue.",
-        meta: timestampLabel(timestampRaw),
-        timestampRaw,
-        tone: "warn",
-        sortValue: Number.isFinite(timeValue(timestampRaw)) ? timeValue(timestampRaw) : Number.POSITIVE_INFINITY,
-      });
-    }
-
-    for (const failure of asList(mission?.state?.verification_failures).slice(0, 3)) {
-      pushTurn({
-        id: `verification-${failure}`,
-        dedupeKey: `verification:${failure}`,
-        role: "system",
-        roleLabel: "Fluxio",
-        roleIcon: "·",
-        label: "Verification failure",
-        title: failure,
-        detail: mission?.proof?.summary || "Verification failed and needs operator review.",
-        tone: "bad",
-        sortValue: Number.POSITIVE_INFINITY,
-      });
-    }
-
     for (const note of operatorNotes) {
       pushTurn({
         id: `operator-${note.id}`,
@@ -1830,40 +2128,43 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     for (const action of asList(mission?.action_history).slice(-6)) {
       const actionKind = action?.proposal?.kind || action?.action_id || "action";
       const actionGatePending = action?.gate?.status === "pending";
+      const actionStdout = action?.result?.stdout || "";
+      const actionError = action?.result?.error || "";
       const actionRuntimeLike =
         action?.proposal?.sourceKind === "delegated" ||
         /runtime|delegate|test|verify|command/i.test(actionKind);
-      const actionResult =
-        action?.result?.result_summary ||
-        action?.result?.error ||
-        action?.result?.stdout ||
-        "Mission action recorded.";
+      const actionResult = actionError || actionStdout;
+      if (actionGatePending || !actionResult) {
+        continue;
+      }
       pushTurn({
         id: `action-${action?.action_id || actionKind}-${action?.executed_at || actionResult}`,
         dedupeKey: `action:${action?.action_id || actionKind}:${action?.executed_at || actionResult}`,
-        role: actionGatePending ? "queue" : actionRuntimeLike ? "runtime" : "system",
+        role: actionRuntimeLike ? "runtime" : "system",
+        runtimeId: actionRuntimeLike ? mission?.runtime_id : "",
         roleLabel:
-          actionGatePending
-            ? "Needs attention"
-            : actionRuntimeLike
-              ? runtimeLabel(mission?.runtime_id)
-              : "Fluxio",
+          actionRuntimeLike
+            ? runtimeLabel(mission?.runtime_id)
+            : "Fluxio",
         roleIcon:
-          actionGatePending ? "!" : actionRuntimeLike ? (mission?.runtime_id === "hermes" ? "⬢" : "◇") : "·",
-        label: actionGatePending ? "Approval boundary" : titleizeToken(actionKind),
+          actionRuntimeLike ? (mission?.runtime_id === "hermes" ? "⬢" : "◇") : "·",
+        label: actionRuntimeLike ? "Process message" : titleizeToken(actionKind),
         title: action?.proposal?.title || action?.action_id || "Mission action",
         detail: actionResult,
-        technicalDetail:
-          action?.result?.stdout && action?.result?.stdout !== actionResult
-            ? action.result.stdout
-            : "",
+        technicalDetail: actionStdout && actionStdout !== actionResult ? actionStdout : "",
+        technicalSummary: actionStdout && actionStdout !== actionResult ? "Thinking trace" : "",
         meta: timestampLabel(action?.executed_at),
         timestampRaw: action?.executed_at,
-        tone: action?.result?.error ? "bad" : actionGatePending ? "warn" : "neutral",
+        tone: actionError ? "bad" : "neutral",
+        processMessage: actionRuntimeLike,
+        emphasis: Boolean(actionError || actionRuntimeLike),
       });
     }
 
     for (const event of liveControlEvents) {
+      if (!event.processMessage && event.role !== "operator" && event.role !== "bridge") {
+        continue;
+      }
       pushTurn({
         ...event,
         dedupeKey: `live:${event.role || ""}:${event.kind || ""}:${event.title || ""}:${event.timestampRaw || ""}`,
@@ -1875,12 +2176,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         session.delegated_id ||
         `${session.runtime_id || "runtime"}-${session.updated_at || session.last_event || "session"}`;
       const latestEvents = asList(session.latest_events);
-      const meaningfulEvents = latestEvents.filter(event => !isIgnorableAgentRuntimeEvent(event));
-      if (meaningfulEvents.length === 0) {
+      const meaningfulEvents = latestEvents.filter(
+        event => isProcessRuntimeKind(event.kind) || event.status === "failed",
+      );
+      if (meaningfulEvents.length === 0 && (session.status === "failed" || session.heartbeat_status === "stale")) {
         pushTurn({
           id: `delegated-${delegatedMessageId}`,
           dedupeKey: `delegated:${delegatedMessageId}`,
           role: "runtime",
+          runtimeId: session.runtime_id,
           roleLabel: runtimeLabel(session.runtime_id),
           roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
           label: `${runtimeLabel(session.runtime_id)} lane`,
@@ -1916,6 +2220,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
           dedupeKey: `delegated-event:${delegatedMessageId}:${event.event_id || event.message || index}`,
           role: "runtime",
+          runtimeId: session.runtime_id,
           roleLabel: runtimeLabel(session.runtime_id),
           roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
           label: processMessage ? "Process message" : titleizeToken(event.kind || "runtime event"),
@@ -1934,6 +2239,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               : /approval|blocked|stale/i.test(`${event.kind || ""} ${event.message || ""}`)
                 ? "warn"
                 : "neutral",
+          technicalDetail:
+            processMessage
+              ? event.trace ||
+                session.detail ||
+                session.execution_target_detail ||
+                session.execution_root ||
+                ""
+              : "",
+          technicalSummary: processMessage ? "Thinking trace" : "",
           processMessage,
           emphasis:
             processMessage ||
@@ -1957,6 +2271,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           : /runtime|delegate|verification|activity/i.test(kind)
             ? "runtime"
             : "system";
+      if (role !== "bridge") {
+        continue;
+      }
       pushTurn({
         id: `activity-${kind}-${activity?.timestamp || activity?.message}`,
         dedupeKey: `activity:${kind}:${activity?.message || ""}:${activity?.timestamp || ""}`,
@@ -1984,6 +2301,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         id: `openclaw-${message.id}`,
         dedupeKey: `openclaw:${message.id || message.createdAt || message.detail}`,
         role: "runtime",
+        runtimeId: "openclaw",
         roleLabel: "OpenClaw",
         roleIcon: "◇",
         label: "Process message",
@@ -1994,39 +2312,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         tone: message.tone || "neutral",
         processMessage: true,
         emphasis: true,
-      });
-    }
-
-    for (const session of bridgeSessions.slice(0, 3)) {
-      pushTurn({
-        id: `bridge-${session.session_id || session.app_id}`,
-        dedupeKey: `bridge:${session.session_id || session.app_id}:${session.last_seen_at || ""}`,
-        role: "bridge",
-        roleLabel: session.app_name || "Connected app",
-        roleIcon: "⌁",
-        label: `${session.app_name || session.app_id} bridge`,
-        title:
-          session.latest_task_result?.label ||
-          `${titleizeToken(session.status || "connected")} bridge session`,
-        detail:
-          session.latest_task_result?.resultSummary ||
-          session.notes?.[0] ||
-          "Bridge session is connected and reporting.",
-        meta: timestampLabel(session.last_seen_at),
-        timestampRaw: session.last_seen_at,
-        tone:
-          session.bridge_health === "healthy"
-            ? "neutral"
-            : session.bridge_health === "manifest_only"
-              ? "warn"
-              : "bad",
-        chips: [
-          session.bridge_transport ? titleizeToken(session.bridge_transport) : "",
-          session.bridge_health ? titleizeToken(session.bridge_health) : "",
-          Array.isArray(session.active_tasks) && session.active_tasks.length > 0
-            ? `${session.active_tasks.length} active`
-            : "",
-        ].filter(Boolean),
       });
     }
 
@@ -2048,7 +2333,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       .filter(item => !item.heartbeat)
       .map(({ sortOrder, sortValue, ...item }) => item);
   }, [
-    bridgeSessions,
     data.openClawMessages,
     data.pendingApprovals,
     data.pendingQuestions,
@@ -2058,7 +2342,37 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     operatorNotes,
     snapshot.activity,
   ]);
-  const agentHasTurns = agentTranscript.length > 0;
+  const agentVisibleTranscript = useMemo(
+    () =>
+      agentTranscript.filter(item => {
+        if (!mission || agentRuntimeFocus === "all") {
+          return true;
+        }
+        if (item.role !== "runtime") {
+          return true;
+        }
+        return !item.runtimeId || item.runtimeId === agentRuntimeFocus;
+      }),
+    [agentRuntimeFocus, agentTranscript, mission],
+  );
+  const agentThinkingTurns = useMemo(
+    () => agentVisibleTranscript.filter(item => item.processMessage || item.technicalDetail),
+    [agentVisibleTranscript],
+  );
+  const agentNexusTurns = useMemo(() => {
+    const direct = agentVisibleTranscript.filter(item => {
+      const text = `${item.label || ""} ${item.title || ""} ${item.detail || ""}`.toLowerCase();
+      return (
+        pinnedNexusIds.includes(item.id) ||
+        item.role === "queue" ||
+        item.tone === "bad" ||
+        /approval|verification|blocked|replan|switch|route|review|deploy|patch/.test(text) ||
+        (item.processMessage && /plan|patch|review|approval|verify|switch/.test(text))
+      );
+    });
+    return direct.slice(-6);
+  }, [agentVisibleTranscript, pinnedNexusIds]);
+  const agentHasTurns = agentVisibleTranscript.length > 0;
   const agentIdleState = !mission ? "no-mission" : agentHasTurns ? "active" : "no-turns";
   const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Fluxio workspace";
   const agentComposerLabel = !mission ? "Mission prompt" : "Follow-up or note";
@@ -2076,6 +2390,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
     openMissionDialog();
   }, [openMissionDialog, workspaces.length]);
+  const agentRuntimeSelectValue = mission ? agentRuntimeFocus : missionForm.runtime;
+  const agentRuntimeHint = !mission
+    ? "Choose the runtime for the next mission launch."
+    : agentRuntimeFocus === "all"
+      ? `Showing every visible runtime trace. Active lane: ${runtimeLabel(mission?.runtime_id)}.`
+      : `Filtering the transcript to ${runtimeLabel(agentRuntimeFocus)} turns while keeping operator and bridge context visible.`;
+  const agentRouteStatus = `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "Profile default"} · ${
+    activeEffectiveRoute.effort || selectedAgentRoute.effort || "default"
+  }`;
+  const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
 
   const drawerItems = useMemo(() => {
     const items = [
@@ -2142,6 +2466,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         ? drawerItems
         : drawerItems.filter(item => agentVisibleDrawers.includes(item.id)),
     [agentVisibleDrawers, drawerItems, uiMode],
+  );
+  const activeDrawerMeta = useMemo(
+    () =>
+      visibleDrawerItems.find(item => item.id === activeDrawer) ||
+      drawerItems.find(item => item.id === activeDrawer) ||
+      null,
+    [activeDrawer, drawerItems, visibleDrawerItems],
   );
 
   const renderDrawerPanel = () => {
@@ -3559,16 +3890,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 markAction(`mode:${mode}`);
                 setUiMode(mode);
                 if (mode === "builder") {
-                  setActiveDrawer(current =>
-                    ["builder", "skills", "runtime", "profiles", "proof", "queue", "settings"].includes(
-                      current,
-                    )
-                      ? current
-                      : "builder",
-                  );
+                  setActiveDrawer(null);
                   return;
                 }
-                setActiveDrawer(agentBlockedState.defaultDrawer);
+                setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : null);
               }}
               role="tab"
               type="button"
@@ -3580,21 +3905,26 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
         <div className="topbar-shortcuts">
           <TopbarShortcut
-            active={uiMode === "builder"}
-            label="Views"
+            active={showPersistentDrawer}
+            label={showPersistentDrawer && activeDrawerMeta ? `${activeDrawerMeta.label} panel` : "Open panel"}
             onClick={() => {
-              markAction("open:view-builder");
-              setUiMode("builder");
-              setActiveDrawer("builder");
+              markAction("toggle:panel");
+              if (uiMode === "builder") {
+                setActiveDrawer(current => (current ? null : "builder"));
+                return;
+              }
+              if (agentBlockedState.isBlocked) {
+                setActiveDrawer(agentBlockedState.defaultDrawer);
+              }
             }}
             tone="neutral"
           />
         </div>
 
         <div className="topbar-confidence">
-          <span>1.0 confidence</span>
-          <strong className={toneClass(viewModel.drawers.builder.confidence.tone)}>
-            {viewModel.drawers.builder.confidence.score}%
+          <span>{topbarStatus.label}</span>
+          <strong className={toneClass(topbarStatus.tone)}>
+            {topbarStatus.value}
           </strong>
         </div>
 
@@ -3614,7 +3944,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 onClick={() => {
                   markAction("rail:operator");
                   setUiMode("agent");
-                  setActiveDrawer(agentBlockedState.defaultDrawer);
+                  setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : null);
                 }}
               />
               {uiMode === "builder" ? (
@@ -3625,7 +3955,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     label="Builder"
                     onClick={() => {
                       markAction("rail:builder");
-                      setActiveDrawer("builder");
+                      setActiveDrawer(current => (current === "builder" ? null : "builder"));
                     }}
                   />
                   <GlobalRailButton
@@ -3635,7 +3965,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     onClick={() => {
                       markAction("rail:skills");
                       setSkillStudioFilter("all");
-                      setActiveDrawer("skills");
+                      setActiveDrawer(current => (current === "skills" ? null : "skills"));
                     }}
                   />
                   <GlobalRailButton
@@ -3644,7 +3974,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     label="Runtime"
                     onClick={() => {
                       markAction("rail:runtime");
-                      setActiveDrawer("runtime");
+                      setActiveDrawer(current => (current === "runtime" ? null : "runtime"));
                     }}
                   />
                   <GlobalRailButton
@@ -3653,7 +3983,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     label="Profiles"
                     onClick={() => {
                       markAction("rail:profiles");
-                      setActiveDrawer("profiles");
+                      setActiveDrawer(current => (current === "profiles" ? null : "profiles"));
                     }}
                   />
                 </>
@@ -3692,16 +4022,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               </div>
               <div className="fluxio-nav-list">
                 {missionOptions.length > 0 ? (
-                  missionOptions.map(item => (
+                  missionNavItems.map(item => (
                     <NavItem
-                      active={item.mission_id === selectedMissionId}
-                      badge={titleizeToken(item.state?.status || "draft")}
+                      active={item.missionId === selectedMissionId}
+                      badge={item.badge}
+                      context={item.context}
                       icon="◆"
-                      key={item.mission_id}
-                      onClick={() => setSelectedMissionId(item.mission_id)}
-                      subtitle={runtimeLabel(item.runtime_id)}
-                      title={item.title || item.objective}
-                      tone={item.proof?.pending_approvals?.length ? "warn" : viewModel.topBar.liveStatus.tone}
+                      key={item.missionId}
+                      onClick={() => setSelectedMissionId(item.missionId)}
+                      stats={item.stats}
+                      subtitle={item.subtitle}
+                      title={item.title}
+                      tone={item.tone}
                     />
                   ))
                 ) : (
@@ -3905,18 +4237,41 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <div className="builder-command-head">
                       <div className="builder-command-copy">
                         <p className="eyebrow">{builderBoard.headline}</p>
-                        <div className="thread-chip-row">
-                          {viewModel.thread.chips.map(item => (
-                            <StatusPill key={`builder-chip-${item.label}`} tone={item.tone}>
-                              {item.label}
-                            </StatusPill>
-                          ))}
-                          <StatusPill strong tone={viewModel.thread.status.tone}>
-                            {viewModel.thread.status.label}
-                          </StatusPill>
-                        </div>
-                        <h2>{viewModel.drawers.builder.confidence.label}</h2>
-                        <p>{builderBoard.summary}</p>
+                        {builderPrimaryConversation ? (
+                          <>
+                            <div className="thread-chip-row">
+                              <StatusPill tone={builderPrimaryConversation.blocked ? "warn" : builderPrimaryConversation.tone}>
+                                {builderPrimaryConversation.runtime}
+                              </StatusPill>
+                              <StatusPill tone="neutral">{builderPrimaryConversation.harnessLabel}</StatusPill>
+                              <StatusPill strong tone={builderPrimaryConversation.blocked ? "warn" : builderPrimaryConversation.tone}>
+                                {builderPrimaryConversation.statusLabel}
+                              </StatusPill>
+                            </div>
+                            <h2>{builderPrimaryConversation.title}</h2>
+                            <p>{builderPrimaryConversation.current}</p>
+                            {builderPrimaryConversation.executionPath ? (
+                              <p className="builder-conversation-path">{builderPrimaryConversation.executionPath}</p>
+                            ) : null}
+                            <div className="builder-primary-summary">
+                              <article className="builder-summary-card">
+                                <span>Current point</span>
+                                <strong>{builderPrimaryConversation.current}</strong>
+                                <p>{builderPrimaryConversation.lastMovement}</p>
+                              </article>
+                              <article className="builder-summary-card">
+                                <span>Next step</span>
+                                <strong>{builderPrimaryConversation.next}</strong>
+                                <p>{builderPrimaryConversation.updatedAt ? `Updated ${timestampLabel(builderPrimaryConversation.updatedAt)}` : "Active now"}</p>
+                              </article>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <h2>{viewModel.drawers.builder.confidence.label}</h2>
+                            <p>{builderBoard.summary}</p>
+                          </>
+                        )}
                       </div>
 
                       <div className="builder-board-metrics">
@@ -3931,24 +4286,30 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </div>
 
                     <div className="drawer-actions">
+                      {builderPrimaryConversation ? (
+                        <ActionButton onClick={() => setSelectedMissionId(builderPrimaryConversation.missionId)} variant="primary">
+                          Focus thread
+                        </ActionButton>
+                      ) : null}
                       <ActionButton onClick={() => setActiveDrawer("runtime")} variant="primary">
                         Runtime studio
                       </ActionButton>
                       <ActionButton onClick={() => setActiveDrawer("queue")}>Queue review</ActionButton>
                       <ActionButton onClick={() => setActiveDrawer("proof")}>Proof review</ActionButton>
+                      <ActionButton onClick={() => setActiveDrawer("context")}>Context</ActionButton>
                     </div>
                   </article>
 
                   <article className="builder-panel">
                     <div className="section-header">
                       <div className="section-title-block">
-                        <p className="eyebrow">Active conversations</p>
-                        <h2>All live mission threads</h2>
+                        <p className="eyebrow">Other Active Conversations</p>
+                        <h2>Smaller live threads around the main focus</h2>
                       </div>
                     </div>
-                    {builderBoard.activeConversations.length > 0 ? (
+                    {builderSecondaryConversations.length > 0 ? (
                       <div className="builder-conversation-grid">
-                        {builderBoard.activeConversations.map(item => (
+                        {builderSecondaryConversations.map(item => (
                           <button
                             className={`builder-conversation-card ${toneClass(item.tone)} ${item.selected ? "active" : ""}`.trim()}
                             key={item.missionId}
@@ -3965,6 +4326,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                               </StatusPill>
                             </div>
                             <p>{item.current}</p>
+                            {item.executionPath ? <p className="builder-conversation-path">{item.executionPath}</p> : null}
                             <div className="builder-conversation-meta">
                               {item.pendingApprovals > 0 ? (
                                 <span>{item.pendingApprovals} approval{item.pendingApprovals === 1 ? "" : "s"}</span>
@@ -3988,7 +4350,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </div>
                     ) : (
                       <p className="fluxio-empty-copy">
-                        No active conversations yet. Launch a mission and Builder will track every live thread here.
+                        {builderPrimaryConversation
+                          ? "No secondary conversations are active right now."
+                          : "No active conversations yet. Launch a mission and Builder will track every live thread here."}
                       </p>
                     )}
                   </article>
@@ -4081,15 +4445,37 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
                 <aside className="builder-secondary-column">
                   <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Selected thread</p>
-                    <h3>{builderBoard.selectedFocus?.title || viewModel.thread.title}</h3>
+                    <p className="eyebrow">Harnesses</p>
+                    <h3>{titleizeToken(workspaceProfileForm.preferredHarness)}</h3>
                     <div className="builder-inline-list">
-                      <span>Current: {builderBoard.selectedFocus?.current || "No active focus."}</span>
-                      <span>Next: {builderBoard.selectedFocus?.next || "Awaiting next checkpoint."}</span>
-                      <span>Last movement: {builderBoard.selectedFocus?.lastMovement || "No movement recorded."}</span>
+                      <span>Production: {titleizeToken(snapshot.harnessLab?.productionHarness || workspaceProfileForm.preferredHarness)}</span>
+                      <span>
+                        Shadow: {snapshot.harnessLab?.shadowCandidates?.length > 0
+                          ? snapshot.harnessLab.shadowCandidates.map(item => titleizeToken(item)).join(", ")
+                          : "None"}
+                      </span>
+                      <span>{snapshot.harnessLab?.recommendation || "Builder keeps the production and shadow harnesses visible here."}</span>
                     </div>
-                    <p>{builderBoard.selectedFocus?.proof || viewModel.thread.summary}</p>
-                    <ActionButton onClick={() => setActiveDrawer("context")}>Open context</ActionButton>
+                    <div className="drawer-actions">
+                      <ActionButton onClick={() => void applyPreferredHarness("fluxio_hybrid")} variant="primary">
+                        Use Fluxio Hybrid
+                      </ActionButton>
+                      <ActionButton onClick={() => void applyPreferredHarness("legacy_autonomous_engine")}>
+                        Use Legacy Harness
+                      </ActionButton>
+                    </div>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Skills</p>
+                    <h3>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready</h3>
+                    <p>{viewModel.drawers.builder.skillStudio.nextQualityActions[0] || "Skill quality is stable."}</p>
+                    <div className="builder-inline-list">
+                      <span>{viewModel.drawers.builder.skillStudio.summary.reviewedReusableCount}/{viewModel.drawers.builder.skillStudio.summary.totalSkills} reviewed reusable</span>
+                      <span>{viewModel.drawers.builder.skillStudio.summary.needsTestCount} need tests</span>
+                      <span>{viewModel.drawers.builder.skillStudio.summary.learnedCount} learned</span>
+                    </div>
+                    <ActionButton onClick={() => setActiveDrawer("skills")}>Open skill studio</ActionButton>
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
@@ -4104,7 +4490,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <ActionButton onClick={() => setActiveDrawer("profiles")}>Open profiles</ActionButton>
                   </article>
 
-                  <article className="builder-panel builder-panel-focus">
+                  <article className="builder-panel">
                     <p className="eyebrow">Runtime</p>
                     <h3>{viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} need attention</h3>
                     <div className="builder-inline-list">
@@ -4113,23 +4499,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       ))}
                     </div>
                     <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime</ActionButton>
-                  </article>
-
-                  <article className="builder-panel">
-                    <p className="eyebrow">Workflow</p>
-                    <h3>
-                      {viewModel.drawers.builder.workflowStudio.recommended?.label ||
-                        "Workflow recommendation pending"}
-                    </h3>
-                    <p>
-                      {viewModel.drawers.builder.workflowStudio.recommended?.description ||
-                        "Open the builder drawer for workflow details."}
-                    </p>
-                    <div className="builder-inline-list">
-                      <span>Gap: {viewModel.drawers.builder.qualityRoadmap.gap}%</span>
-                      <span>Release: {viewModel.drawers.builder.confidence.releaseStatus}</span>
-                    </div>
-                    <ActionButton onClick={() => setActiveDrawer("builder")}>Open builder</ActionButton>
                   </article>
                 </aside>
               </div>
@@ -4178,43 +4547,17 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
         {showPersistentDrawer ? (
           <aside className={`fluxio-drawer ${activeDrawer ? "open" : ""}`.trim()}>
-            <div className="drawer-toggle-row">
-              {visibleDrawerItems.map(item => (
-                <DrawerToggle
-                  active={activeDrawer === item.id}
-                  count={item.count}
-                  key={item.id}
-                  label={item.label}
-                  onClick={() => setActiveDrawer(item.id)}
-                  tone={item.tone}
-                />
-              ))}
+            <div className="drawer-shell-head">
+              <div>
+                <p className="eyebrow">{uiMode === "builder" ? "Builder panel" : "Blocker panel"}</p>
+                <strong>{activeDrawerMeta?.label || titleizeToken(activeDrawer || "panel")}</strong>
+              </div>
+              {uiMode === "builder" ? (
+                <ActionButton onClick={() => setActiveDrawer(null)} type="button">
+                  Close
+                </ActionButton>
+              ) : null}
             </div>
-            {viewModel.drawers.queue.urgent && activeDrawer !== "queue" ? (
-              <section className="drawer-priority">
-                <div className="drawer-priority-head">
-                  <div>
-                    <p className="eyebrow">Queue Spotlight</p>
-                    <strong>{viewModel.drawers.queue.items[0]?.title || "Queue needs attention"}</strong>
-                  </div>
-                  <StatusPill strong tone="warn">
-                    {viewModel.drawers.queue.count} pending
-                  </StatusPill>
-                </div>
-                <p>{viewModel.drawers.queue.items[0]?.reason || viewModel.drawers.queue.recommendation.reason}</p>
-                <div className="drawer-actions">
-                  <ActionButton onClick={() => setActiveDrawer("queue")} variant="primary">
-                    Review queue
-                  </ActionButton>
-                  <ActionButton
-                    disabled={!missionActionAvailable(mission, "resume")}
-                    onClick={() => void runMissionAction("resume", "Mission resume requested.")}
-                  >
-                    Resume mission
-                  </ActionButton>
-                </div>
-              </section>
-            ) : null}
             <div className="drawer-content">{renderDrawerPanel()}</div>
           </aside>
         ) : null}

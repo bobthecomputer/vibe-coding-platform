@@ -228,6 +228,7 @@ textarea {
 .topbar-confidence strong {
   font-size: 16px;
   line-height: 1;
+  max-width: 220px;
 }
 
 .fluxio-mode {
@@ -420,6 +421,39 @@ textarea {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.fluxio-nav-context {
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+.fluxio-nav-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.fluxio-nav-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 11px;
+}
+
+.fluxio-nav-stat strong {
+  font-size: 12px;
+}
+
+.fluxio-nav-stat em {
+  color: var(--muted);
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .fluxio-main {
@@ -636,6 +670,40 @@ textarea {
   gap: 10px;
 }
 
+.builder-primary-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.builder-summary-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 72%),
+    #232327;
+  padding: 12px;
+}
+
+.builder-summary-card span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.builder-summary-card strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.builder-summary-card p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .builder-metric-card {
   display: grid;
   gap: 4px;
@@ -675,7 +743,7 @@ textarea {
 
 .builder-conversation-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -740,6 +808,12 @@ button.builder-digest-item:hover {
   margin: 0;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.builder-conversation-path {
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-word;
 }
 
 .builder-conversation-meta,
@@ -1369,6 +1443,19 @@ button.builder-digest-item:hover {
   padding: 12px;
 }
 
+.drawer-shell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-shell-head strong {
+  font-size: 15px;
+}
+
 .drawer-priority {
   display: grid;
   gap: 8px;
@@ -1756,6 +1843,7 @@ button.builder-digest-item:hover {
 
   .builder-command-head,
   .builder-board-grid,
+  .builder-primary-summary,
   .builder-conversation-grid {
     grid-template-columns: 1fr;
   }

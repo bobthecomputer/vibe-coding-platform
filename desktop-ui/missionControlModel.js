@@ -516,7 +516,7 @@ function deriveConfidenceSurface({
   return {
     score: confidenceScore,
     tone: scoreTone(confidenceScore),
-    label: `${confidenceScore}% toward 1.0 validation`,
+    label: `${confidenceScore}% release confidence`,
     phase,
     releaseStatus: titleizeToken(release?.status || "building"),
     releaseScore,
@@ -1322,6 +1322,29 @@ function deriveMissionLastMovement(mission) {
   );
 }
 
+function deriveMissionExecutionPath(mission, workspace) {
+  const delegated = asList(mission?.delegated_runtime_sessions).find(
+    item => item?.execution_root || item?.workspace_root,
+  );
+  return (
+    delegated?.execution_root ||
+    delegated?.workspace_root ||
+    mission?.execution_scope?.execution_root ||
+    mission?.state?.execution_scope?.execution_root ||
+    workspace?.root_path ||
+    ""
+  );
+}
+
+function pathLeafLabel(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  const parts = text.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || text;
+}
+
 function missionNeedsAttention(mission) {
   return Boolean(
     asList(mission?.proof?.pending_approvals).length > 0 ||
@@ -1369,8 +1392,65 @@ function deriveActivityDetail(activity, missionById) {
   ]).join(" · ");
 }
 
-function deriveBuilderBoard({ mission, workspace, snapshot, confidence }) {
-  const workspaceId = workspace?.workspace_id || "";
+function deriveMissionNexus(mission, workspace) {
+  const pendingApproval = asList(mission?.proof?.pending_approvals)[0];
+  const verificationFailure = asList(mission?.state?.verification_failures)[0];
+  const latestPlan = asList(mission?.plan_revisions).slice(-1)[0];
+  const delegatedEvent = latestMeaningfulDelegatedEvent(mission);
+  const status = mission?.state?.status || mission?.missionLoop?.continuityState || "active";
+  const executionPath = deriveMissionExecutionPath(mission, workspace);
+
+  let label = "";
+  let reason = "";
+  let tone = "neutral";
+
+  if (verificationFailure) {
+    label = "Verification nexus";
+    reason = verificationFailure;
+    tone = "bad";
+  } else if (pendingApproval) {
+    label = "Approval nexus";
+    reason = pendingApproval;
+    tone = "warn";
+  } else if (["needs_approval", "blocked", "queued"].includes(status)) {
+    label = "Operator nexus";
+    reason =
+      mission?.state?.last_plan_summary ||
+      mission?.missionLoop?.continuityDetail ||
+      deriveMissionLastMovement(mission);
+    tone = "warn";
+  } else if (latestPlan?.summary) {
+    label = "Plan nexus";
+    reason = latestPlan.summary;
+    tone = "neutral";
+  } else if (delegatedEvent?.message) {
+    label = "Runtime nexus";
+    reason = delegatedEvent.message;
+    tone = missionStatusTone(status);
+  } else {
+    return null;
+  }
+
+  return {
+    id: `nexus-${mission?.mission_id || mission?.title || reason}`,
+    missionId: mission?.mission_id || "",
+    title: mission?.title || mission?.objective || "Mission",
+    label,
+    reason,
+    detail: deriveCurrentTask(mission),
+    next: deriveNextCheckpoint(mission),
+    tone,
+    timestamp: deriveMissionLatestTimestamp(mission),
+    workspaceName: workspace?.name || "Workspace",
+    executionPath,
+    folderLabel: pathLeafLabel(executionPath) || pathLeafLabel(workspace?.root_path || ""),
+  };
+}
+
+function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode = "agent" }) {
+  const workspaceId = uiMode === "builder" ? "" : workspace?.workspace_id || "";
+  const workspaces = asList(snapshot?.workspaces);
+  const workspaceById = new Map(workspaces.map(item => [item?.workspace_id, item]));
   const missions = asList(snapshot?.missions).filter(item =>
     workspaceId ? item?.workspace_id === workspaceId : true,
   );
@@ -1402,9 +1482,15 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence }) {
       );
     })
     .map(item => {
+      const ownerWorkspace = workspaceById.get(item?.workspace_id) || workspace;
       const status = item?.state?.status || item?.missionLoop?.continuityState || "active";
+      const executionPath = deriveMissionExecutionPath(item, ownerWorkspace);
       return {
         missionId: item?.mission_id || "",
+        workspaceId: item?.workspace_id || "",
+        workspaceName: ownerWorkspace?.name || "Workspace",
+        workspacePath: ownerWorkspace?.root_path || "",
+        folderLabel: pathLeafLabel(executionPath) || pathLeafLabel(ownerWorkspace?.root_path || ""),
         title: item?.title || item?.objective || "Mission",
         runtime: runtimeLabel(item?.runtime_id),
         statusLabel: titleizeToken(status),
@@ -1420,8 +1506,53 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence }) {
         delegatedSessions: asList(item?.delegated_runtime_sessions).filter(
           session => !["completed", "failed", "stopped"].includes(session?.status || ""),
         ).length,
+        executionPath,
+        harnessLabel: titleizeToken(item?.harness_id || productionHarness),
       };
     });
+
+  const roots = workspaces
+    .filter(item => (workspaceId ? item?.workspace_id === workspaceId : true))
+    .map(item => {
+      const workspaceConversations = activeConversations.filter(
+        entry => entry.workspaceId === item?.workspace_id,
+      );
+      const blocked = workspaceConversations.filter(entry => entry.blocked).length;
+      const delegated = workspaceConversations.reduce(
+        (total, entry) => total + asInt(entry.delegatedSessions),
+        0,
+      );
+      return {
+        workspaceId: item?.workspace_id || "",
+        title: item?.name || "Workspace",
+        path: item?.root_path || "",
+        folderLabel: pathLeafLabel(item?.root_path),
+        activeCount: workspaceConversations.length,
+        blockedCount: blocked,
+        delegatedCount: delegated,
+        tone:
+          blocked > 0
+            ? "warn"
+            : workspaceConversations.length > 0 || item?.runtimeStatus?.detected
+              ? "good"
+              : "neutral",
+      };
+    })
+    .sort((left, right) => {
+      if (left.blockedCount !== right.blockedCount) {
+        return right.blockedCount - left.blockedCount;
+      }
+      if (left.activeCount !== right.activeCount) {
+        return right.activeCount - left.activeCount;
+      }
+      return String(left.title).localeCompare(String(right.title));
+    });
+
+  const nexuses = activeMissions
+    .map(item => deriveMissionNexus(item, workspaceById.get(item?.workspace_id) || workspace))
+    .filter(Boolean)
+    .sort((left, right) => timeValue(right.timestamp) - timeValue(left.timestamp))
+    .slice(0, 8);
 
   const whileAway = asList(snapshot?.activity)
     .filter(item => {
@@ -1496,11 +1627,13 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence }) {
         id: "harness",
         label: "Production harness",
         value: titleizeToken(productionHarness),
-        detail: snapshot?.harnessLab?.recommendation || confidence.phase,
-        tone: confidence.tone,
+        detail: snapshot?.harnessLab?.recommendation || "Harness comparison is visible in Builder.",
+        tone: blockedCount > 0 ? "warn" : "good",
       },
     ],
     activeConversations,
+    roots,
+    nexuses,
     whileAway,
     nextUp,
     selectedFocus: mission
@@ -1584,7 +1717,7 @@ export function buildMissionControlModel({
     workflowStudio,
     builderOps,
   });
-  const builderBoard = deriveBuilderBoard({ mission, workspace, snapshot, confidence });
+  const builderBoard = deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode });
   const proofTone =
     asList(mission?.state?.verification_failures).length > 0
       ? "bad"

@@ -543,6 +543,147 @@ const liveReviewFixture = (() => {
   const snapshot = clone(baseSnapshot);
   snapshot.missions = [
     {
+      mission_id: 'mission_skill_studio',
+      workspace_id: 'workspace_primary',
+      runtime_id: 'hermes',
+      selected_profile: 'builder',
+      title: 'Stabilize skill studio management',
+      objective: 'Make installed, reusable, and needs-test skill lanes easier to supervise and improve.',
+      run_budget: { mode: 'Autopilot' },
+      state: {
+        status: 'running',
+        current_cycle_phase: 'execute',
+        cycle_count: 3,
+        last_verification_result: 'passed',
+        remaining_steps: ['Review weak skills', 'Route fixes into skill studio'],
+        verification_failures: [],
+        active_step_id: 'skill_audit',
+        last_plan_summary: 'Hermes is indexing skills, identifying weak packs, and preparing quality actions.',
+      },
+      proof: {
+        summary: 'Installed skills and learned packs are now being compared against execution readiness.',
+        pending_approvals: [],
+        failed_checks: [],
+      },
+      missionLoop: {
+        continuityState: 'running',
+        continuityDetail: 'Skill studio audit is still in progress.',
+        timeBudget: {
+          budgetHours: 6,
+          elapsedSeconds: 9420,
+          remainingSeconds: 12180,
+          status: 'running',
+          runUntilBehavior: 'pause_on_failure',
+        },
+      },
+      execution_scope: {
+        strategy: 'workspace_root',
+        execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/t3code/apps/web',
+      },
+      plan_revisions: [
+        {
+          revision_id: 'rev_skill_1',
+          trigger: 'skill_audit',
+          summary: 'Inspect installed skills, sort by quality, and queue improvements.',
+          created_at: now,
+          steps: [
+            { title: 'Index reusable skills', status: 'completed' },
+            { title: 'Review low-confidence skills', status: 'in_progress' },
+            { title: 'Open skill studio with filtered queue', status: 'pending' },
+          ],
+        },
+      ],
+      action_history: [
+        {
+          action_id: 'action_skill_1',
+          executed_at: now,
+          proposal: {
+            kind: 'runtime_delegate',
+            title: 'Delegate skill coverage audit to Hermes',
+            sourceKind: 'delegated',
+          },
+          gate: { status: 'not_required' },
+          result: {
+            result_summary: 'Hermes is indexing installed skills and identifying packs that still need tests.',
+            sourceKind: 'delegated',
+          },
+        },
+      ],
+      delegated_runtime_sessions: [
+        {
+          delegated_id: 'delegated_skill_studio',
+          runtime_id: 'hermes',
+          status: 'running',
+          last_event: 'Indexing installed skills and test coverage.',
+          detail: 'Hermes is auditing the skill library and prioritizing weak packs.',
+          heartbeat_status: 'healthy',
+          heartbeat_age_seconds: 12,
+          execution_target: 'workspace_root',
+          execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/t3code/apps/web',
+          execution_target_detail: 'Workspace-root review lane for skill packages and management metadata.',
+          updated_at: now,
+          pending_approval: {},
+          approval_history: [],
+          latest_events: [
+            { event_id: 'evt_skill_1', kind: 'runtime.output', message: 'Indexing installed skills and test coverage.', status: 'running' },
+          ],
+        },
+      ],
+    },
+    {
+      mission_id: 'mission_bridge_context',
+      workspace_id: 'workspace_primary',
+      runtime_id: 'openclaw',
+      selected_profile: 'builder',
+      title: 'Map bridge context and app follow-up surfaces',
+      objective: 'Compare bridge sessions, context previews, and callback readiness without blocking the main UI mission.',
+      run_budget: { mode: 'Autopilot' },
+      state: {
+        status: 'queued',
+        current_cycle_phase: 'plan',
+        cycle_count: 1,
+        last_verification_result: 'pending',
+        remaining_steps: ['Wait for the main UI review mission to clear workspace contention', 'Inspect bridge context rows'],
+        verification_failures: [],
+        active_step_id: 'bridge_queue',
+        last_plan_summary: 'This thread is queued behind the main workbench mission and is waiting for workspace access.',
+      },
+      proof: {
+        summary: 'Bridge context inspection is staged and ready once the current workspace lock clears.',
+        pending_approvals: [],
+        failed_checks: [],
+      },
+      missionLoop: {
+        continuityState: 'resume_available',
+        continuityDetail: 'Queued behind the active review mission.',
+        timeBudget: {
+          budgetHours: 3,
+          elapsedSeconds: 900,
+          remainingSeconds: 9900,
+          status: 'queued',
+          runUntilBehavior: 'pause_on_failure',
+        },
+      },
+      execution_scope: {
+        strategy: 'workspace_root',
+        execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/desktop-ui',
+      },
+      plan_revisions: [
+        {
+          revision_id: 'rev_bridge_1',
+          trigger: 'workspace_collision',
+          summary: 'Queue this bridge-context review until the active UI mission releases the workspace.',
+          created_at: now,
+          steps: [
+            { title: 'Queue behind current workspace lock', status: 'in_progress' },
+            { title: 'Inspect bridge session summaries', status: 'pending' },
+          ],
+        },
+      ],
+      action_history: [],
+      delegated_runtime_sessions: [],
+    },
+    {
       mission_id: 'mission_live_review',
       workspace_id: 'workspace_primary',
       runtime_id: 'openclaw',
@@ -684,6 +825,11 @@ const liveReviewFixture = (() => {
       pendingCount: 1,
       previewMessage: 'Approve delegated deploy simulation before Fluxio continues.',
     },
+  ];
+  snapshot.activity = [
+    { kind: 'mission.queued', mission_id: 'mission_bridge_context', message: 'Bridge context thread queued behind the active UI mission.', timestamp: now, metadata: { queuePosition: 2, blockingMissionId: 'mission_live_review' } },
+    { kind: 'runtime.output', mission_id: 'mission_skill_studio', message: 'Hermes indexed installed skills and flagged two packs for follow-up.', timestamp: now, metadata: { runtimeId: 'hermes' } },
+    ...snapshot.activity,
   ];
   return {
     name: 'Live Review',
