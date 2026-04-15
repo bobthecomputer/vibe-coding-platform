@@ -235,6 +235,29 @@ class DelegatedRuntimeSupervisor:
         payload = self.refresh_session(session)
         return payload.latest_events[-max_lines:]
 
+    def append_operator_follow_up(
+        self,
+        session: DelegatedRuntimeSession | dict | str,
+        message: str,
+        *,
+        actor: str = "operator",
+        channel: str = "desktop",
+    ) -> DelegatedRuntimeSession:
+        payload = self._load_session(session)
+        if payload is None:
+            raise FileNotFoundError(f"Unknown delegated runtime session: {session}")
+        clean_message = str(message).strip()
+        if not clean_message:
+            raise ValueError("Follow-up message cannot be empty.")
+        self._append_structured_event(
+            payload,
+            kind="operator.followup",
+            message=clean_message,
+            status=payload.status,
+            data={"actor": actor, "channel": channel},
+        )
+        return self.refresh_session(payload)
+
     def build_session_snapshot(
         self,
         session: DelegatedRuntimeSession | dict | str,

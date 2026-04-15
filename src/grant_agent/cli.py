@@ -946,6 +946,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Mission lifecycle action",
     )
 
+    mission_follow_up_cmd = subparsers.add_parser(
+        "mission-follow-up",
+        help="Attach an operator follow-up to a mission thread and its active delegated lane",
+    )
+    mission_follow_up_cmd.add_argument("--root", default=".", help="Project root path")
+    mission_follow_up_cmd.add_argument("--mission-id", required=True, help="Mission id")
+    mission_follow_up_cmd.add_argument(
+        "--message",
+        required=True,
+        help="Operator follow-up text to persist in the mission thread",
+    )
+
     workspace_action_cmd = subparsers.add_parser(
         "workspace-action",
         help="Run an approval-aware setup or git action from the control room",
@@ -3000,6 +3012,75 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pick_follow_up_session(mission: Mission) -> DelegatedRuntimeSession | None:
+    sessions = list(mission.delegated_runtime_sessions or [])
+    if not sessions:
+        return None
+
+    def _rank(item: DelegatedRuntimeSession) -> tuple[int, str, str]:
+        active_rank = 1 if item.status in {"waiting_for_approval", "running", "launching"} else 0
+        return (active_rank, item.updated_at or "", item.created_at or "")
+
+    return max(sessions, key=_rank)
+
+
+def cmd_mission_follow_up(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    store.rebalance_mission_queue()
+    mission = store.get_mission(args.mission_id)
+    if mission is None:
+        print(json.dumps({"error": f"Unknown mission id: {args.mission_id}"}, indent=2))
+        return 1
+
+    message = str(args.message or "").strip()
+    if not message:
+        print(json.dumps({"error": "Follow-up message cannot be empty."}, indent=2))
+        return 1
+
+    runtime_supervisor = DelegatedRuntimeSupervisor(root)
+    delegated_session = _pick_follow_up_session(mission)
+    queued_for_runtime = False
+    if delegated_session is not None:
+        refreshed = runtime_supervisor.append_operator_follow_up(
+            delegated_session,
+            message,
+            actor="operator",
+            channel="desktop",
+        )
+        mission.delegated_runtime_sessions = [
+            refreshed if item.delegated_id == refreshed.delegated_id else item
+            for item in mission.delegated_runtime_sessions
+        ]
+        mission.state.delegated_runtime_sessions = [
+            asdict(item) if hasattr(item, "__dataclass_fields__") else item
+            for item in mission.delegated_runtime_sessions
+        ]
+        mission.state.last_runtime_event = refreshed.last_event or mission.state.last_runtime_event
+        queued_for_runtime = True
+
+    store.update_mission(mission)
+    store.append_event(
+        MissionEvent(
+            mission_id=mission.mission_id,
+            kind="mission.follow_up",
+            message=message,
+            metadata={
+                "channel": "desktop",
+                "queuedForRuntime": queued_for_runtime,
+                "runtimeId": mission.runtime_id,
+            },
+        )
+    )
+    payload = {
+        "mission": asdict(mission),
+        "queuedForRuntime": queued_for_runtime,
+        "snapshot": store.build_snapshot(),
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def cmd_workspace_action(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
@@ -3114,6 +3195,9 @@ def main() -> int:
 
     if args.command == "mission-action":
         return cmd_mission_action(args)
+
+    if args.command == "mission-follow-up":
+        return cmd_mission_follow_up(args)
 
     if args.command == "workspace-action":
         return cmd_workspace_action(args)

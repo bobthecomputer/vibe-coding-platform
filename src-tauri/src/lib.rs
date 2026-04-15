@@ -943,6 +943,14 @@ struct ControlMissionActionPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ControlMissionFollowUpPayload {
+    root: Option<String>,
+    mission_id: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ControlWorkspaceActionPayload {
     root: Option<String>,
     workspace_id: Option<String>,
@@ -5126,6 +5134,22 @@ async fn apply_control_room_mission_action_command(
 }
 
 #[tauri::command]
+async fn send_control_room_mission_follow_up_command(
+    app: AppHandle,
+    payload: ControlMissionFollowUpPayload,
+) -> Result<Value, String> {
+    let args = vec![
+        "--mission-id".to_string(),
+        payload.mission_id,
+        "--message".to_string(),
+        payload.message,
+    ];
+    let response = run_agent_cli_json(&app, payload.root, "mission-follow-up", args, 120).await?;
+    emit_control_room_changed(&app, "mission.follow_up");
+    Ok(response)
+}
+
+#[tauri::command]
 async fn apply_control_room_workspace_action_command(
     app: AppHandle,
     payload: ControlWorkspaceActionPayload,
@@ -5435,6 +5459,7 @@ pub fn run() {
             save_workspace_profile_command,
             start_control_room_mission_command,
             apply_control_room_mission_action_command,
+            send_control_room_mission_follow_up_command,
             apply_control_room_workspace_action_command,
             has_telegram_bot_token_command,
             save_telegram_bot_token_command,

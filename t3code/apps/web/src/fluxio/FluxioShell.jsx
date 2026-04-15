@@ -353,6 +353,110 @@ function createSessionEntry(entry) {
   };
 }
 
+function deltaDetail(row) {
+  const detailSources = [
+    row?.detail,
+    row?.metadata?.detail,
+    row?.metadata?.reason,
+    row?.metadata?.pauseReason,
+    row?.metadata?.autopilotStatus,
+    row?.metadata?.status,
+    row?.data?.detail,
+    row?.data?.decision,
+    row?.data?.request_id,
+  ];
+  return detailSources.find(value => value) || "";
+}
+
+function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
+  const row = payload?.row;
+  const source = payload?.source || "delta";
+  if (!row || !mission) {
+    return null;
+  }
+
+  if (source === "mission_event") {
+    if (row.mission_id !== mission.mission_id) {
+      return null;
+    }
+    const kind = row.kind || "mission.event";
+    return {
+      id: `mission-${row.mission_id}-${row.timestamp || payload.detectedAt}-${kind}-${row.message || "event"}`,
+      kind,
+      role: kind === "mission.follow_up" ? "operator" : kind === "mission.approval" ? "queue" : "system",
+      roleLabel:
+        kind === "mission.follow_up"
+          ? "Operator"
+          : kind === "mission.approval"
+            ? "Needs attention"
+            : "Fluxio",
+      roleIcon:
+        kind === "mission.follow_up"
+          ? "◉"
+          : kind === "mission.approval"
+            ? "!"
+            : "·",
+      label: titleizeToken(kind),
+      title: row.message || "Mission event",
+      detail: deltaDetail(row),
+      meta: timestampLabel(row.timestamp || payload.detectedAt),
+      tone:
+        kind === "mission.approval"
+          ? "warn"
+          : /failed|error/i.test(`${kind} ${row.message || ""}`)
+            ? "bad"
+            : "neutral",
+      chips: [
+        row.metadata?.runtimeId ? runtimeLabel(row.metadata.runtimeId) : "",
+        row.metadata?.queuedForRuntime ? "Queued for runtime" : "",
+      ].filter(Boolean),
+    };
+  }
+
+  if (source === "runtime_event") {
+    const delegatedId = row.delegated_id || row.delegatedId || "";
+    const delegatedIds = new Set(
+      delegatedSessions.map(item => item?.delegated_id).filter(Boolean),
+    );
+    if (delegatedIds.size > 0 && delegatedId && !delegatedIds.has(delegatedId)) {
+      return null;
+    }
+    if (delegatedIds.size > 0 && !delegatedId) {
+      return null;
+    }
+    const kind = row.kind || "runtime.event";
+    return {
+      id: `runtime-${delegatedId || mission.mission_id}-${row.event_id || row.created_at || payload.detectedAt}-${kind}`,
+      kind,
+      role: kind === "operator.followup" ? "operator" : "runtime",
+      roleLabel:
+        kind === "operator.followup" ? "Operator" : runtimeLabel(row.runtime_id || mission.runtime_id),
+      roleIcon:
+        kind === "operator.followup"
+          ? "◉"
+          : row.runtime_id === "hermes"
+            ? "⬢"
+            : "◇",
+      label: titleizeToken(kind),
+      title: row.message || "Runtime event",
+      detail: deltaDetail(row),
+      meta: timestampLabel(row.created_at || payload.detectedAt),
+      tone:
+        row.status === "failed"
+          ? "bad"
+          : /approval|waiting/i.test(`${kind} ${row.status || ""}`)
+            ? "warn"
+            : "neutral",
+      chips: [
+        row.runtime_id ? runtimeLabel(row.runtime_id) : "",
+        row.status ? titleizeToken(row.status) : "",
+      ].filter(Boolean),
+    };
+  }
+
+  return null;
+}
+
 function inferSurfaceFromAction(action) {
   if (action?.surface) {
     return action.surface;
@@ -408,6 +512,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [activeDrawer, setActiveDrawer] = useState("context");
   const [operatorDraft, setOperatorDraft] = useState("");
   const [operatorNotes, setOperatorNotes] = useState([]);
+  const [liveControlEvents, setLiveControlEvents] = useState([]);
   const [data, setData] = useState({
     snapshot: null,
     onboarding: null,
@@ -421,6 +526,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   });
 
   const mountedRef = useRef(true);
+  const currentMissionRef = useRef(null);
+  const currentDelegatedSessionsRef = useRef([]);
   const { items: toasts, push: pushToast } = useToastQueue();
 
   const markAction = useCallback(
@@ -451,6 +558,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.telegramChatId, telegramChatId);
   }, [telegramChatId]);
+
+  useEffect(() => {
+    setLiveControlEvents([]);
+  }, [previewMode, selectedMissionId]);
 
   const refreshAll = useCallback(
     async (reason = "manual") => {
@@ -633,7 +744,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     void listen("control-room://delta", event => {
       const reason = event?.payload?.source || "backend-delta";
       setLastPushReason(reason);
-      void refreshAll(reason);
+      const liveItem = controlRoomDeltaToLiveItem(
+        event?.payload,
+        currentMissionRef.current,
+        currentDelegatedSessionsRef.current,
+      );
+      if (liveItem) {
+        setLiveControlEvents(current =>
+          [liveItem, ...current.filter(entry => entry.id !== liveItem.id)].slice(0, 24),
+        );
+      }
     })
       .then(unlisten => {
         unlistenDelta = unlisten;
@@ -1228,39 +1348,46 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
 
   const handleAgentFollowUp = useCallback(async () => {
-    if (!operatorDraft.trim()) {
+    const followUp = operatorDraft.trim();
+    if (!followUp) {
       pushToast("Write a follow-up first.", "warn");
-      return;
-    }
-    if (mission?.runtime_id !== "openclaw") {
-      pushToast("Live follow-up is currently wired for OpenClaw missions only.", "warn");
       return;
     }
     if (previewMode !== "live" || !hasTauriBackend()) {
       pushToast("Preview mode cannot send runtime follow-ups.", "warn");
       return;
     }
+    if (!mission?.mission_id) {
+      pushToast("Select a mission before sending a follow-up.", "warn");
+      return;
+    }
 
     markAction("composer:send-follow-up");
     try {
+      let sentLive = false;
+      if (mission.runtime_id === "openclaw" && openClawStatus?.connected) {
+        try {
+          await callBackend(
+            "send_openclaw_message",
+            { payload: { message: followUp } },
+            { throwOnError: true },
+          );
+          sentLive = true;
+        } catch (error) {
+          pushToast(`OpenClaw live send failed, keeping the follow-up in mission thread: ${error}`, "warn");
+        }
+      }
       await callBackend(
-        "send_openclaw_message",
-        { payload: { message: operatorDraft.trim() } },
+        "send_control_room_mission_follow_up_command",
+        { payload: { missionId: mission.mission_id, message: followUp, root: null } },
         { throwOnError: true },
       );
-      appendOperatorEntry({
-        title: "Operator follow-up",
-        detail: operatorDraft.trim(),
-        meta: "Sent to OpenClaw",
-        tone: "neutral",
-        channel: "followup",
-      });
       setOperatorDraft("");
-      pushToast("Follow-up sent to OpenClaw.", "info");
+      pushToast(sentLive ? "Follow-up sent live and recorded in the mission thread." : "Follow-up recorded in the mission thread.", "info");
     } catch (error) {
-      pushToast(`OpenClaw follow-up failed: ${error}`, "error");
+      pushToast(`Mission follow-up failed: ${error}`, "error");
     }
-  }, [appendOperatorEntry, markAction, mission?.runtime_id, operatorDraft, previewMode, pushToast]);
+  }, [markAction, mission, openClawStatus?.connected, operatorDraft, previewMode, pushToast]);
 
   const handleOpenClawConnect = useCallback(async () => {
     markAction("runtime:openclaw-connect");
@@ -1348,8 +1475,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
 
   const threadEvents = useMemo(
-    () => [...composerEvents, ...(viewModel.thread.events || [])].slice(0, 24),
-    [composerEvents, viewModel.thread.events],
+    () => [...liveControlEvents, ...composerEvents, ...(viewModel.thread.events || [])].slice(0, 24),
+    [composerEvents, liveControlEvents, viewModel.thread.events],
   );
 
   const openClawRuntimeActive = mission?.runtime_id === "openclaw";
@@ -1436,6 +1563,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     workspace?.default_runtime,
   ]);
 
+  useEffect(() => {
+    currentMissionRef.current = mission;
+  }, [mission]);
+
+  useEffect(() => {
+    currentDelegatedSessionsRef.current = delegatedSessions;
+  }, [delegatedSessions]);
+
   const agentTranscript = useMemo(() => {
     const items = [];
 
@@ -1501,6 +1636,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         meta: timestampLabel(note.createdAt),
         tone: note.tone || "neutral",
       });
+    }
+
+    for (const event of liveControlEvents) {
+      items.push(event);
     }
 
     for (const session of delegatedSessions) {
@@ -1623,6 +1762,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     data.pendingApprovals,
     data.pendingQuestions,
     delegatedSessions,
+    liveControlEvents,
     mission,
     operatorNotes,
     viewModel.thread.events,
@@ -2108,7 +2248,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               )}
             </div>
             <p className="drawer-footnote">
-              Hermes does not yet have an OpenClaw-style dedicated Tauri gateway in this shell. Its live supervision currently comes through delegated runtime sessions and connected-app bridge snapshots.
+              OpenClaw still has the direct gateway, but Hermes supervision now lands in the same Agent conversation through control-room runtime events and delegated lane snapshots.
             </p>
           </section>
 
@@ -3673,12 +3813,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   value={operatorDraft}
                 />
                 <div className="thread-composer-actions">
-                  {openClawRuntimeActive ? (
-                    <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
-                      Send to agent
-                    </ActionButton>
-                  ) : null}
-                  <ActionButton onClick={handleOperatorNote} type="button" variant={openClawRuntimeActive ? undefined : "primary"}>
+                  <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
+                    Send to agent
+                  </ActionButton>
+                  <ActionButton onClick={handleOperatorNote} type="button">
                     Save note
                   </ActionButton>
                   <ActionButton

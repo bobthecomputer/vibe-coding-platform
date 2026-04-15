@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import pathlib
@@ -13,6 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
+from grant_agent.cli import cmd_mission_follow_up
 from grant_agent.mission_control import (
     ControlRoomStore,
     _build_git_actions,
@@ -28,6 +30,71 @@ from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
 class MissionControlTests(unittest.TestCase):
+    def test_cli_mission_follow_up_records_thread_and_runtime_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep operator follow-ups inside the mission conversation",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=3600,
+            )
+            runtime_dir = root / ".agent_control" / "runtime_sessions"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            session_path = runtime_dir / "delegate_follow_up.json"
+            session = DelegatedRuntimeSession(
+                delegated_id="delegate_follow_up",
+                runtime_id="hermes",
+                launch_command="hermes chat -q demo -Q",
+                status="running",
+                detail="Delegated runtime is active.",
+                session_path=str(session_path),
+                events_path=str(runtime_dir / "delegate_follow_up.events.jsonl"),
+                decision_path=str(runtime_dir / "delegate_follow_up.approval.json"),
+                updated_at=utc_now_iso(),
+            )
+            session_path.write_text(json.dumps(asdict(session), indent=2), encoding="utf-8")
+            mission.delegated_runtime_sessions = [session]
+            mission.state.delegated_runtime_sessions = [asdict(session)]
+            store.update_mission(mission)
+
+            with mock.patch("grant_agent.runtime_supervisor._pid_alive", return_value=True):
+                exit_code = cmd_mission_follow_up(
+                    argparse.Namespace(
+                        root=str(root),
+                        mission_id=mission.mission_id,
+                        message="Please keep me updated on the next runtime checkpoint.",
+                    )
+                )
+            self.assertEqual(exit_code, 0)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+            self.assertEqual(
+                mission_payload["state"]["last_runtime_event"],
+                "Please keep me updated on the next runtime checkpoint.",
+            )
+            self.assertEqual(
+                mission_payload["delegated_runtime_sessions"][0]["latest_events"][-1]["kind"],
+                "operator.followup",
+            )
+            recent_event = store.recent_events(limit=1)[0]
+            self.assertEqual(recent_event["kind"], "mission.follow_up")
+            self.assertEqual(
+                recent_event["message"],
+                "Please keep me updated on the next runtime checkpoint.",
+            )
+
     def test_store_creates_default_workspace_and_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
