@@ -1404,7 +1404,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     } catch (error) {
       pushToast(`Mission follow-up failed: ${error}`, "error");
     }
-  }, [markAction, mission, openClawStatus?.connected, operatorDraft, previewMode, pushToast]);
+  }, [data.openClawStatus?.connected, markAction, mission, operatorDraft, previewMode, pushToast]);
 
   const handleOpenClawConnect = useCallback(async () => {
     markAction("runtime:openclaw-connect");
@@ -1547,96 +1547,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       workspace?.user_profile,
     ],
   );
-  const runtimeTruth = useMemo(() => {
-    const items = [
-      openClawRuntimeActive
-        ? openClawStatus?.connected
-          ? "OpenClaw gateway connected"
-          : "OpenClaw gateway not connected"
-        : `Mission runtime: ${runtimeLabel(mission?.runtime_id || workspace?.default_runtime || "openclaw")}`,
-      data.openClawHasToken ? "Gateway token stored" : "Gateway token missing",
-    ];
-
-    if (delegatedSessions.length > 0) {
-      items.push(
-        `${delegatedSessions.length} delegated runtime lane${delegatedSessions.length > 1 ? "s" : ""} visible in-thread`,
-      );
-    }
-    if (bridgeSessions.length > 0) {
-      items.push(
-        `${bridgeSessions.length} connected app bridge${bridgeSessions.length > 1 ? "s" : ""} reporting`,
-      );
-    }
-
-    items.push("Builder can install, repair, and update runtimes without leaving the shell.");
-    return items;
-  }, [
-    bridgeSessions.length,
-    data.openClawHasToken,
-    delegatedSessions.length,
-    mission?.runtime_id,
-    openClawRuntimeActive,
-    openClawStatus?.connected,
-    workspace?.default_runtime,
-  ]);
-
-  const agentStatusItems = useMemo(() => {
-    if (!mission) {
-      return [];
-    }
-
-    const waitingValue =
-      data.pendingApprovals.length > 0
-        ? `${data.pendingApprovals.length} approval${data.pendingApprovals.length > 1 ? "s" : ""}`
-        : data.pendingQuestions.length > 0
-          ? `${data.pendingQuestions.length} question${data.pendingQuestions.length > 1 ? "s" : ""}`
-          : "No blockers";
-
-    const liveValue =
-      delegatedSessions.length > 0
-        ? `${delegatedSessions.length} delegated lane${delegatedSessions.length > 1 ? "s" : ""}`
-        : bridgeSessions.length > 0
-          ? `${bridgeSessions.length} connected bridge${bridgeSessions.length > 1 ? "s" : ""}`
-          : openClawRuntimeActive && openClawStatus?.connected
-            ? "Gateway connected"
-            : isRefreshing
-              ? "Refreshing"
-              : "Stable";
-
-    return [
-      {
-        label: "Runtime",
-        value: runtimeLabel(mission?.runtime_id || workspace?.default_runtime || "openclaw"),
-      },
-      {
-        label: "Waiting",
-        value: waitingValue,
-      },
-      {
-        label: "Live",
-        value: liveValue,
-      },
-      {
-        label: "Proof",
-        value:
-          viewModel.thread.proofItems?.length > 0
-            ? `${viewModel.thread.proofItems.length} review item${viewModel.thread.proofItems.length > 1 ? "s" : ""}`
-            : "No proof deltas",
-      },
-    ];
-  }, [
-    bridgeSessions.length,
-    data.pendingApprovals.length,
-    data.pendingQuestions.length,
-    delegatedSessions.length,
-    isRefreshing,
-    mission,
-    openClawRuntimeActive,
-    openClawStatus?.connected,
-    viewModel.thread.proofItems,
-    workspace?.default_runtime,
-  ]);
-
   const builderStudioCards = useMemo(
     () => [
       {
@@ -3980,60 +3890,34 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <p className="eyebrow">Agent conversation</p>
                 <h1>{viewModel.thread.title}</h1>
                 <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
-                <div className="agent-status-grid">
-                  {agentStatusItems.map(item => (
-                    <article className="agent-status-card" key={item.label}>
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
-                    </article>
-                  ))}
+                <div className="agent-thread-meta">
+                  <span>{viewModel.thread.status.label}</span>
+                  <span>{previewLabel(previewMode, data.previewMeta)}</span>
+                  {lastPushReason ? <span>{lastPushReason}</span> : null}
                 </div>
               </header>
 
               <section className="agent-chat-stage">
-                <div className="agent-chat-toolbar">
-                  <div className="agent-chat-toolbar-copy">
-                    <p className="eyebrow">Live thread</p>
-                    <span>
-                      {previewLabel(previewMode, data.previewMeta)}
-                      {lastPushReason ? ` · ${lastPushReason}` : ""}
-                    </span>
-                  </div>
-                  <div className="agent-chat-toolbar-actions">
-                    <ActionButton
-                      onClick={() => {
-                        if (!showPersistentDrawer) {
-                          setUiMode("builder");
-                        }
-                        setActiveDrawer("proof");
-                      }}
-                    >
-                      Proof
-                    </ActionButton>
-                    <ActionButton
-                      onClick={() => {
-                        setUiMode("builder");
-                        setActiveDrawer("builder");
-                      }}
-                    >
-                      Builder
-                    </ActionButton>
-                  </div>
-                </div>
-
                 {showPersistentDrawer ? (
                   <div className="agent-launch-banner">
                     Setup and review stay visible only until launch stabilizes. After that, Agent mode drops back to the conversation.
                   </div>
                 ) : null}
 
-                <div className="agent-presence-row">
-                  {runtimeTruth.slice(0, 3).map(item => (
-                    <span className="agent-presence-pill" key={item}>
-                      {item}
-                    </span>
-                  ))}
-                </div>
+                {!showPersistentDrawer && agentContextDigest.length > 0 ? (
+                  <details className="agent-context-digest">
+                    <summary>Mission context</summary>
+                    <div className="agent-context-grid">
+                      {agentContextDigest.map(item => (
+                        <article className="agent-context-item" key={item.label}>
+                          <span>{item.label}</span>
+                          <strong>{item.value}</strong>
+                          {item.note ? <p>{item.note}</p> : null}
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
 
                 <section className="agent-transcript-shell">
                   <div className="agent-transcript">
@@ -4042,42 +3926,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     ))}
                   </div>
                 </section>
-
-                <div className="agent-proof-summary">
-                  <div>
-                    <p className="eyebrow">Review posture</p>
-                    <strong>{viewModel.thread.status.label}</strong>
-                    <span>
-                      {viewModel.thread.proofItems.length > 0
-                        ? `${viewModel.thread.proofItems.length} proof item${viewModel.thread.proofItems.length > 1 ? "s" : ""} ready to review`
-                        : "No proof deltas are waiting right now."}
-                    </span>
-                  </div>
-                  <div className="agent-proof-summary-actions">
-                    <ActionButton
-                      onClick={() => {
-                        if (!showPersistentDrawer) {
-                          setUiMode("builder");
-                        }
-                        setActiveDrawer("queue");
-                      }}
-                      type="button"
-                    >
-                      Queue
-                    </ActionButton>
-                    <ActionButton
-                      onClick={() => {
-                        if (!showPersistentDrawer) {
-                          setUiMode("builder");
-                        }
-                        setActiveDrawer("proof");
-                      }}
-                      type="button"
-                    >
-                      Open proof
-                    </ActionButton>
-                  </div>
-                </div>
 
                 <form className="thread-composer agent-composer agent-chat-composer" onSubmit={event => event.preventDefault()}>
                   <label htmlFor="thread-note">Follow-up or note</label>

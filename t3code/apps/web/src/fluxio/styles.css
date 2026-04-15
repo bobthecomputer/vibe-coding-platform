@@ -753,14 +753,13 @@ textarea {
 }
 
 .agent-thread-head {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 65%),
-    #18181b;
-  border-color: rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: 0;
+  padding: 4px 0 2px;
 }
 
 .agent-conversation-head {
-  gap: 14px;
+  gap: 10px;
 }
 
 .thread-chip-row {
@@ -771,62 +770,22 @@ textarea {
   margin-top: 8px;
 }
 
-.agent-status-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 10px;
+.agent-thread-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.agent-status-card {
-  display: grid;
-  gap: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.025);
-  padding: 10px 12px;
-}
-
-.agent-status-card span {
+.agent-thread-meta span {
   color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.agent-status-card strong {
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 12px;
 }
 
 .agent-chat-stage {
   display: grid;
   gap: 12px;
-}
-
-.agent-chat-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.agent-chat-toolbar-copy {
-  display: grid;
-  gap: 3px;
-}
-
-.agent-chat-toolbar-copy span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.agent-chat-toolbar-actions,
-.agent-proof-summary-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  max-width: 860px;
+  margin-inline: auto;
 }
 
 .agent-launch-banner {
@@ -839,20 +798,57 @@ textarea {
   padding: 10px 12px;
 }
 
-.agent-presence-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.agent-context-digest {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
 }
 
-.agent-presence-pill {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
+.agent-context-digest summary,
+.agent-message-details summary {
+  cursor: pointer;
   color: var(--muted);
-  padding: 6px 10px;
+  font-size: 12px;
+  list-style: none;
+}
+
+.agent-context-digest summary::-webkit-details-marker,
+.agent-message-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-context-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.agent-context-item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 11px;
+}
+
+.agent-context-item span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.agent-context-item strong {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.agent-context-item p {
+  margin: 0;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -893,10 +889,8 @@ textarea {
   gap: 10px;
   border: 0;
   border-radius: 18px;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.035), transparent 22%),
-    #17171a;
-  padding: 6px 0;
+  background: transparent;
+  padding: 0;
 }
 
 .agent-transcript {
@@ -987,6 +981,15 @@ textarea {
 .agent-message p {
   margin: 0;
   color: var(--muted);
+}
+
+.agent-message-details {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-message-details p {
+  font-size: 12px;
 }
 
 .agent-message-chips {
@@ -1158,33 +1161,6 @@ textarea {
 
 .agent-proof-inline {
   background: #1b1b1f;
-}
-
-.agent-proof-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 68%),
-    #1b1b1f;
-  padding: 12px 14px;
-}
-
-.agent-proof-summary > div:first-child {
-  display: grid;
-  gap: 3px;
-}
-
-.agent-proof-summary strong {
-  font-size: 15px;
-}
-
-.agent-proof-summary span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .agent-chat-composer {
@@ -1621,7 +1597,7 @@ textarea {
   }
 
   .builder-studio-ribbon,
-  .agent-status-grid {
+  .agent-context-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1675,11 +1651,6 @@ textarea {
     display: grid;
   }
 
-  .agent-chat-toolbar,
-  .agent-proof-summary {
-    flex-direction: column;
-    align-items: stretch;
-  }
 }
 
 @media (max-width: 860px) {
@@ -1713,7 +1684,7 @@ textarea {
   }
 
   .builder-studio-ribbon,
-  .agent-status-grid {
+  .agent-context-grid {
     grid-template-columns: 1fr;
   }
 
