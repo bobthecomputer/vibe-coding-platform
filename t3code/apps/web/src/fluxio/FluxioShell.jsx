@@ -1605,85 +1605,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     currentDelegatedSessionsRef.current = delegatedSessions;
   }, [delegatedSessions]);
 
-  const agentContextDigest = useMemo(() => {
-    const sectionById = new Map((viewModel.thread.sections || []).map(item => [item.id, item]));
-    return [
-      {
-        label: "Current task",
-        value: sectionById.get("current-task")?.body || viewModel.thread.summary,
-        note: sectionById.get("current-task")?.detail || "",
-      },
-      {
-        label: "Known state",
-        value: sectionById.get("known-state")?.body || "",
-        note: sectionById.get("known-state")?.detail || "",
-      },
-      {
-        label: "Assumptions",
-        value: sectionById.get("assumptions")?.body || "",
-        note: sectionById.get("assumptions")?.detail || "",
-      },
-      {
-        label: "Operator boundary",
-        value:
-          sectionById.get("needs-input")?.body ||
-          (data.pendingApprovals.length > 0
-            ? "Approval required before the mission can continue."
-            : data.pendingQuestions.length > 0
-              ? "Fluxio needs an operator answer."
-              : "No active operator boundary."),
-        note: sectionById.get("needs-input")?.detail || "",
-      },
-    ].filter(item => item.value || item.note);
-  }, [
-    data.pendingApprovals.length,
-    data.pendingQuestions.length,
-    viewModel.thread.sections,
-    viewModel.thread.summary,
-  ]);
-
   const agentTranscript = useMemo(() => {
     const items = [];
     const timelineTurns = [];
     const sectionById = new Map((viewModel.thread.sections || []).map(item => [item.id, item]));
-    const currentTask = sectionById.get("current-task");
-    const knownState = sectionById.get("known-state");
-    const assumptions = sectionById.get("assumptions");
-
-    if (mission) {
-      items.push({
-        id: "agent-mission",
-        role: "fluxio",
-        roleIcon: "◎",
-        label: "Mission",
-        title: viewModel.thread.objective || viewModel.thread.title,
-        detail: viewModel.thread.summary,
-        technicalSummary: "Mission context",
-        technicalDetail: [knownState?.detail, assumptions?.detail].filter(Boolean).join(" · "),
-        chips: [
-          runtimeLabel(mission?.runtime_id),
-          titleizeToken(mission?.state?.status || "active"),
-          mission?.missionLoop?.continuityState
-            ? titleizeToken(mission.missionLoop.continuityState)
-            : "",
-        ].filter(Boolean),
-        tone: "neutral",
-        emphasis: true,
-      });
-      if (currentTask?.body) {
-        items.push({
-          id: "agent-current-task",
-          role: "fluxio",
-          roleIcon: "◎",
-          label: "Current task",
-          title: currentTask.body,
-          detail: currentTask.detail,
-          technicalSummary: knownState?.label || "Known state",
-          technicalDetail: [knownState?.body, assumptions?.body].filter(Boolean).join(" · "),
-          tone: mission?.state?.status === "running" ? "good" : "neutral",
-        });
-      }
-    }
 
     for (const approval of data.pendingApprovals.slice(0, 3)) {
       timelineTurns.push({
@@ -1897,7 +1822,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
     return items;
   }, [
-    agentContextDigest,
     bridgeSessions,
     data.openClawMessages,
     data.pendingApprovals,
@@ -1908,9 +1832,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     operatorNotes,
     viewModel.thread.events,
     viewModel.thread.sections,
-    viewModel.thread.summary,
-    viewModel.thread.title,
-    viewModel.thread.objective,
   ]);
 
   const drawerItems = useMemo(() => {
@@ -3887,10 +3808,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ) : (
             <section className="thread-shell agent-shell">
               <header className="thread-head agent-thread-head agent-conversation-head">
-                <p className="eyebrow">Agent conversation</p>
                 <h1>{viewModel.thread.title}</h1>
-                <p>{viewModel.thread.objective || viewModel.thread.summary}</p>
                 <div className="agent-thread-meta">
+                  <span>{workspace?.name || "Workspace"}</span>
                   <span>{viewModel.thread.status.label}</span>
                   <span>{previewLabel(previewMode, data.previewMeta)}</span>
                   {lastPushReason ? <span>{lastPushReason}</span> : null}
@@ -3898,27 +3818,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               </header>
 
               <section className="agent-chat-stage">
-                {showPersistentDrawer ? (
-                  <div className="agent-launch-banner">
-                    Setup and review stay visible only until launch stabilizes. After that, Agent mode drops back to the conversation.
-                  </div>
-                ) : null}
-
-                {!showPersistentDrawer && agentContextDigest.length > 0 ? (
-                  <details className="agent-context-digest">
-                    <summary>Mission context</summary>
-                    <div className="agent-context-grid">
-                      {agentContextDigest.map(item => (
-                        <article className="agent-context-item" key={item.label}>
-                          <span>{item.label}</span>
-                          <strong>{item.value}</strong>
-                          {item.note ? <p>{item.note}</p> : null}
-                        </article>
-                      ))}
-                    </div>
-                  </details>
-                ) : null}
-
                 <section className="agent-transcript-shell">
                   <div className="agent-transcript">
                     {agentTranscript.map(item => (

@@ -438,7 +438,7 @@ textarea {
 }
 
 .agent-shell {
-  max-width: 980px;
+  max-width: 820px;
   margin-inline: auto;
 }
 
@@ -755,11 +755,13 @@ textarea {
 .agent-thread-head {
   background: transparent;
   border: 0;
-  padding: 4px 0 2px;
+  padding: 8px 0 0;
 }
 
 .agent-conversation-head {
-  gap: 10px;
+  gap: 6px;
+  justify-items: center;
+  text-align: center;
 }
 
 .thread-chip-row {
@@ -773,7 +775,8 @@ textarea {
 .agent-thread-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
+  justify-content: center;
 }
 
 .agent-thread-meta span {
@@ -783,29 +786,11 @@ textarea {
 
 .agent-chat-stage {
   display: grid;
-  gap: 12px;
-  max-width: 860px;
+  gap: 14px;
+  max-width: 760px;
   margin-inline: auto;
 }
 
-.agent-launch-banner {
-  border: 1px solid rgba(245, 158, 11, 0.22);
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent 72%),
-    #1f1b18;
-  color: var(--muted);
-  padding: 10px 12px;
-}
-
-.agent-context-digest {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  padding: 10px 12px;
-}
-
-.agent-context-digest summary,
 .agent-message-details summary {
   cursor: pointer;
   color: var(--muted);
@@ -813,43 +798,8 @@ textarea {
   list-style: none;
 }
 
-.agent-context-digest summary::-webkit-details-marker,
 .agent-message-details summary::-webkit-details-marker {
   display: none;
-}
-
-.agent-context-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.agent-context-item {
-  display: grid;
-  gap: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  padding: 10px 11px;
-}
-
-.agent-context-item span {
-  color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.agent-context-item strong {
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.agent-context-item p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .thread-lane {
@@ -895,13 +845,13 @@ textarea {
 
 .agent-transcript {
   display: grid;
-  gap: 10px;
+  gap: 14px;
 }
 
 .agent-message {
   display: grid;
   gap: 6px;
-  width: min(100%, 780px);
+  width: min(100%, 720px);
   border: 1px solid rgba(255, 255, 255, 0.055);
   border-radius: 18px;
   background: #1d1d22;
@@ -1596,8 +1546,7 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .builder-studio-ribbon,
-  .agent-context-grid {
+  .builder-studio-ribbon {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1684,10 +1633,6 @@ textarea {
   }
 
   .builder-studio-ribbon,
-  .agent-context-grid {
-    grid-template-columns: 1fr;
-  }
-
   .context-grid.compact-metrics {
     grid-template-columns: 1fr;
   }
