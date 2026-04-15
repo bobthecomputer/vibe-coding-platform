@@ -112,6 +112,7 @@ class MissionRunBudget:
     max_runtime_seconds: int
     focus_window_hours: int = 12
     run_until_behavior: str = "pause_on_failure"
+    deadline_at: str | None = None
 
 
 @dataclass
@@ -166,6 +167,15 @@ class MissionStateSnapshot:
     time_budget_status: str = "pending"
     last_budget_pause_reason: str = ""
     current_runtime_lane: str = ""
+    context_used_tokens: int = 0
+    context_usage_ratio: float = 0.0
+    context_status: str = "ok"
+    handoff_count: int = 0
+    last_handoff_reason: str = ""
+    route_change_count: int = 0
+    parallel_agents: int = 1
+    merge_policy: str = "best_score"
+    runtime_autonomy: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

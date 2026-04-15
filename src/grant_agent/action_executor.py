@@ -129,14 +129,16 @@ class HybridExecutionAdapter(ExecutionAdapter):
             approval_required.extend(["file_patch", "file_write"])
         elif approval_mode == "tiered":
             approval_required.extend(["file_patch", "file_write"])
-        return ExecutionPolicy(
-            profile_name=(profile_name or "builder"),
-            approval_mode=approval_mode,
-            explanation_depth=defaults["explanation_depth"],
-            delegation_aggressiveness=defaults["delegation"],
-            auto_allowed_kinds=auto_allowed,
-            approval_required_kinds=approval_required,
-            destructive_requires_approval=True,
+        return normalize_execution_policy(
+            ExecutionPolicy(
+                profile_name=(profile_name or "builder"),
+                approval_mode=approval_mode,
+                explanation_depth=defaults["explanation_depth"],
+                delegation_aggressiveness=defaults["delegation"],
+                auto_allowed_kinds=auto_allowed,
+                approval_required_kinds=approval_required,
+                destructive_requires_approval=True,
+            )
         )
 
     def prepare_scope(
@@ -254,7 +256,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 mutability_class="verify",
             )
 
-        if _matches(lowered, DELEGATE_HINTS):
+        if _should_delegate_step(lowered, execution_policy):
             return self._proposal(
                 action_id=action_id,
                 event_id=event_id,
@@ -518,6 +520,9 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 workspace=delegated_workspace,
                 source_step_id=proposal.source_step_id,
             )
+            if session.status == "running":
+                time.sleep(0.2)
+                session = supervisor.refresh_session(session)
             snapshot = supervisor.build_session_snapshot(session)
             events = adapter.stream_events(delegated_mission) + supervisor.read_events(session)
             return _completed_record(
@@ -601,7 +606,27 @@ DEFAULT_EXECUTION_ADAPTER = HybridExecutionAdapter()
 
 
 def build_execution_policy(profile_name: str) -> ExecutionPolicy:
-    return DEFAULT_EXECUTION_ADAPTER.build_policy(profile_name)
+    return normalize_execution_policy(DEFAULT_EXECUTION_ADAPTER.build_policy(profile_name))
+
+
+def normalize_execution_policy(policy: ExecutionPolicy) -> ExecutionPolicy:
+    auto_allowed = {
+        "workspace_search",
+        "file_read",
+        "git_status",
+        "git_diff",
+        "test_run",
+    }
+    approval_required = {"git_commit", "shell_command"}
+    if policy.delegation_aggressiveness != "low":
+        auto_allowed.add("runtime_delegate")
+    else:
+        approval_required.add("runtime_delegate")
+    if policy.approval_mode in {"strict", "tiered"}:
+        approval_required.update({"file_patch", "file_write"})
+    policy.auto_allowed_kinds = sorted(auto_allowed)
+    policy.approval_required_kinds = sorted(approval_required)
+    return policy
 
 
 def requested_scope_for_execution_target(preference: str = "") -> str:
@@ -819,6 +844,27 @@ def _risk_for_proposal(proposal: ActionProposal) -> str:
 def _fallback_query(objective: str) -> str:
     words = re.findall(r"[A-Za-z0-9_]+", objective)
     return "|".join(words[:4]) or "mission"
+
+
+def _should_delegate_step(text: str, policy: ExecutionPolicy) -> bool:
+    if _matches(text, DELEGATE_HINTS):
+        return True
+    delegation = (policy.delegation_aggressiveness or "balanced").strip().lower()
+    if delegation == "high":
+        return any(
+            hint in text
+            for hint in (
+                "approval",
+                "bridge",
+                "deploy",
+                "handoff",
+                "live review",
+                "runtime lane",
+            )
+        )
+    if delegation == "balanced":
+        return any(hint in text for hint in ("approval", "bridge", "runtime lane"))
+    return False
 
 
 def _matches(text: str, hints: tuple[str, ...]) -> bool:

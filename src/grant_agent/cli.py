@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import time
 import webbrowser
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .checkpoints import CheckpointStore
@@ -45,6 +48,7 @@ from .mission_control import (
     build_release_readiness_snapshot,
     build_escalation_preview,
     default_docs_for_workspace,
+    mission_time_budget_window,
     mission_mode_to_engine_mode,
     normalize_action_history,
     sync_mission_state_snapshot,
@@ -83,6 +87,10 @@ SUPPORTED_MINIMAX_AUTH_MODES = (
     "none",
     "minimax-portal-oauth",
     "minimax-api",
+)
+OBJECTIVE_DEADLINE_PATTERN = re.compile(
+    r"\buntil\s+(?:(today|tomorrow)\s+)?(\d{1,2})(?:(?::|h)(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\b",
+    flags=re.IGNORECASE,
 )
 
 
@@ -1123,6 +1131,7 @@ def _invoke_engine(
     route_overrides_override: list[dict] | None = None,
     auto_optimize_routing: bool = False,
     execution_target_preference: str | None = None,
+    pause_on_handoff: bool | None = None,
 ) -> dict:
     constitution = AgentConstitution.load(root / "config" / "constitution.json")
     modes = ModeRegistry(root / "config" / "modes.json")
@@ -1249,7 +1258,7 @@ def _invoke_engine(
         or "profile_default"
     )
     guardrails = {
-        "pause_on_handoff": True,
+        "pause_on_handoff": True if pause_on_handoff is None else bool(pause_on_handoff),
         "pause_on_verification_failure": resolved_pause_on_verification_failure,
     }
     if efficiency_autotune.get("forcePauseOnFailure"):
@@ -1338,6 +1347,9 @@ def _invoke_engine(
             routing_strategy_override=effective_routing_strategy,
             route_overrides=resolved_route_overrides,
             execution_target_preference=resolved_execution_target_preference,
+            max_tokens=resolved_max_tokens,
+            parallel_agents=resolved_parallel_agents,
+            merge_policy=resolved_merge_policy,
         )
     result["effective_verify_commands"] = effective_verify_commands
     result["mode"] = selected_mode_name
@@ -1350,6 +1362,7 @@ def _invoke_engine(
     result["effective_pause_on_verification_failure"] = (
         bool(guardrails.get("pause_on_verification_failure"))
     )
+    result["effective_pause_on_handoff"] = bool(guardrails.get("pause_on_handoff"))
     result["mode_description"] = mode.description
     result["profile"] = resolved_profile.name if resolved_profile else None
     result["effective_harness"] = resolved_harness
@@ -2237,9 +2250,206 @@ def _mission_iterations_for_mode(mode: str) -> int:
     normalized = mode.strip().lower()
     if normalized == "focus":
         return 1
+    if normalized == "deep run":
+        return 12
     if normalized == "research":
-        return 2
-    return 2
+        return 4
+    return 8
+
+
+def _now_local() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _parse_objective_deadline(
+    objective: str,
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    match = OBJECTIVE_DEADLINE_PATTERN.search(str(objective or ""))
+    if match is None:
+        return None
+
+    day_marker = str(match.group(1) or "").strip().lower()
+    hour = int(match.group(2))
+    minute = int(match.group(3) or 0)
+    meridiem = str(match.group(4) or "").strip().lower().replace(".", "")
+    if minute >= 60:
+        return None
+
+    if meridiem:
+        if hour < 1 or hour > 12:
+            return None
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+    elif hour > 23:
+        return None
+
+    current_time = now or _now_local()
+    candidate = current_time.replace(
+        hour=hour,
+        minute=minute,
+        second=0,
+        microsecond=0,
+    )
+    if day_marker == "tomorrow":
+        candidate += timedelta(days=1)
+    elif day_marker != "today" and candidate <= current_time:
+        candidate += timedelta(days=1)
+    elif day_marker == "today" and candidate <= current_time:
+        return None
+    return candidate
+
+
+def _mission_budget_settings(
+    objective: str,
+    budget_hours: int,
+    run_until_behavior: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    current_time = now or _now_local()
+    requested_runtime_seconds = max(3600, int(budget_hours) * 3600)
+    deadline = _parse_objective_deadline(objective, now=current_time)
+    if deadline is None:
+        return {
+            "max_runtime_seconds": requested_runtime_seconds,
+            "deadline_at": None,
+            "run_until_behavior": run_until_behavior,
+        }
+
+    deadline_runtime_seconds = max(
+        60,
+        int((deadline.astimezone(timezone.utc) - current_time.astimezone(timezone.utc)).total_seconds()),
+    )
+    return {
+        "max_runtime_seconds": deadline_runtime_seconds,
+        "deadline_at": deadline.astimezone(timezone.utc).isoformat(),
+        "run_until_behavior": "continue_until_blocked",
+    }
+
+
+def _latest_checkpoint_for_session(root: Path, session_id: str | None) -> str | None:
+    if not session_id:
+        return None
+    checkpoint = CheckpointStore.latest(root / ".agent_runs" / session_id)
+    return str(checkpoint) if checkpoint else None
+
+
+def _mission_poll_interval_seconds(mission) -> int:
+    return 15 if mission.run_budget.deadline_at else 0
+
+
+def _sleep_for_mission_poll(seconds: int) -> None:
+    if seconds > 0:
+        time.sleep(seconds)
+
+
+def _mission_should_continue_after_result(mission, result: dict) -> bool:
+    if result.get("status") != "ok":
+        return False
+    if result.get("autopilot_status") == "completed":
+        return False
+
+    pause_reason = str(result.get("autopilot_pause_reason") or "").strip()
+    if pause_reason in {
+        "approval_required",
+        "verification_failed",
+        "verification_failure",
+        "runtime_budget",
+    }:
+        return False
+    if pause_reason == "delegated_runtime_running":
+        return bool(mission.run_budget.deadline_at)
+    if pause_reason.startswith("context_"):
+        return mission.run_budget.run_until_behavior == "continue_until_blocked"
+    if pause_reason:
+        return False
+    return bool(result.get("remaining_steps")) and (
+        mission.run_budget.run_until_behavior == "continue_until_blocked"
+    )
+
+
+def _mark_mission_budget_exhausted(store: ControlRoomStore, mission) -> dict:
+    mission.state.status = "blocked"
+    mission.state.stop_reason = "runtime_budget"
+    mission.state.last_error = "runtime_budget"
+    mission.proof.summary = (
+        "Mission reached its requested runtime deadline."
+        if mission.run_budget.deadline_at
+        else "Mission reached its runtime budget."
+    )
+    mission.proof.blocked_by = ["runtime_budget"]
+    sync_mission_state_snapshot(mission)
+    store.update_mission(mission)
+    store.append_event(
+        MissionEvent(
+            mission_id=mission.mission_id,
+            kind="mission.runtime_budget_exhausted",
+            message=mission.proof.summary,
+            metadata={
+                "deadlineAt": mission.run_budget.deadline_at,
+                "maxRuntimeSeconds": mission.run_budget.max_runtime_seconds,
+            },
+        )
+    )
+    return {"mission": asdict(mission)}
+
+
+def _run_mission_engine_cycles(
+    *,
+    store: ControlRoomStore,
+    mission,
+    workspace,
+    project_profile: str,
+    resume_from: str | None = None,
+    resume_checkpoint: str | None = None,
+) -> dict:
+    root = Path(workspace.root_path)
+
+    while True:
+        mission = store.get_mission(mission.mission_id) or mission
+        budget_window = mission_time_budget_window(mission)
+        remaining_budget = int(budget_window["remainingSeconds"])
+        if remaining_budget <= 0:
+            return _mark_mission_budget_exhausted(store, mission)
+
+        result = _invoke_engine(
+            root=root,
+            objective=mission.objective,
+            docs=default_docs_for_workspace(root),
+            mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
+            profile_name=mission.selected_profile or workspace.user_profile,
+            persona_override=None,
+            iterations=_mission_iterations_for_mode(mission.run_budget.mode),
+            verify_commands=mission.verification_policy.commands,
+            project_profile=project_profile,
+            resume_from=resume_from,
+            resume_checkpoint=resume_checkpoint,
+            checkpoint_every=1,
+            pause_on_verification_failure=mission.verification_policy.pause_on_failure,
+            max_runtime_override=remaining_budget,
+            runtime_id=mission.runtime_id,
+            mission_id=mission.mission_id,
+            harness_preference=mission.harness_id or workspace.preferred_harness,
+            routing_strategy_override=workspace.routing_strategy,
+            route_overrides_override=workspace.route_overrides,
+            auto_optimize_routing=workspace.auto_optimize_routing,
+            execution_target_preference=workspace.execution_target_preference,
+            pause_on_handoff=mission.run_budget.run_until_behavior != "continue_until_blocked",
+        )
+        result_payload = _sync_mission_from_result(store, mission.mission_id, result)
+        mission = store.get_mission(mission.mission_id) or mission
+
+        if not _mission_should_continue_after_result(mission, result):
+            return result_payload
+
+        resume_from = mission.state.latest_session_id
+        resume_checkpoint = _latest_checkpoint_for_session(root, resume_from)
+        if str(result.get("autopilot_pause_reason") or "") == "delegated_runtime_running":
+            _sleep_for_mission_poll(_mission_poll_interval_seconds(mission))
 
 
 def _effective_route_contract_from_result(result: dict) -> dict:
@@ -2434,6 +2644,24 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         for entry in delegated.approval_history
         if isinstance(entry, dict)
     ][-8:]
+    context_payload = result.get("context", {})
+    mission.state.context_used_tokens = int(context_payload.get("used_tokens", 0) or 0)
+    mission.state.context_usage_ratio = float(context_payload.get("usage_ratio", 0.0) or 0.0)
+    mission.state.context_status = str(context_payload.get("status", "ok") or "ok")
+    mission.state.handoff_count = len(result.get("handoff_packets", []))
+    mission.state.last_handoff_reason = (
+        result.get("autopilot_pause_reason", "")
+        if str(result.get("autopilot_pause_reason", "")).startswith("context_")
+        else mission.state.last_handoff_reason
+    )
+    mission.state.route_change_count = int(result.get("route_change_count", 0) or 0)
+    mission.state.parallel_agents = int(result.get("parallel_agents", 1) or 1)
+    mission.state.merge_policy = str(result.get("merge_policy", "best_score") or "best_score")
+    mission.state.runtime_autonomy = (
+        dict(result.get("runtime_autonomy", {}))
+        if isinstance(result.get("runtime_autonomy"), dict)
+        else {}
+    )
 
     mission.escalation_policy.pending_count = len(mission.state.verification_failures)
     mission.escalation_policy.delivery_ready = bool(mission.escalation_policy.destination)
@@ -2695,6 +2923,11 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
     runtime_status = adapter.doctor(Path(workspace.root_path))
     verification_commands = detect_default_verification_commands(Path(workspace.root_path))
     escalation_destination = str(args.escalation_destination or "").strip() or load_telegram_destination(root)
+    budget_settings = _mission_budget_settings(
+        args.objective,
+        args.budget_hours,
+        args.run_until,
+    )
     mission = store.create_mission(
         workspace_id=workspace.workspace_id,
         runtime_id=args.runtime,
@@ -2702,12 +2935,27 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         success_checks=args.success_check,
         mode=args.mode,
         verification_commands=verification_commands,
-        max_runtime_seconds=max(3600, args.budget_hours * 3600),
+        max_runtime_seconds=budget_settings["max_runtime_seconds"],
         selected_profile=args.profile or workspace.user_profile,
         escalation_destination=escalation_destination,
-        run_until_behavior=args.run_until,
+        run_until_behavior=budget_settings["run_until_behavior"],
+        deadline_at=budget_settings["deadline_at"],
         harness_id=workspace.preferred_harness,
     )
+    if mission.run_budget.deadline_at:
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.deadline_detected",
+                message=(
+                    "Mission objective requested uninterrupted runtime until a deadline."
+                ),
+                metadata={
+                    "deadlineAt": mission.run_budget.deadline_at,
+                    "runUntilBehavior": mission.run_budget.run_until_behavior,
+                },
+            )
+        )
     if mission.state.queue_position > 0:
         payload = {
             "mission": asdict(mission),
@@ -2745,38 +2993,20 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    docs = default_docs_for_workspace(Path(workspace.root_path))
-    engine_mode = mission_mode_to_engine_mode(args.mode)
-    result = _invoke_engine(
-        root=Path(workspace.root_path),
-        objective=args.objective,
-        docs=docs,
-        mode_name=engine_mode,
-        profile_name=args.profile or workspace.user_profile,
-        persona_override=None,
-        iterations=_mission_iterations_for_mode(args.mode),
-        verify_commands=verification_commands,
+    synced = _run_mission_engine_cycles(
+        store=store,
+        mission=mission,
+        workspace=workspace,
         project_profile=(
             f"Mission controlled through {args.runtime} adapter. "
             "Use phone escalation, explicit proof, and multi-project safety defaults."
         ),
-        resume_from=None,
-        resume_checkpoint=None,
-        checkpoint_every=1,
-        pause_on_verification_failure=mission.verification_policy.pause_on_failure,
-        runtime_id=args.runtime,
-        mission_id=mission.mission_id,
-        harness_preference=workspace.preferred_harness,
-        routing_strategy_override=workspace.routing_strategy,
-        route_overrides_override=workspace.route_overrides,
-        auto_optimize_routing=workspace.auto_optimize_routing,
-        execution_target_preference=workspace.execution_target_preference,
     )
-    synced = _sync_mission_from_result(store, mission.mission_id, result)
     synced["runtimeStatus"] = asdict(runtime_status)
     synced["snapshot"] = store.build_snapshot()
     print(json.dumps(synced, indent=2))
-    return 0 if result.get("status") == "ok" else 2
+    result = synced.get("result", {})
+    return 0 if not result or result.get("status") == "ok" else 2
 
 
 def cmd_mission_action(args: argparse.Namespace) -> int:
@@ -2853,63 +3083,38 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
                     )
                 )
                 return 0
-            result = _invoke_engine(
-                root=Path(workspace.root_path),
-                objective=mission.objective,
-                docs=default_docs_for_workspace(Path(workspace.root_path)),
-                mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
-                profile_name=mission.selected_profile or workspace.user_profile,
-                persona_override=None,
-                iterations=_mission_iterations_for_mode(mission.run_budget.mode),
-                verify_commands=mission.verification_policy.commands,
+            payload = _run_mission_engine_cycles(
+                store=store,
+                mission=mission,
+                workspace=workspace,
                 project_profile=(
                     f"Start queued mission {mission.mission_id} through {mission.runtime_id} adapter."
                 ),
                 resume_from=None,
                 resume_checkpoint=None,
-                checkpoint_every=1,
-                pause_on_verification_failure=mission.verification_policy.pause_on_failure,
-                runtime_id=mission.runtime_id,
-                mission_id=mission.mission_id,
-                harness_preference=mission.harness_id or workspace.preferred_harness,
-                routing_strategy_override=workspace.routing_strategy,
-                route_overrides_override=workspace.route_overrides,
-                auto_optimize_routing=workspace.auto_optimize_routing,
-                execution_target_preference=workspace.execution_target_preference,
             )
-            payload = _sync_mission_from_result(store, mission.mission_id, result)
             payload["runtimeStatus"] = asdict(runtime_status)
             payload["snapshot"] = store.build_snapshot()
             print(json.dumps(payload, indent=2))
-            return 0 if result.get("status") == "ok" else 2
-        result = _invoke_engine(
-            root=Path(workspace.root_path),
-            objective=mission.objective,
-            docs=default_docs_for_workspace(Path(workspace.root_path)),
-            mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
-            profile_name=mission.selected_profile or workspace.user_profile,
-            persona_override=None,
-            iterations=_mission_iterations_for_mode(mission.run_budget.mode),
-            verify_commands=mission.verification_policy.commands,
+            result = payload.get("result", {})
+            return 0 if not result or result.get("status") == "ok" else 2
+        payload = _run_mission_engine_cycles(
+            store=store,
+            mission=mission,
+            workspace=workspace,
             project_profile=(
                 f"Resume mission {mission.mission_id} through {mission.runtime_id} adapter."
             ),
             resume_from=mission.state.latest_session_id,
-            resume_checkpoint=None,
-            checkpoint_every=1,
-            pause_on_verification_failure=mission.verification_policy.pause_on_failure,
-            runtime_id=mission.runtime_id,
-            mission_id=mission.mission_id,
-            harness_preference=mission.harness_id or workspace.preferred_harness,
-            routing_strategy_override=workspace.routing_strategy,
-            route_overrides_override=workspace.route_overrides,
-            auto_optimize_routing=workspace.auto_optimize_routing,
-            execution_target_preference=workspace.execution_target_preference,
+            resume_checkpoint=_latest_checkpoint_for_session(
+                Path(workspace.root_path),
+                mission.state.latest_session_id,
+            ),
         )
-        payload = _sync_mission_from_result(store, mission.mission_id, result)
         payload["snapshot"] = store.build_snapshot()
         print(json.dumps(payload, indent=2))
-        return 0 if result.get("status") == "ok" else 2
+        result = payload.get("result", {})
+        return 0 if not result or result.get("status") == "ok" else 2
 
     if args.action in {"approve-latest", "reject-latest"}:
         if not mission.state.latest_session_id:

@@ -235,6 +235,58 @@ class FluxioHarnessTests(unittest.TestCase):
         self.assertEqual(policy["routingStrategy"], "uniform_quality")
         self.assertEqual(policy["appliedPolicy"]["policy"], "safety_bias")
 
+    def test_harness_compacts_context_and_saves_handoff_packets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_sample.py").write_text(
+                "import unittest\n\nclass Sample(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+
+            harness = self._build_harness(root)
+            result = harness.run(
+                objective="Implement a very long runtime continuity objective with repeated context summaries and proof checkpoints",
+                docs=["README.md"],
+                project_profile="Runtime rollover test",
+                verify_commands=["python -m unittest discover -s tests"],
+                repo_path=root,
+                iterations=4,
+                max_handoffs=3,
+                max_runtime_seconds=300,
+                profile_name="builder",
+                max_tokens=24,
+            )
+
+            self.assertTrue(result["handoff_packets"])
+            self.assertEqual(result["context"]["status"], "ok")
+            self.assertTrue(result["context_seed"])
+
+    def test_harness_shifts_to_uniform_quality_after_verification_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            harness = self._build_harness(root)
+
+            result = harness.run(
+                objective="Implement runtime repair notes",
+                docs=["README.md"],
+                project_profile="Autonomy route test",
+                verify_commands=[f"{sys.executable} -c \"import sys; sys.exit(1)\""],
+                repo_path=root,
+                iterations=2,
+                max_handoffs=4,
+                max_runtime_seconds=120,
+                profile_name="builder",
+                routing_strategy_override="budget_first",
+            )
+
+            self.assertEqual(result["runtime_autonomy"]["routingStrategy"], "uniform_quality")
+            self.assertGreaterEqual(result["route_change_count"], 1)
+            self.assertEqual(result["execution_policy"]["delegation_aggressiveness"], "low")
+
 
 if __name__ == "__main__":
     unittest.main()

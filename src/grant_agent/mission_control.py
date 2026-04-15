@@ -380,6 +380,7 @@ class ControlRoomStore:
         selected_profile: str = "builder",
         escalation_destination: str = "",
         run_until_behavior: str | None = None,
+        deadline_at: str | None = None,
         harness_id: str = "fluxio_hybrid",
     ) -> Mission:
         missions = self.load_missions()
@@ -424,6 +425,7 @@ class ControlRoomStore:
                 max_runtime_seconds=max_runtime_seconds,
                 focus_window_hours=max(1, round(max_runtime_seconds / 3600)),
                 run_until_behavior=run_until_behavior or "pause_on_failure",
+                deadline_at=deadline_at or None,
             ),
             verification_policy=MissionVerificationPolicy(
                 commands=verification_commands,
@@ -988,6 +990,17 @@ def build_mission_loop_snapshot(mission: Mission) -> dict:
         "pauseReason": time_budget["lastPauseReason"],
         "currentRuntimeLane": _current_runtime_lane_for_mission(mission, delegated),
         "timeBudget": time_budget,
+        "contextWindow": {
+            "usedTokens": mission.state.context_used_tokens,
+            "usageRatio": mission.state.context_usage_ratio,
+            "status": mission.state.context_status,
+            "handoffCount": mission.state.handoff_count,
+            "lastHandoffReason": mission.state.last_handoff_reason,
+        },
+        "runtimeAutonomy": mission.state.runtime_autonomy,
+        "routeChangeCount": mission.state.route_change_count,
+        "parallelAgents": mission.state.parallel_agents,
+        "mergePolicy": mission.state.merge_policy,
     }
 
 
@@ -1186,15 +1199,57 @@ def _verification_summary_for_mission(mission: Mission, verification_result: str
     return "Verification is still pending."
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def mission_time_budget_window(
+    mission: Mission,
+    now: datetime | None = None,
+) -> dict:
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    started_at = _parse_iso_datetime(mission.created_at) or current_time
+    elapsed_seconds = max(0, round((current_time - started_at).total_seconds()))
+
+    deadline_at = _parse_iso_datetime(mission.run_budget.deadline_at)
+    max_runtime_seconds = max(0, int(mission.run_budget.max_runtime_seconds or 0))
+    if deadline_at is not None:
+        max_runtime_seconds = max(
+            0,
+            round((deadline_at - started_at).total_seconds()),
+        )
+        remaining_seconds = max(
+            0,
+            round((deadline_at - current_time).total_seconds()),
+        )
+    else:
+        remaining_seconds = max(0, max_runtime_seconds - elapsed_seconds)
+
+    return {
+        "startedAt": started_at.isoformat(),
+        "deadlineAt": deadline_at.isoformat() if deadline_at is not None else None,
+        "maxRuntimeSeconds": max_runtime_seconds,
+        "elapsedSeconds": elapsed_seconds,
+        "remainingSeconds": remaining_seconds,
+    }
+
+
 def _time_budget_snapshot_for_mission(mission: Mission) -> dict:
     delegated = mission.delegated_runtime_sessions or []
-    try:
-        started_at = datetime.fromisoformat((mission.created_at or utc_now_iso()).replace("Z", "+00:00"))
-        elapsed_seconds = max(0, round((datetime.now(timezone.utc) - started_at).total_seconds()))
-    except ValueError:
-        elapsed_seconds = 0
-    max_runtime_seconds = max(0, int(mission.run_budget.max_runtime_seconds or 0))
-    remaining_seconds = max(0, max_runtime_seconds - elapsed_seconds)
+    budget_window = mission_time_budget_window(mission)
+    elapsed_seconds = int(budget_window["elapsedSeconds"])
+    max_runtime_seconds = int(budget_window["maxRuntimeSeconds"])
+    remaining_seconds = int(budget_window["remainingSeconds"])
     pause_reason = _pause_reason_for_mission(mission, delegated)
 
     if mission.state.status in TERMINAL_MISSION_STATUSES:
@@ -1220,6 +1275,7 @@ def _time_budget_snapshot_for_mission(mission: Mission) -> dict:
         "mode": mission.run_budget.mode,
         "runUntilBehavior": mission.run_budget.run_until_behavior,
         "focusWindowHours": mission.run_budget.focus_window_hours,
+        "deadlineAt": budget_window["deadlineAt"],
         "maxRuntimeSeconds": max_runtime_seconds,
         "budgetHours": round(max_runtime_seconds / 3600, 2) if max_runtime_seconds else 0,
         "elapsedSeconds": elapsed_seconds,

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import asdict
+from datetime import datetime, timezone
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -24,6 +25,7 @@ from grant_agent.mission_control import (
     build_release_readiness_snapshot,
     build_escalation_preview,
     mission_mode_to_engine_mode,
+    mission_time_budget_window,
 )
 from grant_agent.models import DelegatedRuntimeSession, utc_now_iso
 from grant_agent.workspace_actions import execute_control_room_workspace_action
@@ -515,6 +517,39 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(
                 mission_payload["missionLoop"]["currentRuntimeLane"],
                 "hermes primary lane queued",
+            )
+
+    def test_mission_time_budget_window_prefers_explicit_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Work through the night until 8 a.m.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=3600,
+                run_until_behavior="continue_until_blocked",
+                deadline_at="2026-04-17T08:00:00+00:00",
+            )
+            mission.created_at = "2026-04-16T22:00:00+00:00"
+
+            budget_window = mission_time_budget_window(
+                mission,
+                now=datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(budget_window["maxRuntimeSeconds"], 36000)
+            self.assertEqual(budget_window["elapsedSeconds"], 10800)
+            self.assertEqual(budget_window["remainingSeconds"], 25200)
+            self.assertEqual(
+                budget_window["deadlineAt"],
+                "2026-04-17T08:00:00+00:00",
             )
 
     def test_snapshot_workflows_and_services_reflect_setup_and_runtime_truth(self) -> None:

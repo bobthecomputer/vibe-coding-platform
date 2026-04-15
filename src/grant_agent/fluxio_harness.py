@@ -8,13 +8,16 @@ from pathlib import Path
 from .action_executor import (
     build_action_proposal,
     build_execution_policy,
+    normalize_execution_policy,
     execute_action,
     prepare_execution_scope,
     requested_scope_for_execution_target,
 )
 from .checkpoints import CheckpointStore
+from .context_manager import ContextWindowManager
 from .doc_ingestion import ingest_docs
 from .engine import AutonomousEngine
+from .handoff import create_handoff_packet, save_handoff_packet
 from .models import (
     ActionExecutionRecord,
     ActionProposal,
@@ -24,8 +27,10 @@ from .models import (
     HarnessExecutionContext,
     ImprovementQueueItem,
     ModelRouteConfig,
+    PersonaProfile,
     PlanRevision,
     PlannedStep,
+    PromptStack,
     RoutingDecision,
     RunState,
     TimelineEvent,
@@ -34,11 +39,23 @@ from .models import (
 )
 from .planner import PlanBundle, build_docs_first_plan
 from .profiles import PersonalizationProfile
+from .prompts import build_prompt_stack
 from .reporting import write_run_report
 from .runtime_supervisor import DelegatedRuntimeSupervisor
 from .session_store import SessionStore
 from .skill_library import SkillLibrary
 from .verification import VerificationRunner
+
+DEFAULT_FLUXIO_MAX_TOKENS = 2600
+DEFAULT_FLUXIO_MERGE_POLICY = "best_score"
+VALID_MERGE_POLICIES = {"best_score", "consensus", "risk_averse"}
+DELEGATED_FOLLOW_BUDGET_SECONDS = 12
+AUTONOMY_HISTORY_LIMIT = 12
+RUNTIME_CONSTITUTION_TEXT = (
+    "Fluxio hybrid harness coordinates planning, execution, verification, delegated runtimes, "
+    "and resumable continuity. Prefer small grounded actions, preserve proof, compact context "
+    "before it overflows, and keep unattended progress safe."
+)
 
 
 def guided_profile_defaults(name: str) -> dict:
@@ -400,8 +417,10 @@ class FluxioHarness:
         routing_strategy_override: str | None = None,
         route_overrides: list[dict] | None = None,
         execution_target_preference: str | None = None,
+        max_tokens: int | None = None,
+        parallel_agents: int | None = None,
+        merge_policy: str | None = None,
     ) -> dict:
-        del max_handoffs
         guardrails = autopilot_guardrails or {
             "pause_on_handoff": True,
             "pause_on_verification_failure": True,
@@ -409,12 +428,50 @@ class FluxioHarness:
         started_at = time.monotonic()
         resolved_mission_id = mission_id or f"mission_{uuid.uuid4().hex[:8]}"
         profile_defaults = guided_profile_defaults(profile_name)
+        profile_agent = selected_profile.agent if selected_profile else None
+        resolved_max_tokens = max(
+            256,
+            int(
+                max_tokens
+                if max_tokens is not None
+                else (
+                    profile_agent.max_tokens
+                    if profile_agent and profile_agent.max_tokens is not None
+                    else DEFAULT_FLUXIO_MAX_TOKENS
+                )
+            ),
+        )
+        resolved_parallel_agents = max(
+            1,
+            int(
+                parallel_agents
+                if parallel_agents is not None
+                else (
+                    profile_agent.parallel_agents
+                    if profile_agent and profile_agent.parallel_agents is not None
+                    else 1
+                )
+            ),
+        )
+        requested_merge_policy = (
+            merge_policy
+            or (
+                profile_agent.merge_policy
+                if profile_agent and profile_agent.merge_policy
+                else DEFAULT_FLUXIO_MERGE_POLICY
+            )
+        )
+        resolved_merge_policy = (
+            requested_merge_policy
+            if requested_merge_policy in VALID_MERGE_POLICIES
+            else DEFAULT_FLUXIO_MERGE_POLICY
+        )
         route_configs = recommended_model_routes(
             profile_name,
             routing_strategy_override=routing_strategy_override,
             route_overrides=route_overrides,
         )
-        execution_policy = build_execution_policy(profile_name)
+        execution_policy = normalize_execution_policy(build_execution_policy(profile_name))
         execution_scope = prepare_execution_scope(
             workspace_root=repo_path,
             mission_id=resolved_mission_id,
@@ -437,6 +494,13 @@ class FluxioHarness:
             ),
             innovation_scope=str(profile_defaults["innovation_scope"]),
             harness_id=self.harness_id,
+        )
+        context_manager = ContextWindowManager(max_tokens=resolved_max_tokens)
+        prompt_stack = self._build_prompt_stack(
+            objective=objective,
+            project_profile=project_profile,
+            profile_name=profile_name,
+            selected_profile=selected_profile,
         )
 
         resumed_state: dict | None = None
@@ -462,7 +526,7 @@ class FluxioHarness:
             if loaded_scope is not None:
                 execution_scope = loaded_scope
             if loaded_policy is not None:
-                execution_policy = loaded_policy
+                execution_policy = normalize_execution_policy(loaded_policy)
             keep_loaded_routes = bool(
                 loaded_routes
                 and not normalize_route_overrides(route_overrides or [])
@@ -501,6 +565,24 @@ class FluxioHarness:
             if resumed_state
             else []
         )
+        handoff_paths = list(resumed_state.get("handoff_packets", [])) if resumed_state else []
+        handoff_count = len(handoff_paths)
+        stable_success_streak = int(
+            resumed_state.get("stable_success_streak", 0)
+        ) if resumed_state else 0
+        route_change_count = int(
+            resumed_state.get("route_change_count", 0)
+        ) if resumed_state else 0
+        runtime_autonomy_history = (
+            list(resumed_state.get("runtime_autonomy_history", []))
+            if resumed_state
+            else []
+        )
+        runtime_autonomy = (
+            dict(resumed_state.get("runtime_autonomy", {}))
+            if resumed_state
+            else {}
+        )
         selected_skills = self.skill_library.retrieve(task_brief=objective, top_k=4)
         skill_usage = list(resumed_state.get("skill_usage", [])) if resumed_state else []
         learned_skill_events = (
@@ -524,6 +606,17 @@ class FluxioHarness:
         repeated_failure_count = (
             int(resumed_state.get("repeated_failure_count", 0)) if resumed_state else 0
         )
+        context_seed = (
+            list(resumed_state.get("context_seed", []))
+            if resumed_state and isinstance(resumed_state.get("context_seed"), list)
+            else []
+        )
+        if context_seed:
+            context_manager.reset_with_seed(context_seed)
+        else:
+            context_manager.record("system", RUNTIME_CONSTITUTION_TEXT)
+            context_manager.record("system", f"Project profile: {project_profile}")
+            context_manager.record("user", objective)
 
         decisions.append("Fluxio hybrid harness orchestrated this mission.")
         if selected_profile:
@@ -540,6 +633,22 @@ class FluxioHarness:
         notes.append(
             f"Execution policy: {execution_policy.approval_mode} approvals with {execution_policy.delegation_aggressiveness} delegation."
         )
+        notes.append(
+            f"Runtime controls: context={resolved_max_tokens} tokens, parallel_agents={resolved_parallel_agents}, merge_policy={resolved_merge_policy}."
+        )
+        if resumed_state:
+            context_manager.record(
+                "system",
+                (
+                    f"Resumed from prior session with {len(completed_steps)} completed step(s), "
+                    f"{len(verification_failures)} outstanding verification failure(s), and "
+                    f"{len(delegated_runtime_sessions)} delegated lane(s)."
+                ),
+            )
+        context_manager.record(
+            "system",
+            f"Resolved route contract: {', '.join([item.role + '=' + item.model for item in route_configs])}",
+        )
         execution_root = Path(execution_scope.execution_root or repo_path)
         runtime_supervisor = DelegatedRuntimeSupervisor(repo_path)
 
@@ -552,6 +661,19 @@ class FluxioHarness:
                     "mission_id": execution_context.mission_id,
                     "runtime_id": runtime_id,
                     "profile_name": profile_name,
+                },
+            ),
+        )
+        self.session_store.append_timeline(
+            session_path,
+            TimelineEvent(
+                kind="runtime.controls",
+                message="Fluxio resolved runtime continuity controls.",
+                metadata={
+                    "max_tokens": resolved_max_tokens,
+                    "parallel_agents": resolved_parallel_agents,
+                    "merge_policy": resolved_merge_policy,
+                    "max_handoffs": max_handoffs,
                 },
             ),
         )
@@ -577,6 +699,55 @@ class FluxioHarness:
                         )
                     )
                 )
+        delegated_status = ""
+
+        (
+            route_configs,
+            execution_policy,
+            runtime_autonomy,
+            autonomy_changed,
+            route_change_count,
+        ) = self._apply_runtime_autonomy(
+            profile_name=profile_name,
+            route_configs=route_configs,
+            route_overrides=route_overrides or [],
+            execution_policy=execution_policy,
+            repeated_failure_count=repeated_failure_count,
+            verification_failures=verification_failures,
+            stable_success_streak=stable_success_streak,
+            context_status=context_manager.status(),
+            delegated_status="",
+            route_change_count=route_change_count,
+            parallel_agents=resolved_parallel_agents,
+            merge_policy=resolved_merge_policy,
+            max_tokens=resolved_max_tokens,
+        )
+        if autonomy_changed:
+            for route in route_configs:
+                if route.role not in {"planner", "executor", "verifier"}:
+                    continue
+                routing_decisions.append(
+                    asdict(
+                        RoutingDecision(
+                            role=route.role,
+                            provider=route.provider,
+                            model=route.model,
+                            reason=runtime_autonomy["reason"],
+                            budget_class=route.budget_class,
+                        )
+                    )
+                )
+            runtime_autonomy_history.append(runtime_autonomy)
+            runtime_autonomy_history = runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:]
+            self.session_store.append_timeline(
+                session_path,
+                TimelineEvent(
+                    kind="runtime.autonomy.updated",
+                    message=runtime_autonomy["reason"],
+                    metadata=runtime_autonomy,
+                ),
+            )
+            context_manager.record("system", f"Runtime autonomy adjusted: {runtime_autonomy['reason']}")
 
         for iteration in range(1, iterations + 1):
             (
@@ -590,12 +761,32 @@ class FluxioHarness:
                 notes=notes,
                 risks=risks,
             )
+            if delegated_status == "running":
+                (
+                    delegated_runtime_sessions,
+                    delegated_status,
+                    delegated_replan_trigger,
+                ) = self._follow_delegated_sessions(
+                    delegated_runtime_sessions=delegated_runtime_sessions,
+                    plan_revisions=plan_revisions,
+                    runtime_supervisor=runtime_supervisor,
+                    notes=notes,
+                    risks=risks,
+                    wait_seconds=self._delegated_follow_budget_seconds(
+                        started_at=started_at,
+                        max_runtime_seconds=max_runtime_seconds,
+                        parallel_agents=resolved_parallel_agents,
+                        context_status=context_manager.status(),
+                    ),
+                )
             if delegated_status == "waiting_for_approval":
                 autopilot_status = "paused"
                 autopilot_pause_reason = "approval_required"
+                context_manager.record("system", "Delegated runtime is waiting for approval.")
                 break
             if delegated_replan_trigger == "approval_rejected":
                 repeated_failure_count += 1
+                stable_success_streak = 0
                 self._append_revised_plan(
                     plan_revisions=plan_revisions,
                     base_revision=plan_revisions[-1],
@@ -614,7 +805,56 @@ class FluxioHarness:
             if delegated_status == "running":
                 autopilot_status = "paused"
                 autopilot_pause_reason = "delegated_runtime_running"
+                context_manager.record("system", "Delegated runtime is still running after the follow budget.")
                 break
+
+            (
+                route_configs,
+                execution_policy,
+                runtime_autonomy,
+                autonomy_changed,
+                route_change_count,
+            ) = self._apply_runtime_autonomy(
+                profile_name=profile_name,
+                route_configs=route_configs,
+                route_overrides=route_overrides or [],
+                execution_policy=execution_policy,
+                repeated_failure_count=repeated_failure_count,
+                verification_failures=verification_failures,
+                stable_success_streak=stable_success_streak,
+                context_status=context_manager.status(),
+                delegated_status=delegated_status,
+                route_change_count=route_change_count,
+                parallel_agents=resolved_parallel_agents,
+                merge_policy=resolved_merge_policy,
+                max_tokens=resolved_max_tokens,
+            )
+            if autonomy_changed:
+                for route in route_configs:
+                    if route.role not in {"planner", "executor", "verifier"}:
+                        continue
+                    routing_decisions.append(
+                        asdict(
+                            RoutingDecision(
+                                role=route.role,
+                                provider=route.provider,
+                                model=route.model,
+                                reason=runtime_autonomy["reason"],
+                                budget_class=route.budget_class,
+                            )
+                        )
+                    )
+                runtime_autonomy_history.append(runtime_autonomy)
+                runtime_autonomy_history = runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:]
+                self.session_store.append_timeline(
+                    session_path,
+                    TimelineEvent(
+                        kind="runtime.autonomy.updated",
+                        message=runtime_autonomy["reason"],
+                        metadata=runtime_autonomy,
+                    ),
+                )
+                context_manager.record("system", f"Runtime autonomy adjusted: {runtime_autonomy['reason']}")
 
             if time.monotonic() - started_at >= max_runtime_seconds:
                 autopilot_status = "paused"
@@ -639,6 +879,7 @@ class FluxioHarness:
                     },
                 ),
             )
+            context_manager.record("system", f"Planner selected step: {next_step.title}")
 
             execution_record = None
             pending_approval = self._resolve_pending_action_if_any(
@@ -652,9 +893,11 @@ class FluxioHarness:
                     autopilot_status = "paused"
                     autopilot_pause_reason = "approval_required"
                     notes.append("Harness detected a pending approval gate and paused safely.")
+                    context_manager.record("system", "A pending operator approval blocked the next action.")
                     break
                 if pending_approval.gate.status == "rejected":
                     repeated_failure_count += 1
+                    stable_success_streak = 0
                     risks.append("Operator rejected a high-risk action; replanning required.")
                     self._append_revised_plan(
                         plan_revisions=plan_revisions,
@@ -671,6 +914,10 @@ class FluxioHarness:
                         ],
                     )
                     action_history[-1] = asdict(pending_approval)
+                    context_manager.record(
+                        "system",
+                        "Operator rejected a high-risk action and triggered replanning.",
+                    )
                     continue
                 execution_record = pending_approval
                 action_history[-1] = asdict(execution_record)
@@ -693,6 +940,10 @@ class FluxioHarness:
                         metadata=asdict(proposal),
                     ),
                 )
+                context_manager.record(
+                    "system",
+                    f"Proposed action: {proposal.title}. Policy decision: {proposal.policy_decision}.",
+                )
 
                 execution_record = execute_action(
                     proposal,
@@ -708,6 +959,7 @@ class FluxioHarness:
                 risks.append("A high-risk action was proposed and is waiting for operator approval.")
                 next_step.notes.append("Pending approval before execution.")
                 latest_revision.active_step_id = next_step.step_id
+                context_manager.record("system", f"Action is waiting for operator approval: {execution_record.proposal.title}")
                 break
 
             delegated_payload = execution_record.result.payload.get("delegatedSession", {})
@@ -721,9 +973,44 @@ class FluxioHarness:
                 ]
                 delegated_runtime_sessions.append(delegated_payload)
                 notes.append("Delegated runtime lane launched; Fluxio will resume once it completes.")
-                autopilot_status = "paused"
-                autopilot_pause_reason = "delegated_runtime_running"
-                break
+                context_manager.record(
+                    "system",
+                    f"Delegated runtime lane launched for step {next_step.title}.",
+                )
+                (
+                    delegated_runtime_sessions,
+                    delegated_status,
+                    delegated_replan_trigger,
+                ) = self._follow_delegated_sessions(
+                    delegated_runtime_sessions=delegated_runtime_sessions,
+                    plan_revisions=plan_revisions,
+                    runtime_supervisor=runtime_supervisor,
+                    notes=notes,
+                    risks=risks,
+                    wait_seconds=self._delegated_follow_budget_seconds(
+                        started_at=started_at,
+                        max_runtime_seconds=max_runtime_seconds,
+                        parallel_agents=resolved_parallel_agents,
+                        context_status=context_manager.status(),
+                    ),
+                )
+                if delegated_replan_trigger == "approval_rejected":
+                    repeated_failure_count += 1
+                    stable_success_streak = 0
+                    continue
+                if delegated_status == "waiting_for_approval":
+                    autopilot_status = "paused"
+                    autopilot_pause_reason = "approval_required"
+                    break
+                if delegated_status == "running":
+                    autopilot_status = "paused"
+                    autopilot_pause_reason = "delegated_runtime_running"
+                    break
+                context_manager.record(
+                    "system",
+                    f"Delegated runtime lane settled within the same control cycle for step {next_step.title}.",
+                )
+                continue
 
             if execution_record.result.ok:
                 next_step.status = "completed"
@@ -732,6 +1019,7 @@ class FluxioHarness:
                     dict.fromkeys(changed_files + execution_record.result.changed_files)
                 )
                 repeated_failure_count = 0
+                stable_success_streak += 1
                 skill_record = self.skill_library.record_usage(
                     skill_id=selected_skills[0]["skillId"] if selected_skills else "curated:repo_scan",
                     label=selected_skills[0]["label"] if selected_skills else "Repo Scan",
@@ -745,11 +1033,16 @@ class FluxioHarness:
                 next_step.attempts += 1
                 next_step.status = "blocked"
                 repeated_failure_count += 1
+                stable_success_streak = 0
                 risks.append(
                     execution_record.result.error
                     or execution_record.result.stderr
                     or "Action execution failed."
                 )
+            context_manager.record(
+                "system",
+                self._execution_result_summary(execution_record),
+            )
 
             last_verification_results = self.verification_runner.run(
                 verify_commands, execution_root
@@ -759,6 +1052,12 @@ class FluxioHarness:
                 for item in last_verification_results
                 if item.return_code != 0 or item.status != "executed"
             ]
+            if verification_failures:
+                stable_success_streak = 0
+            context_manager.record(
+                "system",
+                self._verification_summary(last_verification_results),
+            )
             if verification_failures:
                 improvement_queue.extend(
                     [
@@ -840,6 +1139,7 @@ class FluxioHarness:
                     iteration=iteration,
                     run_state=self._build_run_state(
                         objective=objective,
+                        acceptance_checks=plan_bundle.acceptance_checks,
                         plan_revisions=plan_revisions,
                         completed_steps=completed_steps,
                         decisions=decisions,
@@ -849,13 +1149,79 @@ class FluxioHarness:
                         selected_skills=selected_skills,
                         notes=notes,
                     ),
-                    context={
-                        "used_tokens": 0,
-                        "usage_ratio": 0.0,
-                        "status": "nominal",
-                    },
+                    context=self._context_snapshot(context_manager),
                     doc_sources=docs,
                 )
+
+            context_status = context_manager.status()
+            if context_status in {"rollover", "hard_stop"}:
+                if handoff_count >= max_handoffs:
+                    autopilot_status = "paused"
+                    autopilot_pause_reason = "handoff_budget"
+                    risks.append(
+                        f"Context rollover requested but max handoffs budget ({max_handoffs}) was reached."
+                    )
+                    self.session_store.append_timeline(
+                        session_path,
+                        TimelineEvent(
+                            kind="runtime.context_budget",
+                            message="Fluxio hit the handoff budget before it could compact context again.",
+                            metadata={
+                                "handoff_count": handoff_count,
+                                "max_handoffs": max_handoffs,
+                                "context_status": context_status,
+                            },
+                        ),
+                    )
+                    break
+                handoff_count += 1
+                run_state = self._build_run_state(
+                    objective=objective,
+                    acceptance_checks=plan_bundle.acceptance_checks,
+                    plan_revisions=plan_revisions,
+                    completed_steps=completed_steps,
+                    decisions=decisions,
+                    changed_files=changed_files,
+                    risks=risks,
+                    verification_results=last_verification_results,
+                    selected_skills=selected_skills,
+                    notes=notes,
+                )
+                packet = create_handoff_packet(
+                    session_id=session_id,
+                    parent_session_id=metadata.get("parent_session_id"),
+                    reason=f"context_{context_status}",
+                    state=run_state,
+                    prompt_stack=prompt_stack,
+                    context_manager=context_manager,
+                )
+                handoff_path = save_handoff_packet(
+                    packet=packet,
+                    session_path=session_path,
+                    sequence=handoff_count,
+                )
+                handoff_paths.append(str(handoff_path))
+                context_seed = context_manager.compact_window()
+                context_manager.reset_with_seed(context_seed)
+                notes.append(
+                    f"Context compacted after reaching {context_status}; rollover handoff packet {handoff_count} captured."
+                )
+                self.session_store.append_timeline(
+                    session_path,
+                    TimelineEvent(
+                        kind="runtime.context_compacted",
+                        message="Fluxio compacted the live context window and saved a rollover handoff packet.",
+                        metadata={
+                            "status": context_status,
+                            "handoff_path": str(handoff_path),
+                            "handoff_count": handoff_count,
+                        },
+                    ),
+                )
+                if guardrails.get("pause_on_handoff", True):
+                    autopilot_status = "paused"
+                    autopilot_pause_reason = f"context_{context_status}"
+                    break
 
             if autopilot_pause_reason:
                 break
@@ -866,6 +1232,79 @@ class FluxioHarness:
         if not final_steps and not autopilot_pause_reason:
             autopilot_status = "completed"
 
+        (
+            route_configs,
+            execution_policy,
+            runtime_autonomy,
+            autonomy_changed,
+            route_change_count,
+        ) = self._apply_runtime_autonomy(
+            profile_name=profile_name,
+            route_configs=route_configs,
+            route_overrides=route_overrides or [],
+            execution_policy=execution_policy,
+            repeated_failure_count=repeated_failure_count,
+            verification_failures=verification_failures,
+            stable_success_streak=stable_success_streak,
+            context_status=context_manager.status(),
+            delegated_status=autopilot_pause_reason or delegated_status,
+            route_change_count=route_change_count,
+            parallel_agents=resolved_parallel_agents,
+            merge_policy=resolved_merge_policy,
+            max_tokens=resolved_max_tokens,
+        )
+        if autonomy_changed:
+            for route in route_configs:
+                if route.role not in {"planner", "executor", "verifier"}:
+                    continue
+                routing_decisions.append(
+                    asdict(
+                        RoutingDecision(
+                            role=route.role,
+                            provider=route.provider,
+                            model=route.model,
+                            reason=runtime_autonomy["reason"],
+                            budget_class=route.budget_class,
+                        )
+                    )
+                )
+            runtime_autonomy_history.append(runtime_autonomy)
+            runtime_autonomy_history = runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:]
+
+        if (
+            context_manager.status() in {"rollover", "hard_stop"}
+            and handoff_count < max_handoffs
+        ):
+            handoff_count += 1
+            packet = create_handoff_packet(
+                session_id=session_id,
+                parent_session_id=metadata.get("parent_session_id"),
+                reason=f"context_{context_manager.status()}",
+                state=self._build_run_state(
+                    objective=objective,
+                    acceptance_checks=plan_bundle.acceptance_checks,
+                    plan_revisions=plan_revisions,
+                    completed_steps=completed_steps,
+                    decisions=decisions,
+                    changed_files=changed_files,
+                    risks=risks,
+                    verification_results=last_verification_results,
+                    selected_skills=selected_skills,
+                    notes=notes,
+                ),
+                prompt_stack=prompt_stack,
+                context_manager=context_manager,
+            )
+            handoff_path = save_handoff_packet(
+                packet=packet,
+                session_path=session_path,
+                sequence=handoff_count,
+            )
+            handoff_paths.append(str(handoff_path))
+            context_seed = context_manager.compact_window()
+            context_manager.reset_with_seed(context_seed)
+
+        context_seed = context_manager.compact_window()
         persisted_state = {
             "objective": objective,
             "doc_evidence": [asdict(item) for item in docs_evidence],
@@ -904,20 +1343,15 @@ class FluxioHarness:
             "mission_id": execution_context.mission_id,
             "compatibility_harness_id": self.compatibility_harness.harness_id,
             "project_profile": project_profile,
-            "context": {
-                "used_tokens": 0,
-                "usage_ratio": 0.0,
-                "status": "nominal",
-            },
+            "prompt_stack": asdict(prompt_stack),
+            "context": self._context_snapshot(context_manager),
+            "context_seed": context_seed,
             "memory_item_ids": [],
-            "handoff_packets": [],
-            "handoff_budget_used": 0,
-            "parallel_agents": 1,
-            "merge_policy": (
-                "risk_averse"
-                if profile_defaults["approval_strictness"] == "high"
-                else "best_score"
-            ),
+            "handoff_packets": handoff_paths,
+            "handoff_budget_used": handoff_count,
+            "parallel_agents": resolved_parallel_agents,
+            "merge_policy": resolved_merge_policy,
+            "max_tokens": resolved_max_tokens,
             "vibe_next_steps": [item.title for item in improvement_queue[:3]],
             "pending_mutating_actions": sum(
                 1
@@ -933,6 +1367,10 @@ class FluxioHarness:
                 "explanationDepth": execution_policy.explanation_depth,
                 "scope": execution_scope.strategy,
             },
+            "stable_success_streak": stable_success_streak,
+            "route_change_count": route_change_count,
+            "runtime_autonomy": runtime_autonomy,
+            "runtime_autonomy_history": runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:],
         }
         self.session_store.save_state(session_path, persisted_state)
 
@@ -940,7 +1378,7 @@ class FluxioHarness:
             session_path=session_path,
             objective=objective,
             session_lineage=lineage,
-            handoff_paths=[],
+            handoff_paths=handoff_paths,
             state=persisted_state,
         )
 
@@ -967,11 +1405,22 @@ class FluxioHarness:
             "harness_id": self.harness_id,
             "profile_defaults": profile_defaults,
             "repeated_failure_count": repeated_failure_count,
+            "context": self._context_snapshot(context_manager),
+            "context_seed": context_seed,
+            "handoff_packets": handoff_paths,
+            "parallel_agents": resolved_parallel_agents,
+            "merge_policy": resolved_merge_policy,
+            "max_tokens": resolved_max_tokens,
+            "stable_success_streak": stable_success_streak,
+            "route_change_count": route_change_count,
+            "runtime_autonomy": runtime_autonomy,
+            "runtime_autonomy_history": runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:],
         }
 
     @staticmethod
     def _build_run_state(
         objective: str,
+        acceptance_checks: list[str],
         plan_revisions: list[PlanRevision],
         completed_steps: list[str],
         decisions: list[str],
@@ -984,7 +1433,7 @@ class FluxioHarness:
         return RunState(
             objective=objective,
             plan_steps=[item.title for item in plan_revisions[-1].steps],
-            acceptance_checks=[],
+            acceptance_checks=acceptance_checks,
             completed_steps=completed_steps,
             decisions=decisions,
             changed_files=changed_files,
@@ -995,6 +1444,246 @@ class FluxioHarness:
             verification_results=verification_results,
             retrieved_skills=[item["label"] for item in selected_skills],
             notes=notes,
+        )
+
+    @staticmethod
+    def _build_prompt_stack(
+        objective: str,
+        project_profile: str,
+        profile_name: str,
+        selected_profile: PersonalizationProfile | None,
+    ) -> PromptStack:
+        persona = PersonaProfile(
+            name=f"fluxio_{profile_name}",
+            tone="direct",
+            risk_tolerance="guarded" if profile_name == "beginner" else "balanced",
+            creativity_level="bounded",
+            coding_style="incremental",
+            verbosity=(
+                selected_profile.agent.explanation_depth
+                if selected_profile and selected_profile.agent.explanation_depth
+                else "medium"
+            ),
+        )
+        return build_prompt_stack(
+            constitution_text=RUNTIME_CONSTITUTION_TEXT,
+            project_profile=project_profile,
+            persona=persona,
+            task_brief=objective,
+        )
+
+    @staticmethod
+    def _context_snapshot(context_manager: ContextWindowManager) -> dict:
+        return {
+            "used_tokens": context_manager.used_tokens,
+            "usage_ratio": round(context_manager.usage_ratio, 3),
+            "status": context_manager.status(),
+        }
+
+    @staticmethod
+    def _route_signature(route_configs: list[ModelRouteConfig]) -> list[tuple[str, str, str, str, str]]:
+        return [
+            (
+                item.role,
+                item.provider,
+                item.model,
+                item.effort,
+                item.budget_class,
+            )
+            for item in route_configs
+        ]
+
+    @staticmethod
+    def _policy_signature(
+        policy: ExecutionPolicy,
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
+        return (
+            policy.approval_mode,
+            policy.delegation_aggressiveness,
+            tuple(policy.auto_allowed_kinds),
+            tuple(policy.approval_required_kinds),
+        )
+
+    @staticmethod
+    def _routing_strategy_for_routes(route_configs: list[ModelRouteConfig]) -> str:
+        planner = next((item for item in route_configs if item.role == "planner"), None)
+        executor = next((item for item in route_configs if item.role == "executor"), None)
+        if not planner or not executor:
+            return "profile_default"
+        if planner.model == "gpt-5.4" and executor.model == "gpt-5.4":
+            return "uniform_quality"
+        if planner.model == "gpt-5.4-mini" and executor.model == "gpt-5.4-mini":
+            return "budget_first"
+        if planner.model == "gpt-5.4" and executor.model == "gpt-5.4-mini":
+            return "planner_premium_executor_efficient"
+        return "custom"
+
+    @staticmethod
+    def _apply_runtime_autonomy(
+        *,
+        profile_name: str,
+        route_configs: list[ModelRouteConfig],
+        route_overrides: list[dict],
+        execution_policy: ExecutionPolicy,
+        repeated_failure_count: int,
+        verification_failures: list[str],
+        stable_success_streak: int,
+        context_status: str,
+        delegated_status: str,
+        route_change_count: int,
+        parallel_agents: int,
+        merge_policy: str,
+        max_tokens: int,
+    ) -> tuple[list[ModelRouteConfig], ExecutionPolicy, dict, bool, int]:
+        current_strategy = FluxioHarness._routing_strategy_for_routes(route_configs)
+        target_strategy = current_strategy
+        target_approval_mode = execution_policy.approval_mode
+        target_delegation = execution_policy.delegation_aggressiveness
+        policy_name = "steady_state"
+        reason = "Runtime posture stayed unchanged."
+
+        if verification_failures or repeated_failure_count >= 2:
+            target_strategy = "uniform_quality"
+            target_approval_mode = "tiered"
+            target_delegation = "low"
+            policy_name = "verification_guardrail"
+            reason = "Verification pressure moved the mission onto the high-confidence route and reduced delegation."
+        elif context_status in {"rollover", "hard_stop"}:
+            target_strategy = "planner_premium_executor_efficient"
+            target_approval_mode = "tiered"
+            target_delegation = "low"
+            policy_name = "context_compaction"
+            reason = "Context pressure reduced delegation and kept execution on the efficient route."
+        elif stable_success_streak >= 2 and delegated_status != "waiting_for_approval":
+            target_strategy = "planner_premium_executor_efficient"
+            if profile_name != "beginner":
+                target_delegation = "high" if profile_name == "experimental" else "balanced"
+            policy_name = "stable_progress"
+            reason = "Recent cycles were stable, so Fluxio kept execution efficient and restart-safe."
+
+        old_route_signature = FluxioHarness._route_signature(route_configs)
+        old_policy_signature = FluxioHarness._policy_signature(execution_policy)
+
+        updated_routes = route_configs
+        if target_strategy != current_strategy and target_strategy != "custom":
+            updated_routes = recommended_model_routes(
+                profile_name,
+                routing_strategy_override=target_strategy,
+                route_overrides=route_overrides,
+            )
+
+        updated_policy = ExecutionPolicy(
+            profile_name=execution_policy.profile_name,
+            approval_mode=target_approval_mode,
+            explanation_depth=execution_policy.explanation_depth,
+            delegation_aggressiveness=target_delegation,
+            auto_allowed_kinds=list(execution_policy.auto_allowed_kinds),
+            approval_required_kinds=list(execution_policy.approval_required_kinds),
+            destructive_requires_approval=execution_policy.destructive_requires_approval,
+        )
+        updated_policy = normalize_execution_policy(updated_policy)
+
+        changed = bool(
+            FluxioHarness._route_signature(updated_routes) != old_route_signature
+            or FluxioHarness._policy_signature(updated_policy) != old_policy_signature
+        )
+        if changed:
+            route_change_count += 1
+
+        autonomy = {
+            "policy": policy_name,
+            "reason": reason,
+            "routingStrategy": (
+                FluxioHarness._routing_strategy_for_routes(updated_routes)
+                if updated_routes
+                else current_strategy
+            ),
+            "delegationAggressiveness": updated_policy.delegation_aggressiveness,
+            "approvalMode": updated_policy.approval_mode,
+            "contextStatus": context_status,
+            "stableSuccessStreak": stable_success_streak,
+            "verificationFailureCount": len(verification_failures),
+            "repeatedFailureCount": repeated_failure_count,
+            "delegatedStatus": delegated_status or "idle",
+            "parallelAgents": parallel_agents,
+            "mergePolicy": merge_policy,
+            "maxTokens": max_tokens,
+            "routeChangeCount": route_change_count,
+            "changed": changed,
+            "evaluatedAt": utc_now_iso(),
+        }
+        return updated_routes, updated_policy, autonomy, changed, route_change_count
+
+    @staticmethod
+    def _delegated_follow_budget_seconds(
+        *,
+        started_at: float,
+        max_runtime_seconds: int,
+        parallel_agents: int,
+        context_status: str,
+    ) -> int:
+        remaining = max(0, int(max_runtime_seconds - (time.monotonic() - started_at)))
+        if remaining <= 0:
+            return 0
+        budget = min(
+            DELEGATED_FOLLOW_BUDGET_SECONDS + max(0, parallel_agents - 1) * 2,
+            remaining,
+        )
+        if context_status in {"rollover", "hard_stop"}:
+            return min(budget, 4)
+        return budget
+
+    @staticmethod
+    def _follow_delegated_sessions(
+        *,
+        delegated_runtime_sessions: list[dict],
+        plan_revisions: list[PlanRevision],
+        runtime_supervisor: DelegatedRuntimeSupervisor,
+        notes: list[str],
+        risks: list[str],
+        wait_seconds: int,
+    ) -> tuple[list[dict], str, str]:
+        current_sessions, active_status, replan_trigger = FluxioHarness._reconcile_delegated_sessions(
+            delegated_runtime_sessions=delegated_runtime_sessions,
+            plan_revisions=plan_revisions,
+            runtime_supervisor=runtime_supervisor,
+            notes=notes,
+            risks=risks,
+        )
+        if active_status != "running" or wait_seconds <= 0:
+            return current_sessions, active_status, replan_trigger
+        deadline = time.monotonic() + wait_seconds
+        while active_status == "running" and time.monotonic() < deadline:
+            time.sleep(1.0)
+            current_sessions, active_status, replan_trigger = FluxioHarness._reconcile_delegated_sessions(
+                delegated_runtime_sessions=current_sessions,
+                plan_revisions=plan_revisions,
+                runtime_supervisor=runtime_supervisor,
+                notes=notes,
+                risks=risks,
+            )
+        if active_status != "running":
+            notes.append("Delegated runtime lane settled within the same control cycle.")
+        return current_sessions, active_status, replan_trigger
+
+    @staticmethod
+    def _verification_summary(results: list[VerificationResult]) -> str:
+        if not results:
+            return "No verification commands were configured for this cycle."
+        failed = [item.command for item in results if item.return_code != 0 or item.status != "executed"]
+        if failed:
+            return f"Verification failed: {', '.join(failed[:2])}"
+        return f"Verification passed for {len(results)} command(s)."
+
+    @staticmethod
+    def _execution_result_summary(record: ActionExecutionRecord) -> str:
+        if record.result.ok:
+            return f"Completed action: {record.proposal.title}. {record.result.result_summary}"
+        if record.gate.status == "pending":
+            return f"Action is waiting for approval: {record.proposal.title}."
+        return (
+            f"Action failed: {record.proposal.title}. "
+            f"{record.result.error or record.result.stderr or record.result.result_summary}"
         )
 
     @staticmethod
