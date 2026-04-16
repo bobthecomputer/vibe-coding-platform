@@ -16,6 +16,7 @@ from .models import (
     ExecutionScope,
     IntegrationRecommendation,
     Mission,
+    MissionCodeExecutionConfig,
     MissionEvent,
     MissionProof,
     MissionRunBudget,
@@ -76,6 +77,13 @@ HARNESS_RECENT_RUN_LIMIT = max(
 RELEASE_READINESS_WEIGHTS = {
     "required": 80,
     "quality": 20,
+}
+PROVIDER_ENV_HINTS = {
+    "openai": "OPENAI_API_KEY",
+    "openai-codex": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
 }
 
 
@@ -252,6 +260,9 @@ class ControlRoomStore:
             execution_policy = ExecutionPolicy(
                 **item.get("execution_policy", {"profile_name": item.get("selected_profile", "builder")})
             )
+            code_execution = MissionCodeExecutionConfig(
+                **item.get("code_execution", {})
+            )
             delegated_runtime_sessions = [
                 DelegatedRuntimeSession(**row)
                 for row in item.get("delegated_runtime_sessions", [])
@@ -273,6 +284,7 @@ class ControlRoomStore:
                     selected_profile=item.get("selected_profile", "builder"),
                     execution_scope=execution_scope,
                     execution_policy=execution_policy,
+                    code_execution=code_execution,
                     route_configs=item.get("route_configs", []),
                     routing_decisions=item.get("routing_decisions", []),
                     effective_route_contract=item.get("effective_route_contract", {}),
@@ -382,6 +394,10 @@ class ControlRoomStore:
         run_until_behavior: str | None = None,
         deadline_at: str | None = None,
         harness_id: str = "fluxio_hybrid",
+        code_execution_enabled: bool = False,
+        code_execution_memory: str = "4g",
+        code_execution_container_id: str = "",
+        code_execution_required: bool = False,
     ) -> Mission:
         missions = self.load_missions()
         self._rebalance_workspace_queue_in_place(missions, workspace_id)
@@ -455,11 +471,24 @@ class ControlRoomStore:
             execution_policy=ExecutionPolicy(
                 profile_name=selected_profile,
             ),
+            code_execution=MissionCodeExecutionConfig(
+                enabled=bool(code_execution_enabled),
+                memory_limit=code_execution_memory or "4g",
+                container_id=str(code_execution_container_id or "").strip(),
+                required=bool(code_execution_required),
+            ),
             state=MissionStateSnapshot(
                 status="queued",
                 queue_position=queue_position,
                 blocking_mission_id=blocking_mission_id,
                 queue_reason=queue_reason,
+                code_execution={
+                    "enabled": bool(code_execution_enabled),
+                    "memory_limit": code_execution_memory or "4g",
+                    "container_id": str(code_execution_container_id or "").strip(),
+                    "required": bool(code_execution_required),
+                    "artifacts": [],
+                },
             ),
             tutorial_context={
                 "profile": selected_profile,
@@ -584,6 +613,7 @@ class ControlRoomStore:
         connected_apps_snapshot = build_connected_apps_snapshot(self.root)
         harness_lab_snapshot = build_harness_lab_snapshot(self.root)
         activity = self.recent_events()
+        provider_auth_presence = _provider_auth_presence_from_env()
 
         workspace_cards = []
         recommended_skill_pack_objects = []
@@ -659,6 +689,10 @@ class ControlRoomStore:
             mission.action_history = normalize_action_history(mission.action_history)
             mission.state.delegated_runtime_sessions = [asdict(item) for item in refreshed_sessions]
             refresh_mission_runtime_state(mission, refreshed_sessions)
+            mission.state.provider_runtime_truth = _provider_truth_for_mission(
+                mission,
+                auth_presence=provider_auth_presence,
+            )
             sync_mission_state_snapshot(mission)
         self._rebalance_workspace_queue_in_place(missions)
         if missions:
@@ -672,6 +706,7 @@ class ControlRoomStore:
                 if item.effective_route_contract
                 else _effective_route_contract_for_mission(item)
             )
+            mission_payload["providerTruth"] = dict(item.state.provider_runtime_truth or {})
             missions_payload.append(mission_payload)
         recommended_skill_packs = list(
             {item.pack_id: item for item in recommended_skill_pack_objects}.values()
@@ -712,12 +747,56 @@ class ControlRoomStore:
         ]
 
         active_workspace_payload = workspace_payload[0] if workspace_payload else {}
+        active_workspace_id = str(active_workspace_payload.get("workspace_id", "") or "")
+        active_mission = self._active_workspace_mission(active_workspace_id, missions)
+        active_provider_truth = (
+            dict(active_mission.state.provider_runtime_truth or {})
+            if active_mission is not None
+            else {}
+        )
+        active_route = (
+            dict(active_provider_truth.get("activeRoute", {}))
+            if isinstance(active_provider_truth.get("activeRoute"), dict)
+            else {}
+        )
+        provider_status = {}
+        for provider_id in ("openai", "anthropic", "openrouter"):
+            last_success = (
+                active_provider_truth.get("lastSuccessfulCall", {})
+                if isinstance(active_provider_truth.get("lastSuccessfulCall"), dict)
+                else {}
+            )
+            last_failure = (
+                active_provider_truth.get("lastFailure", {})
+                if isinstance(active_provider_truth.get("lastFailure"), dict)
+                else {}
+            )
+            provider_status[provider_id] = {
+                "providerId": provider_id,
+                "authPresent": bool(provider_auth_presence.get(provider_id, False)),
+                "configured": bool(provider_auth_presence.get(provider_id, False)),
+                "activeRoute": active_route
+                if active_route.get("provider") == provider_id
+                else {},
+                "lastSuccessfulModelCall": (
+                    last_success
+                    if last_success.get("provider") == provider_id
+                    else {}
+                ),
+                "lastProviderFailure": (
+                    last_failure
+                    if last_failure.get("provider") == provider_id
+                    else {}
+                ),
+                "lastCheckedAt": utc_now_iso(),
+            }
         provider_setup_status = {
+            **provider_status,
             "minimax": active_workspace_payload.get("minimaxSetupStatus")
             or _minimax_setup_status_for_workspace(
                 self._default_workspace_profile(),
                 setup_history,
-            )
+            ),
         }
         efficiency_autotune = _build_efficiency_autotune_snapshot(
             harness_lab=harness_lab_snapshot,
@@ -1001,6 +1080,9 @@ def build_mission_loop_snapshot(mission: Mission) -> dict:
         "routeChangeCount": mission.state.route_change_count,
         "parallelAgents": mission.state.parallel_agents,
         "mergePolicy": mission.state.merge_policy,
+        "blocker": mission.state.blocker_classification,
+        "providerTruth": mission.state.provider_runtime_truth,
+        "codeExecution": mission.state.code_execution,
     }
 
 
@@ -1020,6 +1102,9 @@ def sync_mission_state_snapshot(mission: Mission) -> dict:
     mission.state.time_budget_status = mission_loop["timeBudget"]["status"]
     mission.state.last_budget_pause_reason = mission_loop["timeBudget"]["lastPauseReason"]
     mission.state.current_runtime_lane = mission_loop["currentRuntimeLane"]
+    mission.state.blocker_classification = mission_loop.get("blocker", {})
+    mission.state.provider_runtime_truth = mission_loop.get("providerTruth", {})
+    mission.state.code_execution = mission_loop.get("codeExecution", {})
     return mission_loop
 
 
@@ -1042,6 +1127,188 @@ def _plan_revision_value(revision: object, key: str) -> str:
     if isinstance(revision, dict):
         return str(revision.get(key, "") or "")
     return str(getattr(revision, key, "") or "")
+
+
+def _provider_auth_presence_from_env() -> dict[str, bool]:
+    presence: dict[str, bool] = {}
+    for provider_id, env_name in PROVIDER_ENV_HINTS.items():
+        presence[provider_id] = bool(str(os.environ.get(env_name, "")).strip())
+    return presence
+
+
+def _route_role_for_phase(phase: str) -> str:
+    normalized = str(phase or "execute").strip().lower()
+    if normalized in {"plan", "replan"}:
+        return "planner"
+    if normalized == "verify":
+        return "verifier"
+    return "executor"
+
+
+def _route_rows_for_mission(mission: Mission) -> list[dict]:
+    effective_contract = (
+        mission.effective_route_contract
+        if mission.effective_route_contract
+        else _effective_route_contract_for_mission(mission)
+    )
+    rows = effective_contract.get("roles", [])
+    if not isinstance(rows, list):
+        return []
+    normalized: list[dict] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        if role not in ROUTE_OVERRIDE_ROLES:
+            continue
+        normalized.append(
+            {
+                "role": role,
+                "provider": str(item.get("provider", "")).strip().lower(),
+                "model": str(item.get("model", "")).strip(),
+                "effort": str(item.get("effort", "")).strip().lower(),
+                "budgetClass": str(
+                    item.get("budgetClass", item.get("budget_class", ""))
+                ).strip(),
+                "source": str(item.get("source", "")).strip(),
+                "reason": str(item.get("reason", "")).strip(),
+            }
+        )
+    return normalized
+
+
+def _route_row_for_phase(
+    mission: Mission,
+    phase: str,
+    *,
+    route_rows: list[dict] | None = None,
+) -> dict:
+    rows = route_rows if route_rows is not None else _route_rows_for_mission(mission)
+    role = _route_role_for_phase(phase)
+    for item in rows:
+        if str(item.get("role", "")).strip().lower() == role:
+            return item
+    return {
+        "role": role,
+        "provider": "",
+        "model": "",
+        "effort": "",
+        "budgetClass": "",
+        "source": "",
+        "reason": "",
+    }
+
+
+def _provider_truth_from_action_history(
+    mission: Mission,
+    *,
+    route_rows: list[dict],
+) -> tuple[dict, dict]:
+    success: dict = {}
+    failure: dict = {}
+    for entry in reversed(mission.action_history or []):
+        if not isinstance(entry, dict):
+            if hasattr(entry, "__dataclass_fields__"):
+                entry = asdict(entry)
+            else:
+                continue
+        result = dict(entry.get("result", {}))
+        proposal = dict(entry.get("proposal", {}))
+        delegation = dict(proposal.get("delegation_metadata", {}))
+        phase = str(
+            delegation.get("cycle_phase", mission.state.current_cycle_phase or "execute")
+        ).strip().lower()
+        route = _route_row_for_phase(mission, phase, route_rows=route_rows)
+        provider = str(route.get("provider", "")).strip().lower()
+        model = str(route.get("model", "")).strip()
+        role = str(route.get("role", "")).strip().lower()
+        if not provider and not model:
+            continue
+        summary = str(
+            result.get("result_summary")
+            or result.get("error")
+            or result.get("stderr")
+            or result.get("stdout")
+            or ""
+        ).strip()
+        if len(summary) > 220:
+            summary = summary[:217].rstrip() + "..."
+        row = {
+            "provider": provider,
+            "model": model,
+            "role": role,
+            "phase": phase,
+            "at": str(entry.get("executed_at", "") or ""),
+            "source": "action_history",
+            "summary": summary,
+        }
+        if bool(result.get("ok")):
+            if not success:
+                success = row
+        elif not failure:
+            failure = row
+        if success and failure:
+            break
+    return success, failure
+
+
+def _provider_truth_for_mission(
+    mission: Mission,
+    *,
+    auth_presence: dict[str, bool],
+) -> dict:
+    phase = str(mission.state.current_cycle_phase or "execute").strip().lower()
+    route_rows = _route_rows_for_mission(mission)
+    active_route = _route_row_for_phase(mission, phase, route_rows=route_rows)
+    active_provider = str(active_route.get("provider", "")).strip().lower()
+    active_model = str(active_route.get("model", "")).strip()
+    auth_present = bool(auth_presence.get(active_provider, False)) if active_provider else False
+    last_success, last_failure = _provider_truth_from_action_history(
+        mission,
+        route_rows=route_rows,
+    )
+    if not last_failure:
+        for session in reversed(mission.delegated_runtime_sessions or []):
+            if hasattr(session, "__dataclass_fields__"):
+                row = asdict(session)
+            elif isinstance(session, dict):
+                row = dict(session)
+            else:
+                continue
+            status = str(row.get("status", "")).strip().lower()
+            if status not in {"failed", "stopped"}:
+                continue
+            provider = str(row.get("target_provider", active_provider)).strip().lower()
+            model = str(row.get("target_model", active_model)).strip()
+            if not provider and not model:
+                continue
+            last_failure = {
+                "provider": provider,
+                "model": model,
+                "role": str(row.get("target_role", _route_role_for_phase(phase))).strip().lower(),
+                "phase": str(row.get("target_phase", phase)).strip().lower(),
+                "at": str(row.get("updated_at", "") or ""),
+                "source": "delegated_runtime",
+                "summary": str(row.get("last_event") or row.get("detail") or "").strip(),
+            }
+            break
+
+    return {
+        "currentPhase": phase or "execute",
+        "activeRoute": {
+            "role": str(active_route.get("role", "")).strip().lower(),
+            "provider": active_provider,
+            "model": active_model,
+            "effort": str(active_route.get("effort", "")).strip().lower(),
+            "budgetClass": str(active_route.get("budgetClass", "")).strip(),
+            "source": str(active_route.get("source", "")).strip(),
+        },
+        "authPresent": auth_present,
+        "authKnown": bool(active_provider),
+        "lastSuccessfulCall": last_success,
+        "lastFailure": last_failure,
+        "updatedAt": utc_now_iso(),
+    }
 
 
 def _effective_route_contract_for_mission(mission: Mission) -> dict:

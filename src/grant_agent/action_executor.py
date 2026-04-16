@@ -282,6 +282,18 @@ class HybridExecutionAdapter(ExecutionAdapter):
 
         if _should_delegate_step(lowered, execution_policy):
             delegated_cycle_phase = _delegated_cycle_phase(step, objective, route_configs)
+            delegated_role = _route_role_for_phase(delegated_cycle_phase)
+            delegated_route = next(
+                (
+                    asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
+                    for item in (route_configs or [])
+                    if str(
+                        (asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)).get("role", "")
+                    ).strip().lower()
+                    == delegated_role
+                ),
+                {},
+            )
             return self._proposal(
                 action_id=action_id,
                 event_id=event_id,
@@ -296,7 +308,10 @@ class HybridExecutionAdapter(ExecutionAdapter):
                     "runtime_id": runtime_id,
                     "objective": objective,
                     "cycle_phase": delegated_cycle_phase,
-                    "route_role": _route_role_for_phase(delegated_cycle_phase),
+                    "route_role": delegated_role,
+                    "route_provider": str(delegated_route.get("provider", "")).strip().lower(),
+                    "route_model": str(delegated_route.get("model", "")).strip(),
+                    "route_effort": str(delegated_route.get("effort", "")).strip().lower(),
                     "route_configs": [
                         asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
                         for item in (route_configs or [])
@@ -937,6 +952,18 @@ def _delegated_cycle_phase(
     if _matches(lowered, DELEGATED_PLAN_HINTS):
         return "plan"
     return "execute"
+
+
+def delegated_cycle_phase_for_step(
+    step: PlannedStep,
+    objective: str = "",
+    route_configs: list[dict] | list[ModelRouteConfig] | None = None,
+) -> str:
+    return _delegated_cycle_phase(
+        step=step,
+        objective=objective,
+        route_configs=route_configs,
+    )
 
 
 def _route_role_for_phase(phase: str) -> str:

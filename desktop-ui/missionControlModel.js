@@ -367,11 +367,22 @@ function deriveEvents(mission, snapshot) {
 
   for (const session of asList(mission?.delegated_runtime_sessions)) {
     for (const event of asList(session?.latest_events)) {
+      const kind = String(event?.kind || "runtime").toLowerCase();
+      const eventDetail =
+        kind === "runtime.phase_entered"
+          ? `${titleizeToken(event?.data?.phase || "execute")} phase via ${titleizeToken(
+              event?.data?.role || "route",
+            )}${event?.data?.provider ? ` · ${titleizeToken(event.data.provider)}` : ""}${event?.data?.model ? ` · ${event.data.model}` : ""}`
+          : kind === "runtime.route_switch_reason"
+            ? event?.data?.reason || event?.message || session?.detail || ""
+            : kind === "runtime.handoff"
+              ? event?.data?.reason || event?.message || session?.detail || ""
+              : session?.detail || session?.last_event || "";
       events.push(
         timelineEntry(
           event?.kind || "runtime",
           event?.message || "Runtime update",
-          session?.detail || session?.last_event || "",
+          eventDetail,
           missionStatusTone(session?.status),
           runtimeLabel(session?.runtime_id),
         ),
@@ -1393,9 +1404,12 @@ function deriveActivityDetail(activity, missionById) {
   return uniq([
     missionTitle,
     metadata.runtimeId ? runtimeLabel(metadata.runtimeId) : metadata.runtime_id ? runtimeLabel(metadata.runtime_id) : "",
+    metadata.provider ? `${titleizeToken(metadata.provider)}${metadata.model ? `:${metadata.model}` : ""}` : "",
     metadata.queuePosition ? `Queue ${metadata.queuePosition}` : "",
     metadata.action ? `Action ${titleizeToken(metadata.action)}` : "",
     metadata.autopilotStatus ? titleizeToken(metadata.autopilotStatus) : "",
+    metadata.pauseReason ? `Pause ${titleizeToken(metadata.pauseReason)}` : "",
+    metadata.blockerClass ? `Blocker ${titleizeToken(metadata.blockerClass)}` : "",
     blockingMissionTitle ? `Blocked by ${blockingMissionTitle}` : "",
   ]).join(" · ");
 }
@@ -1493,6 +1507,20 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
       const ownerWorkspace = workspaceById.get(item?.workspace_id) || workspace;
       const status = item?.state?.status || item?.missionLoop?.continuityState || "active";
       const executionPath = deriveMissionExecutionPath(item, ownerWorkspace);
+      const providerTruth =
+        item?.providerTruth ||
+        item?.missionLoop?.providerTruth ||
+        item?.state?.provider_runtime_truth ||
+        {};
+      const activeRoute = providerTruth?.activeRoute || {};
+      const blocker =
+        item?.missionLoop?.blocker ||
+        item?.state?.blocker_classification ||
+        {};
+      const stuckReason =
+        blocker?.summary ||
+        resolveMissionPauseReason(item) ||
+        "";
       return {
         missionId: item?.mission_id || "",
         workspaceId: item?.workspace_id || "",
@@ -1516,6 +1544,12 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
         ).length,
         executionPath,
         harnessLabel: titleizeToken(item?.harness_id || productionHarness),
+        providerLabel: activeRoute?.provider ? titleizeToken(activeRoute.provider) : "Unresolved",
+        modelLabel: activeRoute?.model || "Profile default",
+        routeRole: activeRoute?.role ? titleizeToken(activeRoute.role) : "Route",
+        blockerClass: blocker?.class || "",
+        stuckReason,
+        nextCheckpointPrediction: deriveNextCheckpoint(item),
       };
     });
 
@@ -1593,14 +1627,72 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
     runtime: item.runtime,
     summary: item.next,
     detail: item.blocked ? item.lastMovement : item.current,
+    routeLabel: `${item.providerLabel} · ${item.modelLabel}`,
+    checkpoint: item.nextCheckpointPrediction,
     tone: item.blocked ? "warn" : item.tone,
     updatedAt: item.updatedAt,
     selected: item.selected,
   }));
 
+  const stuckThreads = activeConversations
+    .filter(item => item.blocked || item.blockerClass || item.stuckReason)
+    .slice(0, 6)
+    .map(item => ({
+      missionId: item.missionId,
+      title: item.title,
+      blockerClass: titleizeToken(item.blockerClass || "operator_only"),
+      reason: item.stuckReason || item.lastMovement || "Blocked without a recorded reason.",
+      routeLabel: `${item.providerLabel} · ${item.modelLabel}`,
+      runtime: item.runtime,
+      tone: item.tone === "bad" ? "bad" : "warn",
+    }));
+
+  const winningRouteMap = new Map();
+  for (const item of activeConversations) {
+    const key = `${item.runtime}|${item.providerLabel}|${item.modelLabel}`;
+    const existing = winningRouteMap.get(key) || {
+      key,
+      runtime: item.runtime,
+      provider: item.providerLabel,
+      model: item.modelLabel,
+      activeCount: 0,
+      blockedCount: 0,
+    };
+    existing.activeCount += 1;
+    if (item.blocked) {
+      existing.blockedCount += 1;
+    }
+    winningRouteMap.set(key, existing);
+  }
+  const winningRoutes = [...winningRouteMap.values()]
+    .sort((left, right) => {
+      if (left.blockedCount !== right.blockedCount) {
+        return left.blockedCount - right.blockedCount;
+      }
+      return right.activeCount - left.activeCount;
+    })
+    .slice(0, 4)
+    .map(item => ({
+      ...item,
+      tone: item.blockedCount > 0 ? "warn" : "good",
+      label: `${item.runtime} · ${item.provider} · ${item.model}`,
+      detail:
+        item.blockedCount > 0
+          ? `${item.activeCount} active · ${item.blockedCount} blocked`
+          : `${item.activeCount} active and clear`,
+    }));
+
+  const predictedCheckpoints = nextUp
+    .map(item => `${item.title}: ${item.checkpoint || item.summary}`)
+    .slice(0, 6);
+
+  const changedWhileAway = whileAway
+    .slice(0, 6)
+    .map(item => `${item.missionTitle}: ${item.message}`);
+
   const summary =
     activeConversations.length > 0
-      ? `${activeConversations.length} active conversation${activeConversations.length === 1 ? "" : "s"} across ${Math.max(runtimeCount, 1)} runtime lane${Math.max(runtimeCount, 1) === 1 ? "" : "s"}. ${blockedCount > 0 ? `${blockedCount} need operator attention.` : "No operator block is active right now."}`
+      ? `${activeConversations.length} active conversation${activeConversations.length === 1 ? "" : "s"} across ${Math.max(runtimeCount, 1)} runtime lane${Math.max(runtimeCount, 1) === 1 ? "" : "s"}. ${blockedCount > 0 ? `${blockedCount} need operator attention.` : "No operator block is active right now."} Top route: ${winningRoutes[0]?.label || "not resolved yet"}.`
       : "No active conversations. Builder stays ready for launch, runtime tuning, and review.";
 
   return {
@@ -1644,6 +1736,10 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
     nexuses,
     whileAway,
     nextUp,
+    stuckThreads,
+    winningRoutes,
+    changedWhileAway,
+    predictedCheckpoints,
     selectedFocus: mission
       ? {
           missionId: mission.mission_id,

@@ -176,6 +176,10 @@ class MissionStateSnapshot:
     parallel_agents: int = 1
     merge_policy: str = "best_score"
     runtime_autonomy: dict[str, Any] = field(default_factory=dict)
+    blocker_classification: dict[str, Any] = field(default_factory=dict)
+    blocker_history: list[dict[str, Any]] = field(default_factory=list)
+    provider_runtime_truth: dict[str, Any] = field(default_factory=dict)
+    code_execution: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -298,6 +302,19 @@ class ExecutionPolicy:
 
 
 @dataclass
+class MissionCodeExecutionConfig:
+    enabled: bool = False
+    memory_limit: str = "4g"
+    container_id: str = ""
+    required: bool = False
+    file_ids: list[str] = field(default_factory=list)
+    last_started_at: str = ""
+    last_result: str = ""
+    last_error: str = ""
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class DelegatedRuntimeEvent:
     event_id: str
     delegated_id: str
@@ -352,6 +369,15 @@ class DelegatedSessionSnapshot:
     heartbeat_status: str = "unknown"
     heartbeat_age_seconds: int | None = None
     heartbeat_interval_seconds: int = 10
+    target_phase: str = ""
+    target_role: str = ""
+    target_provider: str = ""
+    target_model: str = ""
+    target_effort: str = ""
+    target_budget_class: str = ""
+    handoff_count: int = 0
+    handoff_reason: str = ""
+    source_delegated_id: str = ""
 
 
 @dataclass
@@ -388,6 +414,15 @@ class DelegatedRuntimeSession:
     heartbeat_status: str = "unknown"
     heartbeat_age_seconds: int | None = None
     heartbeat_interval_seconds: int = 10
+    target_phase: str = ""
+    target_role: str = ""
+    target_provider: str = ""
+    target_model: str = ""
+    target_effort: str = ""
+    target_budget_class: str = ""
+    handoff_count: int = 0
+    handoff_reason: str = ""
+    source_delegated_id: str = ""
 
 
 @dataclass
@@ -648,6 +683,9 @@ class HarnessExecutionContext:
     execution_scope: ExecutionScope = field(default_factory=ExecutionScope)
     execution_policy: ExecutionPolicy = field(
         default_factory=lambda: ExecutionPolicy(profile_name="builder")
+    )
+    code_execution: MissionCodeExecutionConfig = field(
+        default_factory=MissionCodeExecutionConfig
     )
     route_configs: list[ModelRouteConfig] = field(default_factory=list)
     broadening_threshold: int = 2

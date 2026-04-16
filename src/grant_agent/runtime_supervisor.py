@@ -65,6 +65,9 @@ class DelegatedRuntimeSupervisor:
         workspace: WorkspaceProfile,
         source_step_id: str,
         resume: bool = False,
+        handoff_reason: str = "",
+        source_delegated_id: str = "",
+        handoff_count: int = 0,
     ) -> DelegatedRuntimeSession:
         adapter = runtime_adapter_map()[runtime_id]
         launch = (
@@ -109,17 +112,69 @@ class DelegatedRuntimeSupervisor:
         )
         route_summary = str(launch.get("route_summary", "")).strip()
         route_contract = launch.get("route_contract", {})
+        route_contract_payload = (
+            dict(route_contract) if isinstance(route_contract, dict) else {}
+        )
         if route_summary:
             self._append_structured_event(
                 session,
                 kind="runtime.route_contract",
                 message=route_summary,
                 status="queued",
-                data=(
-                    dict(route_contract)
-                    if isinstance(route_contract, dict)
-                    else {}
+                data=route_contract_payload,
+            )
+        session.target_phase = str(route_contract_payload.get("phase", "")).strip().lower()
+        session.target_role = str(route_contract_payload.get("role", "")).strip().lower()
+        session.target_provider = str(route_contract_payload.get("provider", "")).strip().lower()
+        session.target_model = str(route_contract_payload.get("model", "")).strip()
+        session.target_effort = str(route_contract_payload.get("effort", "")).strip().lower()
+        session.target_budget_class = str(
+            route_contract_payload.get("budget_class", route_contract_payload.get("budgetClass", ""))
+        ).strip()
+        session.handoff_count = max(0, int(handoff_count or 0))
+        session.handoff_reason = str(handoff_reason or "").strip()
+        session.source_delegated_id = str(source_delegated_id or "").strip()
+        if session.target_phase:
+            self._append_structured_event(
+                session,
+                kind="runtime.phase_entered",
+                message=(
+                    f"Entered {session.target_phase} phase via {session.target_role or 'route'} route."
                 ),
+                status="queued",
+                data={
+                    "reason": session.handoff_reason,
+                    "phase": session.target_phase,
+                    "role": session.target_role,
+                    "provider": session.target_provider,
+                    "model": session.target_model,
+                },
+            )
+        if session.handoff_reason:
+            self._append_structured_event(
+                session,
+                kind="runtime.route_switch_reason",
+                message=session.handoff_reason,
+                status="queued",
+                data={
+                    "phase": session.target_phase,
+                    "role": session.target_role,
+                    "provider": session.target_provider,
+                    "model": session.target_model,
+                    "source_delegated_id": session.source_delegated_id,
+                    "handoff_count": session.handoff_count,
+                },
+            )
+            self._append_structured_event(
+                session,
+                kind="runtime.handoff",
+                message="Delegated runtime lane was relaunched after a route or phase change.",
+                status="queued",
+                data={
+                    "reason": session.handoff_reason,
+                    "source_delegated_id": session.source_delegated_id,
+                    "handoff_count": session.handoff_count,
+                },
             )
 
         process = subprocess.Popen(  # noqa: S603
@@ -199,6 +254,43 @@ class DelegatedRuntimeSupervisor:
             status="stopped",
         )
         return self.refresh_session(payload)
+
+    def handoff_session(
+        self,
+        *,
+        session: DelegatedRuntimeSession | dict | str,
+        mission: Mission,
+        workspace: WorkspaceProfile,
+        source_step_id: str,
+        reason: str,
+    ) -> DelegatedRuntimeSession:
+        current = self.refresh_session(session)
+        clean_reason = str(reason or "Delegated route changed.").strip()
+        self._append_structured_event(
+            current,
+            kind="runtime.handoff",
+            message=f"Handoff requested: {clean_reason}",
+            status=current.status,
+            data={
+                "phase": current.target_phase,
+                "role": current.target_role,
+                "provider": current.target_provider,
+                "model": current.target_model,
+                "handoff_count": current.handoff_count,
+            },
+        )
+        self.stop_session(current)
+        relaunched = self.start_session(
+            runtime_id=current.runtime_id,
+            mission=mission,
+            workspace=workspace,
+            source_step_id=source_step_id or current.source_step_id,
+            resume=False,
+            handoff_reason=clean_reason,
+            source_delegated_id=current.delegated_id,
+            handoff_count=int(current.handoff_count or 0) + 1,
+        )
+        return self.refresh_session(relaunched)
 
     def resolve_approval(
         self,
@@ -317,6 +409,15 @@ class DelegatedRuntimeSupervisor:
             heartbeat_status=payload.heartbeat_status,
             heartbeat_age_seconds=payload.heartbeat_age_seconds,
             heartbeat_interval_seconds=payload.heartbeat_interval_seconds,
+            target_phase=payload.target_phase,
+            target_role=payload.target_role,
+            target_provider=payload.target_provider,
+            target_model=payload.target_model,
+            target_effort=payload.target_effort,
+            target_budget_class=payload.target_budget_class,
+            handoff_count=payload.handoff_count,
+            handoff_reason=payload.handoff_reason,
+            source_delegated_id=payload.source_delegated_id,
         )
 
     def _load_session(self, session: DelegatedRuntimeSession | dict | str) -> DelegatedRuntimeSession | None:

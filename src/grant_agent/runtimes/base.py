@@ -120,6 +120,15 @@ def mission_phase_route(
     }
 
 
+def route_role_for_phase(phase: str) -> str:
+    normalized = PHASE_ALIASES.get(str(phase or "execute").strip().lower(), "execute")
+    if normalized in {"plan", "replan"}:
+        return "planner"
+    if normalized == "verify":
+        return "verifier"
+    return "executor"
+
+
 def mission_executor_route(
     mission: Mission,
     preferred_roles: tuple[str, ...] = ("executor", "planner", "verifier"),

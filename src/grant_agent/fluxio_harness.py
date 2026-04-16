@@ -8,6 +8,7 @@ from pathlib import Path
 from .action_executor import (
     build_action_proposal,
     build_execution_policy,
+    delegated_cycle_phase_for_step,
     normalize_execution_policy,
     execute_action,
     prepare_execution_scope,
@@ -27,6 +28,7 @@ from .models import (
     HarnessExecutionContext,
     ImprovementQueueItem,
     ModelRouteConfig,
+    Mission,
     PersonaProfile,
     PlanRevision,
     PlannedStep,
@@ -35,6 +37,7 @@ from .models import (
     RunState,
     TimelineEvent,
     VerificationResult,
+    WorkspaceProfile,
     utc_now_iso,
 )
 from .planner import PlanBundle, build_docs_first_plan
@@ -420,6 +423,7 @@ class FluxioHarness:
         max_tokens: int | None = None,
         parallel_agents: int | None = None,
         merge_policy: str | None = None,
+        code_execution_config: dict | None = None,
     ) -> dict:
         guardrails = autopilot_guardrails or {
             "pause_on_handoff": True,
@@ -583,6 +587,30 @@ class FluxioHarness:
             if resumed_state
             else {}
         )
+        blocker_history = (
+            list(resumed_state.get("blocker_history", []))
+            if resumed_state and isinstance(resumed_state.get("blocker_history"), list)
+            else []
+        )
+        latest_blocker = (
+            dict(resumed_state.get("latest_blocker", {}))
+            if resumed_state and isinstance(resumed_state.get("latest_blocker"), dict)
+            else {}
+        )
+        blocker_retry_counts = (
+            dict(resumed_state.get("blocker_retry_counts", {}))
+            if resumed_state and isinstance(resumed_state.get("blocker_retry_counts"), dict)
+            else {}
+        )
+        code_execution = self._resolve_code_execution_config(
+            requested_config=code_execution_config,
+            resumed_state=resumed_state,
+            mission_id=resolved_mission_id,
+        )
+        code_execution_state = self._load_code_execution_state(
+            resumed_state=resumed_state,
+            code_execution=code_execution,
+        )
         selected_skills = self.skill_library.retrieve(task_brief=objective, top_k=4)
         skill_usage = list(resumed_state.get("skill_usage", [])) if resumed_state else []
         learned_skill_events = (
@@ -636,6 +664,11 @@ class FluxioHarness:
         notes.append(
             f"Runtime controls: context={resolved_max_tokens} tokens, parallel_agents={resolved_parallel_agents}, merge_policy={resolved_merge_policy}."
         )
+        if code_execution.get("enabled"):
+            notes.append(
+                "Code execution enabled with persistent container "
+                f"{code_execution.get('container_id') or code_execution_state.get('container_id') or 'auto'}."
+            )
         if resumed_state:
             context_manager.record(
                 "system",
@@ -649,6 +682,14 @@ class FluxioHarness:
             "system",
             f"Resolved route contract: {', '.join([item.role + '=' + item.model for item in route_configs])}",
         )
+        if code_execution.get("enabled"):
+            context_manager.record(
+                "system",
+                (
+                    "Mission code execution is enabled with container "
+                    f"{code_execution_state.get('container_id') or code_execution.get('container_id') or 'auto'}."
+                ),
+            )
         execution_root = Path(execution_scope.execution_root or repo_path)
         runtime_supervisor = DelegatedRuntimeSupervisor(repo_path)
 
@@ -674,6 +715,8 @@ class FluxioHarness:
                     "parallel_agents": resolved_parallel_agents,
                     "merge_policy": resolved_merge_policy,
                     "max_handoffs": max_handoffs,
+                    "code_execution": bool(code_execution.get("enabled")),
+                    "code_execution_container_id": code_execution_state.get("container_id", ""),
                 },
             ),
         )
@@ -760,6 +803,8 @@ class FluxioHarness:
                 runtime_supervisor=runtime_supervisor,
                 notes=notes,
                 risks=risks,
+                objective=objective,
+                route_configs=route_configs,
             )
             if delegated_status == "running":
                 (
@@ -772,6 +817,8 @@ class FluxioHarness:
                     runtime_supervisor=runtime_supervisor,
                     notes=notes,
                     risks=risks,
+                    objective=objective,
+                    route_configs=route_configs,
                     wait_seconds=self._delegated_follow_budget_seconds(
                         started_at=started_at,
                         max_runtime_seconds=max_runtime_seconds,
@@ -782,6 +829,15 @@ class FluxioHarness:
             if delegated_status == "waiting_for_approval":
                 autopilot_status = "paused"
                 autopilot_pause_reason = "approval_required"
+                blocker_history, latest_blocker = self._remember_blocker(
+                    blocker=self._classify_blocker(
+                        reason="approval_required",
+                        detail="Delegated runtime is waiting for operator approval.",
+                        phase="execute",
+                        runtime_id=runtime_id,
+                    ),
+                    blocker_history=blocker_history,
+                )
                 context_manager.record("system", "Delegated runtime is waiting for approval.")
                 break
             if delegated_replan_trigger == "approval_rejected":
@@ -803,8 +859,33 @@ class FluxioHarness:
                 )
                 continue
             if delegated_status == "running":
+                blocker = self._classify_blocker(
+                    reason="delegated_runtime_running",
+                    detail="Delegated runtime is still running after the follow budget.",
+                    phase="execute",
+                    runtime_id=runtime_id,
+                )
+                retry_key = blocker["kind"]
+                retry_count = int(blocker_retry_counts.get(retry_key, 0) or 0)
+                if retry_count < 1:
+                    blocker_retry_counts[retry_key] = retry_count + 1
+                    decisions.append(
+                        "Fluxio retried delegated lane follow-up once before pausing."
+                    )
+                    notes.append(
+                        "Delegated runtime remained active; Fluxio is retrying the follow loop once."
+                    )
+                    context_manager.record(
+                        "system",
+                        "Delegated runtime is still running; Fluxio is retrying before pausing.",
+                    )
+                    continue
                 autopilot_status = "paused"
                 autopilot_pause_reason = "delegated_runtime_running"
+                blocker_history, latest_blocker = self._remember_blocker(
+                    blocker=blocker,
+                    blocker_history=blocker_history,
+                )
                 context_manager.record("system", "Delegated runtime is still running after the follow budget.")
                 break
 
@@ -860,6 +941,15 @@ class FluxioHarness:
                 autopilot_status = "paused"
                 autopilot_pause_reason = "runtime_budget"
                 decisions.append("Mission paused because runtime budget was exhausted.")
+                blocker_history, latest_blocker = self._remember_blocker(
+                    blocker=self._classify_blocker(
+                        reason="runtime_budget",
+                        detail="Mission paused because runtime budget was exhausted.",
+                        phase="execute",
+                        runtime_id=runtime_id,
+                    ),
+                    blocker_history=blocker_history,
+                )
                 break
 
             latest_revision = plan_revisions[-1]
@@ -893,6 +983,15 @@ class FluxioHarness:
                     autopilot_status = "paused"
                     autopilot_pause_reason = "approval_required"
                     notes.append("Harness detected a pending approval gate and paused safely.")
+                    blocker_history, latest_blocker = self._remember_blocker(
+                        blocker=self._classify_blocker(
+                            reason="approval_required",
+                            detail="A pending operator approval blocked the next action.",
+                            phase="execute",
+                            runtime_id=runtime_id,
+                        ),
+                        blocker_history=blocker_history,
+                    )
                     context_manager.record("system", "A pending operator approval blocked the next action.")
                     break
                 if pending_approval.gate.status == "rejected":
@@ -960,8 +1059,24 @@ class FluxioHarness:
                 risks.append("A high-risk action was proposed and is waiting for operator approval.")
                 next_step.notes.append("Pending approval before execution.")
                 latest_revision.active_step_id = next_step.step_id
+                blocker_history, latest_blocker = self._remember_blocker(
+                    blocker=self._classify_blocker(
+                        reason="approval_required",
+                        detail=f"Action waiting for approval: {execution_record.proposal.title}",
+                        phase="execute",
+                        runtime_id=runtime_id,
+                    ),
+                    blocker_history=blocker_history,
+                )
                 context_manager.record("system", f"Action is waiting for operator approval: {execution_record.proposal.title}")
                 break
+
+            if code_execution.get("enabled"):
+                code_execution_state = self._record_code_execution_artifact(
+                    code_execution_state=code_execution_state,
+                    code_execution=code_execution,
+                    execution_record=execution_record,
+                )
 
             delegated_payload = execution_record.result.payload.get("delegatedSession", {})
             if execution_record.proposal.kind == "runtime_delegate" and delegated_payload:
@@ -988,6 +1103,8 @@ class FluxioHarness:
                     runtime_supervisor=runtime_supervisor,
                     notes=notes,
                     risks=risks,
+                    objective=objective,
+                    route_configs=route_configs,
                     wait_seconds=self._delegated_follow_budget_seconds(
                         started_at=started_at,
                         max_runtime_seconds=max_runtime_seconds,
@@ -1002,10 +1119,37 @@ class FluxioHarness:
                 if delegated_status == "waiting_for_approval":
                     autopilot_status = "paused"
                     autopilot_pause_reason = "approval_required"
+                    blocker_history, latest_blocker = self._remember_blocker(
+                        blocker=self._classify_blocker(
+                            reason="approval_required",
+                            detail="Delegated runtime requires approval after launch.",
+                            phase="execute",
+                            runtime_id=runtime_id,
+                        ),
+                        blocker_history=blocker_history,
+                    )
                     break
                 if delegated_status == "running":
+                    blocker = self._classify_blocker(
+                        reason="delegated_runtime_running",
+                        detail="Delegated runtime is still running after launch follow budget.",
+                        phase="execute",
+                        runtime_id=runtime_id,
+                    )
+                    retry_key = blocker["kind"]
+                    retry_count = int(blocker_retry_counts.get(retry_key, 0) or 0)
+                    if retry_count < 1:
+                        blocker_retry_counts[retry_key] = retry_count + 1
+                        notes.append(
+                            "Delegated runtime remained active after launch; Fluxio retries once before pausing."
+                        )
+                        continue
                     autopilot_status = "paused"
                     autopilot_pause_reason = "delegated_runtime_running"
+                    blocker_history, latest_blocker = self._remember_blocker(
+                        blocker=blocker,
+                        blocker_history=blocker_history,
+                    )
                     break
                 context_manager.record(
                     "system",
@@ -1074,9 +1218,52 @@ class FluxioHarness:
                         for command in verification_failures
                     ]
                 )
+                auto_replanned_on_verification = False
                 if guardrails.get("pause_on_verification_failure", True):
-                    autopilot_status = "paused"
-                    autopilot_pause_reason = "verification_failed"
+                    blocker = self._classify_blocker(
+                        reason="verification_failed",
+                        detail=self._verification_summary(last_verification_results),
+                        phase="verify",
+                        runtime_id=runtime_id,
+                    )
+                    retry_key = blocker["kind"]
+                    retry_count = int(blocker_retry_counts.get(retry_key, 0) or 0)
+                    if retry_count < 1:
+                        blocker_retry_counts[retry_key] = retry_count + 1
+                        auto_replanned_on_verification = True
+                        decisions.append(
+                            "Fluxio auto-replanned once after verification failure."
+                        )
+                        notes.append(
+                            "Verification failed; Fluxio queued an automatic replan before pausing."
+                        )
+                        self._append_revised_plan(
+                            plan_revisions=plan_revisions,
+                            base_revision=latest_revision,
+                            trigger="auto_replan_verification",
+                            summary="Fluxio auto-replanned after verification failed.",
+                            extra_steps=[
+                                PlannedStep(
+                                    step_id=f"step_{uuid.uuid4().hex[:8]}",
+                                    title="Repair verification failure and rerun proof",
+                                    description="Focus on failing checks before requesting operator input.",
+                                    kind="derived",
+                                )
+                            ],
+                        )
+                        context_manager.record(
+                            "system",
+                            "Verification failed; Fluxio auto-replanned and will retry once.",
+                        )
+                    else:
+                        autopilot_status = "paused"
+                        autopilot_pause_reason = "verification_failed"
+                        blocker_history, latest_blocker = self._remember_blocker(
+                            blocker=blocker,
+                            blocker_history=blocker_history,
+                        )
+                if auto_replanned_on_verification:
+                    continue
 
             if repeated_failure_count >= execution_context.broadening_threshold:
                 derived = DerivedTask(
@@ -1174,6 +1361,17 @@ class FluxioHarness:
                             },
                         ),
                     )
+                    blocker_history, latest_blocker = self._remember_blocker(
+                        blocker=self._classify_blocker(
+                            reason="handoff_budget",
+                            detail=(
+                                f"Context rollover requested but max handoffs budget ({max_handoffs}) was reached."
+                            ),
+                            phase=context_status,
+                            runtime_id=runtime_id,
+                        ),
+                        blocker_history=blocker_history,
+                    )
                     break
                 handoff_count += 1
                 run_state = self._build_run_state(
@@ -1220,12 +1418,46 @@ class FluxioHarness:
                     ),
                 )
                 if guardrails.get("pause_on_handoff", True):
+                    blocker = self._classify_blocker(
+                        reason=f"context_{context_status}",
+                        detail=(
+                            f"Context {context_status} triggered compaction and a pause boundary."
+                        ),
+                        phase=context_status,
+                        runtime_id=runtime_id,
+                    )
+                    retry_key = blocker["kind"]
+                    retry_count = int(blocker_retry_counts.get(retry_key, 0) or 0)
+                    if retry_count < 1:
+                        blocker_retry_counts[retry_key] = retry_count + 1
+                        decisions.append(
+                            "Fluxio continued once after automatic context compaction."
+                        )
+                        notes.append(
+                            "Context compacted; Fluxio resumed automatically once before pausing."
+                        )
+                        continue
                     autopilot_status = "paused"
                     autopilot_pause_reason = f"context_{context_status}"
+                    blocker_history, latest_blocker = self._remember_blocker(
+                        blocker=blocker,
+                        blocker_history=blocker_history,
+                    )
                     break
 
             if autopilot_pause_reason:
                 break
+
+        if autopilot_pause_reason and not latest_blocker:
+            blocker_history, latest_blocker = self._remember_blocker(
+                blocker=self._classify_blocker(
+                    reason=autopilot_pause_reason,
+                    detail=f"Mission paused due to {autopilot_pause_reason}.",
+                    phase="execute",
+                    runtime_id=runtime_id,
+                ),
+                blocker_history=blocker_history,
+            )
 
         final_steps = [
             step.title for step in plan_revisions[-1].steps if step.status != "completed"
@@ -1305,6 +1537,29 @@ class FluxioHarness:
             context_seed = context_manager.compact_window()
             context_manager.reset_with_seed(context_seed)
 
+        provider_truth = self._provider_truth_for_run(
+            route_configs=route_configs,
+            current_phase=(
+                delegated_cycle_phase_for_step(
+                    plan_revisions[-1].steps[0],
+                    objective=objective,
+                    route_configs=route_configs,
+                )
+                if plan_revisions and plan_revisions[-1].steps
+                else "execute"
+            ),
+            code_execution=code_execution,
+            code_execution_state=code_execution_state,
+            action_history=action_history,
+            latest_blocker=latest_blocker,
+        )
+        code_execution_payload = {
+            **dict(code_execution),
+            "last_started_at": str(code_execution_state.get("updated_at", "") or ""),
+            "last_result": str(code_execution_state.get("last_result", "") or ""),
+            "last_error": str(code_execution_state.get("last_error", "") or ""),
+            "artifacts": list(code_execution_state.get("artifacts", [])),
+        }
         context_seed = context_manager.compact_window()
         persisted_state = {
             "objective": objective,
@@ -1372,6 +1627,12 @@ class FluxioHarness:
             "route_change_count": route_change_count,
             "runtime_autonomy": runtime_autonomy,
             "runtime_autonomy_history": runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:],
+            "blocker_history": blocker_history[-AUTONOMY_HISTORY_LIMIT:],
+            "latest_blocker": latest_blocker,
+            "blocker_retry_counts": blocker_retry_counts,
+            "provider_truth": provider_truth,
+            "code_execution": code_execution_payload,
+            "code_execution_state": code_execution_state,
         }
         self.session_store.save_state(session_path, persisted_state)
 
@@ -1416,6 +1677,11 @@ class FluxioHarness:
             "route_change_count": route_change_count,
             "runtime_autonomy": runtime_autonomy,
             "runtime_autonomy_history": runtime_autonomy_history[-AUTONOMY_HISTORY_LIMIT:],
+            "blocker_history": blocker_history[-AUTONOMY_HISTORY_LIMIT:],
+            "latest_blocker": latest_blocker,
+            "provider_truth": provider_truth,
+            "code_execution": code_execution_payload,
+            "code_execution_state": code_execution_state,
         }
 
     @staticmethod
@@ -1479,6 +1745,209 @@ class FluxioHarness:
             "used_tokens": context_manager.used_tokens,
             "usage_ratio": round(context_manager.usage_ratio, 3),
             "status": context_manager.status(),
+        }
+
+    @staticmethod
+    def _resolve_code_execution_config(
+        *,
+        requested_config: dict | None,
+        resumed_state: dict | None,
+        mission_id: str,
+    ) -> dict:
+        previous_config = (
+            dict(resumed_state.get("code_execution", {}))
+            if resumed_state and isinstance(resumed_state.get("code_execution"), dict)
+            else {}
+        )
+        previous_state = (
+            dict(resumed_state.get("code_execution_state", {}))
+            if resumed_state and isinstance(resumed_state.get("code_execution_state"), dict)
+            else {}
+        )
+        requested = dict(requested_config or {})
+        enabled = bool(requested.get("enabled", previous_config.get("enabled", False)))
+        memory_limit = str(
+            requested.get("memory_limit", previous_config.get("memory_limit", "4g")) or "4g"
+        ).strip().lower()
+        container_id = str(
+            requested.get("container_id")
+            or previous_config.get("container_id")
+            or previous_state.get("container_id")
+            or ""
+        ).strip()
+        if enabled and not container_id:
+            container_id = f"auto-{str(mission_id or 'mission').replace('_', '-')[:40]}"
+        required = bool(requested.get("required", previous_config.get("required", False)))
+        file_ids = list(requested.get("file_ids", previous_config.get("file_ids", [])) or [])
+        return {
+            "enabled": enabled,
+            "memory_limit": memory_limit or "4g",
+            "container_id": container_id,
+            "required": required,
+            "file_ids": file_ids,
+        }
+
+    @staticmethod
+    def _load_code_execution_state(
+        *,
+        resumed_state: dict | None,
+        code_execution: dict,
+    ) -> dict:
+        previous_state = (
+            dict(resumed_state.get("code_execution_state", {}))
+            if resumed_state and isinstance(resumed_state.get("code_execution_state"), dict)
+            else {}
+        )
+        container_id = str(
+            previous_state.get("container_id") or code_execution.get("container_id", "")
+        ).strip()
+        return {
+            "enabled": bool(code_execution.get("enabled", False)),
+            "container_id": container_id,
+            "memory_limit": str(code_execution.get("memory_limit", "4g") or "4g"),
+            "required": bool(code_execution.get("required", False)),
+            "artifacts": list(previous_state.get("artifacts", [])),
+            "last_result": str(previous_state.get("last_result", "") or ""),
+            "last_error": str(previous_state.get("last_error", "") or ""),
+            "updated_at": str(previous_state.get("updated_at", "") or ""),
+        }
+
+    @staticmethod
+    def _record_code_execution_artifact(
+        *,
+        code_execution_state: dict,
+        code_execution: dict,
+        execution_record: ActionExecutionRecord,
+    ) -> dict:
+        if not bool(code_execution.get("enabled", False)):
+            return dict(code_execution_state)
+        updated = dict(code_execution_state)
+        artifact = {
+            "artifact_id": f"artifact_{uuid.uuid4().hex[:10]}",
+            "created_at": utc_now_iso(),
+            "action_id": execution_record.action_id,
+            "kind": execution_record.proposal.kind,
+            "title": execution_record.proposal.title,
+            "ok": bool(execution_record.result.ok),
+            "summary": str(
+                execution_record.result.result_summary
+                or execution_record.result.error
+                or execution_record.result.stderr
+                or execution_record.result.stdout
+                or ""
+            ).strip(),
+            "files": list(execution_record.result.changed_files or [])[:12],
+            "runtime": "delegated"
+            if execution_record.proposal.kind == "runtime_delegate"
+            else "local",
+            "container_id": str(updated.get("container_id", "") or ""),
+        }
+        delegated = execution_record.result.payload.get("delegatedSession", {})
+        if isinstance(delegated, dict) and delegated.get("delegated_id"):
+            artifact["delegated_id"] = str(delegated.get("delegated_id"))
+        artifacts = list(updated.get("artifacts", []))
+        artifacts.append(artifact)
+        updated["artifacts"] = artifacts[-24:]
+        updated["last_result"] = artifact["summary"]
+        if execution_record.result.ok:
+            updated["last_error"] = ""
+        else:
+            updated["last_error"] = artifact["summary"] or "Code execution artifact failed."
+        updated["updated_at"] = artifact["created_at"]
+        updated["enabled"] = bool(code_execution.get("enabled", False))
+        updated["memory_limit"] = str(code_execution.get("memory_limit", "4g") or "4g")
+        updated["required"] = bool(code_execution.get("required", False))
+        updated["container_id"] = str(
+            updated.get("container_id") or code_execution.get("container_id", "")
+        ).strip()
+        return updated
+
+    @staticmethod
+    def _provider_truth_for_run(
+        *,
+        route_configs: list[ModelRouteConfig],
+        current_phase: str,
+        code_execution: dict,
+        code_execution_state: dict,
+        action_history: list[dict],
+        latest_blocker: dict,
+    ) -> dict:
+        def role_for_phase(value: str) -> str:
+            normalized = str(value or "execute").strip().lower()
+            if normalized in {"plan", "replan"}:
+                return "planner"
+            if normalized == "verify":
+                return "verifier"
+            return "executor"
+
+        phase = str(current_phase or "execute").strip().lower()
+        active_route = FluxioHarness._route_for_phase(route_configs, phase)
+        active_provider = active_route.provider if active_route is not None else ""
+        active_model = active_route.model if active_route is not None else ""
+        active_role = active_route.role if active_route is not None else role_for_phase(phase)
+        last_success: dict = {}
+        last_failure: dict = {}
+        for row in reversed(action_history):
+            if not isinstance(row, dict):
+                continue
+            proposal = dict(row.get("proposal", {}))
+            delegation = dict(proposal.get("delegation_metadata", {}))
+            entry_phase = str(delegation.get("cycle_phase", phase) or phase).strip().lower()
+            route = FluxioHarness._route_for_phase(route_configs, entry_phase)
+            provider = route.provider if route is not None else active_provider
+            model = route.model if route is not None else active_model
+            role = route.role if route is not None else role_for_phase(entry_phase)
+            result = dict(row.get("result", {}))
+            summary = str(
+                result.get("result_summary")
+                or result.get("error")
+                or result.get("stderr")
+                or result.get("stdout")
+                or ""
+            ).strip()
+            if len(summary) > 220:
+                summary = summary[:217].rstrip() + "..."
+            payload = {
+                "provider": provider,
+                "model": model,
+                "role": role,
+                "phase": entry_phase,
+                "at": str(row.get("executed_at", "") or ""),
+                "source": "action_history",
+                "summary": summary,
+            }
+            if bool(result.get("ok")):
+                if not last_success:
+                    last_success = payload
+            elif not last_failure:
+                last_failure = payload
+            if last_success and last_failure:
+                break
+        if not last_failure and str(code_execution_state.get("last_error", "")).strip():
+            last_failure = {
+                "provider": active_provider,
+                "model": active_model,
+                "role": active_role,
+                "phase": phase,
+                "at": str(code_execution_state.get("updated_at", "") or utc_now_iso()),
+                "source": "code_execution",
+                "summary": str(code_execution_state.get("last_error", "")).strip(),
+            }
+        return {
+            "currentPhase": phase,
+            "activeRoute": {
+                "role": active_role,
+                "provider": active_provider,
+                "model": active_model,
+                "effort": active_route.effort if active_route is not None else "",
+                "budgetClass": active_route.budget_class if active_route is not None else "",
+            },
+            "codeExecutionEnabled": bool(code_execution.get("enabled", False)),
+            "codeExecutionContainerId": str(code_execution_state.get("container_id", "")),
+            "lastSuccessfulCall": last_success,
+            "lastFailure": last_failure,
+            "blockerClass": str(latest_blocker.get("class", "") or ""),
+            "updatedAt": utc_now_iso(),
         }
 
     @staticmethod
@@ -1616,6 +2085,55 @@ class FluxioHarness:
         return updated_routes, updated_policy, autonomy, changed, route_change_count
 
     @staticmethod
+    def _classify_blocker(
+        *,
+        reason: str,
+        detail: str = "",
+        phase: str = "execute",
+        runtime_id: str = "",
+    ) -> dict:
+        normalized = str(reason or "").strip().lower() or "unknown"
+        blocker_class = "operator_only"
+        resolution = "pause_for_operator"
+        if normalized in {"verification_failed", "verification_failure", "action_failed"}:
+            blocker_class = "safe_to_replan"
+            resolution = "auto_replan"
+        elif normalized in {
+            "delegated_runtime_running",
+            "context_rollover",
+            "context_hard_stop",
+            "context_warning",
+        }:
+            blocker_class = "safe_to_self_resolve"
+            resolution = "retry_or_continue"
+        elif normalized in {"runtime_budget", "handoff_budget"}:
+            blocker_class = "operator_only"
+            resolution = "budget_boundary"
+        elif normalized in {"approval_required", "needs_approval", "approval_waiting"}:
+            blocker_class = "operator_only"
+            resolution = "approval_required"
+        summary = detail or f"{normalized.replace('_', ' ')} blocker."
+        return {
+            "kind": normalized,
+            "class": blocker_class,
+            "resolution": resolution,
+            "phase": str(phase or "execute").strip().lower() or "execute",
+            "runtimeId": runtime_id,
+            "summary": summary,
+            "at": utc_now_iso(),
+        }
+
+    @staticmethod
+    def _remember_blocker(
+        *,
+        blocker: dict,
+        blocker_history: list[dict],
+    ) -> tuple[list[dict], dict]:
+        updated = list(blocker_history)
+        updated.append(dict(blocker))
+        return updated[-AUTONOMY_HISTORY_LIMIT:], dict(blocker)
+
+    @staticmethod
     def _delegated_follow_budget_seconds(
         *,
         started_at: float,
@@ -1642,6 +2160,8 @@ class FluxioHarness:
         runtime_supervisor: DelegatedRuntimeSupervisor,
         notes: list[str],
         risks: list[str],
+        objective: str,
+        route_configs: list[ModelRouteConfig],
         wait_seconds: int,
     ) -> tuple[list[dict], str, str]:
         current_sessions, active_status, replan_trigger = FluxioHarness._reconcile_delegated_sessions(
@@ -1650,6 +2170,8 @@ class FluxioHarness:
             runtime_supervisor=runtime_supervisor,
             notes=notes,
             risks=risks,
+            objective=objective,
+            route_configs=route_configs,
         )
         if active_status != "running" or wait_seconds <= 0:
             return current_sessions, active_status, replan_trigger
@@ -1662,6 +2184,8 @@ class FluxioHarness:
                 runtime_supervisor=runtime_supervisor,
                 notes=notes,
                 risks=risks,
+                objective=objective,
+                route_configs=route_configs,
             )
         if active_status != "running":
             notes.append("Delegated runtime lane settled within the same control cycle.")
@@ -1688,12 +2212,131 @@ class FluxioHarness:
         )
 
     @staticmethod
+    def _route_for_phase(
+        route_configs: list[ModelRouteConfig],
+        phase: str,
+    ) -> ModelRouteConfig | None:
+        role = "executor"
+        normalized = str(phase or "execute").strip().lower()
+        if normalized in {"plan", "replan"}:
+            role = "planner"
+        elif normalized == "verify":
+            role = "verifier"
+        return next((item for item in route_configs if item.role == role), None)
+
+    @staticmethod
+    def _delegated_route_mismatch(
+        session: object,
+        *,
+        desired_phase: str,
+        desired_route: ModelRouteConfig | None,
+    ) -> bool:
+        session_phase = str(getattr(session, "target_phase", "") or "").strip().lower()
+        if desired_phase and session_phase and desired_phase != session_phase:
+            return True
+        if desired_route is None:
+            return False
+        session_provider = str(getattr(session, "target_provider", "") or "").strip().lower()
+        session_model = str(getattr(session, "target_model", "") or "").strip()
+        session_effort = str(getattr(session, "target_effort", "") or "").strip().lower()
+        if session_provider and session_provider != desired_route.provider:
+            return True
+        if session_model and session_model != desired_route.model:
+            return True
+        if session_effort and session_effort != desired_route.effort:
+            return True
+        if not session_provider and desired_route.provider:
+            return True
+        if not session_model and desired_route.model:
+            return True
+        return False
+
+    @staticmethod
+    def _handoff_reason_for_session(
+        *,
+        session: object,
+        desired_phase: str,
+        desired_route: ModelRouteConfig | None,
+    ) -> str:
+        previous_phase = str(getattr(session, "target_phase", "") or "execute").strip().lower()
+        if desired_phase != previous_phase:
+            return (
+                f"Mission phase changed from {previous_phase} to {desired_phase}; "
+                "handoff to the matching route."
+            )
+        if desired_route is None:
+            return "Route contract changed; handoff to keep delegated lane aligned."
+        previous_provider = str(getattr(session, "target_provider", "") or "unknown").strip().lower()
+        previous_model = str(getattr(session, "target_model", "") or "unknown").strip()
+        return (
+            "Route contract changed for the delegated lane "
+            f"({previous_provider}:{previous_model} -> {desired_route.provider}:{desired_route.model})."
+        )
+
+    @staticmethod
+    def _handoff_delegated_session(
+        *,
+        session: object,
+        step: PlannedStep | None,
+        objective: str,
+        desired_phase: str,
+        route_configs: list[ModelRouteConfig],
+        runtime_supervisor: DelegatedRuntimeSupervisor,
+        reason: str,
+    ):
+        workspace_root = str(
+            getattr(session, "workspace_root", "") or getattr(session, "execution_root", "")
+        ).strip()
+        execution_root = str(
+            getattr(session, "execution_root", "") or workspace_root
+        ).strip()
+        delegated_scope = ExecutionScope(
+            requested="isolated",
+            strategy="delegated_runtime",
+            execution_root=execution_root,
+            workspace_root=workspace_root,
+            status="ready",
+            detail="Delegated lane relaunched after phase-aware route handoff.",
+        )
+        delegated_mission = Mission(
+            mission_id=f"delegated_{uuid.uuid4().hex[:8]}",
+            workspace_id="delegated",
+            runtime_id=str(getattr(session, "runtime_id", "openclaw") or "openclaw"),
+            objective=(
+                step.title
+                if step is not None and step.title
+                else (objective or "Continue delegated mission work")
+            ),
+            success_checks=[],
+            execution_scope=delegated_scope,
+            route_configs=route_configs,
+        )
+        delegated_mission.state.current_cycle_phase = desired_phase or "execute"
+        delegated_mission.state.status = "running"
+        delegated_workspace = WorkspaceProfile(
+            workspace_id="delegated",
+            name=Path(execution_root or workspace_root or "delegated").name or "delegated",
+            root_path=execution_root or workspace_root or ".",
+            default_runtime=str(getattr(session, "runtime_id", "openclaw") or "openclaw"),
+            workspace_type="general",
+        )
+        return runtime_supervisor.handoff_session(
+            session=session,
+            mission=delegated_mission,
+            workspace=delegated_workspace,
+            source_step_id=str(getattr(session, "source_step_id", "") or ""),
+            reason=reason,
+        )
+
+    @staticmethod
     def _reconcile_delegated_sessions(
         delegated_runtime_sessions: list[dict],
         plan_revisions: list[PlanRevision],
         runtime_supervisor: DelegatedRuntimeSupervisor,
         notes: list[str],
         risks: list[str],
+        objective: str,
+        route_configs: list[ModelRouteConfig],
     ) -> tuple[list[dict], str, str]:
         if not delegated_runtime_sessions:
             return delegated_runtime_sessions, "", ""
@@ -1706,6 +2349,41 @@ class FluxioHarness:
         for item in delegated_runtime_sessions:
             session = runtime_supervisor.refresh_session(item)
             step = step_lookup.get(session.source_step_id)
+            desired_phase = delegated_cycle_phase_for_step(
+                step,
+                objective=objective,
+                route_configs=route_configs,
+            ) if step is not None else str(session.target_phase or "execute")
+            desired_phase = str(desired_phase or "execute").strip().lower()
+            desired_route = FluxioHarness._route_for_phase(route_configs, desired_phase)
+            can_handoff = session.status in {"running", "launching"}
+            if can_handoff and FluxioHarness._delegated_route_mismatch(
+                session,
+                desired_phase=desired_phase,
+                desired_route=desired_route,
+            ):
+                handoff_reason = FluxioHarness._handoff_reason_for_session(
+                    session=session,
+                    desired_phase=desired_phase,
+                    desired_route=desired_route,
+                )
+                try:
+                    session = FluxioHarness._handoff_delegated_session(
+                        session=session,
+                        step=step,
+                        objective=objective,
+                        desired_phase=desired_phase,
+                        route_configs=route_configs,
+                        runtime_supervisor=runtime_supervisor,
+                        reason=handoff_reason,
+                    )
+                    notes.append(
+                        f"Delegated lane auto-handoff on {session.runtime_id}: {handoff_reason}"
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    risks.append(
+                        f"Delegated handoff failed for {session.runtime_id}: {exc}"
+                    )
             if session.status in {"running", "launching"}:
                 active_status = "running"
                 if step is not None:

@@ -64,6 +64,7 @@ const AGENT_PROVIDER_ENV_MAPPINGS: [(&str, &[&str]); 4] = [
     ("OPENROUTER_API_KEY", &["openrouter"]),
     ("MINIMAX_API_KEY", &["minimax", "minimax-cn"]),
 ];
+const CONTROL_ROOM_PROVIDER_IDS: [&str; 4] = ["openai", "anthropic", "openrouter", "minimax"];
 const OPENCLAW_MAX_PENDING_OUTBOUND: usize = 256;
 const OPENCLAW_MAX_RECENT_EVENT_IDS: usize = 512;
 const OPENCLAW_MAX_PENDING_ACKS: usize = 512;
@@ -870,6 +871,10 @@ struct ControlMissionStartPayload {
     run_until: Option<String>,
     profile: Option<String>,
     escalation_destination: Option<String>,
+    code_execution: Option<bool>,
+    code_execution_memory: Option<String>,
+    code_execution_container_id: Option<String>,
+    code_execution_required: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2320,6 +2325,15 @@ fn provider_secret_for_ids(provider_ids: &[&str]) -> Result<Option<String>, Stri
         }
     }
     Ok(None)
+}
+
+fn provider_secret_presence_snapshot(provider_ids: &[&str]) -> Result<Value, String> {
+    let mut output = serde_json::Map::new();
+    for provider_id in provider_ids {
+        let has_secret = load_provider_secret(provider_id)?.is_some();
+        output.insert((*provider_id).to_string(), Value::Bool(has_secret));
+    }
+    Ok(Value::Object(output))
 }
 
 fn inject_agent_cli_provider_env(command: &mut TokioCommand) -> Result<(), String> {
@@ -5004,8 +5018,41 @@ async fn get_control_room_snapshot_command(
     app: AppHandle,
     payload: Option<AutonomyDashboardPayload>,
 ) -> Result<Value, String> {
-    run_agent_cli_json(&app, payload.and_then(|item| item.root), "control-room", vec![], 180)
-        .await
+    let mut snapshot =
+        run_agent_cli_json(&app, payload.and_then(|item| item.root), "control-room", vec![], 180)
+            .await?;
+    let provider_presence = provider_secret_presence_snapshot(&CONTROL_ROOM_PROVIDER_IDS)?;
+    if let Value::Object(root) = &mut snapshot {
+        root.insert(
+            "providerSecretPresence".to_string(),
+            provider_presence.clone(),
+        );
+        let setup_status_entry = root
+            .entry("providerSetupStatus".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Value::Object(setup_status) = setup_status_entry {
+            for provider_id in CONTROL_ROOM_PROVIDER_IDS {
+                let auth_present = provider_presence
+                    .get(provider_id)
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let provider_entry = setup_status
+                    .entry(provider_id.to_string())
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if let Value::Object(provider_payload) = provider_entry {
+                    provider_payload.insert(
+                        "authPresent".to_string(),
+                        Value::Bool(auth_present),
+                    );
+                    provider_payload.insert(
+                        "configured".to_string(),
+                        Value::Bool(auth_present),
+                    );
+                }
+            }
+        }
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -5136,6 +5183,32 @@ async fn start_control_room_mission_command(
     if let Some(profile) = payload.profile.filter(|value| !value.trim().is_empty()) {
         args.push("--profile".to_string());
         args.push(profile);
+    }
+    if payload.code_execution.unwrap_or(false)
+        || payload
+            .code_execution_container_id
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    {
+        args.push("--code-execution".to_string());
+    }
+    if let Some(memory) = payload
+        .code_execution_memory
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--code-execution-memory".to_string());
+        args.push(memory);
+    }
+    if let Some(container_id) = payload
+        .code_execution_container_id
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--code-execution-container-id".to_string());
+        args.push(container_id);
+    }
+    if payload.code_execution_required.unwrap_or(false) {
+        args.push("--code-execution-required".to_string());
     }
     let response = run_agent_cli_json(&app, payload.root, "mission-start", args, 300).await?;
     emit_control_room_changed(&app, "mission.started");

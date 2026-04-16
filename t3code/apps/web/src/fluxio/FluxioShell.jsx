@@ -614,7 +614,11 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
     const kind = row.kind || "runtime.event";
     const processMessage = isTraceRuntimeKind(kind);
     const heartbeat = isHeartbeatRuntimeKind(kind);
-    const routeSwitch = String(kind).toLowerCase() === "runtime.route_contract";
+    const normalizedKind = String(kind).toLowerCase();
+    const routeSwitch = normalizedKind === "runtime.route_contract";
+    const phaseEntered = normalizedKind === "runtime.phase_entered";
+    const routeSwitchReason = normalizedKind === "runtime.route_switch_reason";
+    const handoffEvent = normalizedKind === "runtime.handoff";
     const detail = deltaDetail(row);
     return {
       id: `runtime-${delegatedId || mission.mission_id}-${row.event_id || row.created_at || payload.detectedAt}-${kind}`,
@@ -629,14 +633,28 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           : row.runtime_id === "hermes"
             ? "⬢"
             : "◇",
-      label: processMessage
+      label: phaseEntered
+        ? "Phase entered"
+        : routeSwitchReason
+          ? "Route switch reason"
+          : handoffEvent
+            ? "Runtime handoff"
+            : processMessage
         ? "Process message"
         : heartbeat
           ? "Runtime heartbeat"
           : titleizeToken(kind),
       title: row.message || "Runtime event",
       detail:
-        (routeSwitch
+        (phaseEntered
+          ? `${titleizeToken(row?.data?.phase || "execute")} phase via ${titleizeToken(
+              row?.data?.role || "route",
+            )}${row?.data?.provider ? ` · ${titleizeToken(row.data.provider)}` : ""}${row?.data?.model ? ` · ${row.data.model}` : ""}`
+          : routeSwitchReason
+            ? detail || row.message || "Route switch reason emitted by runtime supervision."
+            : handoffEvent
+              ? detail || row?.data?.reason || "Runtime handoff emitted by supervision."
+              : routeSwitch
           ? `${titleizeToken(row?.data?.phase || "execute")} phase · ${titleizeToken(
               row?.data?.role || "route",
             )} route`
@@ -663,12 +681,18 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       heartbeat,
       emphasis:
         processMessage ||
+        phaseEntered ||
+        routeSwitchReason ||
+        handoffEvent ||
         row.status === "failed" ||
         /approval|blocked|error/i.test(`${kind} ${row.message || ""}`),
       chips: [
         row.runtime_id ? runtimeLabel(row.runtime_id) : "",
         routeSwitch && row?.data?.phase ? titleizeToken(row.data.phase) : "",
         routeSwitch && row?.data?.role ? titleizeToken(row.data.role) : "",
+        phaseEntered && row?.data?.provider ? titleizeToken(row.data.provider) : "",
+        phaseEntered && row?.data?.model ? row.data.model : "",
+        routeSwitchReason && row?.data?.reason ? row.data.reason : "",
         row.status ? titleizeToken(row.status) : "",
       ].filter(Boolean),
     };
@@ -899,6 +923,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         }
 
         const providerSecretPresence =
+          (snapshot?.providerSecretPresence && typeof snapshot.providerSecretPresence === "object"
+            ? snapshot.providerSecretPresence
+            : null) ||
           providerSecretPresencePrimary ||
           (await callBackend("get_provider_secret_presence_command", {
             provider_ids: PROVIDER_SECRET_OPTIONS.map(item => item.id),
@@ -1761,6 +1788,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               runUntil: missionForm.runUntil,
               profile: missionForm.profile,
               escalationDestination: telegramChatId.trim() || null,
+              codeExecution: codeExecutionEnabled,
+              codeExecutionMemory: codeExecutionMemory,
+              codeExecutionRequired: false,
             },
           },
           { throwOnError: true },
@@ -1773,7 +1803,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         pushToast(`Mission launch failed: ${error}`, "error");
       }
     },
-    [markAction, missionForm, previewMode, pushToast, refreshAll, telegramChatId],
+    [
+      codeExecutionEnabled,
+      codeExecutionMemory,
+      markAction,
+      missionForm,
+      previewMode,
+      pushToast,
+      refreshAll,
+      telegramChatId,
+    ],
   );
 
   const handleSaveTelegram = useCallback(
@@ -2156,6 +2195,44 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               label: "Harness",
               value: titleizeToken(mission?.harness_id || workspace?.preferred_harness || "fluxio_hybrid"),
             },
+            {
+              label: "Active route",
+              value: (() => {
+                const truth =
+                  mission?.providerTruth ||
+                  mission?.missionLoop?.providerTruth ||
+                  mission?.state?.provider_runtime_truth ||
+                  {};
+                const active = truth?.activeRoute || {};
+                if (!active?.provider && !active?.model) {
+                  return "Not resolved";
+                }
+                return `${titleizeToken(active.provider)} · ${active.model || "default"}`;
+              })(),
+            },
+            {
+              label: "Blocker class",
+              value: titleizeToken(
+                mission?.state?.blocker_classification?.class ||
+                  mission?.missionLoop?.blocker?.class ||
+                  "none",
+              ),
+            },
+            {
+              label: "Code execution",
+              value: (() => {
+                const codeState =
+                  mission?.state?.code_execution ||
+                  mission?.missionLoop?.codeExecution ||
+                  {};
+                if (!codeState?.enabled) {
+                  return "Off";
+                }
+                return codeState?.container_id
+                  ? `On · ${codeState.container_id}`
+                  : "On · auto container";
+              })(),
+            },
           ]
         : [],
     [
@@ -2463,6 +2540,36 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       });
     }
 
+    const codeArtifacts = asList(
+      mission?.state?.code_execution?.artifacts ||
+        mission?.missionLoop?.codeExecution?.artifacts,
+    )
+      .slice()
+      .reverse()
+      .slice(0, 4);
+    for (const artifact of codeArtifacts) {
+      pushTurn({
+        id: `code-artifact-${artifact.artifact_id || artifact.created_at || artifact.action_id}`,
+        dedupeKey: `code-artifact:${artifact.artifact_id || artifact.created_at || artifact.action_id}`,
+        role: "runtime",
+        runtimeId: mission?.runtime_id || "",
+        roleLabel: "Code execution",
+        roleIcon: "◇",
+        label: titleizeToken(artifact.kind || "artifact"),
+        title: artifact.title || artifact.action_id || "Code execution artifact",
+        detail: artifact.summary || "No summary captured.",
+        meta: timestampLabel(artifact.created_at),
+        timestampRaw: artifact.created_at,
+        tone: artifact.ok ? "neutral" : "bad",
+        processMessage: true,
+        emphasis: true,
+        chips: [
+          artifact.container_id ? artifact.container_id : "",
+          artifact.runtime ? titleizeToken(artifact.runtime) : "",
+        ].filter(Boolean),
+      });
+    }
+
     for (const action of asList(mission?.action_history).slice(-6)) {
       const actionKind = action?.proposal?.kind || action?.action_id || "action";
       const actionGatePending = action?.gate?.status === "pending";
@@ -2515,7 +2622,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         `${session.runtime_id || "runtime"}-${session.updated_at || session.last_event || "session"}`;
       const latestEvents = asList(session.latest_events);
       const meaningfulEvents = latestEvents.filter(
-        event => isTraceRuntimeKind(event.kind) || event.status === "failed",
+        event =>
+          isTraceRuntimeKind(event.kind) ||
+          ["runtime.phase_entered", "runtime.route_switch_reason", "runtime.handoff"].includes(
+            String(event.kind || "").toLowerCase(),
+          ) ||
+          event.status === "failed",
       );
       if (meaningfulEvents.length === 0 && (session.status === "failed" || session.heartbeat_status === "stale")) {
         pushTurn({
@@ -2554,7 +2666,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
       for (const [index, event] of meaningfulEvents.slice(-4).entries()) {
         const processMessage = isTraceRuntimeKind(event.kind);
-        const routeSwitch = String(event.kind || "").toLowerCase() === "runtime.route_contract";
+        const normalizedKind = String(event.kind || "").toLowerCase();
+        const routeSwitch = normalizedKind === "runtime.route_contract";
+        const phaseEntered = normalizedKind === "runtime.phase_entered";
+        const routeSwitchReason = normalizedKind === "runtime.route_switch_reason";
+        const handoffEvent = normalizedKind === "runtime.handoff";
         pushTurn({
           id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
           dedupeKey: `delegated-event:${delegatedMessageId}:${event.event_id || event.message || index}`,
@@ -2562,10 +2678,26 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           runtimeId: session.runtime_id,
           roleLabel: runtimeLabel(session.runtime_id),
           roleIcon: session.runtime_id === "hermes" ? "⬢" : "◇",
-          label: processMessage ? "Process message" : titleizeToken(event.kind || "runtime event"),
+          label: phaseEntered
+            ? "Phase entered"
+            : routeSwitchReason
+              ? "Route switch reason"
+              : handoffEvent
+                ? "Runtime handoff"
+                : processMessage
+                  ? "Process message"
+                  : titleizeToken(event.kind || "runtime event"),
           title: event.message || "Runtime event",
           detail:
-            (routeSwitch
+            (phaseEntered
+              ? `${titleizeToken(event?.data?.phase || "execute")} phase via ${titleizeToken(
+                  event?.data?.role || "route",
+                )}${event?.data?.provider ? ` · ${titleizeToken(event.data.provider)}` : ""}${event?.data?.model ? ` · ${event.data.model}` : ""}`
+              : routeSwitchReason
+                ? event?.data?.reason || event.message || "Route switch reason emitted by runtime supervision."
+                : handoffEvent
+                  ? event?.data?.reason || event.message || "Runtime handoff emitted by supervision."
+                  : routeSwitch
               ? `${titleizeToken(event?.data?.phase || "execute")} phase · ${titleizeToken(
                   event?.data?.role || "route",
                 )} route`
@@ -2594,6 +2726,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           processMessage,
           emphasis:
             processMessage ||
+            phaseEntered ||
+            routeSwitchReason ||
+            handoffEvent ||
             event.status === "failed" ||
             /approval|blocked|error/i.test(`${event.kind || ""} ${event.message || ""}`),
           chips: [
@@ -2601,6 +2736,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             session.execution_target ? titleizeToken(session.execution_target) : "",
             routeSwitch && event?.data?.phase ? titleizeToken(event.data.phase) : "",
             routeSwitch && event?.data?.role ? titleizeToken(event.data.role) : "",
+            phaseEntered && event?.data?.provider ? titleizeToken(event.data.provider) : "",
+            phaseEntered && event?.data?.model ? event.data.model : "",
+            routeSwitchReason && event?.data?.reason ? event.data.reason : "",
+            handoffEvent && event?.data?.source_delegated_id ? event.data.source_delegated_id : "",
             event.status ? titleizeToken(event.status) : "",
           ].filter(Boolean),
         });
@@ -2748,6 +2887,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     activeEffectiveRoute.effort || selectedAgentRoute.effort || "default"
   }`;
   const providerSecretPresence = data.providerSecretPresence || {};
+  const providerSetupStatus = snapshot?.providerSetupStatus || {};
+  const missionProviderTruth =
+    mission?.providerTruth ||
+    mission?.missionLoop?.providerTruth ||
+    mission?.state?.provider_runtime_truth ||
+    {};
+  const missionCodeExecutionState =
+    mission?.state?.code_execution ||
+    mission?.missionLoop?.codeExecution ||
+    {};
+  const codeExecutionArtifacts = asList(missionCodeExecutionState?.artifacts)
+    .slice()
+    .reverse()
+    .slice(0, 4);
   const openAISecretReady = Boolean(
     providerSecretPresence.openai || providerSecretPresence["openai-codex"],
   );
@@ -3030,25 +3183,67 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <p>Saved secrets are injected into Fluxio runtime launches.</p>
               </article>
               <article className="context-item">
-                <span>Code execution</span>
-                <strong>{codeExecutionEnabled ? "Enabled" : "Disabled"}</strong>
-                <p>{codeExecutionEnabled ? `${codeExecutionMemory} auto container` : "Prompt-only execution"}</p>
+                <span>Active provider route</span>
+                <strong>
+                  {missionProviderTruth?.activeRoute?.provider
+                    ? `${titleizeToken(missionProviderTruth.activeRoute.provider)} · ${missionProviderTruth.activeRoute.model || "default"}`
+                    : "Not resolved"}
+                </strong>
+                <p>
+                  {missionProviderTruth?.activeRoute?.role
+                    ? `${titleizeToken(missionProviderTruth.activeRoute.role)} in ${titleizeToken(missionProviderTruth.currentPhase || agentCyclePhase)}`
+                    : "Route role will appear once the mission resolves planner/executor/verifier usage."}
+                </p>
               </article>
               <article className="context-item">
-                <span>Phase-aware switching</span>
-                <strong>{titleizeToken(agentCyclePhase)}</strong>
-                <p>{titleizeToken(agentCycleRole)} route is now the active runtime focus.</p>
+                <span>Last successful model call</span>
+                <strong>
+                  {missionProviderTruth?.lastSuccessfulCall?.provider
+                    ? `${titleizeToken(missionProviderTruth.lastSuccessfulCall.provider)} · ${missionProviderTruth.lastSuccessfulCall.model || "default"}`
+                    : "None yet"}
+                </strong>
+                <p>
+                  {missionProviderTruth?.lastSuccessfulCall?.at
+                    ? timestampLabel(missionProviderTruth.lastSuccessfulCall.at)
+                    : "Success timestamps appear after the first grounded action result."}
+                </p>
+              </article>
+              <article className="context-item">
+                <span>Last provider failure</span>
+                <strong>
+                  {missionProviderTruth?.lastFailure?.provider
+                    ? `${titleizeToken(missionProviderTruth.lastFailure.provider)} · ${missionProviderTruth.lastFailure.model || "default"}`
+                    : "No provider failure"}
+                </strong>
+                <p>
+                  {missionProviderTruth?.lastFailure?.summary ||
+                    "Failures are promoted into this surface when a provider route errors."}
+                </p>
               </article>
             </div>
 
             <div className="drawer-list">
               {PROVIDER_SECRET_OPTIONS.map(item => {
                 const hasSecret = Boolean(providerSecretPresence[item.id]);
+                const providerTruthRow =
+                  (providerSetupStatus && typeof providerSetupStatus === "object"
+                    ? providerSetupStatus[item.id]
+                    : null) || {};
                 return (
                   <article className={`drawer-card ${toneClass(hasSecret ? "good" : "warn")}`} key={`provider-${item.id}`}>
                     <span>{item.env}</span>
                     <strong>{item.label}</strong>
                     <p>{item.note}</p>
+                    <p>
+                      {providerTruthRow?.lastSuccessfulModelCall?.provider
+                        ? `Last success: ${titleizeToken(providerTruthRow.lastSuccessfulModelCall.provider)} · ${providerTruthRow.lastSuccessfulModelCall.model || "default"}`
+                        : "No successful call recorded yet."}
+                    </p>
+                    <p>
+                      {providerTruthRow?.lastProviderFailure?.summary
+                        ? `Last failure: ${providerTruthRow.lastProviderFailure.summary}`
+                        : "No provider failure recorded."}
+                    </p>
                     <Field label={`${item.label} API key`}>
                       <input
                         onChange={event =>
@@ -3098,8 +3293,35 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </select>
               </Field>
             </div>
+            {mission ? (
+              <div className="drawer-list compact runtime-event-mini-list">
+                <article className="drawer-card">
+                  <span>Mission container</span>
+                  <strong>
+                    {missionCodeExecutionState?.enabled
+                      ? missionCodeExecutionState?.container_id || "auto container"
+                      : "disabled"}
+                  </strong>
+                  <p>
+                    {missionCodeExecutionState?.last_result ||
+                      "Code execution results and errors are persisted per mission turn."}
+                  </p>
+                  {missionCodeExecutionState?.last_error ? (
+                    <p>{missionCodeExecutionState.last_error}</p>
+                  ) : null}
+                </article>
+                {codeExecutionArtifacts.map(item => (
+                  <article className="drawer-card" key={`code-artifact-${item.artifact_id || item.created_at || item.action_id}`}>
+                    <span>{titleizeToken(item.kind || "artifact")}</span>
+                    <strong>{item.title || item.action_id || "Code execution artifact"}</strong>
+                    <p>{item.summary || "No summary captured."}</p>
+                    <p>{item.created_at ? timestampLabel(item.created_at) : ""}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
             <p className="drawer-footnote">
-              OpenAI Code Interpreter is configured using the current Responses API tool contract: auto containers use the `code_interpreter` tool with a memory tier, and explicit containers can be reused when needed.
+              Mission-level code execution state now persists container identity, failures, and artifacts so the runtime can reuse the same container across turns.
             </p>
           </section>
 
@@ -5306,6 +5528,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                               </div>
                               <strong>{item.title}</strong>
                               <p>{item.summary}</p>
+                              {item.checkpoint ? <p className="builder-digest-detail">Checkpoint: {item.checkpoint}</p> : null}
+                              {item.routeLabel ? <p className="builder-digest-detail">Route: {item.routeLabel}</p> : null}
                               {item.detail ? <p className="builder-digest-detail">{item.detail}</p> : null}
                               <div className="builder-digest-meta">
                                 <span>{item.statusLabel}</span>
@@ -5408,6 +5632,35 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                           type="button"
                         >
                           <span>{item.label}</span>
+                          <strong>{item.title}</strong>
+                          <p>{item.reason}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Runtime leaders</p>
+                    <h3>{builderBoard.winningRoutes?.length || 0} active route pattern{(builderBoard.winningRoutes?.length || 0) === 1 ? "" : "s"}</h3>
+                    <p>Builder tracks which runtime/provider/model combinations are clearing threads versus getting stuck.</p>
+                    <div className="builder-thread-list">
+                      {asList(builderBoard.winningRoutes).slice(0, 3).map(item => (
+                        <article className={`builder-thread-item ${toneClass(item.tone)}`} key={`winning-route-${item.key || item.label}`}>
+                          <span>{item.runtime}</span>
+                          <strong>{item.label}</strong>
+                          <p>{item.detail}</p>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="builder-thread-list">
+                      {asList(builderBoard.stuckThreads).slice(0, 3).map(item => (
+                        <button
+                          className={`builder-thread-item ${toneClass(item.tone)}`.trim()}
+                          key={`stuck-${item.missionId || item.title}`}
+                          onClick={() => item.missionId && setSelectedMissionId(item.missionId)}
+                          type="button"
+                        >
+                          <span>{item.blockerClass}</span>
                           <strong>{item.title}</strong>
                           <p>{item.reason}</p>
                         </button>

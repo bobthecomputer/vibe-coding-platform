@@ -53,7 +53,13 @@ from .mission_control import (
     normalize_action_history,
     sync_mission_state_snapshot,
 )
-from .models import DelegatedRuntimeSession, ExecutionPolicy, ExecutionScope, MissionEvent
+from .models import (
+    DelegatedRuntimeSession,
+    ExecutionPolicy,
+    ExecutionScope,
+    MissionCodeExecutionConfig,
+    MissionEvent,
+)
 from .modes import ModeRegistry
 from .onboarding import detect_onboarding_status, load_telegram_destination
 from .openai_adapter import CodeExecutionConfig, build_responses_request, tools_from_skills
@@ -954,6 +960,27 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Telegram chat id or destination label for phone escalation",
     )
+    mission_start_cmd.add_argument(
+        "--code-execution",
+        action="store_true",
+        help="Enable mission-level OpenAI code execution state and artifact capture.",
+    )
+    mission_start_cmd.add_argument(
+        "--code-execution-memory",
+        default="4g",
+        choices=["1g", "4g", "16g", "64g"],
+        help="Default memory tier for mission code execution containers.",
+    )
+    mission_start_cmd.add_argument(
+        "--code-execution-container-id",
+        default="",
+        help="Reuse this OpenAI code execution container id across mission turns.",
+    )
+    mission_start_cmd.add_argument(
+        "--code-execution-required",
+        action="store_true",
+        help="Require code execution tooling when compatible provider routes are active.",
+    )
 
     mission_action_cmd = subparsers.add_parser(
         "mission-action", help="Apply a control-room action to an existing mission"
@@ -1153,6 +1180,7 @@ def _invoke_engine(
     auto_optimize_routing: bool = False,
     execution_target_preference: str | None = None,
     pause_on_handoff: bool | None = None,
+    code_execution_config: dict | None = None,
 ) -> dict:
     constitution = AgentConstitution.load(root / "config" / "constitution.json")
     modes = ModeRegistry(root / "config" / "modes.json")
@@ -1371,6 +1399,7 @@ def _invoke_engine(
             max_tokens=resolved_max_tokens,
             parallel_agents=resolved_parallel_agents,
             merge_policy=resolved_merge_policy,
+            code_execution_config=code_execution_config or {},
         )
     result["effective_verify_commands"] = effective_verify_commands
     result["mode"] = selected_mode_name
@@ -1393,6 +1422,42 @@ def _invoke_engine(
     result["efficiency_autotune"] = efficiency_autotune
     result["effective_execution_target_preference"] = (
         resolved_execution_target_preference
+    )
+    result["effective_code_execution"] = (
+        dict(code_execution_config) if isinstance(code_execution_config, dict) else {}
+    )
+    result.setdefault(
+        "code_execution",
+        dict(code_execution_config) if isinstance(code_execution_config, dict) else {},
+    )
+    result.setdefault(
+        "code_execution_state",
+        {
+            "enabled": bool(
+                (code_execution_config or {}).get("enabled", False)
+                if isinstance(code_execution_config, dict)
+                else False
+            ),
+            "container_id": str(
+                (code_execution_config or {}).get("container_id", "")
+                if isinstance(code_execution_config, dict)
+                else ""
+            ),
+            "memory_limit": str(
+                (code_execution_config or {}).get("memory_limit", "4g")
+                if isinstance(code_execution_config, dict)
+                else "4g"
+            ),
+            "required": bool(
+                (code_execution_config or {}).get("required", False)
+                if isinstance(code_execution_config, dict)
+                else False
+            ),
+            "artifacts": [],
+            "last_result": "",
+            "last_error": "",
+            "updated_at": "",
+        },
     )
     return result
 
@@ -2468,6 +2533,17 @@ def _run_mission_engine_cycles(
             auto_optimize_routing=workspace.auto_optimize_routing,
             execution_target_preference=workspace.execution_target_preference,
             pause_on_handoff=mission.run_budget.run_until_behavior != "continue_until_blocked",
+            code_execution_config={
+                "enabled": bool(getattr(mission.code_execution, "enabled", False)),
+                "memory_limit": str(
+                    getattr(mission.code_execution, "memory_limit", "4g") or "4g"
+                ),
+                "container_id": str(
+                    getattr(mission.code_execution, "container_id", "") or ""
+                ),
+                "required": bool(getattr(mission.code_execution, "required", False)),
+                "file_ids": list(getattr(mission.code_execution, "file_ids", []) or []),
+            },
         )
         result_payload = _sync_mission_from_result(store, mission.mission_id, result)
         mission = store.get_mission(mission.mission_id) or mission
@@ -2559,6 +2635,28 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
             policy_payload
             if isinstance(policy_payload, ExecutionPolicy)
             else ExecutionPolicy(**policy_payload)
+        )
+    code_execution_payload = result.get("code_execution")
+    if isinstance(code_execution_payload, dict):
+        mission.code_execution = MissionCodeExecutionConfig(
+            enabled=bool(code_execution_payload.get("enabled", False)),
+            memory_limit=str(code_execution_payload.get("memory_limit", "4g") or "4g"),
+            container_id=str(code_execution_payload.get("container_id", "") or ""),
+            required=bool(code_execution_payload.get("required", False)),
+            file_ids=list(code_execution_payload.get("file_ids", []) or []),
+            last_started_at=str(
+                code_execution_payload.get("last_started_at", "")
+                or mission.code_execution.last_started_at
+            ),
+            last_result=str(
+                code_execution_payload.get("last_result", "")
+                or mission.code_execution.last_result
+            ),
+            last_error=str(
+                code_execution_payload.get("last_error", "")
+                or mission.code_execution.last_error
+            ),
+            artifacts=list(code_execution_payload.get("artifacts", []) or []),
         )
     mission.route_configs = result.get("route_configs", [])
     mission.routing_decisions = result.get("routing_decisions", [])
@@ -2691,6 +2789,44 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         if isinstance(result.get("runtime_autonomy"), dict)
         else {}
     )
+    mission.state.blocker_classification = (
+        dict(result.get("latest_blocker", {}))
+        if isinstance(result.get("latest_blocker"), dict)
+        else {}
+    )
+    mission.state.blocker_history = (
+        list(result.get("blocker_history", []))
+        if isinstance(result.get("blocker_history"), list)
+        else []
+    )[-12:]
+    mission.state.provider_runtime_truth = (
+        dict(result.get("provider_truth", {}))
+        if isinstance(result.get("provider_truth"), dict)
+        else mission.state.provider_runtime_truth
+    )
+    code_execution_state = result.get("code_execution_state", {})
+    if isinstance(code_execution_state, dict):
+        mission.state.code_execution = dict(code_execution_state)
+        mission.code_execution.container_id = str(
+            code_execution_state.get("container_id", mission.code_execution.container_id)
+            or ""
+        )
+        mission.code_execution.last_result = str(
+            code_execution_state.get("last_result", mission.code_execution.last_result)
+            or ""
+        )
+        mission.code_execution.last_error = str(
+            code_execution_state.get("last_error", mission.code_execution.last_error)
+            or ""
+        )
+        mission.code_execution.last_started_at = str(
+            code_execution_state.get("updated_at", mission.code_execution.last_started_at)
+            or mission.code_execution.last_started_at
+            or ""
+        )
+        mission.code_execution.artifacts = list(
+            code_execution_state.get("artifacts", mission.code_execution.artifacts) or []
+        )
 
     mission.escalation_policy.pending_count = len(mission.state.verification_failures)
     mission.escalation_policy.delivery_ready = bool(mission.escalation_policy.destination)
@@ -2741,6 +2877,8 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
     )
     if waiting_delegated is not None and waiting_delegated.pending_approval.get("prompt"):
         mission.proof.blocked_by.append(waiting_delegated.pending_approval["prompt"])
+    if mission.state.blocker_classification.get("summary"):
+        mission.proof.blocked_by.append(mission.state.blocker_classification["summary"])
 
     sync_mission_state_snapshot(mission)
 
@@ -2756,6 +2894,17 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
                 "sessionId": latest_session_id,
                 "autopilotStatus": result.get("autopilot_status"),
                 "pauseReason": result.get("autopilot_pause_reason"),
+                "blockerClass": mission.state.blocker_classification.get("class", ""),
+                "provider": (
+                    mission.state.provider_runtime_truth.get("activeRoute", {}).get("provider", "")
+                    if isinstance(mission.state.provider_runtime_truth, dict)
+                    else ""
+                ),
+                "model": (
+                    mission.state.provider_runtime_truth.get("activeRoute", {}).get("model", "")
+                    if isinstance(mission.state.provider_runtime_truth, dict)
+                    else ""
+                ),
             },
         )
     )
@@ -2970,6 +3119,12 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         run_until_behavior=budget_settings["run_until_behavior"],
         deadline_at=budget_settings["deadline_at"],
         harness_id=workspace.preferred_harness,
+        code_execution_enabled=bool(
+            args.code_execution or args.code_execution_container_id
+        ),
+        code_execution_memory=args.code_execution_memory,
+        code_execution_container_id=args.code_execution_container_id or "",
+        code_execution_required=bool(args.code_execution_required),
     )
     if mission.run_budget.deadline_at:
         store.append_event(
@@ -3306,6 +3461,49 @@ def cmd_mission_follow_up(args: argparse.Namespace) -> int:
             },
         )
     )
+    blocker_row = mission.state.blocker_classification or {}
+    if blocker_row.get("kind"):
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.blocker.classified",
+                message=str(
+                    blocker_row.get("summary")
+                    or f"{blocker_row.get('class', 'unknown')} blocker detected."
+                ),
+                metadata=dict(blocker_row),
+            )
+        )
+    provider_failure = (
+        mission.state.provider_runtime_truth.get("lastFailure", {})
+        if isinstance(mission.state.provider_runtime_truth, dict)
+        else {}
+    )
+    if isinstance(provider_failure, dict) and provider_failure.get("provider"):
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.provider.failure",
+                message=(
+                    f"{provider_failure.get('provider')}:{provider_failure.get('model', 'unknown')} "
+                    "reported a recent failure."
+                ),
+                metadata=provider_failure,
+            )
+        )
+    code_execution_state = mission.state.code_execution or {}
+    if code_execution_state.get("last_error"):
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.code_execution.failure",
+                message=str(code_execution_state.get("last_error")),
+                metadata={
+                    "containerId": code_execution_state.get("container_id", ""),
+                    "enabled": code_execution_state.get("enabled", False),
+                },
+            )
+        )
     payload = {
         "mission": asdict(mission),
         "queuedForRuntime": queued_for_runtime,
