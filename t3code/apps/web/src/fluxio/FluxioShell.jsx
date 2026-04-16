@@ -1138,6 +1138,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const workspaces = snapshot.workspaces || [];
   const missions = snapshot.missions || [];
   const inboxItems = snapshot.inbox || [];
+  const initialLiveSnapshotPending =
+    previewMode === "live" && data.snapshot === null && data.previewMeta === null;
 
   const workspace = useMemo(
     () => selectedWorkspace(snapshot, selectedWorkspaceId),
@@ -4711,6 +4713,62 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       </section>
     );
   };
+
+  if (initialLiveSnapshotPending) {
+    return (
+      <div
+        className="fluxio-shell"
+        data-drawer="collapsed"
+        data-mode={uiMode}
+        data-profile={profileId}
+      >
+        <header className="fluxio-topbar">
+          <div className="topbar-app">
+            <div className="topbar-context">
+              <strong>Fluxio workspace</strong>
+              <span>Loading live control-room state</span>
+            </div>
+          </div>
+
+          <div className="topbar-confidence">
+            <span>Workspace state</span>
+            <strong className={toneClass("warn")}>Detecting environment</strong>
+          </div>
+        </header>
+
+        <div className="fluxio-body">
+          <main className="fluxio-main">
+            <section className="thread-shell agent-shell agent-idle-shell">
+              <header className="thread-head agent-thread-head agent-title-head">
+                <h1>Loading workspace state</h1>
+              </header>
+
+              <article className="builder-panel builder-panel-hero builder-feature-card">
+                <p>
+                  Fluxio is loading the first live control-room snapshot. Runtime,
+                  workspace, and setup detection can take a couple of seconds on startup.
+                </p>
+                <div className="thread-chip-row">
+                  <span className="mini-pill muted">Live backend</span>
+                  <span className="mini-pill muted">
+                    {isRefreshing ? "Refreshing snapshot" : "Starting snapshot"}
+                  </span>
+                </div>
+                <div className="drawer-actions">
+                  <ActionButton
+                    onClick={() => void refreshAll("bootstrap-retry")}
+                    variant="primary"
+                  >
+                    Retry now
+                  </ActionButton>
+                </div>
+              </article>
+            </section>
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

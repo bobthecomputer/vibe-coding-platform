@@ -11,7 +11,7 @@ This report tracks the M1 overlay budgets from day one instrumentation.
 ## How to sample
 
 1. Start the app: `npm run tauri:dev`
-2. Trigger overlay open/close with the configured hold key (`Space` or fallback `Ctrl+Space`).
+2. Trigger overlay open/close with the configured hold key (`Ctrl+Space` or fallback `Ctrl+Shift+Space`).
 3. Open tray menu -> **Performance snapshot** or click **Perf** in the overlay.
 4. Read current values in the overlay panel and in app logs.
 

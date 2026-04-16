@@ -4,6 +4,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -12,6 +13,72 @@ from grant_agent.app_capability_standard import build_connected_apps_snapshot
 
 
 class AppCapabilityStandardTests(unittest.TestCase):
+    def test_build_connected_apps_snapshot_does_not_rewrite_state_when_nothing_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = pathlib.Path(temp_dir) / "vibe-coding-platform"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "config").mkdir()
+            (workspace_root / ".agent_control").mkdir()
+            (workspace_root / "config" / "connected_apps.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "manifest_id": "manifest_oratio_viva",
+                            "schema_version": "fluxio.app-capability/v0-draft",
+                            "app_id": "oratio-viva",
+                            "name": "Oratio Viva",
+                            "description": "Speech bridge",
+                            "bridge": {
+                                "transport": "http",
+                                "endpoint": "http://127.0.0.1:47830/fluxio",
+                                "healthcheck": "/health",
+                                "event_stream": "/events",
+                            },
+                            "auth": {"mode": "local_token", "scopes": ["voice.render"]},
+                            "permissions": ["task.run", "context.read", "action.invoke"],
+                            "tasks": [
+                                {
+                                    "task_id": "render-voice-preview",
+                                    "label": "Render voice preview",
+                                    "description": "Preview",
+                                }
+                            ],
+                            "context_surfaces": [
+                                {
+                                    "surface_id": "voice-catalog",
+                                    "label": "Voice Catalog",
+                                    "description": "Catalog",
+                                    "access": "read",
+                                }
+                            ],
+                            "action_hooks": [
+                                {
+                                    "hook_id": "queue-render",
+                                    "label": "Queue Render",
+                                    "description": "Queue",
+                                    "mutability": "write",
+                                }
+                            ],
+                        }
+                    ],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            state_path = workspace_root / ".agent_control" / "connected_apps_state.json"
+            build_connected_apps_snapshot(workspace_root)
+            original_text = state_path.read_text(encoding="utf-8")
+            original_mtime = state_path.stat().st_mtime_ns
+
+            time.sleep(0.05)
+            build_connected_apps_snapshot(workspace_root)
+
+            self.assertEqual(state_path.read_text(encoding="utf-8"), original_text)
+            self.assertEqual(state_path.stat().st_mtime_ns, original_mtime)
+            persisted_state = json.loads(original_text)
+            self.assertNotIn("last_seen_at", persisted_state["oratio-viva"])
+
     def test_build_connected_apps_snapshot_uses_live_reference_apps_and_follow_on_solantir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace_root = pathlib.Path(temp_dir) / "vibe-coding-platform"

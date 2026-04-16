@@ -87,7 +87,7 @@ impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
             pinned: true,
-            hotkey: "Space".to_string(),
+            hotkey: "Ctrl+Space".to_string(),
             mode_id: "coding".to_string(),
             localhost_api_enabled: true,
             localhost_api_port: DEFAULT_LOCALHOST_PORT,
@@ -1407,11 +1407,17 @@ fn collect_control_room_signature_paths(root: &Path) -> Vec<PathBuf> {
         let mut control_files: Vec<PathBuf> = entries
             .filter_map(|entry| entry.ok().map(|item| item.path()))
             .filter(|path| {
+                let file_name = path
+                    .file_name()
+                    .and_then(|item| item.to_str())
+                    .unwrap_or_default();
                 path.is_file()
                     && matches!(
                         path.extension().and_then(|item| item.to_str()),
                         Some("json") | Some("jsonl")
                     )
+                    && file_name != "connected_apps_state.json"
+                    && file_name != "mission_events.jsonl"
             })
             .collect();
         control_files.sort();
@@ -1440,8 +1446,9 @@ fn collect_control_room_signature_paths(root: &Path) -> Vec<PathBuf> {
             .collect();
         sessions.sort_by(|left, right| right.0.cmp(&left.0));
         for (_modified, session_path) in sessions.into_iter().take(CONTROL_ROOM_WATCH_MAX_SESSIONS) {
+            // High-churn event streams are pushed through the delta channel and should
+            // not force a full control-room snapshot refresh.
             paths.push(session_path.join("state.json"));
-            paths.push(session_path.join("timeline.jsonl"));
         }
     }
 
@@ -2988,7 +2995,7 @@ fn on_hold_shortcut_event(app: &AppHandle, event: ShortcutEvent) {
                 perf.begin_hotkey_open();
             }
 
-            if let Err(err) = open_overlay(app, "hold-space") {
+            if let Err(err) = open_overlay(app, "hold-shortcut") {
                 log::error!("failed to open overlay on hold press: {err}");
             }
         }
@@ -3002,33 +3009,35 @@ fn on_hold_shortcut_event(app: &AppHandle, event: ShortcutEvent) {
                 .map(|settings| settings.pinned)
                 .unwrap_or(false);
             if !is_pinned {
-                let _ = hide_overlay(app, "space-release");
+                let _ = hide_overlay(app, "shortcut-release");
             }
         }
     }
 }
 
 fn register_hold_shortcut(app: &AppHandle) -> Result<(), String> {
-    let space_shortcut = Shortcut::new(None, Code::Space);
+    let primary_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
     let primary_result = app
         .global_shortcut()
-        .on_shortcut(space_shortcut, |app, _shortcut, event| {
+        .on_shortcut(primary_shortcut, |app, _shortcut, event| {
             on_hold_shortcut_event(app, event)
         });
 
     if primary_result.is_ok() {
-        update_hotkey_name(app, "Space");
+        update_hotkey_name(app, "Ctrl+Space");
         return Ok(());
     }
 
-    let fallback_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+    let fallback_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
     app.global_shortcut()
         .on_shortcut(fallback_shortcut, |app, _shortcut, event| {
             on_hold_shortcut_event(app, event)
         })
-        .map_err(|err| format!("Failed to register Space and Ctrl+Space shortcuts: {err}"))?;
+        .map_err(|err| {
+            format!("Failed to register Ctrl+Space and Ctrl+Shift+Space shortcuts: {err}")
+        })?;
 
-    update_hotkey_name(app, "Ctrl+Space (fallback)");
+    update_hotkey_name(app, "Ctrl+Shift+Space (fallback)");
     Ok(())
 }
 

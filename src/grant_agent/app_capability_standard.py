@@ -422,7 +422,6 @@ def _persistable_session_state(session: ConnectedAppSession) -> dict:
         "session_id": session.session_id,
         "task_history": session.task_history,
         "latest_task_result": session.latest_task_result,
-        "last_seen_at": session.last_seen_at,
     }
 
 
@@ -440,7 +439,14 @@ def _load_session_state(root: Path) -> dict:
 def _save_session_state(root: Path, state: dict) -> None:
     state_path = root / ".agent_control" / "connected_apps_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    serialized = json.dumps(state, indent=2)
+    if state_path.exists():
+        try:
+            if state_path.read_text(encoding="utf-8") == serialized:
+                return
+        except OSError:
+            pass
+    state_path.write_text(serialized, encoding="utf-8")
 
 
 def _build_grants(manifest: AppCapabilityManifest) -> list[CapabilityGrant]:

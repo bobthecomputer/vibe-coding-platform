@@ -82,7 +82,7 @@ npm run tauri:dev
 
 Implemented backend features:
 
-- Hold-to-open overlay (`Space`, fallback `Ctrl+Space`), tray controls, persisted settings.
+- Hold-to-open overlay (`Ctrl+Space`, fallback `Ctrl+Shift+Space`), tray controls, persisted settings.
 - Performance telemetry: cold start, hotkey latency, idle RAM.
 - Dictation service (push-to-talk session model, local-first command-based STT, OS fallback path).
 - Mode system v1 (`coding`, `youtube`, `writing`) with per-mode context recipe + tool allowlists.
