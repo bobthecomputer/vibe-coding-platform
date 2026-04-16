@@ -9,28 +9,6 @@ const repoRoot = process.cwd();
 const webRoot = resolve(repoRoot, "t3code", "apps", "web");
 const webSrc = resolve(webRoot, "src");
 
-function manualChunks(id) {
-  if (!id.includes("node_modules")) {
-    return undefined;
-  }
-  if (id.includes("react-dom") || id.includes(`${resolve(repoRoot, "node_modules", "react")}`)) {
-    return "react-core";
-  }
-  if (id.includes("@base-ui")) {
-    return "base-ui";
-  }
-  if (id.includes("lucide-react")) {
-    return "icons";
-  }
-  if (id.includes("@tauri-apps")) {
-    return "tauri";
-  }
-  if (id.includes("effect") || id.includes("class-variance-authority") || id.includes("tailwind-merge")) {
-    return "fluxio-utils";
-  }
-  return "vendor";
-}
-
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   root: webRoot,
@@ -60,10 +38,5 @@ export default defineConfig({
   build: {
     outDir: resolve(webRoot, "dist"),
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks,
-      },
-    },
   },
 });

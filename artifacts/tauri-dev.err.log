@@ -1,0 +1,6 @@
+     Running BeforeDevCommand (`npm run frontend:dev`)
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching C:\Users\paul\Projects\vibe-coding-platform\src-tauri for changes...
+[1m[32m   Compiling[0m vibe-coding-platform v0.1.0 (C:\Users\paul\Projects\vibe-coding-platform\src-tauri)
+[1m[36m    Building[0m [=======================> ] 485/487: vibe-...[1m[36m    Building[0m [=======================> ] 486/487: vibe-...                                                            [1m[32m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 29.08s
+[1m[32m     Running[0m `target\debug\vibe-coding-platform.exe`

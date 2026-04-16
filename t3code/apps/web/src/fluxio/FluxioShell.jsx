@@ -1662,7 +1662,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           setActiveDrawer("runtime");
           return;
         case "open_auth":
-          openAuthDrawer();
+          setUiMode("builder");
+          setActiveDrawer("runtime");
+          window.setTimeout(() => {
+            document.getElementById("provider-auth-panel")?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
+          }, 0);
           return;
         case "open_profiles":
           setUiMode("builder");
@@ -1727,7 +1734,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [
       markAction,
       mission?.mission_id,
-      openAuthDrawer,
       openMissionDialog,
       pushToast,
       runWorkspaceActionSpec,
