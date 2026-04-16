@@ -1375,6 +1375,9 @@ def _provider_truth_for_mission(
     openai_auth_mode = normalize_openai_codex_auth_mode(
         getattr(workspace, "openai_codex_auth_mode", "none")
     )
+    minimax_auth_mode = normalize_minimax_auth_mode(
+        getattr(workspace, "minimax_auth_mode", "none")
+    )
     if active_provider in {"openai", "openai-codex"}:
         api_key_present = bool(
             auth_presence.get("openai", False) or auth_presence.get("openai-codex", False)
@@ -1390,6 +1393,23 @@ def _provider_truth_for_mission(
             else ("api" if api_key_present else "none")
         )
         auth_path = openai_codex_auth_label(auth_mode)
+    elif active_provider in {"minimax", "minimax-portal", "minimax-cn"}:
+        api_key_present = bool(
+            auth_presence.get("minimax", False)
+            or auth_presence.get("minimax-cn", False)
+            or auth_presence.get(active_provider, False)
+        )
+        auth_present = (
+            minimax_auth_mode == "minimax-portal-oauth"
+            or (minimax_auth_mode == "minimax-api" and api_key_present)
+            or api_key_present
+        )
+        auth_mode = (
+            minimax_auth_mode
+            if minimax_auth_mode != "none"
+            else ("minimax-api" if api_key_present else "none")
+        )
+        auth_path = minimax_auth_label(auth_mode)
     else:
         auth_present = bool(auth_presence.get(active_provider, False)) if active_provider else False
         auth_mode = ""

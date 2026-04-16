@@ -92,6 +92,7 @@ const ROUTE_ROLE_OPTIONS = ["planner", "executor", "verifier"];
 const MODEL_PROVIDER_OPTIONS = [
   { value: "openai", label: "OpenAI" },
   { value: "anthropic", label: "Anthropic" },
+  { value: "minimax", label: "MiniMax" },
   { value: "openrouter", label: "OpenRouter" },
 ];
 const MODEL_EFFORT_OPTIONS = [
@@ -125,6 +126,12 @@ const PROVIDER_SECRET_OPTIONS = [
     env: "OPENROUTER_API_KEY",
     note: "Used when a route is delegated through OpenRouter.",
   },
+  {
+    id: "minimax",
+    label: "MiniMax",
+    env: "MINIMAX_API_KEY",
+    note: "Used when a route targets MiniMax with API-key auth. Portal OAuth does not require a stored key.",
+  },
 ];
 const ROUTE_MODEL_OPTIONS = [
   "gpt-5.4",
@@ -132,6 +139,8 @@ const ROUTE_MODEL_OPTIONS = [
   "codex",
   "claude-sonnet-4.5",
   "claude-opus-4.1",
+  "MiniMax-M2.7",
+  "MiniMax-M2.7-highspeed",
 ];
 
 const AGENT_BLOCKER_DRAWER_IDS = ["queue", "proof", "context"];
@@ -1050,22 +1059,29 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       return undefined;
     }
 
-    let unlistenChanged = null;
-    let unlistenDelta = null;
-    let unlistenOpenClawStatus = null;
-    let unlistenOpenClawMessage = null;
+    let cancelled = false;
+    const unlisteners = [];
+    const registerListener = async (eventName, handler) => {
+      try {
+        const unlisten = await listen(eventName, handler);
+        if (cancelled) {
+          unlisten();
+          return;
+        }
+        unlisteners.push(unlisten);
+      } catch {
+        return undefined;
+      }
+      return undefined;
+    };
 
-    void listen("control-room://changed", event => {
+    void registerListener("control-room://changed", event => {
       const reason = event?.payload?.reason || "backend-event";
       setLastPushReason(reason);
       void refreshAll(reason);
-    })
-      .then(unlisten => {
-        unlistenChanged = unlisten;
-      })
-      .catch(() => undefined);
+    });
 
-    void listen("control-room://delta", event => {
+    void registerListener("control-room://delta", event => {
       const reason = event?.payload?.source || "backend-delta";
       setLastPushReason(reason);
       const liveItem = controlRoomDeltaToLiveItem(
@@ -1078,24 +1094,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           [liveItem, ...current.filter(entry => entry.id !== liveItem.id)].slice(0, 24),
         );
       }
-    })
-      .then(unlisten => {
-        unlistenDelta = unlisten;
-      })
-      .catch(() => undefined);
+    });
 
-    void listen("openclaw://status", event => {
+    void registerListener("openclaw://status", event => {
       setData(current => ({
         ...current,
         openClawStatus: event?.payload || current.openClawStatus,
       }));
-    })
-      .then(unlisten => {
-        unlistenOpenClawStatus = unlisten;
-      })
-      .catch(() => undefined);
+    });
 
-    void listen("openclaw://message", event => {
+    void registerListener("openclaw://message", event => {
       const content = event?.payload?.content;
       if (!content) {
         return;
@@ -1112,24 +1120,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           }),
         ].slice(-16),
       }));
-    })
-      .then(unlisten => {
-        unlistenOpenClawMessage = unlisten;
-      })
-      .catch(() => undefined);
+    });
 
     return () => {
-      if (typeof unlistenChanged === "function") {
-        unlistenChanged();
-      }
-      if (typeof unlistenDelta === "function") {
-        unlistenDelta();
-      }
-      if (typeof unlistenOpenClawStatus === "function") {
-        unlistenOpenClawStatus();
-      }
-      if (typeof unlistenOpenClawMessage === "function") {
-        unlistenOpenClawMessage();
+      cancelled = true;
+      for (const unlisten of unlisteners) {
+        if (typeof unlisten === "function") {
+          unlisten();
+        }
       }
     };
   }, [previewMode, refreshAll]);
@@ -2032,8 +2030,17 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
       const composedFollowUp =
         steeringLines.length > 0 ? `${steeringLines.join(" ")}\n\n${followUp}` : followUp;
+      const hasActiveDelegatedRuntime = asList(mission?.delegated_runtime_sessions).some(session =>
+        ["waiting_for_approval", "running", "launching"].includes(
+          String(session?.status || "").trim().toLowerCase(),
+        ),
+      );
       let sentLive = false;
-      if (mission.runtime_id === "openclaw" && data.openClawStatus?.connected) {
+      if (
+        mission.runtime_id === "openclaw" &&
+        data.openClawStatus?.connected &&
+        !hasActiveDelegatedRuntime
+      ) {
         try {
           await callBackend(
             "send_openclaw_message",
@@ -3063,8 +3070,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     openAIProviderStatus?.authPath ||
       (openAISecretReady ? "API key" : "not configured"),
   );
+  const minimaxSecretReady = Boolean(
+    providerSecretPresence.minimax || providerSecretPresence["minimax-cn"],
+  );
   const minimaxAuthReady = Boolean(
-    minimaxProviderStatus?.configured || minimaxProviderStatus?.authPresent,
+    minimaxProviderStatus?.authPresent || minimaxProviderStatus?.configured || minimaxSecretReady,
+  );
+  const minimaxAuthPath = String(
+    minimaxProviderStatus?.authPath ||
+      (minimaxSecretReady ? "API key" : "not configured"),
   );
   const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
@@ -3357,7 +3371,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           </header>
 
           <section className="drawer-block" id="provider-auth-panel">
-            <h3>Provider auth and OpenAI tools</h3>
+            <h3>Provider auth and model tools</h3>
             <div className="context-grid compact-metrics">
               <article className="context-item">
                 <span>OpenAI / Codex auth</span>
@@ -3366,6 +3380,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   {openAICodexAuthPath.toLowerCase().includes("chatgpt")
                     ? "Portal auth is configured for Codex sign-in."
                     : "Saved API keys are injected into Fluxio runtime launches."}
+                </p>
+              </article>
+              <article className="context-item">
+                <span>MiniMax auth</span>
+                <strong>{`${minimaxAuthPath} · ${minimaxAuthReady ? "Ready" : "Missing"}`}</strong>
+                <p>
+                  {minimaxAuthPath.toLowerCase().includes("oauth")
+                    ? "Portal OAuth is treated as a valid runtime auth path even without a stored API key."
+                    : "Save a MiniMax API key when the route is configured for API-key auth."}
                 </p>
               </article>
               <article className="context-item">
@@ -5437,7 +5460,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         Code execution {codeExecutionEnabled ? "on" : "off"}
                       </span>
                       <span className="mini-pill muted">
-                        {openAICodexAuthReady ? "OpenAI auth ready" : "OpenAI auth missing"}
+                        {modelAuthReady ? "Model auth ready" : "Model auth missing"}
                       </span>
                     </div>
                     <div className="thread-composer-actions">
@@ -6140,7 +6163,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         Code execution {codeExecutionEnabled ? `on · ${codeExecutionMemory}` : "off"}
                       </span>
                       <span className="mini-pill muted">
-                        {openAICodexAuthReady ? "OpenAI auth ready" : "OpenAI auth missing"}
+                        {modelAuthReady ? "Model auth ready" : "Model auth missing"}
                       </span>
                     </div>
                     <div className="thread-composer-actions">

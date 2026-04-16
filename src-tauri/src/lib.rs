@@ -5047,8 +5047,9 @@ async fn get_control_room_snapshot_command(
                         .unwrap_or("")
                         .trim()
                         .to_ascii_lowercase();
-                    let effective_auth_present =
-                        auth_present || (provider_id == "openai" && auth_mode == "chatgpt");
+                    let effective_auth_present = auth_present
+                        || (provider_id == "openai" && auth_mode == "chatgpt")
+                        || (provider_id == "minimax" && auth_mode == "minimax-portal-oauth");
                     provider_payload.insert(
                         "authPresent".to_string(),
                         Value::Bool(effective_auth_present),

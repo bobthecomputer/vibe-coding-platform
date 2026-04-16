@@ -187,6 +187,56 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("currentCyclePhase", mission_payload["missionLoop"])
             self.assertIn("timeBudget", mission_payload["missionLoop"])
 
+    def test_minimax_portal_auth_marks_provider_truth_ready_without_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspaces = store.load_workspaces()
+            workspace = workspaces[0]
+            workspace.minimax_auth_mode = "minimax-portal-oauth"
+            workspace.route_overrides = [
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                    "effort": "medium",
+                }
+            ]
+            store.save_workspaces(workspaces)
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="openclaw",
+                objective="Route execution through MiniMax",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=3600,
+            )
+            mission.state.current_cycle_phase = "execute"
+            mission.effective_route_contract = {
+                "roles": [
+                    {
+                        "role": "executor",
+                        "provider": "minimax",
+                        "model": "MiniMax-M2.7",
+                        "effort": "medium",
+                    }
+                ]
+            }
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+            self.assertTrue(mission_payload["providerTruth"]["authPresent"])
+            self.assertEqual(
+                mission_payload["providerTruth"]["authPath"],
+                "OAuth portal",
+            )
+
     def test_second_mission_is_queued_behind_active_workspace_mission(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
