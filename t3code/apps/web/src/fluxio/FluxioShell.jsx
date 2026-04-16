@@ -423,6 +423,53 @@ function TranscriptMessage({
   );
 }
 
+function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }) {
+  const isUser = item.role === "operator";
+  const speakerLabel = isUser ? "You" : item.roleLabel || "Fluxio";
+  const speakerIcon = isUser ? "◉" : item.roleIcon || "◇";
+  const secondaryText =
+    !isUser && item.detail && item.detail !== item.title && item.detail !== item.meta
+      ? item.detail
+      : "";
+  const hasTraceDetail = Boolean(item.technicalDetail || item.traceOnly);
+
+  return (
+    <article
+      className={`agent-chat-message ${isUser ? "user" : "assistant"} ${toneClass(item.tone || "neutral")} ${highlighted ? "highlighted" : ""}`.trim()}
+      id={item.id}
+    >
+      <div className="agent-chat-message-head">
+        <div className="agent-chat-speaker">
+          <span aria-hidden="true" className="agent-chat-avatar">{speakerIcon}</span>
+          <strong>{speakerLabel}</strong>
+        </div>
+        {item.meta ? <span>{item.meta}</span> : null}
+      </div>
+      <div className="agent-chat-bubble">
+        {item.label && !isUser ? <span className="agent-chat-label">{item.label}</span> : null}
+        {item.title ? <p className="agent-chat-primary">{item.title}</p> : null}
+        {secondaryText ? <p className="agent-chat-secondary">{secondaryText}</p> : null}
+        {item.chips?.length ? (
+          <div className="agent-chat-chips">
+            {item.chips.slice(0, 4).map(chip => (
+              <span className="mini-pill muted" key={`${item.id}-${chip}`}>
+                {chip}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {!isUser && hasTraceDetail ? (
+        <div className="agent-chat-actions">
+          <ActionButton onClick={() => onFocusTrace(item.id)} type="button">
+            Open trace
+          </ActionButton>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function DrawerToggle({ active, label, count, tone, onClick }) {
   return (
     <button className={`drawer-toggle ${active ? "active" : ""}`.trim()} onClick={onClick} type="button">
@@ -568,6 +615,77 @@ function deltaDetail(row) {
   return detailSources.find(value => value) || "";
 }
 
+const OPERATOR_STEERING_PREFIXES = [
+  "runtime preference:",
+  "current mission phase:",
+  "route preference for",
+  "if the openai route is active,",
+];
+
+function extractOperatorSteeringHints(block) {
+  return String(block || "")
+    .split(/(?<=\.)\s+(?=[A-Z])|[\n]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter(item =>
+      OPERATOR_STEERING_PREFIXES.some(prefix => item.toLowerCase().startsWith(prefix)),
+    );
+}
+
+function splitOperatorSteeringMessage(value) {
+  const raw = String(value || "").replace(/\r\n?/g, "\n").trim();
+  if (!raw) {
+    return { visibleText: "", steeringHints: [] };
+  }
+
+  const blocks = raw.split(/\n\s*\n/).map(item => item.trim()).filter(Boolean);
+  if (blocks.length > 1) {
+    const steeringHints = extractOperatorSteeringHints(blocks[0]);
+    if (steeringHints.length > 0) {
+      return {
+        visibleText: blocks.slice(1).join("\n\n").trim() || raw,
+        steeringHints,
+      };
+    }
+  }
+
+  const steeringHints = [];
+  const visibleLines = [];
+  let inBody = false;
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (inBody && visibleLines[visibleLines.length - 1] !== "") {
+        visibleLines.push("");
+      }
+      continue;
+    }
+    const steeringLine =
+      !inBody &&
+      OPERATOR_STEERING_PREFIXES.some(prefix => line.toLowerCase().startsWith(prefix));
+    if (steeringLine) {
+      steeringHints.push(line);
+      continue;
+    }
+    inBody = true;
+    visibleLines.push(line);
+  }
+
+  return {
+    visibleText: visibleLines.join("\n").trim() || raw,
+    steeringHints,
+  };
+}
+
+function isRuntimeRouteMetaKind(kind) {
+  return [
+    "runtime.phase_entered",
+    "runtime.route_switch_reason",
+    "runtime.handoff",
+    "runtime.route_contract",
+  ].includes(String(kind || "").toLowerCase());
+}
+
 function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
   const row = payload?.row;
   const source = payload?.source || "delta";
@@ -580,26 +698,32 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
       return null;
     }
     const kind = row.kind || "mission.event";
+    const isOperatorFollowUp = kind === "mission.follow_up";
+    const operatorPrompt = isOperatorFollowUp
+      ? splitOperatorSteeringMessage(row.message || "")
+      : null;
     return {
       id: `mission-${row.mission_id}-${row.timestamp || payload.detectedAt}-${kind}-${row.message || "event"}`,
       kind,
-      role: kind === "mission.follow_up" ? "operator" : kind === "mission.approval" ? "queue" : "system",
+      role: isOperatorFollowUp ? "operator" : kind === "mission.approval" ? "queue" : "system",
       runtimeId: row.metadata?.runtimeId || row.metadata?.runtime_id || "",
       roleLabel:
-        kind === "mission.follow_up"
+        isOperatorFollowUp
           ? "Operator"
           : kind === "mission.approval"
             ? "Needs attention"
             : "Fluxio",
       roleIcon:
-        kind === "mission.follow_up"
+        isOperatorFollowUp
           ? "◉"
           : kind === "mission.approval"
             ? "!"
             : "·",
       label: titleizeToken(kind),
-      title: row.message || "Mission event",
-      detail: deltaDetail(row),
+      title: operatorPrompt?.visibleText || row.message || "Mission event",
+      detail:
+        operatorPrompt?.steeringHints?.join(" · ") ||
+        deltaDetail(row),
       meta: timestampLabel(row.timestamp || payload.detectedAt),
       timestampRaw: row.timestamp || payload.detectedAt,
       tone:
@@ -608,6 +732,13 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           : /failed|error/i.test(`${kind} ${row.message || ""}`)
             ? "bad"
             : "neutral",
+      technicalDetail:
+        operatorPrompt?.steeringHints?.length > 0
+          ? operatorPrompt.steeringHints.join("\n")
+          : "",
+      technicalSummary:
+        operatorPrompt?.steeringHints?.length > 0 ? "Routing note" : "",
+      chatPreferred: isOperatorFollowUp,
       chips: [
         row.metadata?.runtimeId ? runtimeLabel(row.metadata.runtimeId) : "",
         row.metadata?.queuedForRuntime ? "Queued for runtime" : "",
@@ -635,6 +766,10 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
     const routeSwitchReason = normalizedKind === "runtime.route_switch_reason";
     const handoffEvent = normalizedKind === "runtime.handoff";
     const detail = deltaDetail(row);
+    const operatorPrompt =
+      normalizedKind === "operator.followup"
+        ? splitOperatorSteeringMessage(row.message || "")
+        : null;
     return {
       id: `runtime-${delegatedId || mission.mission_id}-${row.event_id || row.created_at || payload.detectedAt}-${kind}`,
       kind,
@@ -659,8 +794,9 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
         : heartbeat
           ? "Runtime heartbeat"
           : titleizeToken(kind),
-      title: row.message || "Runtime event",
+      title: operatorPrompt?.visibleText || row.message || "Runtime event",
       detail:
+        (operatorPrompt?.steeringHints?.join(" · ") ||
         (phaseEntered
           ? `${titleizeToken(row?.data?.phase || "execute")} phase via ${titleizeToken(
               row?.data?.role || "route",
@@ -678,7 +814,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           ? `${runtimeLabel(row.runtime_id || mission.runtime_id)} emitted process output.`
           : heartbeat
             ? "Heartbeat telemetry from the delegated runtime lane."
-            : ""),
+            : "")),
       meta: timestampLabel(row.created_at || payload.detectedAt),
       timestampRaw: row.created_at || payload.detectedAt,
       tone:
@@ -688,11 +824,22 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
             ? "warn"
             : "neutral",
       technicalDetail:
-        processMessage && detail && detail !== row.message
+        operatorPrompt?.steeringHints?.length > 0
+          ? operatorPrompt.steeringHints.join("\n")
+          : processMessage && detail && detail !== row.message
           ? detail
           : row?.metadata?.trace || row?.data?.trace || "",
-      technicalSummary: processMessage ? "Thinking trace" : "",
+      technicalSummary:
+        operatorPrompt?.steeringHints?.length > 0
+          ? "Routing note"
+          : processMessage
+            ? "Thinking trace"
+            : "",
       processMessage,
+      chatPreferred:
+        normalizedKind === "operator.followup" ||
+        (processMessage && !isRuntimeRouteMetaKind(kind)),
+      traceOnly: isRuntimeRouteMetaKind(kind),
       heartbeat,
       emphasis:
         processMessage ||
@@ -2690,6 +2837,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         meta: timestampLabel(note.createdAt),
         timestampRaw: note.createdAt,
         tone: note.tone || "neutral",
+        chatPreferred: note.channel === "followup",
       });
     }
 
@@ -2716,6 +2864,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         tone: artifact.ok ? "neutral" : "bad",
         processMessage: true,
         emphasis: true,
+        traceOnly: true,
         chips: [
           artifact.container_id ? artifact.container_id : "",
           artifact.runtime ? titleizeToken(artifact.runtime) : "",
@@ -2756,6 +2905,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         tone: actionError ? "bad" : "neutral",
         processMessage: actionRuntimeLike,
         emphasis: Boolean(actionError || actionRuntimeLike),
+        traceOnly: true,
       });
     }
 
@@ -2810,6 +2960,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 ? "bad"
                 : "neutral",
           emphasis: session.status === "failed" || session.heartbeat_status === "stale",
+          traceOnly: true,
           chips: [
             titleizeToken(session.status || "unknown"),
             session.execution_target ? titleizeToken(session.execution_target) : "",
@@ -2877,6 +3028,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               : "",
           technicalSummary: processMessage ? "Thinking trace" : "",
           processMessage,
+          chatPreferred: processMessage && !isRuntimeRouteMetaKind(event.kind),
+          traceOnly: !processMessage || isRuntimeRouteMetaKind(event.kind),
           emphasis:
             processMessage ||
             phaseEntered ||
@@ -2899,8 +3052,17 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
     }
 
-    for (const activity of asList(snapshot.activity).slice(0, 6)) {
+    for (const activity of asList(snapshot.activity).slice(0, 12)) {
       const kind = activity?.kind || "activity";
+      const activityMissionId =
+        activity?.mission_id ||
+        activity?.missionId ||
+        activity?.metadata?.mission_id ||
+        activity?.metadata?.missionId ||
+        "";
+      if (activityMissionId && activityMissionId !== mission?.mission_id) {
+        continue;
+      }
       const role = /bridge|app/i.test(kind)
         ? "bridge"
         : /approval|question/i.test(kind)
@@ -2908,28 +3070,51 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           : /runtime|delegate|verification|activity/i.test(kind)
             ? "runtime"
             : "system";
-      if (role !== "bridge") {
+      const isOperatorFollowUp = kind === "mission.follow_up";
+      const operatorPrompt = isOperatorFollowUp
+        ? splitOperatorSteeringMessage(activity?.message || "")
+        : null;
+      if (!isOperatorFollowUp && role !== "bridge" && role !== "queue") {
         continue;
       }
       pushTurn({
         id: `activity-${kind}-${activity?.timestamp || activity?.message}`,
         dedupeKey: `activity:${kind}:${activity?.message || ""}:${activity?.timestamp || ""}`,
-        role,
+        role: isOperatorFollowUp ? "operator" : role,
         roleLabel:
-          role === "bridge"
+          isOperatorFollowUp
+            ? "Operator"
+            : role === "bridge"
             ? "Bridge"
             : role === "queue"
               ? "Needs attention"
               : role === "runtime"
                 ? "Runtime"
                 : "Fluxio",
-        roleIcon: role === "bridge" ? "⌁" : role === "queue" ? "!" : role === "runtime" ? "◇" : "·",
+        roleIcon:
+          isOperatorFollowUp
+            ? "◉"
+            : role === "bridge"
+              ? "⌁"
+              : role === "queue"
+                ? "!"
+                : role === "runtime"
+                  ? "◇"
+                  : "·",
         label: titleizeToken(kind),
-        title: activity?.message || "Activity update",
-        detail: activity?.detail || "",
+        title: operatorPrompt?.visibleText || activity?.message || "Activity update",
+        detail: operatorPrompt?.steeringHints?.join(" · ") || activity?.detail || "",
         meta: timestampLabel(activity?.timestamp),
         timestampRaw: activity?.timestamp,
         tone: role === "queue" ? "warn" : activity?.tone || "neutral",
+        technicalDetail:
+          operatorPrompt?.steeringHints?.length > 0
+            ? operatorPrompt.steeringHints.join("\n")
+            : "",
+        technicalSummary:
+          operatorPrompt?.steeringHints?.length > 0 ? "Routing note" : "",
+        chatPreferred: isOperatorFollowUp,
+        traceOnly: !isOperatorFollowUp,
       });
     }
 
@@ -2949,6 +3134,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         tone: message.tone || "neutral",
         processMessage: true,
         emphasis: true,
+        chatPreferred: true,
       });
     }
 
@@ -2992,12 +3178,38 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }),
     [agentRuntimeFocus, agentTranscript, mission],
   );
-  const agentThinkingTurns = useMemo(
-    () => agentVisibleTranscript.filter(item => item.processMessage || item.technicalDetail),
+  const agentConversationTurns = useMemo(
+    () =>
+      agentTranscript.filter(item => {
+        if (item.traceOnly) {
+          return false;
+        }
+        if (item.chatPreferred) {
+          return true;
+        }
+        return item.role === "operator";
+      }),
+    [agentTranscript],
+  );
+  const agentTraceTurns = useMemo(
+    () =>
+      agentVisibleTranscript.filter(item => {
+        if (item.traceOnly) {
+          return true;
+        }
+        if (item.role === "queue" || item.role === "system") {
+          return true;
+        }
+        return Boolean(item.technicalDetail);
+      }),
     [agentVisibleTranscript],
   );
+  const agentThinkingTurns = useMemo(
+    () => agentTraceTurns.filter(item => item.processMessage || item.technicalDetail),
+    [agentTraceTurns],
+  );
   const agentNexusTurns = useMemo(() => {
-    const direct = agentVisibleTranscript.filter(item => {
+    const direct = agentTraceTurns.filter(item => {
       const text = `${item.label || ""} ${item.title || ""} ${item.detail || ""}`.toLowerCase();
       return (
         pinnedNexusIds.includes(item.id) ||
@@ -3008,8 +3220,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       );
     });
     return direct.slice(-6);
-  }, [agentVisibleTranscript, pinnedNexusIds]);
-  const agentHasTurns = agentVisibleTranscript.length > 0;
+  }, [agentTraceTurns, pinnedNexusIds]);
+  const agentHasTurns = agentConversationTurns.length > 0;
   const agentIdleState = !mission ? "no-mission" : agentHasTurns ? "active" : "no-turns";
   const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Fluxio workspace";
   const agentComposerLabel = !mission ? "Mission prompt" : "Follow-up or note";
@@ -3031,8 +3243,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const agentRuntimeHint = !mission
     ? "Choose the runtime for the next mission launch."
     : agentRuntimeFocus === "all"
-      ? `Showing every visible runtime trace. Active lane: ${runtimeLabel(mission?.runtime_id)}.`
-      : `Filtering the transcript to ${runtimeLabel(agentRuntimeFocus)} turns while keeping operator and bridge context visible.`;
+      ? `Main conversation stays intact. Trace is showing every visible runtime lane. Active lane: ${runtimeLabel(mission?.runtime_id)}.`
+      : `Main conversation stays intact. Trace is filtered to ${runtimeLabel(agentRuntimeFocus)} while the chat view keeps the full exchange visible.`;
   const agentCyclePhase =
     mission?.missionLoop?.currentCyclePhase || mission?.state?.current_cycle_phase || "plan";
   const agentCycleRole = phaseRouteRole(agentCyclePhase);
@@ -6116,36 +6328,92 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
               <section className={`agent-chat-stage ${agentIdleState === "no-turns" ? "agent-chat-stage-empty" : ""}`.trim()}>
                 {agentHasTurns ? (
-                  <section className="agent-transcript-shell">
-                    <div className="agent-transcript">
-                      {agentVisibleTranscript.map(item => (
-                        <TranscriptMessage
+                  <section className="agent-conversation-shell">
+                    <div className="agent-conversation-feed">
+                      {agentConversationTurns.map(item => (
+                        <AgentChatMessage
                           highlighted={highlightedTurnId === item.id}
                           item={item}
                           key={item.id}
-                          onMemory={handleAgentMemoryFromTurn}
-                          onPinNexus={togglePinnedNexus}
-                          onSteer={handleAgentSteerFromTurn}
-                          onValidate={handleAgentValidateTurn}
-                          pinned={pinnedNexusIds.includes(item.id)}
-                          showTrace={showThinkingTrace}
+                          onFocusTrace={turnId => {
+                            setShowThinkingTrace(true);
+                            focusTranscriptTurn(turnId);
+                          }}
                         />
                       ))}
                     </div>
                   </section>
+                ) : (
+                  <section className="agent-conversation-empty">
+                    <p className="eyebrow">{mission ? "Conversation ready" : "Mission launch"}</p>
+                    <h2>
+                      {mission
+                        ? "Talk to the mission like a normal chat."
+                        : "Start with a mission prompt in the center composer."}
+                    </h2>
+                    <p>
+                      {mission
+                        ? "The technical trace stays available below, but the primary surface is the exchange between you and the agent."
+                      : "Choose the route you want, write the objective, and Fluxio will switch into a real conversation once the mission is active."}
+                    </p>
+                  </section>
+                )}
+
+                {agentTraceTurns.length > 0 ? (
+                  <section className="agent-trace-shell">
+                    <div className="agent-trace-head">
+                      <div className="section-title-block">
+                        <p className="eyebrow">Live trace</p>
+                        <h2>Route changes, approvals, and technical output</h2>
+                      </div>
+                      <div className="thread-composer-actions">
+                        <ActionButton onClick={() => setShowThinkingTrace(current => !current)} type="button">
+                          {showThinkingTrace ? "Hide trace" : "Show trace"}
+                        </ActionButton>
+                      </div>
+                    </div>
+                    {showThinkingTrace ? (
+                      <div className="agent-trace-list">
+                        {agentTraceTurns.slice(-8).map(item => (
+                          <TranscriptMessage
+                            highlighted={highlightedTurnId === item.id}
+                            item={item}
+                            key={item.id}
+                            onMemory={handleAgentMemoryFromTurn}
+                            onPinNexus={togglePinnedNexus}
+                            onSteer={handleAgentSteerFromTurn}
+                            onValidate={handleAgentValidateTurn}
+                            pinned={pinnedNexusIds.includes(item.id)}
+                            showTrace={showThinkingTrace}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="fluxio-empty-copy">
+                        Trace is hidden. Fluxio is still recording runtime decisions in the background.
+                      </p>
+                    )}
+                  </section>
                 ) : null}
 
                 <form
-                  className={`thread-composer agent-composer agent-chat-composer ${agentIdleState === "no-turns" ? "agent-idle-composer" : ""}`.trim()}
+                  className={`thread-composer agent-composer agent-chat-composer ${agentIdleState === "no-turns" ? "agent-idle-composer" : "agent-docked-composer"}`.trim()}
                   onSubmit={event => event.preventDefault()}
                 >
-                  <div className="agent-control-grid">
-                    <Field label="Runtime focus">
+                  <div className="agent-composer-toolbar">
+                    <Field label={mission ? "Trace runtime" : "Launch runtime"}>
                       <select
-                        onChange={event => setAgentRuntimeFocus(event.target.value)}
+                        onChange={event =>
+                          mission
+                            ? setAgentRuntimeFocus(event.target.value)
+                            : setMissionForm(current => ({
+                                ...current,
+                                runtime: event.target.value,
+                              }))
+                        }
                         value={agentRuntimeSelectValue}
                       >
-                        <option value="all">All traces</option>
+                        {mission ? <option value="all">All traces</option> : null}
                         {runtimeOptions.map(option => (
                           <option key={`agent-runtime-${option.value}`} value={option.value}>
                             {option.label}
@@ -6200,46 +6468,31 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </select>
                     </Field>
                   </div>
-                  <div className="agent-control-strip">
-                    <p>{agentRuntimeHint}</p>
-                    <div className="thread-chip-row">
-                      <span className="mini-pill muted">{agentRouteStatus}</span>
+                  <p className="agent-composer-hint">{agentRuntimeHint}</p>
+                  <div className="agent-composer-status">
+                    <span className="mini-pill muted">{agentRouteStatus}</span>
+                    {mission ? (
                       <span className="mini-pill muted">
                         {titleizeToken(agentCyclePhase)} phase via {titleizeToken(agentCycleRole)}
                       </span>
-                      <span className="mini-pill muted">
-                        {latestThinkingTurn
-                          ? `${latestThinkingTurn.roleLabel || "Runtime"} thinking`
-                          : mission?.state?.status === "running"
-                            ? "Awaiting the next runtime thought"
-                            : "No live thinking trace right now"}
-                      </span>
-                      <span className="mini-pill muted">
-                        {agentThinkingTurns.length} trace moment{agentThinkingTurns.length === 1 ? "" : "s"}
-                      </span>
-                      <span className="mini-pill muted">
-                        Code execution {codeExecutionEnabled ? `on · ${codeExecutionMemory}` : "off"}
-                      </span>
-                      <span className="mini-pill muted">
-                        {modelAuthReady ? "Model auth ready" : "Model auth missing"}
-                      </span>
-                    </div>
-                    <div className="thread-composer-actions">
-                      <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
-                        Apply route
-                      </ActionButton>
-                      <ActionButton
-                        onClick={() => setCodeExecutionEnabled(current => !current)}
-                        type="button"
-                      >
-                        {codeExecutionEnabled ? "Disable code execution" : "Enable code execution"}
-                      </ActionButton>
-                      <ActionButton onClick={() => setShowThinkingTrace(current => !current)} type="button">
-                        {showThinkingTrace ? "Hide trace" : "Show trace"}
-                      </ActionButton>
-                    </div>
+                    ) : null}
+                    <span className="mini-pill muted">
+                      {latestThinkingTurn
+                        ? `${latestThinkingTurn.roleLabel || "Runtime"} trace live`
+                        : mission?.state?.status === "running"
+                          ? "Awaiting the next runtime trace"
+                          : "No live trace right now"}
+                    </span>
+                    <span className="mini-pill muted">
+                      {agentThinkingTurns.length} trace moment{agentThinkingTurns.length === 1 ? "" : "s"}
+                    </span>
+                    <span className="mini-pill muted">
+                      Code execution {codeExecutionEnabled ? `on · ${codeExecutionMemory}` : "off"}
+                    </span>
+                    <span className="mini-pill muted">
+                      {modelAuthReady ? "Model auth ready" : "Model auth missing"}
+                    </span>
                   </div>
-                  <label htmlFor="thread-note">{agentComposerLabel}</label>
                   <textarea
                     id="thread-note"
                     onChange={event => setOperatorDraft(event.target.value)}
@@ -6247,12 +6500,33 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     value={operatorDraft}
                   />
                   <div className="thread-composer-actions">
-                    <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
-                      Send to agent
+                    <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
+                      Apply model
                     </ActionButton>
-                    <ActionButton onClick={handleOperatorNote} type="button">
-                      Save note
+                    <ActionButton
+                      onClick={() => setCodeExecutionEnabled(current => !current)}
+                      type="button"
+                    >
+                      {codeExecutionEnabled ? "Disable code execution" : "Enable code execution"}
                     </ActionButton>
+                    {mission ? (
+                      <>
+                        <ActionButton onClick={handleOperatorNote} type="button">
+                          Save note
+                        </ActionButton>
+                        <ActionButton onClick={() => void handleAgentFollowUp()} type="button" variant="primary">
+                          Send message
+                        </ActionButton>
+                      </>
+                    ) : (
+                      <ActionButton
+                        onClick={handleAgentIdlePrimaryAction}
+                        type="button"
+                        variant="primary"
+                      >
+                        {workspaces.length > 0 ? "Launch mission" : "Add workspace"}
+                      </ActionButton>
+                    )}
                   </div>
                 </form>
               </section>
