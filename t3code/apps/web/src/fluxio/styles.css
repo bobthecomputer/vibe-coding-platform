@@ -368,6 +368,17 @@ textarea {
   gap: 6px;
 }
 
+.fluxio-sidebar-branch-actions {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.fluxio-sidebar-branch-actions .action-btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
 .fluxio-nav-item {
   width: 100%;
   border: 1px solid transparent;

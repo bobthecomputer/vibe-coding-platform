@@ -89,6 +89,11 @@ SUPPORTED_EXECUTION_TARGET_PREFERENCES = (
     "workspace_root",
     "isolated_worktree",
 )
+SUPPORTED_OPENAI_CODEX_AUTH_MODES = (
+    "none",
+    "chatgpt",
+    "api",
+)
 SUPPORTED_MINIMAX_AUTH_MODES = (
     "none",
     "minimax-portal-oauth",
@@ -909,6 +914,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="false",
         choices=["true", "false"],
         help="Enable deterministic routing autotune when enough local history exists",
+    )
+    workspace_cmd.add_argument(
+        "--openai-codex-auth-mode",
+        default="none",
+        choices=list(SUPPORTED_OPENAI_CODEX_AUTH_MODES),
+        help="OpenAI/Codex auth contract mode for this workspace",
     )
     workspace_cmd.add_argument(
         "--minimax-auth-mode",
@@ -3067,6 +3078,7 @@ def cmd_workspace_save(args: argparse.Namespace) -> int:
         routing_strategy=getattr(args, "routing_strategy", "profile_default"),
         route_overrides=route_overrides,
         auto_optimize_routing=auto_optimize_routing,
+        openai_codex_auth_mode=getattr(args, "openai_codex_auth_mode", "none"),
         minimax_auth_mode=getattr(args, "minimax_auth_mode", "none"),
         commit_message_style=getattr(args, "commit_message_style", "scoped"),
         execution_target_preference=getattr(

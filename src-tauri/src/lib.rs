@@ -853,6 +853,7 @@ struct WorkspaceSavePayload {
     routing_strategy: Option<String>,
     route_overrides: Option<Vec<Value>>,
     auto_optimize_routing: Option<bool>,
+    openai_codex_auth_mode: Option<String>,
     minimax_auth_mode: Option<String>,
     commit_message_style: Option<String>,
     execution_target_preference: Option<String>,
@@ -5119,6 +5120,13 @@ async fn save_workspace_profile_command(
     if let Some(auto_optimize_routing) = payload.auto_optimize_routing {
         args.push("--auto-optimize-routing".to_string());
         args.push(if auto_optimize_routing { "true" } else { "false" }.to_string());
+    }
+    if let Some(openai_codex_auth_mode) = payload
+        .openai_codex_auth_mode
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push("--openai-codex-auth-mode".to_string());
+        args.push(openai_codex_auth_mode);
     }
     if let Some(minimax_auth_mode) = payload
         .minimax_auth_mode

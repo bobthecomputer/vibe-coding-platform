@@ -750,6 +750,9 @@ class Mission:
     execution_policy: ExecutionPolicy = field(
         default_factory=lambda: ExecutionPolicy(profile_name="builder")
     )
+    code_execution: MissionCodeExecutionConfig = field(
+        default_factory=MissionCodeExecutionConfig
+    )
     route_configs: list[ModelRouteConfig] = field(default_factory=list)
     routing_decisions: list[RoutingDecision] = field(default_factory=list)
     effective_route_contract: dict[str, Any] = field(default_factory=dict)
@@ -779,6 +782,7 @@ class WorkspaceProfile:
     routing_strategy: str = "profile_default"
     route_overrides: list[dict[str, Any]] = field(default_factory=list)
     auto_optimize_routing: bool = False
+    openai_codex_auth_mode: str = "none"
     minimax_auth_mode: str = "none"
     commit_message_style: str = "scoped"
     execution_target_preference: str = "profile_default"

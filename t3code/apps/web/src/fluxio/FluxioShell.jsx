@@ -71,6 +71,11 @@ const MINIMAX_AUTH_OPTIONS = [
   { value: "minimax-portal-oauth", label: "MiniMax Portal OAuth" },
   { value: "minimax-api", label: "MiniMax API Key" },
 ];
+const OPENAI_CODEX_AUTH_OPTIONS = [
+  { value: "none", label: "Not Configured" },
+  { value: "chatgpt", label: "ChatGPT Portal" },
+  { value: "api", label: "API Key" },
+];
 
 const COMMIT_STYLE_OPTIONS = [
   { value: "scoped", label: "Scoped" },
@@ -515,6 +520,7 @@ function profileFormFromWorkspace(workspace, fallbackProfile) {
     preferredHarness: workspace?.preferred_harness || "fluxio_hybrid",
     routingStrategy: workspace?.routing_strategy || "profile_default",
     autoOptimizeRouting: Boolean(workspace?.auto_optimize_routing),
+    openaiCodexAuthMode: workspace?.openai_codex_auth_mode || "none",
     minimaxAuthMode: workspace?.minimax_auth_mode || "none",
     commitMessageStyle: workspace?.commit_message_style || "scoped",
     executionTargetPreference: workspace?.execution_target_preference || "profile_default",
@@ -1240,6 +1246,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     workspace?.auto_optimize_routing,
     workspace?.commit_message_style,
     workspace?.execution_target_preference,
+    workspace?.openai_codex_auth_mode,
     workspace?.minimax_auth_mode,
     workspace?.preferred_harness,
     workspace?.routing_strategy,
@@ -1403,6 +1410,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             routingStrategy: workspaceProfileForm.routingStrategy,
             routeOverrides: saveableRouteOverrides(workspaceProfileForm.routeOverrides),
             autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
+            openaiCodexAuthMode: workspaceProfileForm.openaiCodexAuthMode,
             minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
             commitMessageStyle: workspaceProfileForm.commitMessageStyle,
             executionTargetPreference: workspaceProfileForm.executionTargetPreference,
@@ -1448,6 +1456,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               routingStrategy: workspaceProfileForm.routingStrategy,
               routeOverrides: saveableRouteOverrides(workspaceProfileForm.routeOverrides),
               autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
+              openaiCodexAuthMode: workspaceProfileForm.openaiCodexAuthMode,
               minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
               commitMessageStyle: workspaceProfileForm.commitMessageStyle,
               executionTargetPreference: workspaceProfileForm.executionTargetPreference,
@@ -2487,6 +2496,107 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       viewModel.drawers.builder.skillStudio.summary.needsTestCount,
     ],
   );
+  const workspaceGitSnapshot = workspace?.gitSnapshot || {};
+  const branchInspectAction = useMemo(
+    () =>
+      asList(viewModel.drawers.builder.gitActions).find(
+        item => item.actionId === "inspect_repo_state",
+      ) ||
+      asList(viewModel.drawers.builder.gitActions)[0] ||
+      null,
+    [viewModel.drawers.builder.gitActions],
+  );
+  const branchPullAction = useMemo(
+    () =>
+      asList(viewModel.drawers.builder.gitActions).find(
+        item => item.actionId === "pull_branch",
+      ) || null,
+    [viewModel.drawers.builder.gitActions],
+  );
+  const branchPushAction = useMemo(
+    () =>
+      asList(viewModel.drawers.builder.gitActions).find(
+        item => item.actionId === "push_branch",
+      ) || null,
+    [viewModel.drawers.builder.gitActions],
+  );
+  const sidebarAccessLabel = previewMode === "live" ? "Full access" : "Read-only preview";
+  const sidebarLocalPath = workspace?.root_path || snapshot?.workspaceRoot || "";
+  const sidebarLocalLeaf = pathLeaf(sidebarLocalPath) || "workspace";
+  const sidebarBranchName = String(workspaceGitSnapshot?.branch || "").trim() || "No branch";
+  const sidebarBranchTone = !workspaceGitSnapshot?.repoDetected
+    ? "warn"
+    : workspaceGitSnapshot?.dirty ||
+        Number(workspaceGitSnapshot?.behind || 0) > 0
+      ? "warn"
+      : "good";
+  const sidebarBranchContext = !workspaceGitSnapshot?.repoDetected
+    ? "Git repository not detected for selected workspace."
+    : [
+        workspaceGitSnapshot?.trackingBranch
+          ? `tracking ${workspaceGitSnapshot.trackingBranch}`
+          : "no tracking branch",
+        `${workspaceGitSnapshot?.stagedCount || 0} staged`,
+        `${workspaceGitSnapshot?.unstagedCount || 0} unstaged`,
+        `${workspaceGitSnapshot?.untrackedCount || 0} untracked`,
+      ].join(" · ");
+
+  const handleSidebarAccess = useCallback(() => {
+    markAction("quick:access");
+    setUiMode("builder");
+    setActiveDrawer("settings");
+  }, [markAction]);
+
+  const handleSidebarLocal = useCallback(() => {
+    markAction("quick:local");
+    if (workspaces.length === 0) {
+      setShowWorkspaceDialog(true);
+      return;
+    }
+    const fallbackWorkspaceId = workspaces[0]?.workspace_id || "";
+    const targetWorkspaceId = workspace?.workspace_id || fallbackWorkspaceId;
+    if (targetWorkspaceId) {
+      setSelectedWorkspaceId(targetWorkspaceId);
+    }
+    setUiMode("agent");
+    setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : null);
+  }, [
+    agentBlockedState.defaultDrawer,
+    agentBlockedState.isBlocked,
+    markAction,
+    workspace?.workspace_id,
+    workspaces,
+  ]);
+
+  const handleSidebarFolders = useCallback(() => {
+    markAction("quick:folders");
+    setUiMode("builder");
+    setActiveDrawer("builder");
+  }, [markAction]);
+
+  const handleSidebarBranch = useCallback(async () => {
+    markAction("quick:branch");
+    if (branchInspectAction) {
+      await runWorkspaceActionSpec(branchInspectAction);
+      return;
+    }
+    setUiMode("builder");
+    setActiveDrawer("builder");
+  }, [branchInspectAction, markAction, runWorkspaceActionSpec]);
+
+  const handleSidebarBranchPull = useCallback(async () => {
+    if (!branchPullAction) {
+      return;
+    }
+    await runWorkspaceActionSpec(branchPullAction);
+  }, [branchPullAction, runWorkspaceActionSpec]);
+
+  const handleSidebarBranchPush = useCallback(async () => {
+    if (!branchPushAction) {
+      return;
+    }
+    await runWorkspaceActionSpec(branchPushAction);
+  }, [branchPushAction, runWorkspaceActionSpec]);
 
   useEffect(() => {
     currentMissionRef.current = mission;
@@ -2888,6 +2998,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }`;
   const providerSecretPresence = data.providerSecretPresence || {};
   const providerSetupStatus = snapshot?.providerSetupStatus || {};
+  const openAIProviderStatus =
+    (providerSetupStatus && typeof providerSetupStatus === "object"
+      ? providerSetupStatus.openai
+      : null) || {};
   const missionProviderTruth =
     mission?.providerTruth ||
     mission?.missionLoop?.providerTruth ||
@@ -2903,6 +3017,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     .slice(0, 4);
   const openAISecretReady = Boolean(
     providerSecretPresence.openai || providerSecretPresence["openai-codex"],
+  );
+  const openAICodexAuthReady = Boolean(
+    openAIProviderStatus?.authPresent || openAIProviderStatus?.configured || openAISecretReady,
+  );
+  const openAICodexAuthPath = String(
+    openAIProviderStatus?.authPath ||
+      (openAISecretReady ? "API key" : "not configured"),
   );
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
 
@@ -3179,8 +3300,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <div className="context-grid compact-metrics">
               <article className="context-item">
                 <span>OpenAI / Codex auth</span>
-                <strong>{openAISecretReady ? "Stored" : "Missing"}</strong>
-                <p>Saved secrets are injected into Fluxio runtime launches.</p>
+                <strong>{`${openAICodexAuthPath} · ${openAICodexAuthReady ? "Ready" : "Missing"}`}</strong>
+                <p>
+                  {openAICodexAuthPath.toLowerCase().includes("chatgpt")
+                    ? "Portal auth is configured for Codex sign-in."
+                    : "Saved API keys are injected into Fluxio runtime launches."}
+                </p>
               </article>
               <article className="context-item">
                 <span>Active provider route</span>
@@ -4068,6 +4193,23 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             </div>
 
             <div className="field-row">
+              <Field label="OpenAI / Codex auth path">
+                <select
+                  onChange={event =>
+                    setWorkspaceProfileForm(current => ({
+                      ...current,
+                      openaiCodexAuthMode: event.target.value,
+                    }))
+                  }
+                  value={workspaceProfileForm.openaiCodexAuthMode}
+                >
+                  {OPENAI_CODEX_AUTH_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="MiniMax auth path">
                 <select
                   onChange={event =>
@@ -4085,6 +4227,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   ))}
                 </select>
               </Field>
+            </div>
+
+            <div className="field-row">
               <Field label="Commit message style">
                 <select
                   onChange={event =>
@@ -4646,6 +4791,71 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ) : null}
             </section>
 
+            <section className="fluxio-nav-section">
+              <div className="fluxio-nav-heading">
+                <p className="eyebrow">Quick controls</p>
+              </div>
+              <div className="fluxio-nav-list">
+                <NavItem
+                  badge={previewMode === "live" ? "full" : "read-only"}
+                  context={previewMode === "live" ? "Live backend access is enabled." : "Fixture mode keeps actions read-only."}
+                  icon="⛨"
+                  onClick={handleSidebarAccess}
+                  subtitle={sidebarAccessLabel}
+                  title="Access"
+                  tone={previewMode === "live" ? "good" : "warn"}
+                />
+                <NavItem
+                  badge={sidebarLocalLeaf}
+                  context={sidebarLocalPath || "No workspace selected yet."}
+                  icon="⌂"
+                  onClick={handleSidebarLocal}
+                  subtitle={workspace?.name || "Pick workspace"}
+                  title="Local"
+                  tone={workspace ? "good" : "warn"}
+                />
+                <NavItem
+                  badge={`${builderRootItems.length} root${builderRootItems.length === 1 ? "" : "s"}`}
+                  context={
+                    builderPrimaryConversation?.executionPath ||
+                    builderPrimaryConversation?.workspacePath ||
+                    "Folder map appears once Builder has active conversations."
+                  }
+                  icon="📁"
+                  onClick={handleSidebarFolders}
+                  subtitle={builderPrimaryConversation?.folderLabel || "Open folder map"}
+                  title="Folders"
+                  tone={builderRootItems.length > 0 ? "neutral" : "warn"}
+                />
+                <NavItem
+                  badge={sidebarBranchName}
+                  context={sidebarBranchContext}
+                  icon="⑂"
+                  onClick={() => void handleSidebarBranch()}
+                  subtitle={workspaceGitSnapshot?.repoDetected ? "Git branch controls" : "No git workspace"}
+                  title="Branch"
+                  tone={sidebarBranchTone}
+                />
+              </div>
+              {workspaceGitSnapshot?.repoDetected ? (
+                <div className="fluxio-sidebar-branch-actions">
+                  <ActionButton onClick={() => void handleSidebarBranch()} type="button">
+                    Inspect branch
+                  </ActionButton>
+                  {branchPullAction ? (
+                    <ActionButton onClick={() => void handleSidebarBranchPull()} type="button">
+                      Pull
+                    </ActionButton>
+                  ) : null}
+                  {branchPushAction ? (
+                    <ActionButton onClick={() => void handleSidebarBranchPush()} type="button">
+                      Push
+                    </ActionButton>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+
             {uiMode === "builder" ? (
               <>
                 <section className="fluxio-nav-section">
@@ -5166,7 +5376,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         Code execution {codeExecutionEnabled ? "on" : "off"}
                       </span>
                       <span className="mini-pill muted">
-                        {openAISecretReady ? "OpenAI auth ready" : "OpenAI auth missing"}
+                        {openAICodexAuthReady ? "OpenAI auth ready" : "OpenAI auth missing"}
                       </span>
                     </div>
                     <div className="thread-composer-actions">
@@ -5869,7 +6079,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         Code execution {codeExecutionEnabled ? `on · ${codeExecutionMemory}` : "off"}
                       </span>
                       <span className="mini-pill muted">
-                        {openAISecretReady ? "OpenAI auth ready" : "OpenAI auth missing"}
+                        {openAICodexAuthReady ? "OpenAI auth ready" : "OpenAI auth missing"}
                       </span>
                     </div>
                     <div className="thread-composer-actions">

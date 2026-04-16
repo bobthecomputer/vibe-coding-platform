@@ -63,6 +63,7 @@ MISSION_TITLE_PREFIXES = [
     r"^(let's|lets)\s+",
 ]
 ROUTE_OVERRIDE_ROLES = {"planner", "executor", "verifier"}
+OPENAI_CODEX_AUTH_MODES = {"none", "chatgpt", "api"}
 MINIMAX_AUTH_MODES = {"none", "minimax-portal-oauth", "minimax-api"}
 MINIMAX_SETUP_ACTION_IDS = {
     "minimax-global-oauth",
@@ -129,6 +130,23 @@ def normalize_minimax_auth_mode(value: object) -> str:
     return normalized if normalized in MINIMAX_AUTH_MODES else "none"
 
 
+def normalize_openai_codex_auth_mode(value: object) -> str:
+    normalized = str(value or "none").strip().lower()
+    if normalized in {"chatgpt", "chatgpt-portal", "portal", "oauth", "chatgpt-oauth"}:
+        return "chatgpt"
+    if normalized in {"api", "api-key", "api_key"}:
+        return "api"
+    return normalized if normalized in OPENAI_CODEX_AUTH_MODES else "none"
+
+
+def openai_codex_auth_label(mode: str) -> str:
+    if mode == "chatgpt":
+        return "ChatGPT portal"
+    if mode == "api":
+        return "API key"
+    return "not configured"
+
+
 def minimax_auth_label(mode: str) -> str:
     if mode == "minimax-portal-oauth":
         return "OAuth portal"
@@ -174,6 +192,38 @@ def _minimax_setup_status_for_workspace(
         "configured": mode != "none",
         "lastActionResult": latest,
         "lastCheckedAt": latest.get("executedAt", "") or workspace_payload.get("updated_at", ""),
+    }
+
+
+def _openai_codex_setup_status_for_workspace(
+    workspace: WorkspaceProfile | dict,
+    *,
+    auth_presence: dict[str, bool],
+) -> dict:
+    workspace_payload = (
+        asdict(workspace) if hasattr(workspace, "__dataclass_fields__") else dict(workspace)
+    )
+    mode = normalize_openai_codex_auth_mode(
+        workspace_payload.get("openai_codex_auth_mode")
+    )
+    api_key_present = bool(
+        auth_presence.get("openai", False) or auth_presence.get("openai-codex", False)
+    )
+    effective_mode = mode
+    configured = False
+    if mode == "chatgpt":
+        configured = True
+    elif mode == "api":
+        configured = api_key_present
+    elif api_key_present:
+        effective_mode = "api"
+        configured = True
+    return {
+        "authMode": effective_mode,
+        "authPath": openai_codex_auth_label(effective_mode),
+        "configured": configured,
+        "authPresent": configured,
+        "lastCheckedAt": workspace_payload.get("updated_at", "") or utc_now_iso(),
     }
 
 
@@ -320,6 +370,7 @@ class ControlRoomStore:
         routing_strategy: str = "profile_default",
         route_overrides: list[dict] | None = None,
         auto_optimize_routing: bool | None = None,
+        openai_codex_auth_mode: str | None = None,
         minimax_auth_mode: str | None = None,
         commit_message_style: str = "scoped",
         execution_target_preference: str = "profile_default",
@@ -329,6 +380,9 @@ class ControlRoomStore:
         workspace_root = Path(root_path).resolve()
         now = utc_now_iso()
         normalized_route_overrides = normalize_route_overrides(route_overrides or [])
+        normalized_openai_codex_auth_mode = normalize_openai_codex_auth_mode(
+            openai_codex_auth_mode
+        )
         normalized_minimax_auth_mode = normalize_minimax_auth_mode(minimax_auth_mode)
         for item in workspaces:
             if item.workspace_id == workspace_id or (
@@ -347,6 +401,8 @@ class ControlRoomStore:
                 )
                 if auto_optimize_routing is not None:
                     item.auto_optimize_routing = bool(auto_optimize_routing)
+                if openai_codex_auth_mode is not None:
+                    item.openai_codex_auth_mode = normalized_openai_codex_auth_mode
                 if minimax_auth_mode is not None:
                     item.minimax_auth_mode = normalized_minimax_auth_mode
                 item.commit_message_style = (
@@ -371,6 +427,7 @@ class ControlRoomStore:
             routing_strategy=routing_strategy or "profile_default",
             route_overrides=normalized_route_overrides,
             auto_optimize_routing=bool(auto_optimize_routing),
+            openai_codex_auth_mode=normalized_openai_codex_auth_mode,
             minimax_auth_mode=normalized_minimax_auth_mode,
             commit_message_style=commit_message_style or "scoped",
             execution_target_preference=execution_target_preference or "profile_default",
@@ -614,6 +671,7 @@ class ControlRoomStore:
         harness_lab_snapshot = build_harness_lab_snapshot(self.root)
         activity = self.recent_events()
         provider_auth_presence = _provider_auth_presence_from_env()
+        workspace_lookup = {item.workspace_id: item for item in workspaces}
 
         workspace_cards = []
         recommended_skill_pack_objects = []
@@ -651,6 +709,10 @@ class ControlRoomStore:
             workspace_cards.append(
                 {
                     **asdict(workspace),
+                    "openaiCodexSetupStatus": _openai_codex_setup_status_for_workspace(
+                        workspace,
+                        auth_presence=provider_auth_presence,
+                    ),
                     "minimaxSetupStatus": _minimax_setup_status_for_workspace(
                         workspace,
                         setup_history,
@@ -692,6 +754,7 @@ class ControlRoomStore:
             mission.state.provider_runtime_truth = _provider_truth_for_mission(
                 mission,
                 auth_presence=provider_auth_presence,
+                workspace=workspace_lookup.get(mission.workspace_id),
             )
             sync_mission_state_snapshot(mission)
         self._rebalance_workspace_queue_in_place(missions)
@@ -761,6 +824,11 @@ class ControlRoomStore:
         )
         provider_status = {}
         for provider_id in ("openai", "anthropic", "openrouter"):
+            aliases = (
+                {"openai", "openai-codex"}
+                if provider_id == "openai"
+                else {provider_id}
+            )
             last_success = (
                 active_provider_truth.get("lastSuccessfulCall", {})
                 if isinstance(active_provider_truth.get("lastSuccessfulCall"), dict)
@@ -771,21 +839,42 @@ class ControlRoomStore:
                 if isinstance(active_provider_truth.get("lastFailure"), dict)
                 else {}
             )
+            openai_status = (
+                dict(active_workspace_payload.get("openaiCodexSetupStatus", {}))
+                if provider_id == "openai"
+                and isinstance(active_workspace_payload.get("openaiCodexSetupStatus"), dict)
+                else {}
+            )
+            auth_present = (
+                bool(openai_status.get("authPresent", False))
+                if provider_id == "openai"
+                else bool(provider_auth_presence.get(provider_id, False))
+            )
             provider_status[provider_id] = {
                 "providerId": provider_id,
-                "authPresent": bool(provider_auth_presence.get(provider_id, False)),
-                "configured": bool(provider_auth_presence.get(provider_id, False)),
+                "authPresent": auth_present,
+                "configured": auth_present,
+                "authMode": (
+                    str(openai_status.get("authMode", "")).strip().lower()
+                    if provider_id == "openai"
+                    else ""
+                ),
+                "authPath": (
+                    str(openai_status.get("authPath", "")).strip()
+                    if provider_id == "openai"
+                    else ""
+                ),
                 "activeRoute": active_route
-                if active_route.get("provider") == provider_id
+                if str(active_route.get("provider", "")).strip().lower() in aliases
                 else {},
                 "lastSuccessfulModelCall": (
                     last_success
-                    if last_success.get("provider") == provider_id
+                    if str(last_success.get("provider", "")).strip().lower() in aliases
                     else {}
                 ),
                 "lastProviderFailure": (
                     last_failure
-                    if last_failure.get("provider") == provider_id
+                    if str(last_failure.get("provider", "")).strip().lower() in aliases
                     else {}
                 ),
                 "lastCheckedAt": utc_now_iso(),
@@ -869,6 +958,7 @@ class ControlRoomStore:
             routing_strategy="profile_default",
             route_overrides=[],
             auto_optimize_routing=False,
+            openai_codex_auth_mode="none",
             minimax_auth_mode="none",
             commit_message_style="scoped",
             execution_target_preference="profile_default",
@@ -1256,13 +1346,35 @@ def _provider_truth_for_mission(
     mission: Mission,
     *,
     auth_presence: dict[str, bool],
+    workspace: WorkspaceProfile | None = None,
 ) -> dict:
     phase = str(mission.state.current_cycle_phase or "execute").strip().lower()
     route_rows = _route_rows_for_mission(mission)
     active_route = _route_row_for_phase(mission, phase, route_rows=route_rows)
     active_provider = str(active_route.get("provider", "")).strip().lower()
     active_model = str(active_route.get("model", "")).strip()
-    auth_present = bool(auth_presence.get(active_provider, False)) if active_provider else False
+    openai_auth_mode = normalize_openai_codex_auth_mode(
+        getattr(workspace, "openai_codex_auth_mode", "none")
+    )
+    if active_provider in {"openai", "openai-codex"}:
+        api_key_present = bool(
+            auth_presence.get("openai", False) or auth_presence.get("openai-codex", False)
+        )
+        auth_present = (
+            openai_auth_mode == "chatgpt"
+            or (openai_auth_mode == "api" and api_key_present)
+            or api_key_present
+        )
+        auth_mode = (
+            openai_auth_mode
+            if openai_auth_mode != "none"
+            else ("api" if api_key_present else "none")
+        )
+        auth_path = openai_codex_auth_label(auth_mode)
+    else:
+        auth_present = bool(auth_presence.get(active_provider, False)) if active_provider else False
+        auth_mode = ""
+        auth_path = ""
     last_success, last_failure = _provider_truth_from_action_history(
         mission,
         route_rows=route_rows,
@@ -1305,6 +1417,8 @@ def _provider_truth_for_mission(
         },
         "authPresent": auth_present,
         "authKnown": bool(active_provider),
+        "authMode": auth_mode,
+        "authPath": auth_path,
         "lastSuccessfulCall": last_success,
         "lastFailure": last_failure,
         "updatedAt": utc_now_iso(),
