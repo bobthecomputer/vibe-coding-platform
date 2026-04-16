@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import shutil
 import subprocess
 import re
+import shlex
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
@@ -11,7 +14,24 @@ from ..runtime_updates import (
     latest_openclaw_release,
     normalize_openclaw_version,
 )
-from .base import AgentRuntimeAdapter
+from .base import AgentRuntimeAdapter, mission_executor_route, shell_join
+
+OPENCLAW_PROVIDER_MAP = {
+    "openai": "openai-codex",
+    "openai-codex": "openai-codex",
+    "openrouter": "openrouter",
+    "anthropic": "anthropic",
+    "gemini": "gemini",
+    "minimax": "minimax",
+    "minimax-portal": "minimax-portal",
+    "minimax-cn": "minimax",
+    "huggingface": "huggingface",
+    "zai": "zai",
+    "kimi-coding": "kimi-coding",
+    "kimi-coding-cn": "kimi-coding-cn",
+    "xiaomi": "xiaomi",
+    "arcee": "arcee",
+}
 
 
 class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
@@ -118,13 +138,18 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
     def start_mission(
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
+        route_contract = self._route_contract(mission)
         return {
             "launch_command": self._mission_launch_command(
                 mission.mission_id,
                 mission.objective,
+                workspace.root_path,
+                route_contract=route_contract,
             ),
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
+            "route_contract": route_contract,
+            "route_summary": self._route_summary(route_contract),
         }
 
     def stream_events(self, mission: Mission) -> list[dict[str, object]]:
@@ -146,13 +171,18 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
     def resume_mission(
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
+        route_contract = self._route_contract(mission)
         return {
             "launch_command": self._mission_launch_command(
                 mission.mission_id,
                 f"Resume mission {mission.mission_id}: {mission.objective}",
+                workspace.root_path,
+                route_contract=route_contract,
             ),
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
+            "route_contract": route_contract,
+            "route_summary": self._route_summary(route_contract),
         }
 
     def stop_mission(self, mission: Mission) -> dict[str, object]:
@@ -161,10 +191,101 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             "runtime_id": self.runtime_id,
         }
 
-    def _mission_launch_command(self, mission_id: str, objective: str) -> str:
+    def _mission_launch_command(
+        self,
+        mission_id: str,
+        objective: str,
+        workspace_root: str,
+        *,
+        route_contract: dict[str, str] | None = None,
+    ) -> str:
         session_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"fluxio_{mission_id}") or "fluxio"
-        escaped_objective = objective.replace('"', r"\"")
-        return (
-            f'openclaw agent --session-id {session_id} '
-            f'--message "{escaped_objective}" --thinking high --json'
-        )
+        route_contract = route_contract or {}
+        thinking = self._thinking_level(route_contract.get("effort", ""))
+        model_id = self._canonical_model_id(route_contract)
+        run_args = [
+            "openclaw",
+            "agent",
+            "--session-id",
+            session_id,
+            "--message",
+            objective,
+            "--thinking",
+            thinking,
+            "--json",
+        ]
+        if not model_id:
+            return shell_join(run_args)
+
+        agent_id = self._agent_id(mission_id, model_id)
+        run_args[2:2] = ["--agent", agent_id]
+        add_args = [
+            "openclaw",
+            "agents",
+            "add",
+            agent_id,
+            "--workspace",
+            workspace_root,
+            "--model",
+            model_id,
+            "--non-interactive",
+            "--json",
+        ]
+        set_args = [
+            "openclaw",
+            "models",
+            "--agent",
+            agent_id,
+            "set",
+            model_id,
+        ]
+        add_cmd = shell_join(add_args)
+        set_cmd = shell_join(set_args)
+        run_cmd = shell_join(run_args)
+        if os.name == "nt":
+            return f"({add_cmd} >nul 2>nul || {set_cmd} >nul 2>nul) && {run_cmd}"
+        return f"({add_cmd} >/dev/null 2>&1 || {set_cmd} >/dev/null 2>&1) && {run_cmd}"
+
+    def _route_contract(self, mission: Mission) -> dict[str, str]:
+        route = mission_executor_route(mission)
+        provider = self._normalize_provider(route.get("provider", ""))
+        model = str(route.get("model", "")).strip()
+        return {
+            "provider": provider,
+            "model": model,
+            "canonical_model_id": (
+                f"{provider}/{model}" if provider and model and "/" not in model else model
+            ),
+            "effort": str(route.get("effort", "")).strip().lower(),
+        }
+
+    def _normalize_provider(self, provider: str) -> str:
+        return OPENCLAW_PROVIDER_MAP.get(str(provider or "").strip().lower(), "")
+
+    def _canonical_model_id(self, route_contract: dict[str, str]) -> str:
+        model = str(route_contract.get("model", "")).strip()
+        if "/" in model:
+            return model
+        provider = str(route_contract.get("provider", "")).strip()
+        return f"{provider}/{model}" if provider and model else model
+
+    def _thinking_level(self, effort: str) -> str:
+        normalized = str(effort or "").strip().lower()
+        if normalized in {"off", "minimal", "low", "medium", "high", "xhigh"}:
+            return normalized
+        return "high"
+
+    def _agent_id(self, mission_id: str, model_id: str) -> str:
+        digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]
+        base = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"fluxio_{mission_id}_{digest}")
+        return base[:64] or "fluxio_agent"
+
+    def _route_summary(self, route_contract: dict[str, str]) -> str:
+        model_id = self._canonical_model_id(route_contract)
+        effort = str(route_contract.get("effort", "")).strip().lower()
+        if not model_id:
+            return "OpenClaw launch route is using the runtime default model configuration."
+        summary = f"OpenClaw launch route: {model_id}"
+        if effort:
+            summary += f" ({self._thinking_level(effort)} thinking)"
+        return summary

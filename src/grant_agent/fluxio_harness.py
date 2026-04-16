@@ -931,6 +931,7 @@ class FluxioHarness:
                     runtime_id=runtime_id,
                     execution_scope=execution_scope,
                     execution_policy=execution_policy,
+                    route_configs=route_configs,
                 )
                 self.session_store.append_timeline(
                     session_path,

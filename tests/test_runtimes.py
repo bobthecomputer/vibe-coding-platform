@@ -117,20 +117,49 @@ class RuntimeAdapterTests(unittest.TestCase):
 
     def test_openclaw_launch_uses_session_id_and_json_output(self) -> None:
         adapter = OpenClawRuntimeAdapter()
-        mission = mock.Mock(mission_id="mission_abcd1234", objective='Fix "quote" handling')
+        mission = mock.Mock(
+            mission_id="mission_abcd1234",
+            objective='Fix "quote" handling',
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "effort": "medium",
+                }
+            ],
+        )
         workspace = mock.Mock(root_path=r"C:\repo")
 
         launch = adapter.start_mission(mission, workspace)
 
         command = str(launch["launch_command"])
+        self.assertIn("openclaw agents add", command)
+        self.assertIn("--agent fluxio_mission_abcd1234_", command)
+        self.assertIn("--model openai-codex/gpt-5.4-mini", command)
         self.assertIn("--session-id fluxio_mission_abcd1234", command)
-        self.assertIn("--thinking high", command)
+        self.assertIn("--thinking medium", command)
         self.assertIn("--json", command)
         self.assertIn('Fix \\"quote\\" handling', command)
+        self.assertEqual(
+            launch["route_contract"]["canonical_model_id"],
+            "openai-codex/gpt-5.4-mini",
+        )
 
     def test_hermes_launch_uses_wsl_bash_lc_when_hermes_only_in_wsl(self) -> None:
         adapter = HermesRuntimeAdapter()
-        mission = mock.Mock(mission_id="mission_abcd1234", objective="Run from WSL")
+        mission = mock.Mock(
+            mission_id="mission_abcd1234",
+            objective="Run from WSL",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "effort": "high",
+                }
+            ],
+        )
         workspace = mock.Mock(root_path=r"C:\repo")
 
         with mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value=None):
@@ -139,7 +168,10 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         command = str(launch["launch_command"])
         self.assertTrue(command.startswith("wsl bash -lc "))
-        self.assertIn('hermes chat -q \\"Run from WSL\\" -Q', command)
+        self.assertIn("hermes chat", command)
+        self.assertIn("--provider openai-codex", command)
+        self.assertIn("--model gpt-5.4", command)
+        self.assertEqual(launch["route_contract"]["provider"], "openai-codex")
 
     @mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes")
     def test_hermes_update_prefers_native_command_when_available(

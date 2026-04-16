@@ -88,7 +88,9 @@ class DelegatedRuntimeSupervisor:
             runtime_id=runtime_id,
             launch_command=str(launch.get("launch_command", "")),
             status="queued",
-            detail="Delegated runtime worker queued.",
+            detail=str(
+                launch.get("route_summary", "Delegated runtime worker queued.")
+            ),
             session_path=str(session_path),
             workspace_root=workspace_root,
             execution_root=execution_root,
@@ -105,6 +107,20 @@ class DelegatedRuntimeSupervisor:
             message="Delegated runtime worker queued.",
             status="queued",
         )
+        route_summary = str(launch.get("route_summary", "")).strip()
+        route_contract = launch.get("route_contract", {})
+        if route_summary:
+            self._append_structured_event(
+                session,
+                kind="runtime.route_contract",
+                message=route_summary,
+                status="queued",
+                data=(
+                    dict(route_contract)
+                    if isinstance(route_contract, dict)
+                    else {}
+                ),
+            )
 
         process = subprocess.Popen(  # noqa: S603
             [

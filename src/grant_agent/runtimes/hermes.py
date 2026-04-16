@@ -1,14 +1,34 @@
 from __future__ import annotations
 
 import os
-import shutil
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
 from ..runtime_updates import compare_version_tokens, latest_hermes_release, normalize_hermes_version
-from .base import AgentRuntimeAdapter
+from .base import AgentRuntimeAdapter, mission_executor_route, shell_join
+
+HERMES_PROVIDER_MAP = {
+    "openai": "openai-codex",
+    "openai-codex": "openai-codex",
+    "openrouter": "openrouter",
+    "nous": "nous",
+    "copilot-acp": "copilot-acp",
+    "copilot": "copilot",
+    "anthropic": "anthropic",
+    "gemini": "gemini",
+    "huggingface": "huggingface",
+    "zai": "zai",
+    "kimi-coding": "kimi-coding",
+    "kimi-coding-cn": "kimi-coding-cn",
+    "minimax": "minimax",
+    "minimax-cn": "minimax-cn",
+    "kilocode": "kilocode",
+    "xiaomi": "xiaomi",
+    "arcee": "arcee",
+}
 
 
 class HermesRuntimeAdapter(AgentRuntimeAdapter):
@@ -149,11 +169,17 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
     def start_mission(
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
-        launch_command = self._mission_launch_command(mission.objective)
+        route_contract = self._route_contract(mission)
+        launch_command = self._mission_launch_command(
+            mission.objective,
+            route_contract=route_contract,
+        )
         return {
             "launch_command": launch_command,
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
+            "route_contract": route_contract,
+            "route_summary": self._route_summary(route_contract),
         }
 
     def stream_events(self, mission: Mission) -> list[dict[str, object]]:
@@ -176,10 +202,16 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
         objective = f"Resume mission {mission.mission_id}: {mission.objective}"
+        route_contract = self._route_contract(mission)
         return {
-            "launch_command": self._mission_launch_command(objective),
+            "launch_command": self._mission_launch_command(
+                objective,
+                route_contract=route_contract,
+            ),
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
+            "route_contract": route_contract,
+            "route_summary": self._route_summary(route_contract),
         }
 
     def stop_mission(self, mission: Mission) -> dict[str, object]:
@@ -188,19 +220,48 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "runtime_id": self.runtime_id,
         }
 
-    def _mission_launch_command(self, objective: str) -> str:
-        escaped_objective = objective.replace('"', r"\"")
-        hermes_chat_cmd = f'hermes chat -q "{escaped_objective}" -Q'
+    def _mission_launch_command(
+        self,
+        objective: str,
+        *,
+        route_contract: dict[str, str] | None = None,
+    ) -> str:
+        route_contract = route_contract or {}
+        provider = self._normalize_provider(route_contract.get("provider", ""))
+        model = str(route_contract.get("model", "")).strip()
+        native_args = ["hermes", "chat", "-q", objective, "-Q"]
+        if model:
+            native_args.extend(["--model", model])
+        if provider:
+            native_args.extend(["--provider", provider])
+        hermes_chat_cmd = shell_join(native_args)
         if shutil.which("hermes"):
             return hermes_chat_cmd
         if self._wsl_hermes_available():
-            escaped_for_cmd = (
-                objective.replace("\\", "\\\\")
-                .replace('"', r"\"")
-                .replace("%", "%%")
-            )
-            return f'wsl bash -lc "hermes chat -q \\"{escaped_for_cmd}\\" -Q"'
+            return f"wsl bash -lc {shlex.quote(hermes_chat_cmd)}"
         return hermes_chat_cmd
+
+    def _route_contract(self, mission: Mission) -> dict[str, str]:
+        route = mission_executor_route(mission)
+        return {
+            "provider": self._normalize_provider(route.get("provider", "")),
+            "model": str(route.get("model", "")).strip(),
+            "effort": str(route.get("effort", "")).strip().lower(),
+        }
+
+    def _normalize_provider(self, provider: str) -> str:
+        return HERMES_PROVIDER_MAP.get(str(provider or "").strip().lower(), "")
+
+    def _route_summary(self, route_contract: dict[str, str]) -> str:
+        model = str(route_contract.get("model", "")).strip()
+        provider = str(route_contract.get("provider", "")).strip()
+        effort = str(route_contract.get("effort", "")).strip()
+        if not model and not provider:
+            return "Hermes launch route is using the runtime default model configuration."
+        summary = f"Hermes launch route: {provider or 'auto'}/{model or 'default'}"
+        if effort:
+            summary += f" ({effort})"
+        return summary
 
     def _wsl_hermes_available(self) -> bool:
         if os.name != "nt":

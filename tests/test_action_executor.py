@@ -124,6 +124,7 @@ class ActionExecutorTests(unittest.TestCase):
                 return type("Status", (), {"detected": True, "doctor_summary": "ready"})()
 
             def start_mission(self, mission, workspace):
+                assert mission.route_configs[0].model == "gpt-5.4"
                 return {
                     "launch_command": f'"{sys.executable}" -c "print(\'delegate lane ready\')"',
                     "workspace": workspace.root_path,
@@ -152,6 +153,14 @@ class ActionExecutorTests(unittest.TestCase):
                 runtime_id="hermes",
                 execution_scope=scope,
                 execution_policy=policy,
+                route_configs=[
+                    {
+                        "role": "executor",
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "effort": "high",
+                    }
+                ],
             )
 
             record = execute_action(
@@ -166,6 +175,10 @@ class ActionExecutorTests(unittest.TestCase):
             self.assertIn("delegatedSession", record.result.payload)
             self.assertEqual(record.result.payload["delegatedSession"]["execution_target"], "workspace")
             self.assertEqual(record.result.payload["delegatedSnapshot"]["execution_target"], "workspace")
+            self.assertEqual(
+                proposal.delegation_metadata["route_configs"][0]["model"],
+                "gpt-5.4",
+            )
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     @mock.patch("grant_agent.action_executor.runtime_adapter_map")
@@ -181,6 +194,7 @@ class ActionExecutorTests(unittest.TestCase):
                 return type("Status", (), {"detected": True, "doctor_summary": "ready"})()
 
             def start_mission(self, mission, workspace):
+                assert mission.route_configs[0].model == "gpt-5.4-mini"
                 return {
                     "launch_command": f'"{sys.executable}" -c "print(\'delegate lane ready\')"',
                     "workspace": workspace.root_path,
@@ -211,6 +225,14 @@ class ActionExecutorTests(unittest.TestCase):
                 runtime_id="hermes",
                 execution_scope=scope,
                 execution_policy=policy,
+                route_configs=[
+                    {
+                        "role": "executor",
+                        "provider": "openai",
+                        "model": "gpt-5.4-mini",
+                        "effort": "medium",
+                    }
+                ],
             )
 
             record = execute_action(

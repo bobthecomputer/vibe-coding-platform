@@ -18,6 +18,7 @@ from .models import (
     DelegatedRuntimeSession,
     ExecutionPolicy,
     ExecutionScope,
+    ModelRouteConfig,
     Mission,
     PlannedStep,
     WorkspaceProfile,
@@ -93,6 +94,7 @@ class ExecutionAdapter(ABC):
         runtime_id: str,
         execution_scope: ExecutionScope,
         execution_policy: ExecutionPolicy,
+        route_configs: list[dict] | list[ModelRouteConfig] | None = None,
     ) -> ActionProposal:
         raise NotImplementedError
 
@@ -234,6 +236,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
         runtime_id: str,
         execution_scope: ExecutionScope,
         execution_policy: ExecutionPolicy,
+        route_configs: list[dict] | list[ModelRouteConfig] | None = None,
     ) -> ActionProposal:
         lowered = f"{step.title} {step.description} {objective}".lower()
         action_id = f"action_{uuid.uuid4().hex[:10]}"
@@ -267,7 +270,14 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 execution_scope=execution_scope,
                 execution_policy=execution_policy,
                 mutability_class="delegate",
-                delegation_metadata={"runtime_id": runtime_id, "objective": objective},
+                delegation_metadata={
+                    "runtime_id": runtime_id,
+                    "objective": objective,
+                    "route_configs": [
+                        asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
+                        for item in (route_configs or [])
+                    ],
+                },
             )
 
         if _matches(lowered, DIFF_HINTS):
@@ -505,6 +515,13 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 objective=str(proposal.delegation_metadata.get("objective", proposal.title)),
                 success_checks=[],
                 execution_scope=execution_scope,
+                route_configs=[
+                    item
+                    if isinstance(item, ModelRouteConfig)
+                    else ModelRouteConfig(**item)
+                    for item in proposal.delegation_metadata.get("route_configs", [])
+                    if isinstance(item, (dict, ModelRouteConfig)) or hasattr(item, "__dataclass_fields__")
+                ],
             )
             delegated_workspace = WorkspaceProfile(
                 workspace_id="delegated",
@@ -656,6 +673,7 @@ def build_action_proposal(
     runtime_id: str = "openclaw",
     execution_scope: ExecutionScope | None = None,
     execution_policy: ExecutionPolicy | None = None,
+    route_configs: list[dict] | list[ModelRouteConfig] | None = None,
 ) -> ActionProposal:
     execution_scope = _with_execution_truth(
         execution_scope
@@ -674,6 +692,7 @@ def build_action_proposal(
         runtime_id=runtime_id,
         execution_scope=execution_scope,
         execution_policy=execution_policy,
+        route_configs=route_configs,
     )
 
 

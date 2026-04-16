@@ -333,6 +333,12 @@ class ReleaseAcceptanceTests(unittest.TestCase):
                     "follow_up": f"{self.runtime_id} setup",
                 }
 
+            def update(self, _workspace_root: pathlib.Path) -> dict[str, str]:
+                return {
+                    "command": f"update-{self.runtime_id}",
+                    "follow_up": f"{self.runtime_id} update",
+                }
+
             def doctor(self, workspace_root: pathlib.Path) -> RuntimeInstallStatus:
                 detected = self.runtime_id == "openclaw"
                 if self.runtime_id in {"openclaw", "hermes"}:
@@ -709,6 +715,24 @@ class ReleaseAcceptanceTests(unittest.TestCase):
                     "installed": True,
                     "default_version": 2,
                     "details": "WSL2 is installed.",
+                },
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                "grant_agent.onboarding.latest_openclaw_release",
+                return_value={
+                    "version": "1.0.0",
+                    "sourceUrl": "https://example.test/openclaw",
+                },
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                "grant_agent.onboarding.latest_hermes_release",
+                return_value={
+                    "version": "1.0.0",
+                    "sourceUrl": "https://example.test/hermes",
                 },
             )
         )
