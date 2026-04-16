@@ -686,6 +686,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [showThinkingTrace, setShowThinkingTrace] = useState(true);
   const [pinnedNexusIds, setPinnedNexusIds] = useState([]);
   const [highlightedTurnId, setHighlightedTurnId] = useState("");
+  const [selectedReviewTargetId, setSelectedReviewTargetId] = useState("");
   const [data, setData] = useState({
     snapshot: null,
     onboarding: null,
@@ -1489,6 +1490,110 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [markAction, openMissionDialog, pushToast, runWorkspaceActionSpec, viewModel],
   );
 
+  const handleBuilderFeatureAction = useCallback(
+    async (actionId, payload = {}) => {
+      markAction(`builder:feature:${actionId || "open"}`);
+      switch (actionId) {
+        case "open_workspace":
+          setShowWorkspaceDialog(true);
+          return;
+        case "open_mission":
+          if (workspaces.length === 0) {
+            setShowWorkspaceDialog(true);
+            return;
+          }
+          openMissionDialog();
+          return;
+        case "open_runtime":
+          setUiMode("builder");
+          setActiveDrawer("runtime");
+          return;
+        case "open_profiles":
+          setUiMode("builder");
+          setActiveDrawer("profiles");
+          return;
+        case "open_skills":
+          setSkillStudioFilter(payload.filter || "needs_attention");
+          setUiMode("builder");
+          setActiveDrawer("skills");
+          return;
+        case "open_escalation":
+          setShowEscalationDialog(true);
+          return;
+        case "open_queue":
+          setActiveDrawer("queue");
+          return;
+        case "open_proof":
+          setActiveDrawer("proof");
+          return;
+        case "open_context":
+          setActiveDrawer("context");
+          return;
+        case "open_builder":
+          setUiMode("builder");
+          setActiveDrawer("builder");
+          return;
+        case "run_validation": {
+          const validateAction = viewModel.drawers.builder.validationActions[0];
+          if (validateAction) {
+            await runWorkspaceActionSpec(validateAction);
+            return;
+          }
+          pushToast("No validation action is currently available.", "warn");
+          setActiveDrawer("proof");
+          return;
+        }
+        case "open_workflow": {
+          const suggested = viewModel.drawers.builder.workflowStudio.recommended;
+          if (suggested?.label) {
+            pushToast(`Workflow focus: ${suggested.label}`, "info");
+          }
+          openMissionDialog();
+          return;
+        }
+        case "focus_thread": {
+          const nextMissionId =
+            payload?.missionId || builderPrimaryConversation?.missionId || mission?.mission_id;
+          if (nextMissionId) {
+            setSelectedMissionId(nextMissionId);
+          }
+          return;
+        }
+        case "focus_conversations":
+          if (builderPrimaryConversation?.missionId) {
+            setSelectedMissionId(builderPrimaryConversation.missionId);
+          }
+          return;
+        default:
+          setActiveDrawer("builder");
+      }
+    },
+    [
+      markAction,
+      mission?.mission_id,
+      openMissionDialog,
+      pushToast,
+      runWorkspaceActionSpec,
+      viewModel.drawers.builder.validationActions,
+      viewModel.drawers.builder.workflowStudio.recommended,
+      workspaces.length,
+    ],
+  );
+
+  const handleBuilderReviewTargetSeed = useCallback(
+    target => {
+      if (!target) {
+        return;
+      }
+      setSelectedReviewTargetId(target.id || "");
+      setOperatorDraft(target.commentSeed || `${target.title || "Review target"}:\n`);
+      window.requestAnimationFrame(() => {
+        document.getElementById("builder-thread-note")?.focus();
+      });
+    },
+    [],
+  );
+
   const handleWorkspaceSubmit = useCallback(
     async event => {
       event.preventDefault();
@@ -1996,6 +2101,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         item => item.missionId !== builderPrimaryConversation?.missionId,
       ),
     [builderBoard.activeConversations, builderPrimaryConversation?.missionId],
+  );
+  const tutorialStudio = viewModel.drawers.builder.tutorialStudio;
+  const recommendationStudio = viewModel.drawers.builder.recommendationStudio;
+  const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
+  const builderSelectedReviewTarget = useMemo(
+    () =>
+      liveReviewStudio.targets.find(item => item.id === selectedReviewTargetId) ||
+      liveReviewStudio.targets[0] ||
+      null,
+    [liveReviewStudio.targets, selectedReviewTargetId],
   );
   const topbarStatus = useMemo(() => {
     if (uiMode === "builder") {
@@ -4235,12 +4350,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           {!mission ? (
             uiMode === "builder" ? (
               <section className="builder-shell builder-launch-shell">
-              <header className="builder-head">
-                <div>
-                  <p className="eyebrow">Builder workbench</p>
-                  <h1>{viewModel.emptyState.title}</h1>
-                  <p>{viewModel.emptyState.summary}</p>
-                </div>
+                <header className="builder-head builder-studio-head">
+                  <div>
+                    <p className="eyebrow">Builder workbench</p>
+                    <h1>{viewModel.emptyState.title}</h1>
+                    <p>{viewModel.emptyState.summary}</p>
+                  </div>
                   <div className="builder-head-actions">
                     <ActionButton
                       onClick={() => {
@@ -4254,31 +4369,63 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     >
                       {viewModel.emptyState.launchEntryLabel}
                     </ActionButton>
-                    <ActionButton onClick={() => setActiveDrawer("profiles")}>Profiles</ActionButton>
+                    <ActionButton onClick={() => handleBuilderFeatureAction("open_builder")}>
+                      Open panel
+                    </ActionButton>
                   </div>
                 </header>
 
-                <section className="mode-story mode-builder">
-                  <strong>Builder mode is the control workbench.</strong>
-                  <p>Use it to shape runtime policy, routing, services, and proof review. The tradeoff is more density and more operational detail.</p>
-                </section>
-
                 <div className="builder-workbench-grid">
                   <section className="builder-primary-column">
-                    <article className="builder-panel builder-panel-hero">
-                      <p className="eyebrow">Launch readiness</p>
-                      <h2>{viewModel.emptyState.confidenceLabel}</h2>
-                      <p>{viewModel.emptyState.confidencePhase}</p>
-                      <div className="empty-confidence">
-                        <p>Recommended workflow: {viewModel.emptyState.recommendedWorkflow}</p>
-                        <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
+                    <article className="builder-panel builder-panel-hero builder-feature-card">
+                      <div className="builder-feature-head">
+                        <div>
+                          <p className="eyebrow">Guided tutorial</p>
+                          <h2>{tutorialStudio.headline}</h2>
+                        </div>
+                        <div className="builder-feature-meta">
+                          <span className="mini-pill muted">{tutorialStudio.progressLabel}</span>
+                          <span className="mini-pill muted">{tutorialStudio.motionMode} motion</span>
+                        </div>
                       </div>
-                      <ul>
-                        {viewModel.emptyState.readiness.map(item => (
-                          <li key={`builder-readiness-${item}`}>{item}</li>
+                      <p>{tutorialStudio.summary}</p>
+                      <div className="builder-step-grid">
+                        {tutorialStudio.steps.map(item => (
+                          <button
+                            className={`builder-step-card ${toneClass(item.tone)} ${item.current ? "current" : ""}`.trim()}
+                            key={item.id}
+                            onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                            type="button"
+                          >
+                            <span>{item.panel}</span>
+                            <strong>{item.title}</strong>
+                            <p>{item.description}</p>
+                            <em>{item.status}</em>
+                          </button>
                         ))}
-                      </ul>
+                      </div>
+                      {tutorialStudio.cards.length > 0 ? (
+                        <div className="builder-inline-list builder-inline-list-actions">
+                          {tutorialStudio.cards.map(item => (
+                            <button
+                              className="builder-inline-action"
+                              key={item.id}
+                              onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                              type="button"
+                            >
+                              <strong>{item.title}</strong>
+                              <span>{item.body}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="drawer-actions">
+                        <ActionButton
+                          onClick={() => void handleBuilderFeatureAction(tutorialStudio.primaryActionId)}
+                          variant="primary"
+                        >
+                          {tutorialStudio.primaryActionLabel}
+                        </ActionButton>
                         {quickSetupActions.map(action => (
                           <ActionButton
                             key={`builder-empty-${action.actionId}`}
@@ -4289,6 +4436,102 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         ))}
                       </div>
                     </article>
+
+                    <div className="builder-feature-grid">
+                      <article className="builder-panel builder-feature-card">
+                        <div className="builder-feature-head">
+                          <div>
+                            <p className="eyebrow">Recommendations</p>
+                            <h2>{recommendationStudio.headline}</h2>
+                          </div>
+                          <div className="builder-feature-meta">
+                            <span className="mini-pill muted">
+                              {recommendationStudio.skillRecommendations.length} skill leads
+                            </span>
+                          </div>
+                        </div>
+                        <p>{recommendationStudio.summary}</p>
+                        <div className="builder-thread-list">
+                          {recommendationStudio.struggleSignals.map(item => (
+                            <button
+                              className={`builder-thread-item ${toneClass(item.tone)}`.trim()}
+                              key={item.id}
+                              onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                              type="button"
+                            >
+                              <span>{item.label}</span>
+                              <strong>{item.detail}</strong>
+                            </button>
+                          ))}
+                        </div>
+                        {recommendationStudio.skillRecommendations.length > 0 ? (
+                          <div className="builder-inline-list">
+                            {recommendationStudio.skillRecommendations.map(item => (
+                              <span className="builder-inline-pill" key={item.id}>
+                                <strong>{item.label}</strong>
+                                <span>{item.reason}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div className="drawer-actions">
+                          {recommendationStudio.nextMoves.slice(0, 2).map(item => (
+                            <ActionButton
+                              key={item.id}
+                              onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                              variant={item === recommendationStudio.nextMoves[0] ? "primary" : "secondary"}
+                            >
+                              {item.label}
+                            </ActionButton>
+                          ))}
+                        </div>
+                      </article>
+
+                      <article className="builder-panel builder-feature-card">
+                        <div className="builder-feature-head">
+                          <div>
+                            <p className="eyebrow">Live UI review</p>
+                            <h2>{liveReviewStudio.statusLine}</h2>
+                          </div>
+                          <div className="builder-feature-meta">
+                            <span className="mini-pill muted">{liveReviewStudio.targets.length} review blocks</span>
+                          </div>
+                        </div>
+                        <p>{liveReviewStudio.summary}</p>
+                        <div className="builder-review-grid">
+                          {liveReviewStudio.targets.map(item => (
+                            <button
+                              className={`builder-review-target ${toneClass(item.tone)} ${builderSelectedReviewTarget?.id === item.id ? "active" : ""}`.trim()}
+                              key={item.id}
+                              onClick={() => handleBuilderReviewTargetSeed(item)}
+                              type="button"
+                            >
+                              <span>{item.label}</span>
+                              <strong>{item.title}</strong>
+                              <p>{item.detail}</p>
+                            </button>
+                          ))}
+                        </div>
+                        {builderSelectedReviewTarget ? (
+                          <article className={`builder-review-focus ${toneClass(builderSelectedReviewTarget.tone)}`}>
+                            <span>{builderSelectedReviewTarget.label}</span>
+                            <strong>{builderSelectedReviewTarget.title}</strong>
+                            <p>{builderSelectedReviewTarget.detail}</p>
+                          </article>
+                        ) : null}
+                        <div className="drawer-actions">
+                          <ActionButton
+                            onClick={() => builderSelectedReviewTarget && handleBuilderReviewTargetSeed(builderSelectedReviewTarget)}
+                            variant="primary"
+                          >
+                            Comment selected block
+                          </ActionButton>
+                          <ActionButton onClick={() => void handleBuilderFeatureAction("open_builder")}>
+                            Open preview controls
+                          </ActionButton>
+                        </div>
+                      </article>
+                    </div>
 
                     <article className="builder-panel">
                       <div className="section-header">
@@ -4313,30 +4556,50 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   </section>
 
                   <aside className="builder-secondary-column">
-                    <article className="builder-panel">
+                    <article className="builder-panel builder-panel-focus">
+                      <p className="eyebrow">Guided readiness</p>
+                      <h3>{tutorialStudio.recommendedWorkflow}</h3>
+                      <p>{viewModel.emptyState.qualityRoadmapHeadline}</p>
+                      <div className="builder-inline-list">
+                        {tutorialStudio.readiness.map(item => (
+                          <span key={`readiness-${item}`}>{item}</span>
+                        ))}
+                      </div>
+                    </article>
+
+                    <article className="builder-panel builder-panel-focus">
                       <p className="eyebrow">Profiles</p>
                       <h3>{titleizeToken(workspaceProfileForm.userProfile)}</h3>
                       <p>{viewModel.drawers.builder.profileStudio.behavior[0]?.value || "No profile selected."}</p>
-                      <ActionButton onClick={() => setActiveDrawer("profiles")}>Open profiles</ActionButton>
+                      <ActionButton onClick={() => void handleBuilderFeatureAction("open_profiles")}>
+                        Open profiles
+                      </ActionButton>
                     </article>
 
-                    <article className="builder-panel">
-                      <p className="eyebrow">Runtime</p>
+                    <article className="builder-panel builder-panel-focus">
+                      <p className="eyebrow">Feature backlog</p>
                       <h3>
-                        {viewModel.drawers.builder.serviceStudio.summary.healthyCount}/
-                        {viewModel.drawers.builder.serviceStudio.summary.totalItems} healthy
+                        {tutorialStudio.improvements.length + recommendationStudio.learningQueue.length} queued improvement{tutorialStudio.improvements.length + recommendationStudio.learningQueue.length === 1 ? "" : "s"}
                       </h3>
-                      <p>
-                        {viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} service(s) need attention.
-                      </p>
-                      <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime</ActionButton>
-                    </article>
-
-                    <article className="builder-panel">
-                      <p className="eyebrow">Skills</p>
-                      <h3>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready</h3>
-                      <p>{viewModel.drawers.builder.skillStudio.nextQualityActions[0] || "Skill quality is stable."}</p>
-                      <ActionButton onClick={() => setActiveDrawer("skills")}>Open skills</ActionButton>
+                      <div className="builder-thread-list">
+                        {tutorialStudio.improvements.map(item => (
+                          <article className={`builder-thread-item ${toneClass(item.tone)}`} key={item.id}>
+                            <span>{item.category}</span>
+                            <strong>{item.title}</strong>
+                            <p>{item.reason}</p>
+                          </article>
+                        ))}
+                        {recommendationStudio.learningQueue.map(item => (
+                          <article className={`builder-thread-item ${toneClass(item.tone)}`} key={item.id}>
+                            <span>{item.priority}</span>
+                            <strong>{item.title}</strong>
+                            <p>Turn repeated friction into a reviewed skill or workflow.</p>
+                          </article>
+                        ))}
+                      </div>
+                      <ActionButton onClick={() => void handleBuilderFeatureAction("open_skills")}>
+                        Open improvement flow
+                      </ActionButton>
                     </article>
                   </aside>
                 </div>
@@ -4588,6 +4851,167 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     )}
                   </article>
 
+                  <div className="builder-feature-grid">
+                    <article className="builder-panel builder-feature-card">
+                      <div className="builder-feature-head">
+                        <div>
+                          <p className="eyebrow">Guided tutorial</p>
+                          <h2>{tutorialStudio.headline}</h2>
+                        </div>
+                        <div className="builder-feature-meta">
+                          <span className="mini-pill muted">{tutorialStudio.progressLabel}</span>
+                          <span className="mini-pill muted">{tutorialStudio.motionMode} motion</span>
+                        </div>
+                      </div>
+                      <p>{tutorialStudio.summary}</p>
+                      <div className="builder-step-grid compact">
+                        {tutorialStudio.steps.map(item => (
+                          <button
+                            className={`builder-step-card ${toneClass(item.tone)} ${item.current ? "current" : ""}`.trim()}
+                            key={`builder-step-${item.id}`}
+                            onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                            type="button"
+                          >
+                            <span>{item.panel}</span>
+                            <strong>{item.title}</strong>
+                            <p>{item.description}</p>
+                            <em>{item.status}</em>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="drawer-actions">
+                        <ActionButton
+                          onClick={() => void handleBuilderFeatureAction(tutorialStudio.primaryActionId)}
+                          variant="primary"
+                        >
+                          {tutorialStudio.primaryActionLabel}
+                        </ActionButton>
+                        {tutorialStudio.cards[0] ? (
+                          <ActionButton
+                            onClick={() => void handleBuilderFeatureAction(tutorialStudio.cards[0].actionId)}
+                          >
+                            {tutorialStudio.cards[0].title}
+                          </ActionButton>
+                        ) : null}
+                      </div>
+                    </article>
+
+                    <article className="builder-panel builder-feature-card">
+                      <div className="builder-feature-head">
+                        <div>
+                          <p className="eyebrow">Recommendations</p>
+                          <h2>{recommendationStudio.headline}</h2>
+                        </div>
+                        <div className="builder-feature-meta">
+                          <span className="mini-pill muted">
+                            {recommendationStudio.blockedConversationCount} blocked
+                          </span>
+                          <span className="mini-pill muted">
+                            {recommendationStudio.skillRecommendations.length} skill leads
+                          </span>
+                        </div>
+                      </div>
+                      <p>{recommendationStudio.summary}</p>
+                      <div className="builder-thread-list">
+                        {recommendationStudio.struggleSignals.map(item => (
+                          <button
+                            className={`builder-thread-item ${toneClass(item.tone)}`.trim()}
+                            key={item.id}
+                            onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                            type="button"
+                          >
+                            <span>{item.label}</span>
+                            <strong>{item.detail}</strong>
+                          </button>
+                        ))}
+                      </div>
+                      {recommendationStudio.skillRecommendations.length > 0 ? (
+                        <div className="builder-inline-list">
+                          {recommendationStudio.skillRecommendations.slice(0, 3).map(item => (
+                            <span className="builder-inline-pill" key={item.id}>
+                              <strong>{item.label}</strong>
+                              <span>{item.reason}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="drawer-actions">
+                        {recommendationStudio.nextMoves.slice(0, 2).map((item, index) => (
+                          <ActionButton
+                            key={item.id}
+                            onClick={() => void handleBuilderFeatureAction(item.actionId)}
+                            variant={index === 0 ? "primary" : "ghost"}
+                          >
+                            {item.label}
+                          </ActionButton>
+                        ))}
+                      </div>
+                    </article>
+
+                    <article className="builder-panel builder-feature-card builder-feature-card-wide">
+                      <div className="builder-feature-head">
+                        <div>
+                          <p className="eyebrow">Live UI review</p>
+                          <h2>{liveReviewStudio.statusLine}</h2>
+                        </div>
+                        <div className="builder-feature-meta">
+                          <span className="mini-pill muted">{liveReviewStudio.targets.length} review blocks</span>
+                          {latestThinkingTurn ? (
+                            <span className="mini-pill muted">{latestThinkingTurn.roleLabel || "Runtime"} trace live</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <p>{liveReviewStudio.summary}</p>
+                      <div className="builder-review-grid">
+                        {liveReviewStudio.targets.map(item => (
+                          <button
+                            className={`builder-review-target ${toneClass(item.tone)} ${builderSelectedReviewTarget?.id === item.id ? "active" : ""}`.trim()}
+                            key={item.id}
+                            onClick={() => handleBuilderReviewTargetSeed(item)}
+                            type="button"
+                          >
+                            <span>{item.label}</span>
+                            <strong>{item.title}</strong>
+                            <p>{item.detail}</p>
+                          </button>
+                        ))}
+                      </div>
+                      {builderSelectedReviewTarget ? (
+                        <div className="builder-review-lower">
+                          <article className={`builder-review-focus ${toneClass(builderSelectedReviewTarget.tone)}`}>
+                            <span>{builderSelectedReviewTarget.label}</span>
+                            <strong>{builderSelectedReviewTarget.title}</strong>
+                            <p>{builderSelectedReviewTarget.detail}</p>
+                          </article>
+                          {latestThinkingTurn ? (
+                            <article className="builder-review-trace">
+                              <span>{latestThinkingTurn.roleLabel || "Runtime"} trace</span>
+                              <strong>{latestThinkingTurn.title}</strong>
+                              <p>{latestThinkingTurn.detail}</p>
+                            </article>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <p className="builder-review-hint">{liveReviewStudio.compareHint}</p>
+                      <div className="drawer-actions">
+                        <ActionButton
+                          onClick={() => builderSelectedReviewTarget && handleBuilderReviewTargetSeed(builderSelectedReviewTarget)}
+                          variant="primary"
+                        >
+                          Comment selected block
+                        </ActionButton>
+                        <ActionButton onClick={() => void handleBuilderFeatureAction("open_builder")}>
+                          Open preview controls
+                        </ActionButton>
+                        {mission ? (
+                          <ActionButton disabled={!operatorDraft.trim()} onClick={() => void handleAgentFollowUp()}>
+                            Send to agent
+                          </ActionButton>
+                        ) : null}
+                      </div>
+                    </article>
+                  </div>
+
                   <div className="builder-board-grid">
                     <article className="builder-panel">
                       <div className="section-header">
@@ -4656,17 +5080,37 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   </div>
 
                   <form className="builder-note-panel" onSubmit={handleOperatorNote}>
-                    <label htmlFor="builder-thread-note">Builder note</label>
+                    <label htmlFor="builder-thread-note">
+                      {builderSelectedReviewTarget ? `Review note for ${builderSelectedReviewTarget.title}` : "Builder note"}
+                    </label>
+                    {builderSelectedReviewTarget ? (
+                      <p className="builder-note-context">
+                        {builderSelectedReviewTarget.label} · {builderSelectedReviewTarget.detail}
+                      </p>
+                    ) : null}
                     <textarea
                       id="builder-thread-note"
                       onChange={event => setOperatorDraft(event.target.value)}
-                      placeholder="Capture a technical observation, routing decision, or runtime intervention plan."
+                      placeholder={
+                        builderSelectedReviewTarget
+                          ? "Describe what is wrong with this block and what the model should change."
+                          : "Capture a technical observation, routing decision, or runtime intervention plan."
+                      }
                       value={operatorDraft}
                     />
                     <div className="thread-composer-actions">
                       <ActionButton type="submit" variant="primary">
                         Save note
                       </ActionButton>
+                      {mission ? (
+                        <ActionButton
+                          disabled={!operatorDraft.trim()}
+                          onClick={() => void handleAgentFollowUp()}
+                          type="button"
+                        >
+                          Send to agent
+                        </ActionButton>
+                      ) : null}
                       <ActionButton onClick={() => setActiveDrawer("builder")} type="button">
                         Open builder drawer
                       </ActionButton>
@@ -4738,15 +5182,30 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Skills</p>
-                    <h3>{viewModel.drawers.builder.skillStudio.summary.executionReadyCount} execution-ready</h3>
-                    <p>{viewModel.drawers.builder.skillStudio.nextQualityActions[0] || "Skill quality is stable."}</p>
-                    <div className="builder-inline-list">
-                      <span>{viewModel.drawers.builder.skillStudio.summary.reviewedReusableCount}/{viewModel.drawers.builder.skillStudio.summary.totalSkills} reviewed reusable</span>
-                      <span>{viewModel.drawers.builder.skillStudio.summary.needsTestCount} need tests</span>
-                      <span>{viewModel.drawers.builder.skillStudio.summary.learnedCount} learned</span>
+                    <p className="eyebrow">Feature backlog</p>
+                    <h3>
+                      {tutorialStudio.improvements.length + recommendationStudio.learningQueue.length} guided follow-up{tutorialStudio.improvements.length + recommendationStudio.learningQueue.length === 1 ? "" : "s"}
+                    </h3>
+                    <p>Turn repeated friction into better defaults, stronger guidance, and reusable skill or workflow patterns.</p>
+                    <div className="builder-thread-list">
+                      {tutorialStudio.improvements.slice(0, 2).map(item => (
+                        <article className={`builder-thread-item ${toneClass(item.tone)}`} key={item.id}>
+                          <span>{item.category}</span>
+                          <strong>{item.title}</strong>
+                          <p>{item.reason}</p>
+                        </article>
+                      ))}
+                      {recommendationStudio.learningQueue.slice(0, 2).map(item => (
+                        <article className={`builder-thread-item ${toneClass(item.tone)}`} key={item.id}>
+                          <span>{item.priority}</span>
+                          <strong>{item.title}</strong>
+                          <p>Promote the pattern into Builder-visible guidance and reusable skill coverage.</p>
+                        </article>
+                      ))}
                     </div>
-                    <ActionButton onClick={() => setActiveDrawer("skills")}>Open skill studio</ActionButton>
+                    <ActionButton onClick={() => void handleBuilderFeatureAction("open_skills")}>
+                      Open skill studio
+                    </ActionButton>
                   </article>
                 </aside>
               </div>

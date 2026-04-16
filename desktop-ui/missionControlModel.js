@@ -6,6 +6,7 @@ import {
   describeMissionNeedsInput,
   describeNextOperatorAction,
   describeProfileFit,
+  previewLabel,
   describeVisibilityBehavior,
   formatDurationCompact,
   missionStatusTone,
@@ -31,6 +32,13 @@ function asInt(value, fallback = 0) {
 
 function clampPercent(value) {
   return Math.max(0, Math.min(100, asInt(value)));
+}
+
+function listLabel(value) {
+  if (!value) {
+    return "Item";
+  }
+  return String(value);
 }
 
 function ratioPercent(part, total) {
@@ -1650,6 +1658,364 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
   };
 }
 
+function priorityTone(priority) {
+  const normalized = String(priority || "").toLowerCase();
+  if (normalized === "high") {
+    return "bad";
+  }
+  if (normalized === "medium") {
+    return "warn";
+  }
+  if (normalized === "low") {
+    return "good";
+  }
+  return "neutral";
+}
+
+function actionForGuidancePanel(panel) {
+  const normalized = String(panel || "").toLowerCase();
+  if (normalized === "setup") {
+    return "open_runtime";
+  }
+  if (normalized === "guidance") {
+    return "open_profiles";
+  }
+  if (normalized === "projects") {
+    return "open_workspace";
+  }
+  if (normalized === "missions") {
+    return "open_mission";
+  }
+  if (normalized === "integrations") {
+    return "open_escalation";
+  }
+  if (normalized === "builder_view" || normalized === "builder") {
+    return "open_builder";
+  }
+  if (normalized === "skill_studio" || normalized === "skills") {
+    return "open_skills";
+  }
+  return "open_builder";
+}
+
+function deriveTutorialStudio({
+  mission,
+  snapshot,
+  setupHealth,
+  profileId,
+  workflowStudio,
+}) {
+  const onboarding = snapshot?.onboarding || {};
+  const guidance = snapshot?.guidance || {};
+  const tutorial = onboarding?.tutorial || {};
+  const completedSteps = asList(tutorial?.completedSteps);
+  const steps = asList(tutorial?.steps).map((item, index) => {
+    const status = String(
+      item?.status ||
+        (completedSteps.includes(item?.step_id)
+          ? "completed"
+          : item?.step_id === tutorial?.currentStepId
+            ? "current"
+            : "pending"),
+    ).toLowerCase();
+    return {
+      id: item?.step_id || `step-${index}`,
+      title: item?.title || `Step ${index + 1}`,
+      description: item?.description || "",
+      panel: item?.panel || "Builder",
+      status: titleizeToken(status),
+      done: status === "completed",
+      current: status === "current" || status === "in_progress" || item?.step_id === tutorial?.currentStepId,
+      tone: status === "completed" ? "good" : status === "pending" ? "neutral" : "warn",
+      actionId: actionForGuidancePanel(item?.panel),
+    };
+  });
+  const currentStep =
+    steps.find(item => item.current) ||
+    steps.find(item => !item.done) ||
+    steps[steps.length - 1] ||
+    null;
+  const motionMode =
+    snapshot?.profiles?.details?.[profileId]?.ui?.motion ||
+    asList(guidance?.profileChoices).find(item => item?.name === profileId)?.motion ||
+    "standard";
+  const readiness = uniq([
+    ...asList(onboarding?.nextActions),
+    ...asList(setupHealth?.blockerExplanations),
+  ]).slice(0, 4);
+  const cards = asList(guidance?.guidanceCards)
+    .slice(0, 4)
+    .map(item => ({
+      id: item?.card_id || item?.title || "guide",
+      title: item?.title || "Guidance",
+      body: item?.body || "",
+      panel: item?.panel || "Builder",
+      kind: titleizeToken(item?.kind || "guide"),
+      actionId: actionForGuidancePanel(item?.panel || item?.kind),
+    }));
+  const improvements = asList(guidance?.productImprovements)
+    .slice(0, 3)
+    .map(item => ({
+      id: item?.item_id || item?.title || "improvement",
+      title: item?.title || "Improvement",
+      reason: item?.reason || "",
+      priority: titleizeToken(item?.priority || "medium"),
+      category: titleizeToken(item?.category || "product"),
+      tone: priorityTone(item?.priority),
+    }));
+
+  return {
+    headline: tutorial?.isComplete ? "Tutorial complete" : currentStep?.title || "Finish guided setup",
+    summary: tutorial?.isComplete
+      ? "Builder is ready for real mission work. Keep the guide nearby for deliberate setup and escalation."
+      : currentStep?.description ||
+        "Finish the guided path so Builder, runtime policy, and escalation all stay coherent.",
+    progressLabel: `${completedSteps.length}/${Math.max(steps.length, 1)} complete`,
+    currentStep,
+    steps,
+    cards,
+    improvements,
+    readiness,
+    motionMode: titleizeToken(motionMode),
+    recommendedWorkflow: workflowStudio?.recommended?.label || "Long-Run Agent Session",
+    primaryActionId: currentStep?.actionId || "open_mission",
+    primaryActionLabel:
+      currentStep?.panel ? `Open ${currentStep.panel}` : mission ? "Keep building" : "Launch first mission",
+  };
+}
+
+function deriveRecommendationStudio({
+  mission,
+  workspace,
+  setupHealth,
+  serviceStudio,
+  skillStudio,
+  workflowStudio,
+  qualityRoadmap,
+  builderBoard,
+}) {
+  const struggleSignals = [];
+  const approvalCount = asInt(asList(mission?.proof?.pending_approvals).length);
+  const verificationCount = asInt(asList(mission?.state?.verification_failures).length);
+  const serviceAttention = asInt(serviceStudio?.summary?.needsAttentionCount);
+  const skillAttention = asInt(skillStudio?.summary?.needsTestCount);
+
+  if (approvalCount > 0) {
+    struggleSignals.push({
+      id: "approval-friction",
+      label: "Approval friction",
+      detail: `${approvalCount} approval boundary is slowing the loop right now.`,
+      tone: "warn",
+      actionId: "open_queue",
+    });
+  }
+  if (verificationCount > 0) {
+    struggleSignals.push({
+      id: "verification-friction",
+      label: "Verification friction",
+      detail: `${verificationCount} failed verification signal needs proof-first attention.`,
+      tone: "bad",
+      actionId: "open_proof",
+    });
+  }
+  if (serviceAttention > 0) {
+    struggleSignals.push({
+      id: "runtime-drift",
+      label: "Runtime drift",
+      detail: `${serviceAttention} runtime or service item still needs repair or review.`,
+      tone: "warn",
+      actionId: "open_runtime",
+    });
+  }
+  if (skillAttention > 0) {
+    struggleSignals.push({
+      id: "skill-gap",
+      label: "Skill coverage gap",
+      detail: `${skillAttention} skill pack(s) still need tests or promotion before they can be trusted.`,
+      tone: "warn",
+      actionId: "open_skills",
+    });
+  }
+  if (struggleSignals.length === 0) {
+    struggleSignals.push({
+      id: "clear-lane",
+      label: "No major blocker",
+      detail: "Use the recommended workflow and keep Builder focused on the highest-value active conversation.",
+      tone: "good",
+      actionId: "open_mission",
+    });
+  }
+
+  const skillRecommendations = uniq([
+    ...asList(workspace?.skillRecommendations).map(item => `${item?.label || "Skill"}||${item?.reason || ""}`),
+    ...skillStudio.recommended.map(item => `${item?.label || "Pack"}||${item?.description || ""}`),
+  ])
+    .slice(0, 4)
+    .map((item, index) => {
+      const [label, reason] = String(item).split("||");
+      return {
+        id: `skill-recommendation-${index}-${label}`,
+        label,
+        reason,
+      };
+    });
+
+  const nextMoves = uniq([
+    ...asList(qualityRoadmap?.tracks)
+      .filter(item => item?.state !== "done")
+      .slice(0, 3)
+      .map(item => `${item?.label || "Next move"}||${item?.suggestedAction || "Open"}||${item?.actionKind || ""}`),
+    workflowStudio?.recommended?.label
+      ? `${workflowStudio.recommended.label}||Recommended workflow for the current profile||workflow`
+      : "",
+    asList(setupHealth?.blockerExplanations)[0]
+      ? `${asList(setupHealth?.blockerExplanations)[0]}||Resolve setup blocker before long unattended runs||runtime`
+      : "",
+  ])
+    .slice(0, 4)
+    .map((item, index) => {
+      const [label, detail, actionKind] = String(item).split("||");
+      return {
+        id: `recommendation-next-${index}`,
+        label,
+        detail,
+        actionId:
+          actionKind === "validate"
+            ? "run_validation"
+            : actionKind === "workflow"
+              ? "open_workflow"
+              : actionKind === "skill"
+                ? "open_skills"
+                : actionKind === "service" || actionKind === "runtime"
+                  ? "open_runtime"
+                  : "open_mission",
+      };
+    });
+
+  return {
+    headline:
+      workflowStudio?.recommended?.label || "Builder recommendations",
+    summary:
+      builderBoard.activeConversations.length > 0
+        ? "Recommendations adapt to the active conversations, current blockers, and the packs that still need work."
+        : "Recommendations are based on setup state, workflow readiness, and the gaps still blocking a strong first run.",
+    struggleSignals: struggleSignals.slice(0, 4),
+    skillRecommendations,
+    nextMoves,
+    learningQueue: asList(workflowStudio?.learningQueue).slice(0, 4).map((item, index) => ({
+      id: `learning-${index}-${item?.title || item}`,
+      title: item?.title || listLabel(item),
+      priority: titleizeToken(item?.priority || "medium"),
+      tone: priorityTone(item?.priority),
+    })),
+    activeConversationCount: builderBoard.activeConversations.length,
+    blockedConversationCount: builderBoard.activeConversations.filter(item => item.blocked).length,
+    recommendedSurface: titleizeToken(workflowStudio?.recommended?.surface || "builder_view"),
+  };
+}
+
+function deriveLiveReviewStudio({
+  mission,
+  workspace,
+  snapshot,
+  previewMode,
+  liveSyncSeconds,
+  liveSyncSuspended,
+  lastPushReason,
+  isRefreshing,
+  builderBoard,
+}) {
+  const bridgeSessions = asList(snapshot?.bridgeLab?.connectedSessions);
+  const missionFiles = deriveChanged(mission, workspace).slice(0, 3);
+  const reviewTargets = [];
+
+  reviewTargets.push({
+    id: "review-preview",
+    label: previewMode === "live" ? "Live surface" : "Fixture surface",
+    title: previewMode === "live" ? "Live Builder review" : previewLabel(previewMode, snapshot?.previewMeta),
+    detail:
+      previewMode === "live"
+        ? liveSyncSuspended
+          ? "Live sync is paused while the surface is hidden."
+          : lastPushReason
+            ? `Latest backend push: ${lastPushReason}.`
+            : "Live backend state is active for review."
+        : "Fixture mode is active for repeatable review and screenshot work.",
+    tone: previewMode === "live" ? (liveSyncSuspended ? "warn" : "good") : "neutral",
+    actionId: "open_builder",
+    commentSeed:
+      previewMode === "live"
+        ? "Live UI review note for the current Builder surface:\nWhat feels wrong:\nWhat should change:\n"
+        : "Fixture review note:\nThis scenario should read differently because \n",
+  });
+
+  if (mission) {
+    reviewTargets.push({
+      id: `review-mission-${mission?.mission_id || "current"}`,
+      label: "Mission focus",
+      title: mission?.title || mission?.objective || "Current mission",
+      detail: `${deriveCurrentTask(mission)} · Next ${deriveNextCheckpoint(mission)}`,
+      tone: missionNeedsAttention(mission) ? "warn" : missionStatusTone(mission?.state?.status),
+      actionId: "focus_thread",
+      commentSeed: `Mission UI review for ${mission?.title || "the current mission"}:\nThis decision point should look different because \n`,
+    });
+  }
+
+  if (builderBoard.activeConversations.length > 1) {
+    reviewTargets.push({
+      id: "review-conversations",
+      label: "Conversation grid",
+      title: `${builderBoard.activeConversations.length} active conversations`,
+      detail: `${builderBoard.activeConversations.filter(item => item.blocked).length} blocked · ${builderBoard.activeConversations.length - 1} secondary thread card(s) visible.`,
+      tone: builderBoard.activeConversations.some(item => item.blocked) ? "warn" : "good",
+      actionId: "focus_conversations",
+      commentSeed: "Conversation board review:\nWhich thread deserves more visual weight and why:\n",
+    });
+  }
+
+  for (const [index, item] of bridgeSessions.slice(0, 2).entries()) {
+    reviewTargets.push({
+      id: item?.session_id || `review-bridge-${index}`,
+      label: titleizeToken(item?.bridge_transport || "bridge"),
+      title: item?.app_name || "Connected app",
+      detail:
+        asList(item?.context_preview).map(entry => entry?.summary).find(Boolean) ||
+        item?.latest_task_result?.resultSummary ||
+        "Connected app review target is ready.",
+      tone: item?.bridge_health === "healthy" ? "good" : "warn",
+      actionId: "open_runtime",
+      commentSeed: `Bridge review for ${item?.app_name || "this app"}:\nThis hand-off or preview block should change because \n`,
+    });
+  }
+
+  for (const [index, file] of missionFiles.entries()) {
+    reviewTargets.push({
+      id: `review-file-${index}-${file}`,
+      label: "Changed file",
+      title: file,
+      detail: "Use this as a review anchor when pointing at what should change in the live UI flow.",
+      tone: "neutral",
+      actionId: "open_proof",
+      commentSeed: `Review note for ${file}:\nThe visible UI behavior should change like this:\n`,
+    });
+  }
+
+  return {
+    headline: "Live UI review",
+    summary:
+      "Pick a visible block, annotate what feels wrong, and push the feedback back into the mission without leaving Builder.",
+    statusLine:
+      previewMode === "live"
+        ? `${isRefreshing ? "Refreshing" : "Live"} · ${liveSyncSeconds === "off" ? "manual sync" : `${liveSyncSeconds}s sync`}`
+        : `${previewLabel(previewMode, snapshot?.previewMeta)} · repeatable review`,
+    targets: reviewTargets.slice(0, 6),
+    compareHint:
+      builderBoard.activeConversations.length > 0
+        ? "Use live review targets to steer the active mission, then jump back through nexuses if the direction changes."
+        : "Use fixture review now, then launch the UI review loop once a real mission is active.",
+  };
+}
+
 export function buildRecentRuns(snapshot) {
   const missionRuns = asList(snapshot?.missions)
     .slice()
@@ -1718,6 +2084,23 @@ export function buildMissionControlModel({
     builderOps,
   });
   const builderBoard = deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode });
+  const tutorialStudio = deriveTutorialStudio({
+    mission,
+    snapshot,
+    setupHealth,
+    profileId,
+    workflowStudio,
+  });
+  const recommendationStudio = deriveRecommendationStudio({
+    mission,
+    workspace,
+    setupHealth,
+    serviceStudio,
+    skillStudio,
+    workflowStudio,
+    qualityRoadmap,
+    builderBoard,
+  });
   const proofTone =
     asList(mission?.state?.verification_failures).length > 0
       ? "bad"
@@ -1945,6 +2328,19 @@ export function buildMissionControlModel({
                 : `Live backend${lastPushReason ? ` · last push ${lastPushReason}` : ""}`
               : "Fixture-backed review mode is active.",
         },
+        tutorialStudio,
+        recommendationStudio,
+        liveReviewStudio: deriveLiveReviewStudio({
+          mission,
+          workspace,
+          snapshot,
+          previewMode,
+          liveSyncSeconds,
+          liveSyncSuspended,
+          lastPushReason,
+          isRefreshing,
+          builderBoard,
+        }),
         profileStudio,
         serviceStudio,
         skillStudio,
