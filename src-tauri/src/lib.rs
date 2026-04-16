@@ -5041,13 +5041,21 @@ async fn get_control_room_snapshot_command(
                     .entry(provider_id.to_string())
                     .or_insert_with(|| Value::Object(serde_json::Map::new()));
                 if let Value::Object(provider_payload) = provider_entry {
+                    let auth_mode = provider_payload
+                        .get("authMode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_lowercase();
+                    let effective_auth_present =
+                        auth_present || (provider_id == "openai" && auth_mode == "chatgpt");
                     provider_payload.insert(
                         "authPresent".to_string(),
-                        Value::Bool(auth_present),
+                        Value::Bool(effective_auth_present),
                     );
                     provider_payload.insert(
                         "configured".to_string(),
-                        Value::Bool(auth_present),
+                        Value::Bool(effective_auth_present),
                     );
                 }
             }

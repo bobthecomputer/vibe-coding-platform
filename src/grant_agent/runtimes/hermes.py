@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
+from ..subprocess_utils import hidden_windows_subprocess_kwargs
 from ..runtime_updates import compare_version_tokens, latest_hermes_release, normalize_hermes_version
 from .base import AgentRuntimeAdapter, mission_phase_route, shell_join
 
@@ -71,6 +72,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                     text=True,
                     timeout=8,
                     check=False,
+                    **hidden_windows_subprocess_kwargs(),
                 )
                 version_output = (completed.stdout or completed.stderr).strip() or None
             except Exception as exc:  # pragma: no cover - defensive
@@ -283,6 +285,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 text=True,
                 timeout=8,
                 check=False,
+                **hidden_windows_subprocess_kwargs(),
             )
         except Exception:  # pragma: no cover - defensive
             return False
@@ -306,6 +309,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 text=True,
                 timeout=10,
                 check=False,
+                **hidden_windows_subprocess_kwargs(),
             )
         except Exception:  # pragma: no cover - defensive
             return None

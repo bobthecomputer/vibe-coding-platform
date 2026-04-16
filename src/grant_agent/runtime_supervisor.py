@@ -23,6 +23,7 @@ from .models import (
 )
 from .execution_truth import derive_execution_target
 from .runtimes import runtime_adapter_map
+from .subprocess_utils import background_creationflags, hidden_windows_subprocess_kwargs
 
 HEARTBEAT_STALE_FLOOR_SECONDS = max(
     int(os.environ.get("FLUXIO_HEARTBEAT_STALE_SECONDS", "35")),
@@ -632,9 +633,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 
 def _creationflags() -> int:
-    if os.name == "nt":
-        return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    return 0
+    return background_creationflags()
 
 
 def _tail_summary(log_path: Path, max_lines: int = 3) -> str:
@@ -661,6 +660,7 @@ def _pid_alive(pid: int) -> bool:
             text=True,
             timeout=10,
             check=False,
+            **hidden_windows_subprocess_kwargs(),
         )
         alive = str(pid) in completed.stdout
         _cache_pid_liveness(pid, alive, now)

@@ -3028,7 +3028,8 @@ def cmd_control_room(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
     payload = store.build_snapshot()
-    payload["onboarding"] = detect_onboarding_status(root)
+    if "onboarding" not in payload:
+        payload["onboarding"] = detect_onboarding_status(root)
     print(json.dumps(payload, indent=2))
     return 0
 

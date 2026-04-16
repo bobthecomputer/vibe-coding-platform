@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import platform
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .models import GuidanceCard, ImprovementQueueItem, OnboardingProgress, TutorialStep
@@ -18,11 +20,24 @@ from .runtime_updates import (
     normalize_openclaw_version,
 )
 from .runtimes import runtime_adapter_map
+from .runtimes.openclaw import read_openclaw_package_version
+from .snapshot_cache import (
+    invalidate_persistent_snapshot_cache,
+    load_persistent_snapshot_cache,
+    save_persistent_snapshot_cache,
+)
+from .subprocess_utils import hidden_windows_subprocess_kwargs
 
 MINIMAX_GLOBAL_OPENCLAW_DOCS = "https://platform.minimax.io/docs/token-plan/openclaw"
 MINIMAX_CN_OPENCLAW_DOCS = "https://platform.minimaxi.com/docs/token-plan/openclaw"
 MINIMAX_GLOBAL_API_PORTAL = "https://platform.minimax.io/user-center/basic-information/interface-key"
 MINIMAX_CN_API_PORTAL = "https://platform.minimaxi.com/user-center/basic-information/interface-key"
+
+_ONBOARDING_CACHE_TTL_SECONDS = max(
+    float(os.environ.get("FLUXIO_ONBOARDING_CACHE_TTL_SECONDS", "300")),
+    5.0,
+)
+_ONBOARDING_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def _shell_open_url_command(url: str, platform_name: str) -> str:
@@ -50,6 +65,37 @@ def _minimax_auth_label(mode: str) -> str:
     return "not configured"
 
 
+def _normalize_openai_codex_auth_mode(value: object) -> str:
+    normalized = str(value or "none").strip().lower()
+    if normalized in {"chatgpt", "chatgpt-portal", "portal", "oauth", "chatgpt-oauth"}:
+        return "chatgpt"
+    if normalized in {"api", "api-key", "api_key"}:
+        return "api"
+    return normalized if normalized in {"none", "chatgpt", "api"} else "none"
+
+
+def _openai_codex_auth_label(mode: str) -> str:
+    normalized = _normalize_openai_codex_auth_mode(mode)
+    if normalized == "chatgpt":
+        return "ChatGPT portal"
+    if normalized == "api":
+        return "API key"
+    return "not configured"
+
+
+def _model_auth_ready(
+    openai_codex_auth_mode: str,
+    minimax_auth_mode: str,
+) -> bool:
+    return _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {
+        "chatgpt",
+        "api",
+    } or str(minimax_auth_mode or "").strip().lower() in {
+        "minimax-portal-oauth",
+        "minimax-api",
+    }
+
+
 def _command_version(command_name: str, version_args: list[str] | None = None) -> dict:
     command = shutil.which(command_name)
     if not command:
@@ -65,6 +111,16 @@ def _command_version(command_name: str, version_args: list[str] | None = None) -
             "details": f"{command_name} was not found on PATH.",
         }
 
+    if command_name == "openclaw":
+        package_version = read_openclaw_package_version(command)
+        if package_version:
+            return {
+                "installed": True,
+                "command": command,
+                "version": package_version,
+                "details": "Installed and reachable.",
+            }
+
     args = [command, *(version_args or ["--version"])]
     try:
         completed = subprocess.run(  # noqa: S603
@@ -73,6 +129,7 @@ def _command_version(command_name: str, version_args: list[str] | None = None) -
             text=True,
             timeout=8,
             check=False,
+            **hidden_windows_subprocess_kwargs(),
         )
         version_text = (completed.stdout or completed.stderr).strip() or None
     except Exception as exc:  # pragma: no cover - defensive
@@ -122,6 +179,7 @@ def _command_version_from_wsl(command_name: str, version_args: list[str] | None 
             text=True,
             timeout=12,
             check=False,
+            **hidden_windows_subprocess_kwargs(),
         )
     except Exception as exc:  # pragma: no cover - defensive
         return {
@@ -172,6 +230,7 @@ def detect_wsl_status() -> dict:
             capture_output=True,
             timeout=10,
             check=False,
+            **hidden_windows_subprocess_kwargs(),
         )
         stdout = _decode_command_output(completed.stdout, completed.stderr)
         lowered = stdout.lower()
@@ -211,8 +270,32 @@ def _decode_command_output(stdout: bytes | str, stderr: bytes | str) -> str:
     return ""
 
 
-def detect_onboarding_status(root: Path) -> dict:
+def invalidate_onboarding_status_cache(root: Path | None = None) -> None:
+    if root is None:
+        _ONBOARDING_CACHE.clear()
+        return
+    resolved_root = root.resolve()
+    _ONBOARDING_CACHE.pop(str(resolved_root), None)
+    invalidate_persistent_snapshot_cache(resolved_root, "onboarding_status")
+
+
+def detect_onboarding_status(root: Path, *, force: bool = False) -> dict:
     root = root.resolve()
+    cache_key = str(root)
+    now = time.monotonic()
+    cached = _ONBOARDING_CACHE.get(cache_key)
+    if not force and cached and now - cached[0] < _ONBOARDING_CACHE_TTL_SECONDS:
+        return copy.deepcopy(cached[1])
+    if not force:
+        persisted = load_persistent_snapshot_cache(
+            root,
+            "onboarding_status",
+            _ONBOARDING_CACHE_TTL_SECONDS,
+        )
+        if isinstance(persisted, dict):
+            _ONBOARDING_CACHE[cache_key] = (now, copy.deepcopy(persisted))
+            return copy.deepcopy(persisted)
+
     readme_exists = (root / "README.md").exists()
     wsl = detect_wsl_status()
     setup_history = _load_setup_history(root)
@@ -275,7 +358,7 @@ def detect_onboarding_status(root: Path) -> dict:
         phone_ready=phone_ready,
     )
     tutorial = _build_tutorial(root, checks, profile_registry, setup_health)
-    return {
+    payload = {
         "platform": platform.system(),
         "workspaceRoot": str(root),
         "wsl": wsl,
@@ -291,11 +374,14 @@ def detect_onboarding_status(root: Path) -> dict:
         "recommendedProfile": _recommended_profile(root, checks, profile_registry),
         "tutorial": tutorial,
     }
+    save_persistent_snapshot_cache(root, "onboarding_status", payload)
+    _ONBOARDING_CACHE[cache_key] = (now, copy.deepcopy(payload))
+    return payload
 
 
-def build_guidance_snapshot(root: Path) -> dict:
+def build_guidance_snapshot(root: Path, *, onboarding: dict | None = None) -> dict:
     root = root.resolve()
-    onboarding = detect_onboarding_status(root)
+    onboarding = onboarding or detect_onboarding_status(root)
     profile_registry = ProfileRegistry(root / "config" / "profiles.json")
     checks = onboarding["checks"]
     tutorial = onboarding["tutorial"]
@@ -324,6 +410,13 @@ def _recommended_next_actions(
 ) -> list[str]:
     status: list[str] = []
     wsl = wsl or detect_wsl_status()
+    workspace_contract = _primary_workspace_contract(root)
+    openai_codex_auth_mode = _normalize_openai_codex_auth_mode(
+        workspace_contract.get("openai_codex_auth_mode", "none")
+    )
+    minimax_auth_mode = str(
+        workspace_contract.get("minimax_auth_mode", "none")
+    ).strip().lower()
     checks = checks or {
         "node": _command_version("node"),
         "python": _command_version("python"),
@@ -331,6 +424,10 @@ def _recommended_next_actions(
         "openclaw": _command_version("openclaw"),
         "hermes": _command_version("hermes"),
     }
+    if not _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode):
+        status.append(
+            "Choose Codex auth (ChatGPT portal or API key) or MiniMax auth (OAuth or API key) before launching a mission."
+        )
     if wsl["required"] and not wsl["installed"]:
         status.append("Install WSL2 and reboot before backend setup.")
     if not checks["node"]["installed"]:
@@ -399,11 +496,29 @@ def _build_tutorial(
     selected_profile = _selected_profile(root) or progress.selected_profile or _recommended_profile(
         root, checks, profile_registry
     )
+    workspace_contract = _primary_workspace_contract(root)
+    openai_codex_auth_mode = _normalize_openai_codex_auth_mode(
+        workspace_contract.get("openai_codex_auth_mode", "none")
+    )
+    minimax_auth_mode = str(
+        workspace_contract.get("minimax_auth_mode", "none")
+    ).strip().lower()
+    model_auth_ready = _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode)
     missions = _launched_mission_count(root)
     workspaces = _workspace_count(root)
     phone_ready = _phone_destination_count(root) > 0
 
     steps = [
+        TutorialStep(
+            step_id="authenticate_model",
+            title="Authenticate a model",
+            description=(
+                "Choose Codex via ChatGPT portal or API key, or choose MiniMax via OAuth or API key, before doing anything else."
+            ),
+            status="completed" if model_auth_ready else "pending",
+            cta_label="Open auth",
+            panel="Auth",
+        ),
         TutorialStep(
             step_id="detect_environment",
             title="Check local setup",
@@ -471,6 +586,17 @@ def _build_guidance_cards(
                 kind="tutorial",
                 cta_label="Open tutorial",
                 panel="Guidance",
+            )
+        )
+    if tutorial["currentStepId"] == "authenticate_model":
+        cards.append(
+            GuidanceCard(
+                card_id="auth.model",
+                title="Authenticate Codex or MiniMax first",
+                body="Open the runtime drawer and pick one working model auth path before asking Fluxio to run a real mission.",
+                kind="setup",
+                cta_label="Open auth",
+                panel="Auth",
             )
         )
     if not tutorial["isComplete"] or not checks["openclaw"]["installed"] or not checks["hermes"]["installed"]:
@@ -635,6 +761,8 @@ def _install_source_for_dependency(dependency: dict) -> str:
     primary_action = repair_actions[0] if repair_actions else {}
     platform = primary_action.get("platform", "")
     command = primary_action.get("command", "")
+    if dependency_id == "model_auth":
+        return "provider_auth"
     if dependency_id == "wsl2":
         return "windows_feature"
     if dependency_id == "guided_mission":
@@ -887,9 +1015,25 @@ def _build_setup_health(
     hermes_update = adapters["hermes"].update(root)
     platform_name = platform.system().lower()
     workspace_contract = _primary_workspace_contract(root)
+    openai_codex_auth_mode = _normalize_openai_codex_auth_mode(
+        workspace_contract.get("openai_codex_auth_mode", "none")
+    )
     minimax_auth_mode = str(
         workspace_contract.get("minimax_auth_mode", "none")
     ).strip().lower()
+    model_auth_configured = _model_auth_ready(
+        openai_codex_auth_mode,
+        minimax_auth_mode,
+    )
+    model_auth_summary = (
+        f"Primary model auth is configured through {_openai_codex_auth_label(openai_codex_auth_mode)}."
+        if _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {"chatgpt", "api"}
+        else (
+            f"Primary model auth is configured through {_minimax_auth_label(minimax_auth_mode)}."
+            if minimax_auth_mode in {"minimax-portal-oauth", "minimax-api"}
+            else "Choose Codex or MiniMax auth in Builder -> Runtime before launching a mission."
+        )
+    )
     minimax_auth_configured = minimax_auth_mode in {
         "minimax-portal-oauth",
         "minimax-api",
@@ -923,6 +1067,20 @@ def _build_setup_health(
     latest_verify = _latest_setup_record(setup_history, command_surface="setup.verify")
 
     dependencies = [
+        {
+            "dependencyId": "model_auth",
+            "label": "Model auth",
+            "category": "agent_runtime",
+            "required": True,
+            "installed": model_auth_configured,
+            "version": (
+                _openai_codex_auth_label(openai_codex_auth_mode)
+                if _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {"chatgpt", "api"}
+                else _minimax_auth_label(minimax_auth_mode)
+            ),
+            "details": model_auth_summary,
+            "repairActions": [],
+        },
         {
             "dependencyId": "wsl2",
             "label": "WSL2",
@@ -1464,4 +1622,11 @@ def _save_guidance_progress(root: Path, progress: OnboardingProgress) -> None:
     control_dir = root / ".agent_control"
     control_dir.mkdir(parents=True, exist_ok=True)
     path = control_dir / "guidance_state.json"
-    path.write_text(json.dumps(progress.__dict__, indent=2), encoding="utf-8")
+    payload = json.dumps(progress.__dict__, indent=2)
+    if path.exists():
+        try:
+            if path.read_text(encoding="utf-8") == payload:
+                return
+        except OSError:
+            pass
+    path.write_text(payload, encoding="utf-8")

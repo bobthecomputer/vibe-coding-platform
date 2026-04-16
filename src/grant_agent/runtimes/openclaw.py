@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import shlex
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
+from ..subprocess_utils import hidden_windows_subprocess_kwargs
 from ..runtime_updates import (
     compare_version_tokens,
     latest_openclaw_release,
@@ -32,6 +34,27 @@ OPENCLAW_PROVIDER_MAP = {
     "xiaomi": "xiaomi",
     "arcee": "arcee",
 }
+
+
+def read_openclaw_package_version(command: str | None) -> str | None:
+    if not command or os.name != "nt":
+        return None
+    command_path = Path(command)
+    candidates = [
+        command_path.parent / "node_modules" / "openclaw" / "package.json",
+        command_path.parent.parent / "node_modules" / "openclaw" / "package.json",
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        version = normalize_openclaw_version(payload.get("version"))
+        if version:
+            return version
+    return None
 
 
 class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
@@ -62,9 +85,9 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
 
     def detect(self, workspace_root: Path) -> RuntimeInstallStatus:
         command = shutil.which("openclaw")
-        version = None
+        version = read_openclaw_package_version(command)
         issues: list[str] = []
-        if command:
+        if command and not version:
             try:
                 completed = subprocess.run(  # noqa: S603
                     [command, "--version"],
@@ -73,6 +96,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
                     text=True,
                     timeout=8,
                     check=False,
+                    **hidden_windows_subprocess_kwargs(),
                 )
                 version = normalize_openclaw_version(
                     (completed.stdout or completed.stderr).strip() or None

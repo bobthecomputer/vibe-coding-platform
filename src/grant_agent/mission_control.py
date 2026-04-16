@@ -28,9 +28,13 @@ from .models import (
 )
 from .app_capability_standard import build_connected_apps_snapshot
 from .execution_truth import derive_execution_target
-from .onboarding import build_guidance_snapshot, detect_onboarding_status
+from .onboarding import (
+    build_guidance_snapshot,
+    detect_onboarding_status,
+    invalidate_onboarding_status_cache,
+)
 from .profiles import ProfileRegistry
-from .runtimes import detect_runtime_statuses
+from .runtimes import detect_runtime_statuses, invalidate_runtime_status_cache
 from .runtime_supervisor import DelegatedRuntimeSupervisor
 from .skill_library import SkillLibrary
 from .skills import SkillRegistry
@@ -223,7 +227,7 @@ def _openai_codex_setup_status_for_workspace(
         "authPath": openai_codex_auth_label(effective_mode),
         "configured": configured,
         "authPresent": configured,
-        "lastCheckedAt": workspace_payload.get("updated_at", "") or utc_now_iso(),
+        "lastCheckedAt": workspace_payload.get("updated_at", ""),
     }
 
 
@@ -279,6 +283,20 @@ class ControlRoomStore:
         self.events_path = self.control_dir / "mission_events.jsonl"
         self.workspace_actions_path = self.control_dir / "workspace_actions.json"
 
+    def _write_json_if_changed(self, path: Path, payload: object) -> None:
+        serialized = json.dumps(payload, indent=2)
+        if path.exists():
+            try:
+                if path.read_text(encoding="utf-8") == serialized:
+                    return
+            except OSError:
+                pass
+        path.write_text(serialized, encoding="utf-8")
+
+    def _invalidate_snapshot_caches(self) -> None:
+        invalidate_onboarding_status_cache(self.root)
+        invalidate_runtime_status_cache(self.root)
+
     def load_workspaces(self) -> list[WorkspaceProfile]:
         payload = self._load_json(self.workspaces_path, [])
         workspaces = [WorkspaceProfile(**item) for item in payload]
@@ -288,9 +306,10 @@ class ControlRoomStore:
         return workspaces
 
     def save_workspaces(self, workspaces: list[WorkspaceProfile]) -> None:
-        self.workspaces_path.write_text(
-            json.dumps([asdict(item) for item in workspaces], indent=2),
-            encoding="utf-8",
+        self._invalidate_snapshot_caches()
+        self._write_json_if_changed(
+            self.workspaces_path,
+            [asdict(item) for item in workspaces],
         )
 
     def load_missions(self) -> list[Mission]:
@@ -355,9 +374,9 @@ class ControlRoomStore:
         return missions
 
     def save_missions(self, missions: list[Mission]) -> None:
-        self.missions_path.write_text(
-            json.dumps([asdict(item) for item in missions], indent=2),
-            encoding="utf-8",
+        self._write_json_if_changed(
+            self.missions_path,
+            [asdict(item) for item in missions],
         )
 
     def upsert_workspace(
@@ -640,6 +659,8 @@ class ControlRoomStore:
         record: dict,
         limit: int = 24,
     ) -> dict:
+        if history_key == "__setup__":
+            self._invalidate_snapshot_caches()
         histories = self.load_workspace_actions()
         entries = list(histories.get(history_key, []))
         entries.append(record)
@@ -665,7 +686,7 @@ class ControlRoomStore:
         onboarding = detect_onboarding_status(self.root)
         setup_health = onboarding.get("setupHealth", {})
         setup_health["actionHistory"] = workspace_action_history.get("__setup__", [])
-        guidance = build_guidance_snapshot(self.root)
+        guidance = build_guidance_snapshot(self.root, onboarding=onboarding)
         runtime_supervisor = DelegatedRuntimeSupervisor(self.root)
         connected_apps_snapshot = build_connected_apps_snapshot(self.root)
         harness_lab_snapshot = build_harness_lab_snapshot(self.root)
@@ -758,8 +779,6 @@ class ControlRoomStore:
             )
             sync_mission_state_snapshot(mission)
         self._rebalance_workspace_queue_in_place(missions)
-        if missions:
-            self.save_missions(missions)
         missions_payload = []
         for item in missions:
             mission_payload = asdict(item)
@@ -1405,6 +1424,16 @@ def _provider_truth_for_mission(
             }
             break
 
+    updated_at_candidates = [
+        str(mission.updated_at or ""),
+        str(last_success.get("at", "") or "") if isinstance(last_success, dict) else "",
+        str(last_failure.get("at", "") or "") if isinstance(last_failure, dict) else "",
+    ]
+    truth_updated_at = max(
+        (value for value in updated_at_candidates if value),
+        default=str(mission.updated_at or ""),
+    )
+
     return {
         "currentPhase": phase or "execute",
         "activeRoute": {
@@ -1421,7 +1450,7 @@ def _provider_truth_for_mission(
         "authPath": auth_path,
         "lastSuccessfulCall": last_success,
         "lastFailure": last_failure,
-        "updatedAt": utc_now_iso(),
+        "updatedAt": truth_updated_at,
     }
 
 

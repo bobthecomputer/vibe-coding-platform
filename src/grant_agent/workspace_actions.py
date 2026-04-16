@@ -23,9 +23,15 @@ from .models import (
     WorkspaceProfile,
     utc_now_iso,
 )
-from .onboarding import detect_onboarding_status, load_telegram_destination
+from .onboarding import (
+    detect_onboarding_status,
+    invalidate_onboarding_status_cache,
+    load_telegram_destination,
+)
 from .profiles import ProfileRegistry
+from .runtimes import invalidate_runtime_status_cache
 from .safety import risk_level_for_command
+from .subprocess_utils import hidden_windows_subprocess_kwargs
 
 SETUP_HISTORY_KEY = "__setup__"
 TELEGRAM_ENV_KEYS = (
@@ -107,6 +113,8 @@ def execute_control_room_workspace_action(
             }
             record_dict.setdefault("result", {})["payload"] = payload
     if surface == "setup":
+        invalidate_onboarding_status_cache(root)
+        invalidate_runtime_status_cache(root)
         record_dict = _refresh_setup_result_payload(
             store=store,
             root=root,
@@ -954,6 +962,7 @@ def _run_shell_action(
             text=True,
             timeout=timeout_seconds,
             check=False,
+            **hidden_windows_subprocess_kwargs(),
         )
     return subprocess.run(  # noqa: S603
         command,
@@ -963,6 +972,7 @@ def _run_shell_action(
         text=True,
         timeout=timeout_seconds,
         check=False,
+        **hidden_windows_subprocess_kwargs(),
     )
 
 
@@ -987,7 +997,7 @@ def _refresh_setup_result_payload(
     spec: dict,
     record: dict,
 ) -> dict:
-    onboarding = detect_onboarding_status(root)
+    onboarding = detect_onboarding_status(root, force=True)
     setup_health = onboarding.get("setupHealth", {})
     dependency_id = spec.get("dependencyId", "")
     missing = setup_health.get("missingDependencies", [])

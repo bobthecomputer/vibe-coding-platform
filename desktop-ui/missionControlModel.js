@@ -1770,6 +1770,9 @@ function priorityTone(priority) {
 
 function actionForGuidancePanel(panel) {
   const normalized = String(panel || "").toLowerCase();
+  if (normalized === "auth") {
+    return "open_auth";
+  }
   if (normalized === "setup") {
     return "open_runtime";
   }

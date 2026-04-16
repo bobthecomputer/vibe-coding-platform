@@ -12,6 +12,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
+from .subprocess_utils import background_creationflags
 
 STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
 HEARTBEAT_INTERVAL_SECONDS = max(
@@ -130,9 +131,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 
 def _creationflags() -> int:
-    if os.name == "nt":
-        return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    return 0
+    return background_creationflags()
 
 
 def _runtime_env(session_path: Path, cwd: Path) -> dict[str, str]:

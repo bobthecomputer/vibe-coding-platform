@@ -798,6 +798,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const mountedRef = useRef(true);
   const currentMissionRef = useRef(null);
   const currentDelegatedSessionsRef = useRef([]);
+  const refreshPromiseRef = useRef(null);
+  const queuedRefreshReasonRef = useRef("");
+  const authPromptedRef = useRef(false);
   const { items: toasts, push: pushToast } = useToastQueue();
 
   const markAction = useCallback(
@@ -844,7 +847,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     setLiveControlEvents([]);
   }, [previewMode, selectedMissionId]);
 
-  const refreshAll = useCallback(
+  const performRefresh = useCallback(
     async (reason = "manual") => {
       markAction(`refresh:${reason}`);
       setIsRefreshing(true);
@@ -895,7 +898,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
         const [
           snapshot,
-          onboarding,
           pendingApprovals,
           pendingQuestions,
           telegramReady,
@@ -906,11 +908,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           await Promise.all([
             callBackend(
               "get_control_room_snapshot_command",
-              { payload: { root: null } },
-              { throwOnError: true },
-            ),
-            callBackend(
-              "get_onboarding_status_command",
               { payload: { root: null } },
               { throwOnError: true },
             ),
@@ -941,7 +938,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         setData(current => ({
           ...current,
           snapshot,
-          onboarding,
+          onboarding: snapshot?.onboarding || current.onboarding || null,
           pendingApprovals: Array.isArray(pendingApprovals) ? pendingApprovals : [],
           pendingQuestions: Array.isArray(pendingQuestions) ? pendingQuestions : [],
           telegramReady: Boolean(telegramReady),
@@ -966,6 +963,33 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
     },
     [markAction, previewMode, pushToast],
+  );
+
+  const refreshAll = useCallback(
+    async (reason = "manual") => {
+      const normalizedReason = String(reason || "manual");
+      if (refreshPromiseRef.current) {
+        queuedRefreshReasonRef.current = normalizedReason;
+        return refreshPromiseRef.current;
+      }
+
+      const refreshPromise = (async () => {
+        let nextReason = normalizedReason;
+        while (nextReason) {
+          queuedRefreshReasonRef.current = "";
+          await performRefresh(nextReason);
+          nextReason = queuedRefreshReasonRef.current;
+        }
+      })().finally(() => {
+        if (refreshPromiseRef.current === refreshPromise) {
+          refreshPromiseRef.current = null;
+        }
+      });
+
+      refreshPromiseRef.current = refreshPromise;
+      return refreshPromise;
+    },
+    [performRefresh],
   );
 
   useEffect(() => {
@@ -1637,6 +1661,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           setUiMode("builder");
           setActiveDrawer("runtime");
           return;
+        case "open_auth":
+          openAuthDrawer();
+          return;
         case "open_profiles":
           setUiMode("builder");
           setActiveDrawer("profiles");
@@ -1700,6 +1727,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [
       markAction,
       mission?.mission_id,
+      openAuthDrawer,
       openMissionDialog,
       pushToast,
       runWorkspaceActionSpec,
@@ -3002,6 +3030,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     (providerSetupStatus && typeof providerSetupStatus === "object"
       ? providerSetupStatus.openai
       : null) || {};
+  const minimaxProviderStatus =
+    (providerSetupStatus && typeof providerSetupStatus === "object"
+      ? providerSetupStatus.minimax
+      : null) || {};
   const missionProviderTruth =
     mission?.providerTruth ||
     mission?.missionLoop?.providerTruth ||
@@ -3025,7 +3057,30 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     openAIProviderStatus?.authPath ||
       (openAISecretReady ? "API key" : "not configured"),
   );
+  const minimaxAuthReady = Boolean(
+    minimaxProviderStatus?.configured || minimaxProviderStatus?.authPresent,
+  );
+  const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
+
+  const openAuthDrawer = useCallback(() => {
+    setUiMode("builder");
+    setActiveDrawer("runtime");
+    window.setTimeout(() => {
+      document.getElementById("provider-auth-panel")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (previewMode !== "live" || mission || workspaces.length === 0 || modelAuthReady || authPromptedRef.current) {
+      return;
+    }
+    authPromptedRef.current = true;
+    openAuthDrawer();
+  }, [mission, modelAuthReady, openAuthDrawer, previewMode, workspaces.length]);
 
   const drawerItems = useMemo(() => {
     const items = [
@@ -3295,7 +3350,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <p>Keep Hermes, OpenClaw, and bridge surfaces manageable from one focused review panel.</p>
           </header>
 
-          <section className="drawer-block">
+          <section className="drawer-block" id="provider-auth-panel">
             <h3>Provider auth and OpenAI tools</h3>
             <div className="context-grid compact-metrics">
               <article className="context-item">
