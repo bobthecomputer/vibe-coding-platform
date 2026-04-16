@@ -22,6 +22,8 @@ const STORAGE_KEYS = {
   telegramChatId: "fluxio.telegram.chatId",
   previewMode: "fluxio.preview.mode",
   liveSyncSeconds: "fluxio.live_sync.seconds",
+  codeExecutionEnabled: "fluxio.openai.code_execution.enabled",
+  codeExecutionMemory: "fluxio.openai.code_execution.memory",
 };
 
 const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...listFixtureOptions()];
@@ -92,6 +94,32 @@ const MODEL_EFFORT_OPTIONS = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
+];
+const CODE_EXECUTION_MEMORY_OPTIONS = [
+  { value: "1g", label: "1 GB" },
+  { value: "4g", label: "4 GB" },
+  { value: "16g", label: "16 GB" },
+  { value: "64g", label: "64 GB" },
+];
+const PROVIDER_SECRET_OPTIONS = [
+  {
+    id: "openai",
+    label: "OpenAI / Codex",
+    env: "OPENAI_API_KEY",
+    note: "Used for GPT and Codex-family routes.",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    env: "ANTHROPIC_API_KEY",
+    note: "Used when planner or verifier routes target Claude.",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    env: "OPENROUTER_API_KEY",
+    note: "Used when a route is delegated through OpenRouter.",
+  },
 ];
 const ROUTE_MODEL_OPTIONS = [
   "gpt-5.4",
@@ -203,8 +231,25 @@ function isTraceRuntimeKind(kind) {
   const normalized = String(kind || "").toLowerCase();
   return (
     isProcessRuntimeKind(normalized) ||
-    ["runtime.phase", "runtime.plan", "runtime.thinking", "runtime.reasoning"].includes(normalized)
+    [
+      "runtime.phase",
+      "runtime.plan",
+      "runtime.thinking",
+      "runtime.reasoning",
+      "runtime.route_contract",
+    ].includes(normalized)
   );
+}
+
+function phaseRouteRole(phase) {
+  const normalized = String(phase || "").trim().toLowerCase();
+  if (["plan", "replan"].includes(normalized)) {
+    return "planner";
+  }
+  if (normalized === "verify") {
+    return "verifier";
+  }
+  return "executor";
 }
 
 function isIgnorableAgentRuntimeEvent(event) {
@@ -569,6 +614,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
     const kind = row.kind || "runtime.event";
     const processMessage = isTraceRuntimeKind(kind);
     const heartbeat = isHeartbeatRuntimeKind(kind);
+    const routeSwitch = String(kind).toLowerCase() === "runtime.route_contract";
     const detail = deltaDetail(row);
     return {
       id: `runtime-${delegatedId || mission.mission_id}-${row.event_id || row.created_at || payload.detectedAt}-${kind}`,
@@ -590,7 +636,11 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           : titleizeToken(kind),
       title: row.message || "Runtime event",
       detail:
-        detail ||
+        (routeSwitch
+          ? `${titleizeToken(row?.data?.phase || "execute")} phase · ${titleizeToken(
+              row?.data?.role || "route",
+            )} route`
+          : detail) ||
         (processMessage
           ? `${runtimeLabel(row.runtime_id || mission.runtime_id)} emitted process output.`
           : heartbeat
@@ -617,6 +667,8 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
         /approval|blocked|error/i.test(`${kind} ${row.message || ""}`),
       chips: [
         row.runtime_id ? runtimeLabel(row.runtime_id) : "",
+        routeSwitch && row?.data?.phase ? titleizeToken(row.data.phase) : "",
+        routeSwitch && row?.data?.role ? titleizeToken(row.data.role) : "",
         row.status ? titleizeToken(row.status) : "",
       ].filter(Boolean),
     };
@@ -646,6 +698,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const storedPreviewMode =
     searchParams.get("fixture") || localStorage.getItem(STORAGE_KEYS.previewMode) || "live";
   const storedLiveSyncSeconds = localStorage.getItem(STORAGE_KEYS.liveSyncSeconds) || "off";
+  const storedCodeExecutionEnabled =
+    localStorage.getItem(STORAGE_KEYS.codeExecutionEnabled) === "true";
+  const storedCodeExecutionMemory =
+    localStorage.getItem(STORAGE_KEYS.codeExecutionMemory) || "4g";
 
   const [uiMode, setUiMode] = useState(
     ["agent", "builder"].includes(storedUiMode) ? storedUiMode : "agent",
@@ -674,6 +730,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [openClawGatewayUrl, setOpenClawGatewayUrl] = useState(DEFAULT_OPENCLAW_GATEWAY_URL);
   const [openClawGatewayToken, setOpenClawGatewayToken] = useState("");
+  const [providerSecretDrafts, setProviderSecretDrafts] = useState(
+    Object.fromEntries(PROVIDER_SECRET_OPTIONS.map(item => [item.id, ""])),
+  );
+  const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
+  const [codeExecutionMemory, setCodeExecutionMemory] = useState(
+    CODE_EXECUTION_MEMORY_OPTIONS.some(option => option.value === storedCodeExecutionMemory)
+      ? storedCodeExecutionMemory
+      : "4g",
+  );
   const [lastPushReason, setLastPushReason] = useState("");
   const [liveSyncSuspended, setLiveSyncSuspended] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -697,6 +762,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     openClawStatus: null,
     openClawHasToken: false,
     openClawMessages: [],
+    providerSecretPresence: {},
   });
 
   const mountedRef = useRef(true);
@@ -734,6 +800,17 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [telegramChatId]);
 
   useEffect(() => {
+    localStorage.setItem(
+      STORAGE_KEYS.codeExecutionEnabled,
+      codeExecutionEnabled ? "true" : "false",
+    );
+  }, [codeExecutionEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.codeExecutionMemory, codeExecutionMemory);
+  }, [codeExecutionMemory]);
+
+  useEffect(() => {
     setLiveControlEvents([]);
   }, [previewMode, selectedMissionId]);
 
@@ -759,6 +836,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             openClawStatus: null,
             openClawHasToken: false,
             openClawMessages: [],
+            providerSecretPresence: {},
           }));
           return;
         }
@@ -793,6 +871,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           telegramReady,
           openClawStatus,
           openClawHasToken,
+          providerSecretPresencePrimary,
         ] =
           await Promise.all([
             callBackend(
@@ -810,11 +889,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             callBackend("has_telegram_bot_token_command"),
             callBackend("get_openclaw_status"),
             callBackend("has_openclaw_gateway_token"),
+            callBackend("get_provider_secret_presence_command", {
+              providerIds: PROVIDER_SECRET_OPTIONS.map(item => item.id),
+            }),
           ]);
 
         if (!mountedRef.current) {
           return;
         }
+
+        const providerSecretPresence =
+          providerSecretPresencePrimary ||
+          (await callBackend("get_provider_secret_presence_command", {
+            provider_ids: PROVIDER_SECRET_OPTIONS.map(item => item.id),
+          })) ||
+          {};
 
         setData(current => ({
           ...current,
@@ -826,6 +915,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           previewMeta: null,
           openClawStatus: openClawStatus || null,
           openClawHasToken: Boolean(openClawHasToken),
+          providerSecretPresence:
+            providerSecretPresence && typeof providerSecretPresence === "object"
+              ? providerSecretPresence
+              : {},
         }));
 
         if (reason !== "initialize") {
@@ -1819,9 +1912,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     markAction("composer:send-follow-up");
     try {
       const steeringLines = [];
+      const currentPhase =
+        mission?.missionLoop?.currentCyclePhase || mission?.state?.current_cycle_phase || "execute";
       if (mission && agentRuntimeFocus !== "all") {
         steeringLines.push(`Runtime preference: ${runtimeLabel(agentRuntimeFocus)}.`);
       }
+      steeringLines.push(
+        `Current mission phase: ${titleizeToken(currentPhase)} via ${titleizeToken(
+          phaseRouteRole(currentPhase),
+        )}.`,
+      );
       const selectedRoute =
         workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {};
       const effectiveRoute =
@@ -1838,6 +1938,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ? ` / ${selectedRoute.effort}`
               : ""
           }.`,
+        );
+      }
+      const activeProvider = String(
+        selectedRoute.provider || effectiveRoute.provider || "openai",
+      ).trim().toLowerCase();
+      if (codeExecutionEnabled && ["openai", "openai-codex"].includes(activeProvider)) {
+        steeringLines.push(
+          `If the OpenAI route is active, use the python tool / code execution when it will ground the work. Prefer a ${codeExecutionMemory} container budget.`,
         );
       }
       const composedFollowUp =
@@ -1866,6 +1974,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast(`Mission follow-up failed: ${error}`, "error");
     }
   }, [
+    codeExecutionEnabled,
+    codeExecutionMemory,
     agentRouteRole,
     agentRuntimeFocus,
     data.openClawStatus?.connected,
@@ -1948,6 +2058,59 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       await refreshAll("openclaw-token-clear");
     } catch (error) {
       pushToast(`OpenClaw token clear failed: ${error}`, "error");
+    }
+  }, [markAction, previewMode, pushToast, refreshAll]);
+
+  const handleProviderSecretSave = useCallback(async providerId => {
+    markAction(`provider-secret:save:${providerId}`);
+    const secret = String(providerSecretDrafts?.[providerId] || "").trim();
+    if (!secret) {
+      pushToast("Paste a provider API key first.", "warn");
+      return;
+    }
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot change provider authentication.", "warn");
+      return;
+    }
+    try {
+      const payload = { providerId, secret };
+      const saved =
+        (await callBackend("save_provider_secret_command", payload)) ??
+        (await callBackend("save_provider_secret_command", {
+          provider_id: providerId,
+          secret,
+        }));
+      if (!saved) {
+        throw new Error("Provider secret save did not complete.");
+      }
+      setProviderSecretDrafts(current => ({ ...current, [providerId]: "" }));
+      pushToast(`${titleizeToken(providerId)} secret saved.`, "info");
+      await refreshAll(`provider-secret-save-${providerId}`);
+    } catch (error) {
+      pushToast(`Provider secret save failed: ${error}`, "error");
+    }
+  }, [markAction, previewMode, providerSecretDrafts, pushToast, refreshAll]);
+
+  const handleProviderSecretClear = useCallback(async providerId => {
+    markAction(`provider-secret:clear:${providerId}`);
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot change provider authentication.", "warn");
+      return;
+    }
+    try {
+      const cleared =
+        (await callBackend("clear_provider_secret_command", { providerId })) ??
+        (await callBackend("clear_provider_secret_command", {
+          provider_id: providerId,
+        }));
+      if (!cleared) {
+        throw new Error("Provider secret clear did not complete.");
+      }
+      setProviderSecretDrafts(current => ({ ...current, [providerId]: "" }));
+      pushToast(`${titleizeToken(providerId)} secret cleared.`, "info");
+      await refreshAll(`provider-secret-clear-${providerId}`);
+    } catch (error) {
+      pushToast(`Provider secret clear failed: ${error}`, "error");
     }
   }, [markAction, previewMode, pushToast, refreshAll]);
 
@@ -2391,6 +2554,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
       for (const [index, event] of meaningfulEvents.slice(-4).entries()) {
         const processMessage = isTraceRuntimeKind(event.kind);
+        const routeSwitch = String(event.kind || "").toLowerCase() === "runtime.route_contract";
         pushTurn({
           id: `delegated-${delegatedMessageId}-event-${event.event_id || index}`,
           dedupeKey: `delegated-event:${delegatedMessageId}:${event.event_id || event.message || index}`,
@@ -2401,7 +2565,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           label: processMessage ? "Process message" : titleizeToken(event.kind || "runtime event"),
           title: event.message || "Runtime event",
           detail:
-            event.detail ||
+            (routeSwitch
+              ? `${titleizeToken(event?.data?.phase || "execute")} phase · ${titleizeToken(
+                  event?.data?.role || "route",
+                )} route`
+              : event.detail) ||
             (processMessage
               ? session.execution_target_detail || "Delegated runtime process output."
               : session.execution_target_detail ||
@@ -2431,6 +2599,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           chips: [
             session.status ? titleizeToken(session.status) : "",
             session.execution_target ? titleizeToken(session.execution_target) : "",
+            routeSwitch && event?.data?.phase ? titleizeToken(event.data.phase) : "",
+            routeSwitch && event?.data?.role ? titleizeToken(event.data.role) : "",
             event.status ? titleizeToken(event.status) : "",
           ].filter(Boolean),
         });
@@ -2571,9 +2741,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     : agentRuntimeFocus === "all"
       ? `Showing every visible runtime trace. Active lane: ${runtimeLabel(mission?.runtime_id)}.`
       : `Filtering the transcript to ${runtimeLabel(agentRuntimeFocus)} turns while keeping operator and bridge context visible.`;
+  const agentCyclePhase =
+    mission?.missionLoop?.currentCyclePhase || mission?.state?.current_cycle_phase || "plan";
+  const agentCycleRole = phaseRouteRole(agentCyclePhase);
   const agentRouteStatus = `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "Profile default"} · ${
     activeEffectiveRoute.effort || selectedAgentRoute.effort || "default"
   }`;
+  const providerSecretPresence = data.providerSecretPresence || {};
+  const openAISecretReady = Boolean(
+    providerSecretPresence.openai || providerSecretPresence["openai-codex"],
+  );
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
 
   const drawerItems = useMemo(() => {
@@ -2843,6 +3020,88 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <h2>Runtime and integrations</h2>
             <p>Keep Hermes, OpenClaw, and bridge surfaces manageable from one focused review panel.</p>
           </header>
+
+          <section className="drawer-block">
+            <h3>Provider auth and OpenAI tools</h3>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>OpenAI / Codex auth</span>
+                <strong>{openAISecretReady ? "Stored" : "Missing"}</strong>
+                <p>Saved secrets are injected into Fluxio runtime launches.</p>
+              </article>
+              <article className="context-item">
+                <span>Code execution</span>
+                <strong>{codeExecutionEnabled ? "Enabled" : "Disabled"}</strong>
+                <p>{codeExecutionEnabled ? `${codeExecutionMemory} auto container` : "Prompt-only execution"}</p>
+              </article>
+              <article className="context-item">
+                <span>Phase-aware switching</span>
+                <strong>{titleizeToken(agentCyclePhase)}</strong>
+                <p>{titleizeToken(agentCycleRole)} route is now the active runtime focus.</p>
+              </article>
+            </div>
+
+            <div className="drawer-list">
+              {PROVIDER_SECRET_OPTIONS.map(item => {
+                const hasSecret = Boolean(providerSecretPresence[item.id]);
+                return (
+                  <article className={`drawer-card ${toneClass(hasSecret ? "good" : "warn")}`} key={`provider-${item.id}`}>
+                    <span>{item.env}</span>
+                    <strong>{item.label}</strong>
+                    <p>{item.note}</p>
+                    <Field label={`${item.label} API key`}>
+                      <input
+                        onChange={event =>
+                          setProviderSecretDrafts(current => ({
+                            ...current,
+                            [item.id]: event.target.value,
+                          }))
+                        }
+                        placeholder={hasSecret ? "Stored in secure keyring" : "Paste API key"}
+                        type="password"
+                        value={providerSecretDrafts[item.id] || ""}
+                      />
+                    </Field>
+                    <div className="drawer-actions">
+                      <ActionButton onClick={() => void handleProviderSecretSave(item.id)}>
+                        Save key
+                      </ActionButton>
+                      <ActionButton onClick={() => void handleProviderSecretClear(item.id)}>
+                        Clear
+                      </ActionButton>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="field-row">
+              <Field label="Code execution">
+                <select
+                  onChange={event => setCodeExecutionEnabled(event.target.value === "enabled")}
+                  value={codeExecutionEnabled ? "enabled" : "disabled"}
+                >
+                  <option value="disabled">Disabled</option>
+                  <option value="enabled">Enabled</option>
+                </select>
+              </Field>
+              <Field label="Container memory">
+                <select
+                  onChange={event => setCodeExecutionMemory(event.target.value)}
+                  value={codeExecutionMemory}
+                >
+                  {CODE_EXECUTION_MEMORY_OPTIONS.map(option => (
+                    <option key={`code-exec-memory-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <p className="drawer-footnote">
+              OpenAI Code Interpreter is configured using the current Responses API tool contract: auto containers use the `code_interpreter` tool with a memory tier, and explicit containers can be reused when needed.
+            </p>
+          </section>
 
           <section className="drawer-block">
             <h3>OpenClaw gateway</h3>
@@ -4681,10 +4940,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <div className="thread-chip-row">
                       <span className="mini-pill muted">{agentRouteStatus}</span>
                       <span className="mini-pill muted">{titleizeToken(agentRouteRole)} route</span>
+                      <span className="mini-pill muted">
+                        Code execution {codeExecutionEnabled ? "on" : "off"}
+                      </span>
+                      <span className="mini-pill muted">
+                        {openAISecretReady ? "OpenAI auth ready" : "OpenAI auth missing"}
+                      </span>
                     </div>
                     <div className="thread-composer-actions">
                       <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
                         Apply route
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => setCodeExecutionEnabled(current => !current)}
+                        type="button"
+                      >
+                        {codeExecutionEnabled ? "Disable code execution" : "Enable code execution"}
                       </ActionButton>
                     </div>
                   </div>
@@ -5329,6 +5600,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <div className="thread-chip-row">
                       <span className="mini-pill muted">{agentRouteStatus}</span>
                       <span className="mini-pill muted">
+                        {titleizeToken(agentCyclePhase)} phase via {titleizeToken(agentCycleRole)}
+                      </span>
+                      <span className="mini-pill muted">
                         {latestThinkingTurn
                           ? `${latestThinkingTurn.roleLabel || "Runtime"} thinking`
                           : mission?.state?.status === "running"
@@ -5338,10 +5612,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       <span className="mini-pill muted">
                         {agentThinkingTurns.length} trace moment{agentThinkingTurns.length === 1 ? "" : "s"}
                       </span>
+                      <span className="mini-pill muted">
+                        Code execution {codeExecutionEnabled ? `on · ${codeExecutionMemory}` : "off"}
+                      </span>
+                      <span className="mini-pill muted">
+                        {openAISecretReady ? "OpenAI auth ready" : "OpenAI auth missing"}
+                      </span>
                     </div>
                     <div className="thread-composer-actions">
                       <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
                         Apply route
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => setCodeExecutionEnabled(current => !current)}
+                        type="button"
+                      >
+                        {codeExecutionEnabled ? "Disable code execution" : "Enable code execution"}
                       </ActionButton>
                       <ActionButton onClick={() => setShowThinkingTrace(current => !current)} type="button">
                         {showThinkingTrace ? "Hide trace" : "Show trace"}

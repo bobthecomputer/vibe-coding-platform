@@ -67,6 +67,27 @@ EXECUTION_TARGET_SCOPE_OVERRIDES = {
     "workspace_root": "direct",
     "isolated_worktree": "isolated",
 }
+DELEGATED_PLAN_HINTS = (
+    "plan",
+    "replan",
+    "diagnose",
+    "investigate",
+    "inspect",
+    "research",
+    "analyze",
+    "analysis",
+    "review",
+    "roadmap",
+)
+DELEGATED_VERIFY_HINTS = (
+    "verify",
+    "verification",
+    "test",
+    "lint",
+    "smoke",
+    "proof",
+    "validate",
+)
 
 
 class ExecutionAdapter(ABC):
@@ -260,6 +281,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
             )
 
         if _should_delegate_step(lowered, execution_policy):
+            delegated_cycle_phase = _delegated_cycle_phase(step, objective, route_configs)
             return self._proposal(
                 action_id=action_id,
                 event_id=event_id,
@@ -273,6 +295,8 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 delegation_metadata={
                     "runtime_id": runtime_id,
                     "objective": objective,
+                    "cycle_phase": delegated_cycle_phase,
+                    "route_role": _route_role_for_phase(delegated_cycle_phase),
                     "route_configs": [
                         asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
                         for item in (route_configs or [])
@@ -523,6 +547,10 @@ class HybridExecutionAdapter(ExecutionAdapter):
                     if isinstance(item, (dict, ModelRouteConfig)) or hasattr(item, "__dataclass_fields__")
                 ],
             )
+            delegated_mission.state.current_cycle_phase = str(
+                proposal.delegation_metadata.get("cycle_phase", "execute")
+            ).strip().lower() or "execute"
+            delegated_mission.state.status = "running"
             delegated_workspace = WorkspaceProfile(
                 workspace_id="delegated",
                 name=execution_root.name,
@@ -884,6 +912,40 @@ def _should_delegate_step(text: str, policy: ExecutionPolicy) -> bool:
     if delegation == "balanced":
         return any(hint in text for hint in ("approval", "bridge", "runtime lane"))
     return False
+
+
+def _delegated_cycle_phase(
+    step: PlannedStep,
+    objective: str,
+    route_configs: list[dict] | list[ModelRouteConfig] | None = None,
+) -> str:
+    explicit_roles = []
+    for item in route_configs or []:
+        row = asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
+        role = str(row.get("role", "")).strip().lower()
+        if role:
+            explicit_roles.append(role)
+    if explicit_roles:
+        if "planner" in explicit_roles and "executor" not in explicit_roles and "verifier" not in explicit_roles:
+            return "plan"
+        if "verifier" in explicit_roles and "executor" not in explicit_roles:
+            return "verify"
+
+    lowered = f"{step.title} {step.description} {objective} {step.kind}".lower()
+    if _matches(lowered, DELEGATED_VERIFY_HINTS):
+        return "verify"
+    if _matches(lowered, DELEGATED_PLAN_HINTS):
+        return "plan"
+    return "execute"
+
+
+def _route_role_for_phase(phase: str) -> str:
+    normalized = (phase or "execute").strip().lower()
+    if normalized in {"plan", "replan"}:
+        return "planner"
+    if normalized == "verify":
+        return "verifier"
+    return "executor"
 
 
 def _matches(text: str, hints: tuple[str, ...]) -> bool:

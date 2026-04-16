@@ -246,6 +246,74 @@ class ActionExecutorTests(unittest.TestCase):
             self.assertEqual(record.result.payload["delegatedSession"]["execution_target"], "worktree")
             self.assertEqual(record.result.payload["delegatedSnapshot"]["execution_target"], "worktree")
 
+    @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
+    @mock.patch("grant_agent.action_executor.runtime_adapter_map")
+    def test_runtime_delegate_preserves_planner_phase_for_delegated_launch(
+        self,
+        runtime_supervisor_map: mock.Mock,
+        runtime_map: mock.Mock,
+    ) -> None:
+        class _FakeAdapter:
+            runtime_id = "hermes"
+
+            def detect(self, _: pathlib.Path):
+                return type("Status", (), {"detected": True, "doctor_summary": "ready"})()
+
+            def start_mission(self, mission, workspace):
+                assert mission.state.current_cycle_phase == "plan"
+                assert mission.route_configs[0].role == "planner"
+                return {
+                    "launch_command": f'"{sys.executable}" -c "print(\'delegate planner lane ready\')"',
+                    "workspace": workspace.root_path,
+                    "route_contract": {
+                        "phase": mission.state.current_cycle_phase,
+                        "role": "planner",
+                    },
+                }
+
+            def stream_events(self, mission):
+                return [{"kind": "runtime.stream", "missionId": mission.mission_id}]
+
+            def resume_mission(self, mission, workspace):
+                return self.start_mission(mission, workspace)
+
+        adapter_map = {"hermes": _FakeAdapter()}
+        runtime_map.return_value = adapter_map
+        runtime_supervisor_map.return_value = adapter_map
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(root, "mission_delegate_plan", requested_scope="direct", profile_name="builder")
+            step = PlannedStep(step_id="step_delegate", title="Delegate approval investigation to Hermes")
+            proposal = build_action_proposal(
+                step=step,
+                objective="Delegate approval investigation to Hermes for a runtime lane check",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+                route_configs=[
+                    {
+                        "role": "planner",
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "effort": "high",
+                    }
+                ],
+            )
+
+            record = execute_action(
+                proposal,
+                root,
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertEqual(proposal.delegation_metadata["cycle_phase"], "plan")
+            self.assertTrue(record.result.ok)
+
 
 if __name__ == "__main__":
     unittest.main()

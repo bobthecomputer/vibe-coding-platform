@@ -56,7 +56,7 @@ from .mission_control import (
 from .models import DelegatedRuntimeSession, ExecutionPolicy, ExecutionScope, MissionEvent
 from .modes import ModeRegistry
 from .onboarding import detect_onboarding_status, load_telegram_destination
-from .openai_adapter import build_responses_request, tools_from_skills
+from .openai_adapter import CodeExecutionConfig, build_responses_request, tools_from_skills
 from .persona import PersonaRegistry
 from .profiles import ProfileRegistry
 from .replay import build_lineage_timeline
@@ -539,6 +539,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_cmd.add_argument(
         "--top-k-skills", type=int, default=3, help="Number of skills to include"
+    )
+    export_cmd.add_argument(
+        "--code-execution",
+        action="store_true",
+        help="Include the OpenAI Code Interpreter tool using an auto container.",
+    )
+    export_cmd.add_argument(
+        "--code-execution-memory",
+        default="4g",
+        choices=["1g", "4g", "16g", "64g"],
+        help="Container memory tier for Code Interpreter auto mode.",
+    )
+    export_cmd.add_argument(
+        "--code-execution-container-id",
+        default="",
+        help="Existing OpenAI container id for Code Interpreter explicit mode.",
+    )
+    export_cmd.add_argument(
+        "--code-execution-required",
+        action="store_true",
+        help="Force the request to choose Code Interpreter when it is enabled.",
     )
 
     memory_cmd = subparsers.add_parser(
@@ -1511,11 +1532,18 @@ def cmd_export_openai_request(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     skills = SkillRegistry(root / "config" / "skills.json")
     retrieved = skills.retrieve(args.objective, top_k=args.top_k_skills)
-    tool_payload = tools_from_skills(retrieved)
+    code_execution = CodeExecutionConfig(
+        enabled=bool(args.code_execution or args.code_execution_container_id),
+        memory_limit=args.code_execution_memory,
+        container_id=args.code_execution_container_id or None,
+        required=bool(args.code_execution_required),
+    )
+    tool_payload = tools_from_skills(retrieved, code_execution=code_execution)
     request_plan = build_responses_request(
         objective=args.objective,
         model=args.model,
         tools=tool_payload,
+        tool_choice="required" if code_execution.enabled and code_execution.required else None,
     )
     output = root / args.output
     output.write_text(json.dumps(request_plan.as_dict(), indent=2), encoding="utf-8")
@@ -1524,6 +1552,7 @@ def cmd_export_openai_request(args: argparse.Namespace) -> int:
             {
                 "output": str(output),
                 "tools_included": [skill.name for skill in retrieved],
+                "code_execution": code_execution.enabled,
             },
             indent=2,
         )

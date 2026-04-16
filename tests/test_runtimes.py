@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -172,6 +173,74 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("--provider openai-codex", command)
         self.assertIn("--model gpt-5.4", command)
         self.assertEqual(launch["route_contract"]["provider"], "openai-codex")
+
+    def test_openclaw_launch_uses_planner_route_during_plan_phase(self) -> None:
+        adapter = OpenClawRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_plan1234",
+            objective="Plan the migration",
+            route_configs=[
+                {
+                    "role": "planner",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "effort": "high",
+                },
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "effort": "medium",
+                },
+            ],
+            state=SimpleNamespace(current_cycle_phase="plan", status="running"),
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        launch = adapter.start_mission(mission, workspace)
+
+        self.assertEqual(launch["route_contract"]["role"], "planner")
+        self.assertEqual(launch["route_contract"]["phase"], "plan")
+        self.assertEqual(
+            launch["route_contract"]["canonical_model_id"],
+            "openai-codex/gpt-5.4",
+        )
+
+    def test_hermes_launch_uses_verifier_route_during_verify_phase(self) -> None:
+        adapter = HermesRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_verify1234",
+            objective="Verify the patch",
+            route_configs=[
+                {
+                    "role": "planner",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "effort": "high",
+                },
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "effort": "medium",
+                },
+                {
+                    "role": "verifier",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "effort": "high",
+                },
+            ],
+            state=SimpleNamespace(current_cycle_phase="verify", status="running"),
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        with mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes"):
+            launch = adapter.start_mission(mission, workspace)
+
+        self.assertEqual(launch["route_contract"]["role"], "verifier")
+        self.assertEqual(launch["route_contract"]["phase"], "verify")
+        self.assertIn("--model gpt-5.4", str(launch["launch_command"]))
 
     @mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes")
     def test_hermes_update_prefers_native_command_when_available(

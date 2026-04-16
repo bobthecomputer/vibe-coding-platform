@@ -58,6 +58,12 @@ const OPENCLAW_KEYRING_USER: &str = "openclaw-gateway-token";
 const LOCALHOST_API_KEYRING_USER: &str = "localhost-api-token";
 const PROVIDER_KEYRING_USER_PREFIX: &str = "provider-secret:";
 const TELEGRAM_BOT_KEYRING_USER: &str = "telegram-phone-bot-token";
+const AGENT_PROVIDER_ENV_MAPPINGS: [(&str, &[&str]); 4] = [
+    ("OPENAI_API_KEY", &["openai", "openai-codex"]),
+    ("ANTHROPIC_API_KEY", &["anthropic"]),
+    ("OPENROUTER_API_KEY", &["openrouter"]),
+    ("MINIMAX_API_KEY", &["minimax", "minimax-cn"]),
+];
 const OPENCLAW_MAX_PENDING_OUTBOUND: usize = 256;
 const OPENCLAW_MAX_RECENT_EVENT_IDS: usize = 512;
 const OPENCLAW_MAX_PENDING_ACKS: usize = 512;
@@ -1808,6 +1814,7 @@ async fn run_agent_cli_json(
     for arg in extra_args {
         command.arg(arg);
     }
+    inject_agent_cli_provider_env(&mut command)?;
 
     append_audit_entry(
         app,
@@ -2304,6 +2311,24 @@ fn clear_provider_secret(provider_id: &str) -> Result<(), String> {
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) => Err(format!("Failed to clear secure credential: {err}")),
     }
+}
+
+fn provider_secret_for_ids(provider_ids: &[&str]) -> Result<Option<String>, String> {
+    for provider_id in provider_ids {
+        if let Some(secret) = load_provider_secret(provider_id)? {
+            return Ok(Some(secret));
+        }
+    }
+    Ok(None)
+}
+
+fn inject_agent_cli_provider_env(command: &mut TokioCommand) -> Result<(), String> {
+    for (env_name, provider_ids) in AGENT_PROVIDER_ENV_MAPPINGS {
+        if let Some(secret) = provider_secret_for_ids(provider_ids)? {
+            command.env(env_name, secret);
+        }
+    }
+    Ok(())
 }
 
 fn load_telegram_bot_token() -> Result<Option<String>, String> {
