@@ -15,6 +15,21 @@ from ..models import (
     WorkspaceProfile,
 )
 
+PHASE_ROLE_PREFERENCES: dict[str, tuple[str, ...]] = {
+    "plan": ("planner", "executor", "verifier"),
+    "replan": ("planner", "verifier", "executor"),
+    "execute": ("executor", "planner", "verifier"),
+    "verify": ("verifier", "executor", "planner"),
+}
+PHASE_ALIASES = {
+    "planning": "plan",
+    "replanning": "replan",
+    "execution": "execute",
+    "executing": "execute",
+    "verification": "verify",
+    "verifying": "verify",
+}
+
 
 def shell_join(args: list[str]) -> str:
     if os.name == "nt":
@@ -22,10 +37,7 @@ def shell_join(args: list[str]) -> str:
     return shlex.join(args)
 
 
-def mission_executor_route(
-    mission: Mission,
-    preferred_roles: tuple[str, ...] = ("executor", "planner", "verifier"),
-) -> dict[str, str]:
+def _normalized_route_rows(mission: Mission) -> list[dict[str, str]]:
     route_configs = getattr(mission, "route_configs", None) or []
     normalized_rows: list[dict[str, str]] = []
     for item in route_configs:
@@ -49,20 +61,74 @@ def mission_executor_route(
                 ).strip(),
             }
         )
-    for role in preferred_roles:
+    return normalized_rows
+
+
+def mission_cycle_phase(
+    mission: Mission,
+    fallback_phase: str = "execute",
+) -> str:
+    state = getattr(mission, "state", None)
+    explicit_phase = str(getattr(state, "current_cycle_phase", "") or "").strip().lower()
+    normalized_phase = PHASE_ALIASES.get(explicit_phase, explicit_phase)
+    if normalized_phase in PHASE_ROLE_PREFERENCES:
+        return normalized_phase
+
+    status = str(getattr(state, "status", "") or "").strip().lower()
+    if status in {"draft", "queued"}:
+        return "plan"
+    if status == "verification_failed":
+        return "replan"
+    if status in {"completed", "verified"}:
+        return "verify"
+    return PHASE_ALIASES.get(fallback_phase, fallback_phase)
+
+
+def mission_phase_route(
+    mission: Mission,
+    *,
+    phase: str | None = None,
+    preferred_roles: tuple[str, ...] | None = None,
+) -> dict[str, str]:
+    normalized_rows = _normalized_route_rows(mission)
+    raw_phase = str(phase or mission_cycle_phase(mission)).strip().lower()
+    phase_key = PHASE_ALIASES.get(raw_phase, raw_phase)
+    default_roles = PHASE_ROLE_PREFERENCES.get(
+        phase_key,
+        PHASE_ROLE_PREFERENCES["execute"],
+    )
+    selected_roles = preferred_roles or default_roles
+    for role in selected_roles:
         match = next(
             (item for item in normalized_rows if item.get("role") == role),
             None,
         )
         if match is not None:
-            return match
+            return {
+                **match,
+                "phase": phase_key,
+                "phase_label": phase_key,
+            }
     return {
         "role": "",
         "provider": "",
         "model": "",
         "effort": "",
         "budget_class": "",
+        "phase": phase_key,
+        "phase_label": phase_key,
     }
+
+
+def mission_executor_route(
+    mission: Mission,
+    preferred_roles: tuple[str, ...] = ("executor", "planner", "verifier"),
+) -> dict[str, str]:
+    return mission_phase_route(
+        mission,
+        phase="execute",
+        preferred_roles=preferred_roles,
+    )
 
 
 class AgentRuntimeAdapter(ABC):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
 from ..runtime_updates import compare_version_tokens, latest_hermes_release, normalize_hermes_version
-from .base import AgentRuntimeAdapter, mission_executor_route, shell_join
+from .base import AgentRuntimeAdapter, mission_phase_route, shell_join
 
 HERMES_PROVIDER_MAP = {
     "openai": "openai-codex",
@@ -242,8 +242,10 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         return hermes_chat_cmd
 
     def _route_contract(self, mission: Mission) -> dict[str, str]:
-        route = mission_executor_route(mission)
+        route = mission_phase_route(mission)
         return {
+            "phase": str(route.get("phase", "")).strip().lower(),
+            "role": str(route.get("role", "")).strip().lower(),
             "provider": self._normalize_provider(route.get("provider", "")),
             "model": str(route.get("model", "")).strip(),
             "effort": str(route.get("effort", "")).strip().lower(),
@@ -256,9 +258,14 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         model = str(route_contract.get("model", "")).strip()
         provider = str(route_contract.get("provider", "")).strip()
         effort = str(route_contract.get("effort", "")).strip()
+        role = str(route_contract.get("role", "")).strip()
+        phase = str(route_contract.get("phase", "")).strip()
         if not model and not provider:
             return "Hermes launch route is using the runtime default model configuration."
-        summary = f"Hermes launch route: {provider or 'auto'}/{model or 'default'}"
+        route_prefix = ""
+        if phase or role:
+            route_prefix = f"{phase or 'execute'}:{role or 'route'} -> "
+        summary = f"Hermes launch route: {route_prefix}{provider or 'auto'}/{model or 'default'}"
         if effort:
             summary += f" ({effort})"
         return summary

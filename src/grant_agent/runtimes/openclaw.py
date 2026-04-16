@@ -14,7 +14,7 @@ from ..runtime_updates import (
     latest_openclaw_release,
     normalize_openclaw_version,
 )
-from .base import AgentRuntimeAdapter, mission_executor_route, shell_join
+from .base import AgentRuntimeAdapter, mission_phase_route, shell_join
 
 OPENCLAW_PROVIDER_MAP = {
     "openai": "openai-codex",
@@ -247,10 +247,12 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         return f"({add_cmd} >/dev/null 2>&1 || {set_cmd} >/dev/null 2>&1) && {run_cmd}"
 
     def _route_contract(self, mission: Mission) -> dict[str, str]:
-        route = mission_executor_route(mission)
+        route = mission_phase_route(mission)
         provider = self._normalize_provider(route.get("provider", ""))
         model = str(route.get("model", "")).strip()
         return {
+            "phase": str(route.get("phase", "")).strip().lower(),
+            "role": str(route.get("role", "")).strip().lower(),
             "provider": provider,
             "model": model,
             "canonical_model_id": (
@@ -283,9 +285,14 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
     def _route_summary(self, route_contract: dict[str, str]) -> str:
         model_id = self._canonical_model_id(route_contract)
         effort = str(route_contract.get("effort", "")).strip().lower()
+        role = str(route_contract.get("role", "")).strip()
+        phase = str(route_contract.get("phase", "")).strip()
         if not model_id:
             return "OpenClaw launch route is using the runtime default model configuration."
-        summary = f"OpenClaw launch route: {model_id}"
+        route_prefix = ""
+        if phase or role:
+            route_prefix = f"{phase or 'execute'}:{role or 'route'} -> "
+        summary = f"OpenClaw launch route: {route_prefix}{model_id}"
         if effort:
             summary += f" ({self._thinking_level(effort)} thinking)"
         return summary
