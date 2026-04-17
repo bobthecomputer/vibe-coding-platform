@@ -9,7 +9,9 @@ const repoRoot = process.cwd();
 const webRoot = resolve(repoRoot, "t3code", "apps", "web");
 const webSrc = resolve(webRoot, "src");
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Packaged Tauri builds need relative asset URLs instead of /assets/... .
+  base: command === "serve" ? "/" : "./",
   plugins: [react(), tailwindcss()],
   root: webRoot,
   resolve: {
@@ -39,4 +41,4 @@ export default defineConfig({
     outDir: resolve(webRoot, "dist"),
     emptyOutDir: true,
   },
-});
+}));

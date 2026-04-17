@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -1822,6 +1823,8 @@ async fn run_agent_cli_json(
     let workspace_root_text = workspace_root.to_string_lossy().to_string();
 
     let mut command = TokioCommand::new("python");
+    command.current_dir(&workspace_root);
+    inject_agent_cli_pythonpath(&mut command, &workspace_root);
     command.arg("-m").arg("grant_agent.cli").arg(subcommand);
     command.arg("--root").arg(&workspace_root_text);
     for arg in extra_args {
@@ -1842,12 +1845,34 @@ async fn run_agent_cli_json(
     let output = timeout(Duration::from_secs(timeout_seconds), command.output())
         .await
         .map_err(|_| {
+            append_audit_entry(
+                app,
+                "agent.cli_failed",
+                json!({
+                    "subcommand": subcommand,
+                    "workspaceRoot": workspace_root_text,
+                    "durationMs": started.elapsed().as_millis() as u64,
+                    "error": format!("timed out after {}s", timeout_seconds),
+                }),
+            );
             format!(
                 "grant_agent.cli {} timed out after {}s",
                 subcommand, timeout_seconds
             )
         })?
-        .map_err(|err| format!("Failed to run grant_agent.cli {}: {err}", subcommand))?;
+        .map_err(|err| {
+            append_audit_entry(
+                app,
+                "agent.cli_failed",
+                json!({
+                    "subcommand": subcommand,
+                    "workspaceRoot": workspace_root_text,
+                    "durationMs": started.elapsed().as_millis() as u64,
+                    "error": format!("spawn failed: {err}"),
+                }),
+            );
+            format!("Failed to run grant_agent.cli {}: {err}", subcommand)
+        })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -2351,6 +2376,24 @@ fn inject_agent_cli_provider_env(command: &mut TokioCommand) -> Result<(), Strin
         }
     }
     Ok(())
+}
+
+fn inject_agent_cli_pythonpath(command: &mut TokioCommand, workspace_root: &Path) {
+    let source_root = workspace_root.join("src");
+    if !source_root.is_dir() {
+        return;
+    }
+
+    let mut pythonpath = OsString::from(source_root.as_os_str());
+    if let Some(existing) = std::env::var_os("PYTHONPATH") {
+        if !existing.is_empty() {
+            let separator = if cfg!(windows) { ";" } else { ":" };
+            pythonpath.push(separator);
+            pythonpath.push(existing);
+        }
+    }
+
+    command.env("PYTHONPATH", pythonpath);
 }
 
 fn load_telegram_bot_token() -> Result<Option<String>, String> {
