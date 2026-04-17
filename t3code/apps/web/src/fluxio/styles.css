@@ -189,6 +189,17 @@ textarea {
   font-size: 12px;
 }
 
+.topbar-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topbar-context-actions .action-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
 .topbar-shortcuts {
   display: inline-flex;
   align-items: center;
@@ -366,6 +377,33 @@ textarea {
 .fluxio-nav-list {
   display: grid;
   gap: 6px;
+}
+
+.fluxio-nav-search input {
+  min-height: 34px;
+}
+
+.windowed-list {
+  display: grid;
+  gap: 10px;
+}
+
+.fluxio-nav-windowed {
+  max-height: 40vh;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.nav-context-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.nav-context-row .action-btn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 11px;
 }
 
 .fluxio-sidebar-branch-actions {
@@ -1347,10 +1385,51 @@ button.builder-review-target:hover {
   align-content: start;
 }
 
+.agent-conversation-shell {
+  max-height: clamp(260px, 46vh, 560px);
+}
+
+.agent-conversation-shell.split {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+  gap: 12px;
+}
+
+.agent-conversation-main {
+  min-width: 0;
+}
+
+.agent-conversation-secondary {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+  min-width: 0;
+}
+
+.agent-conversation-secondary-head {
+  display: grid;
+  gap: 3px;
+}
+
+.agent-conversation-secondary-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .agent-conversation-feed {
   display: grid;
   gap: 18px;
   align-content: start;
+  max-height: 100%;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.agent-conversation-feed.split {
+  gap: 12px;
 }
 
 .agent-conversation-empty {
@@ -1768,6 +1847,21 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.agent-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-split-controls {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+}
+
 .builder-inline {
   display: grid;
   gap: 10px;
@@ -1969,6 +2063,62 @@ button.builder-review-target:hover {
   color: var(--muted);
 }
 
+.composer-attachments {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+}
+
+.composer-attachments-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-attachments-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-attachments-list {
+  display: grid;
+  gap: 8px;
+}
+
+.composer-attachment {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: #1f2024;
+  padding: 8px;
+}
+
+.composer-attachment strong {
+  display: block;
+  font-size: 13px;
+}
+
+.composer-attachment p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-attachment-preview {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  object-fit: cover;
+}
+
 .fluxio-drawer {
   border-left: 1px solid var(--line);
   background: #1a1a1d;
@@ -2079,6 +2229,50 @@ button.builder-review-target:hover {
 
 .drawer-footnote {
   font-size: 12px;
+}
+
+.proof-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.proof-item-list {
+  display: grid;
+  gap: 6px;
+}
+
+.proof-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: #202126;
+  padding: 8px;
+}
+
+.proof-item-row code {
+  color: var(--text);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+.proof-item-list.wrap .proof-item-row code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.proof-item-list.no-wrap .proof-item-row code {
+  white-space: pre;
+  overflow-x: auto;
+  display: block;
+}
+
+.drawer-debug-list {
+  max-height: 46vh;
+  overflow: auto;
 }
 
 .roadmap-grid {
@@ -2411,9 +2605,14 @@ button.builder-review-target:hover {
   .builder-primary-summary,
   .builder-conversation-grid,
   .builder-feature-grid,
+  .proof-compare-grid,
   .builder-review-grid,
   .builder-step-grid.compact,
   .builder-review-lower {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-conversation-shell.split {
     grid-template-columns: 1fr;
   }
 
@@ -2525,6 +2724,10 @@ button.builder-review-target:hover {
   .agent-idle-composer,
   .agent-chat-composer {
     width: 100%;
+  }
+
+  .composer-attachment {
+    grid-template-columns: 1fr;
   }
 
   .agent-docked-composer {

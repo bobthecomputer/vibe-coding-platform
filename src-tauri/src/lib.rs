@@ -88,7 +88,7 @@ impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
             pinned: true,
-            hotkey: "Ctrl+Space".to_string(),
+            hotkey: "Ctrl+Shift+Space".to_string(),
             mode_id: "coding".to_string(),
             localhost_api_enabled: true,
             localhost_api_port: DEFAULT_LOCALHOST_PORT,
@@ -3059,7 +3059,7 @@ fn on_hold_shortcut_event(app: &AppHandle, event: ShortcutEvent) {
 }
 
 fn register_hold_shortcut(app: &AppHandle) -> Result<(), String> {
-    let primary_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+    let primary_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
     let primary_result = app
         .global_shortcut()
         .on_shortcut(primary_shortcut, |app, _shortcut, event| {
@@ -3067,20 +3067,20 @@ fn register_hold_shortcut(app: &AppHandle) -> Result<(), String> {
         });
 
     if primary_result.is_ok() {
-        update_hotkey_name(app, "Ctrl+Space");
+        update_hotkey_name(app, "Ctrl+Shift+Space");
         return Ok(());
     }
 
-    let fallback_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+    let fallback_shortcut = Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::Space);
     app.global_shortcut()
         .on_shortcut(fallback_shortcut, |app, _shortcut, event| {
             on_hold_shortcut_event(app, event)
         })
         .map_err(|err| {
-            format!("Failed to register Ctrl+Space and Ctrl+Shift+Space shortcuts: {err}")
+            format!("Failed to register Ctrl+Shift+Space and Alt+Shift+Space shortcuts: {err}")
         })?;
 
-    update_hotkey_name(app, "Ctrl+Shift+Space (fallback)");
+    update_hotkey_name(app, "Alt+Shift+Space (fallback)");
     Ok(())
 }
 

@@ -1000,6 +1000,11 @@ class ControlRoomStore:
                 continue
             if mission.state.status in TERMINAL_MISSION_STATUSES:
                 continue
+            # A budget-exhausted mission should not keep the active slot forever.
+            # It can remain visible in the queue, but newer missions must still advance.
+            stop_reason = (mission.state.stop_reason or mission.state.last_error or "").strip().lower()
+            if stop_reason == "runtime_budget":
+                continue
             if mission.state.queue_position == 0:
                 return mission
         return None

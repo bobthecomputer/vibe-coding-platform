@@ -718,6 +718,51 @@ function MenuButton({ label, onClick }) {
   );
 }
 
+function ComposerAttachmentStrip({
+  attachments = [],
+  onClear = () => {},
+  onRemove = () => {},
+}) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return null;
+  }
+  return (
+    <section className="composer-attachments" aria-label="Pending attachments">
+      <div className="composer-attachments-head">
+        <span>
+          {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
+        </span>
+        <ActionButton onClick={onClear} type="button">
+          Clear
+        </ActionButton>
+      </div>
+      <div className="composer-attachments-list">
+        {attachments.map(item => (
+          <article className="composer-attachment" key={item.id}>
+            {item.previewUrl ? (
+              <img
+                alt={item.name || "attachment preview"}
+                className="composer-attachment-preview"
+                src={item.previewUrl}
+              />
+            ) : null}
+            <div>
+              <strong>{item.name || "Attachment"}</strong>
+              <p>
+                {item.mime || "image"}
+                {` · ${Math.max(1, Math.round((item.size || 0) / 1024))}KB`}
+              </p>
+            </div>
+            <ActionButton onClick={() => onRemove(item.id)} type="button">
+              Remove
+            </ActionButton>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function GlobalRailButton({ active = false, icon = null, label, onClick, subtle = false }) {
   return (
     <button
@@ -763,6 +808,38 @@ function pathLeaf(value) {
   }
   const parts = text.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || text;
+}
+
+function normalizeOrderedIds(currentOrder, liveIds) {
+  const safeCurrent = Array.isArray(currentOrder) ? currentOrder : [];
+  const safeLive = Array.isArray(liveIds) ? liveIds.filter(Boolean) : [];
+  const kept = safeCurrent.filter(id => safeLive.includes(id));
+  const appended = safeLive.filter(id => !kept.includes(id));
+  return [...kept, ...appended];
+}
+
+function sortRowsByOrder(rows, orderedIds, readId) {
+  const map = new Map(rows.map(item => [readId(item), item]));
+  const normalizedOrder = normalizeOrderedIds(
+    orderedIds,
+    rows.map(item => readId(item)),
+  );
+  return normalizedOrder.map(id => map.get(id)).filter(Boolean);
+}
+
+function moveOrderedId(orderIds, draggedId, targetId) {
+  if (!draggedId || !targetId || draggedId === targetId) {
+    return orderIds;
+  }
+  const sourceIndex = orderIds.indexOf(draggedId);
+  const targetIndex = orderIds.indexOf(targetId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return orderIds;
+  }
+  const next = [...orderIds];
+  next.splice(sourceIndex, 1);
+  next.splice(targetIndex, 0, draggedId);
+  return next;
 }
 
 function saveableRouteOverrides(routeOverrides) {
@@ -1184,10 +1261,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
   const [splitViewEnabled, setSplitViewEnabled] = useState(storedSplitViewEnabled);
   const [splitMissionId, setSplitMissionId] = useState(storedSplitMissionId);
+  const [dragState, setDragState] = useState({ kind: "", id: "" });
   const [localTasks, setLocalTasks] = useState(
     Array.isArray(storedLocalTasks) ? storedLocalTasks : [],
   );
   const [taskForm, setTaskForm] = useState(DEFAULT_TASK_FORM);
+  const [taskTriggerToken, setTaskTriggerToken] = useState("");
+  const [proofWrapEnabled, setProofWrapEnabled] = useState(true);
   const [memoryPolicy, setMemoryPolicy] = useState({
     ...DEFAULT_MEMORY_POLICY,
     ...(storedMemoryPolicy || {}),
@@ -1713,6 +1793,40 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     () => [...(setupHealth.repairActions || []), ...(setupHealth.globalActions || [])].slice(0, 3),
     [setupHealth.globalActions, setupHealth.repairActions],
   );
+  useEffect(() => {
+    const liveIds = workspaces.map(item => item.workspace_id);
+    setWorkspaceOrder(current => {
+      const next = normalizeOrderedIds(current, liveIds);
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [workspaces]);
+
+  useEffect(() => {
+    const liveIds = missionOptions.map(item => item.mission_id);
+    setMissionOrder(current => {
+      const next = normalizeOrderedIds(current, liveIds);
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [missionOptions]);
+
+  useEffect(() => {
+    if (!splitViewEnabled || !mission?.mission_id) {
+      return;
+    }
+    const available = missionOptions
+      .map(item => item.mission_id)
+      .filter(id => id && id !== mission.mission_id);
+    if (available.length === 0) {
+      if (splitMissionId) {
+        setSplitMissionId("");
+      }
+      return;
+    }
+    if (!splitMissionId || !available.includes(splitMissionId)) {
+      setSplitMissionId(available[0]);
+    }
+  }, [mission?.mission_id, missionOptions, splitMissionId, splitViewEnabled]);
+
   const missionStatus = mission?.state?.status || "";
   const agentBlockedState = useMemo(() => {
     const approvalCount = asList(mission?.proof?.pending_approvals).length + asList(data.pendingApprovals).length;
@@ -2026,6 +2140,44 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
     await saveWorkspacePolicy();
   }, [agentRouteRole, markAction, previewMode, pushToast, saveWorkspacePolicy, workspace]);
+
+  const copyContextValue = useCallback(
+    async value => {
+      const copied = await copyTextValue(value);
+      pushToast(copied ? "Copied to clipboard." : "Clipboard copy failed.", copied ? "info" : "warn");
+    },
+    [pushToast],
+  );
+
+  const handleWorkspaceDragStart = useCallback(workspaceId => {
+    setDragState({ kind: "workspace", id: workspaceId });
+  }, []);
+
+  const handleWorkspaceDrop = useCallback(
+    targetWorkspaceId => {
+      if (dragState.kind !== "workspace" || !dragState.id) {
+        return;
+      }
+      setWorkspaceOrder(current => moveOrderedId(current, dragState.id, targetWorkspaceId));
+      setDragState({ kind: "", id: "" });
+    },
+    [dragState.id, dragState.kind],
+  );
+
+  const handleMissionDragStart = useCallback(missionId => {
+    setDragState({ kind: "mission", id: missionId });
+  }, []);
+
+  const handleMissionDrop = useCallback(
+    targetMissionId => {
+      if (dragState.kind !== "mission" || !dragState.id) {
+        return;
+      }
+      setMissionOrder(current => moveOrderedId(current, dragState.id, targetMissionId));
+      setDragState({ kind: "", id: "" });
+    },
+    [dragState.id, dragState.kind],
+  );
 
   const focusTranscriptTurn = useCallback(turnId => {
     if (!turnId) {
@@ -2543,7 +2695,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     async (task, source = "schedule") => {
       const prompt = String(task?.prompt || "").trim();
       if (!prompt) {
-        return;
+        return false;
       }
       if (!mission?.mission_id || previewMode !== "live" || !hasTauriBackend()) {
         appendOperatorEntry({
@@ -2552,7 +2704,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           meta: "Task log only (no live mission selected)",
           tone: "warn",
         });
-        return;
+        return false;
       }
       try {
         await callBackend(
@@ -2566,6 +2718,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           meta: timestampLabel(new Date().toISOString()),
           tone: "good",
         });
+        return true;
       } catch (error) {
         appendOperatorEntry({
           title: `Task failed (${source})`,
@@ -2573,10 +2726,175 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           meta: timestampLabel(new Date().toISOString()),
           tone: "bad",
         });
+        return false;
       }
     },
     [appendOperatorEntry, mission?.mission_id, previewMode],
   );
+
+  const updateTaskFormField = useCallback((field, value) => {
+    setTaskForm(current => ({
+      ...current,
+      [field]: value,
+    }));
+  }, []);
+
+  const resetTaskForm = useCallback(() => {
+    setTaskForm(DEFAULT_TASK_FORM);
+  }, []);
+
+  const createLocalTask = useCallback(() => {
+    const name = String(taskForm.name || "").trim();
+    const prompt = String(taskForm.prompt || "").trim();
+    if (!name || !prompt) {
+      pushToast("Task name and prompt are required.", "warn");
+      return;
+    }
+    const everyMinutes = Math.max(1, Math.round(Number(taskForm.everyMinutes) || 30));
+    const nowIso = new Date().toISOString();
+    const nextRunAt = new Date(Date.now() + everyMinutes * 60_000).toISOString();
+    const createdTask = {
+      id: `task-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name,
+      prompt,
+      trigger: taskForm.trigger || "schedule",
+      everyMinutes,
+      webhookToken: String(taskForm.webhookToken || "").trim(),
+      active: Boolean(taskForm.active),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      lastRunAt: "",
+      nextRunAt: taskForm.trigger === "schedule" && taskForm.active ? nextRunAt : "",
+      totalRuns: 0,
+      lastStatus: "idle",
+    };
+    setLocalTasks(current => [createdTask, ...current].slice(0, MAX_TASK_LOG));
+    appendOperatorEntry({
+      title: "Task created",
+      detail: `${createdTask.name}\n${createdTask.prompt}`,
+      meta: `${titleizeToken(createdTask.trigger)} · every ${createdTask.everyMinutes}m`,
+      tone: "neutral",
+    });
+    resetTaskForm();
+  }, [appendOperatorEntry, pushToast, resetTaskForm, taskForm]);
+
+  const toggleTaskActive = useCallback(taskId => {
+    setLocalTasks(current =>
+      current.map(item => {
+        if (item.id !== taskId) {
+          return item;
+        }
+        const active = !item.active;
+        const everyMinutes = Math.max(1, Number(item.everyMinutes) || 30);
+        return {
+          ...item,
+          active,
+          updatedAt: new Date().toISOString(),
+          nextRunAt:
+            active && item.trigger === "schedule"
+              ? new Date(Date.now() + everyMinutes * 60_000).toISOString()
+              : "",
+        };
+      }),
+    );
+  }, []);
+
+  const removeTask = useCallback(taskId => {
+    setLocalTasks(current => current.filter(item => item.id !== taskId));
+  }, []);
+
+  const executeTask = useCallback(
+    async (task, source = "manual") => {
+      if (!task) {
+        return;
+      }
+      const ok = await runTaskPrompt(task, source);
+      setLocalTasks(current =>
+        current.map(item =>
+          item.id === task.id
+            ? {
+                ...item,
+                totalRuns: (Number(item.totalRuns) || 0) + 1,
+                lastRunAt: new Date().toISOString(),
+                nextRunAt:
+                  item.trigger === "schedule" && item.active
+                    ? new Date(
+                        Date.now() + Math.max(1, Number(item.everyMinutes) || 30) * 60_000,
+                      ).toISOString()
+                    : item.nextRunAt || "",
+                lastStatus: ok ? "ok" : "failed",
+              }
+            : item,
+        ),
+      );
+    },
+    [runTaskPrompt],
+  );
+
+  const triggerTaskByToken = useCallback(() => {
+    const token = String(taskTriggerToken || "").trim();
+    if (!token) {
+      pushToast("Enter a task token to trigger webhook/API task.", "warn");
+      return;
+    }
+    const task = localTasks.find(item => item.webhookToken && item.webhookToken === token);
+    if (!task) {
+      pushToast("No task matched this token.", "warn");
+      return;
+    }
+    void executeTask(task, "webhook");
+    setTaskTriggerToken("");
+  }, [executeTask, localTasks, pushToast, taskTriggerToken]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const nowMs = Date.now();
+      localTasks.forEach(task => {
+        if (!task.active || task.trigger !== "schedule") {
+          return;
+        }
+        const nextRunMs = Date.parse(task.nextRunAt || "");
+        const isDue = !Number.isFinite(nextRunMs) || nextRunMs <= nowMs;
+        if (!isDue) {
+          return;
+        }
+        void executeTask(task, "schedule");
+      });
+    }, 15_000);
+    return () => window.clearInterval(intervalId);
+  }, [executeTask, localTasks]);
+
+  const clearWorkspaceMemory = useCallback(() => {
+    if (!workspace?.workspace_id) {
+      return;
+    }
+    setMemoryStore(current => ({
+      ...current,
+      workspace: Object.fromEntries(
+        Object.entries(current.workspace || {}).filter(([id]) => id !== workspace.workspace_id),
+      ),
+    }));
+  }, [workspace?.workspace_id]);
+
+  const clearMissionMemory = useCallback(() => {
+    if (!mission?.mission_id) {
+      return;
+    }
+    setMemoryStore(current => ({
+      ...current,
+      mission: Object.fromEntries(
+        Object.entries(current.mission || {}).filter(([id]) => id !== mission.mission_id),
+      ),
+    }));
+  }, [mission?.mission_id]);
+
+  const clearAllMemory = useCallback(() => {
+    setMemoryStore({ workspace: {}, mission: {} });
+  }, []);
+
+  const clearDebugEvents = useCallback(() => {
+    setDebugEvents([]);
+  }, []);
 
   const handleOperatorNote = useCallback(
     event => {
@@ -2651,16 +2969,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     markAction("composer:send-follow-up");
     try {
       const steeringLines = [];
-      const currentPhase =
-        mission?.missionLoop?.currentCyclePhase || mission?.state?.current_cycle_phase || "execute";
       if (mission && agentRuntimeFocus !== "all") {
         steeringLines.push(`Runtime preference: ${runtimeLabel(agentRuntimeFocus)}.`);
       }
-      steeringLines.push(
-        `Current mission phase: ${titleizeToken(currentPhase)} via ${titleizeToken(
-          phaseRouteRole(currentPhase),
-        )}.`,
-      );
       const selectedRoute =
         workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {};
       const effectiveRoute =
@@ -2760,6 +3071,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       setOperatorDraft("");
       clearOperatorAttachments();
       pushToast(sentLive ? "Follow-up sent live and recorded in the mission thread." : "Follow-up recorded in the mission thread.", "info");
+      void refreshAll("mission-follow-up");
     } catch (error) {
       pushToast(`Mission follow-up failed: ${error}`, "error");
     }
@@ -2780,6 +3092,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     operatorDraft,
     previewMode,
     pushToast,
+    refreshAll,
     workspace?.workspace_id,
     workspaceProfileForm.routeOverrides,
     mission?.effectiveRouteContract?.roles,
@@ -3006,9 +3319,40 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     () => new Map(workspaces.map(item => [item.workspace_id, item])),
     [workspaces],
   );
+  const orderedWorkspaceRows = useMemo(() => {
+    const ordered = sortRowsByOrder(workspaces, workspaceOrder, item => item.workspace_id);
+    const query = workspaceSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return ordered;
+    }
+    return ordered.filter(item =>
+      [item?.name, item?.root_path, item?.workspace_id]
+        .filter(Boolean)
+        .some(value => String(value).toLowerCase().includes(query)),
+    );
+  }, [workspaceOrder, workspaceSearchQuery, workspaces]);
+  const orderedMissionRows = useMemo(() => {
+    const ordered = sortRowsByOrder(missionOptions, missionOrder, item => item.mission_id);
+    const query = missionSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return ordered;
+    }
+    return ordered.filter(item =>
+      [
+        item?.title,
+        item?.objective,
+        item?.mission_id,
+        item?.state?.status,
+        item?.runtime_id,
+        item?.execution_scope?.execution_root,
+      ]
+        .filter(Boolean)
+        .some(value => String(value).toLowerCase().includes(query)),
+    );
+  }, [missionOptions, missionOrder, missionSearchQuery]);
   const workspaceNavItems = useMemo(
     () =>
-      workspaces.map(item => {
+      orderedWorkspaceRows.map(item => {
         const workspaceMissionRows = missions.filter(entry => entry?.workspace_id === item.workspace_id);
         const activeCount = workspaceMissionRows.filter(
           entry => !["completed", "failed"].includes(entry?.state?.status || ""),
@@ -3034,11 +3378,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ].filter(Boolean),
         };
       }),
-    [missions, workspaces],
+    [missions, orderedWorkspaceRows],
   );
   const missionNavItems = useMemo(
     () =>
-      missionOptions.map(item => {
+      orderedMissionRows.map(item => {
         const ownerWorkspace = workspaceById.get(item.workspace_id) || null;
         const executionPath =
           item?.delegated_runtime_sessions?.find(session => session?.execution_root)?.execution_root ||
@@ -3082,7 +3426,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ].filter(Boolean),
         };
       }),
-    [missionOptions, workspaceById],
+    [orderedMissionRows, workspaceById],
+  );
+  const splitMissionOptions = useMemo(
+    () => missions.filter(item => item?.mission_id && item.mission_id !== mission?.mission_id),
+    [mission?.mission_id, missions],
+  );
+  const splitMission = useMemo(
+    () =>
+      splitMissionOptions.find(item => item.mission_id === splitMissionId) ||
+      splitMissionOptions[0] ||
+      null,
+    [splitMissionId, splitMissionOptions],
   );
   const builderRootItems = useMemo(() => builderBoard.roots || [], [builderBoard.roots]);
   const builderNexusItems = useMemo(() => builderBoard.nexuses || [], [builderBoard.nexuses]);
@@ -3725,6 +4080,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     operatorNotes,
     snapshot.activity,
   ]);
+  useEffect(() => {
+    if (!mission?.mission_id || agentTranscript.length === 0) {
+      return;
+    }
+    transcriptCacheRef.current = {
+      ...transcriptCacheRef.current,
+      [mission.mission_id]: agentTranscript.slice(-5000),
+    };
+  }, [agentTranscript, mission?.mission_id]);
   const agentVisibleTranscript = useMemo(
     () =>
       agentTranscript.filter(item => {
@@ -3738,6 +4102,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }),
     [agentRuntimeFocus, agentTranscript, mission],
   );
+  const splitConversationTurns = useMemo(() => {
+    if (!splitMission?.mission_id) {
+      return [];
+    }
+    const cachedTurns = transcriptCacheRef.current[splitMission.mission_id] || [];
+    return cachedTurns.filter(item => {
+      if (item.traceOnly) {
+        return false;
+      }
+      if (item.chatPreferred) {
+        return true;
+      }
+      return item.role === "operator";
+    });
+  }, [agentTranscript, splitMission?.mission_id]);
   const agentConversationTurns = useMemo(
     () =>
       agentTranscript.filter(item => {
@@ -3811,6 +4190,24 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const agentRouteStatus = `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "Profile default"} · ${
     activeEffectiveRoute.effort || selectedAgentRoute.effort || "default"
   }`;
+  const activeDelegatedRuntimeLane = useMemo(
+    () =>
+      asList(mission?.delegated_runtime_sessions).some(session =>
+        ["waiting_for_approval", "running", "launching"].includes(
+          String(session?.status || "").trim().toLowerCase(),
+        ),
+      ),
+    [mission?.delegated_runtime_sessions],
+  );
+  const followUpDeliveryStatus = !mission
+    ? ""
+    : mission?.state?.status === "blocked" && mission?.state?.stop_reason === "runtime_budget"
+      ? "Budget reached: relaunch or resume mission for runtime replies"
+      : mission?.state?.status === "queued"
+        ? mission?.state?.queue_reason || "Mission is queued: follow-ups wait for the active slot"
+      : activeDelegatedRuntimeLane
+        ? "Runtime lane active for direct replies"
+        : "No active runtime lane: follow-ups are thread-only";
   const providerSecretPresence = data.providerSecretPresence || {};
   const providerSetupStatus = snapshot?.providerSetupStatus || {};
   const openAIProviderStatus =
@@ -3991,18 +4388,37 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <h2>{viewModel.drawers.proof.headline}</h2>
             <p>{viewModel.drawers.proof.diffSummary}</p>
           </header>
-          {viewModel.drawers.proof.sections.map(section => (
-            <section className="drawer-block" key={section.title}>
-              <h3>{section.title}</h3>
-              <ul>
-                {section.items.length > 0 ? (
-                  section.items.map(item => <li key={`${section.title}-${item}`}>{listLabel(item)}</li>)
-                ) : (
-                  <li>Nothing captured yet.</li>
-                )}
-              </ul>
-            </section>
-          ))}
+          <div className="drawer-actions">
+            <ActionButton onClick={() => setProofWrapEnabled(current => !current)} type="button">
+              {proofWrapEnabled ? "Disable wrap" : "Enable wrap"}
+            </ActionButton>
+          </div>
+          <section className="proof-compare-grid">
+            {viewModel.drawers.proof.sections.map(section => (
+              <section className="drawer-block" key={section.title}>
+                <h3>{section.title}</h3>
+                <div className={`proof-item-list ${proofWrapEnabled ? "wrap" : "no-wrap"}`.trim()}>
+                  {section.items.length > 0 ? (
+                    section.items.map(item => (
+                      <article className="proof-item-row" key={`${section.title}-${item}`}>
+                        <code>{listLabel(item)}</code>
+                        <ActionButton
+                          onClick={() => copyContextValue(listLabel(item))}
+                          type="button"
+                        >
+                          Copy
+                        </ActionButton>
+                      </article>
+                    ))
+                  ) : (
+                    <article className="proof-item-row">
+                      <code>Nothing captured yet.</code>
+                    </article>
+                  )}
+                </div>
+              </section>
+            ))}
+          </section>
         </section>
       );
     }
@@ -4838,6 +5254,209 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               <ActionButton onClick={() => void handleSendTestPing()}>Send test ping</ActionButton>
             </div>
           </section>
+
+          <section className="drawer-block">
+            <h3>Memory</h3>
+            <label className="check-field">
+              <input
+                checked={memoryPolicy.includeInFollowUps}
+                onChange={event =>
+                  setMemoryPolicy(current => ({
+                    ...current,
+                    includeInFollowUps: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>Include memory snippets in follow-up messages.</span>
+            </label>
+            <label className="check-field">
+              <input
+                checked={memoryPolicy.projectScoped}
+                onChange={event =>
+                  setMemoryPolicy(current => ({
+                    ...current,
+                    projectScoped: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>Keep workspace memory.</span>
+            </label>
+            <label className="check-field">
+              <input
+                checked={memoryPolicy.missionScoped}
+                onChange={event =>
+                  setMemoryPolicy(current => ({
+                    ...current,
+                    missionScoped: event.target.checked,
+                  }))
+                }
+                type="checkbox"
+              />
+              <span>Keep mission memory.</span>
+            </label>
+            <div className="drawer-list compact">
+              <article className="drawer-card">
+                <span>Workspace memory</span>
+                <strong>
+                  {workspace?.workspace_id
+                    ? String(memoryStore?.workspace?.[workspace.workspace_id] || "").trim() || "No workspace memory"
+                    : "No workspace selected"}
+                </strong>
+              </article>
+              <article className="drawer-card">
+                <span>Mission memory</span>
+                <strong>
+                  {mission?.mission_id
+                    ? String(memoryStore?.mission?.[mission.mission_id] || "").trim() || "No mission memory"
+                    : "No mission selected"}
+                </strong>
+              </article>
+            </div>
+            <div className="drawer-actions">
+              <ActionButton onClick={clearWorkspaceMemory} type="button">
+                Clear workspace memory
+              </ActionButton>
+              <ActionButton onClick={clearMissionMemory} type="button">
+                Clear mission memory
+              </ActionButton>
+              <ActionButton onClick={clearAllMemory} type="button">
+                Clear all memory
+              </ActionButton>
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Tasks</h3>
+            <div className="field-row">
+              <Field label="Task name">
+                <input
+                  onChange={event => updateTaskFormField("name", event.target.value)}
+                  placeholder="Regression sweep"
+                  value={taskForm.name}
+                />
+              </Field>
+              <Field label="Trigger">
+                <select
+                  onChange={event => updateTaskFormField("trigger", event.target.value)}
+                  value={taskForm.trigger}
+                >
+                  <option value="schedule">Scheduled</option>
+                  <option value="api">API</option>
+                  <option value="webhook">Webhook</option>
+                </select>
+              </Field>
+            </div>
+            <Field label="Task prompt">
+              <textarea
+                onChange={event => updateTaskFormField("prompt", event.target.value)}
+                placeholder="Run full mission smoke checks and summarize blockers."
+                value={taskForm.prompt}
+              />
+            </Field>
+            <div className="field-row">
+              <Field label="Every minutes">
+                <input
+                  min="1"
+                  onChange={event => updateTaskFormField("everyMinutes", Number(event.target.value || 1))}
+                  type="number"
+                  value={taskForm.everyMinutes}
+                />
+              </Field>
+              <Field label="Webhook/API token">
+                <input
+                  onChange={event => updateTaskFormField("webhookToken", event.target.value)}
+                  placeholder="task-token-123"
+                  value={taskForm.webhookToken}
+                />
+              </Field>
+            </div>
+            <label className="check-field">
+              <input
+                checked={taskForm.active}
+                onChange={event => updateTaskFormField("active", event.target.checked)}
+                type="checkbox"
+              />
+              <span>Task active on create.</span>
+            </label>
+            <div className="drawer-actions">
+              <ActionButton onClick={createLocalTask} type="button" variant="primary">
+                Create task
+              </ActionButton>
+            </div>
+            <Field label="Trigger token now">
+              <input
+                onChange={event => setTaskTriggerToken(event.target.value)}
+                placeholder="Paste token to simulate webhook/API trigger"
+                value={taskTriggerToken}
+              />
+            </Field>
+            <div className="drawer-actions">
+              <ActionButton onClick={triggerTaskByToken} type="button">
+                Trigger by token
+              </ActionButton>
+            </div>
+            <div className="drawer-list">
+              {localTasks.length > 0 ? (
+                localTasks.map(item => (
+                  <article className={`drawer-card ${toneClass(item.lastStatus === "failed" ? "bad" : item.active ? "good" : "neutral")}`} key={item.id}>
+                    <span>{titleizeToken(item.trigger)}</span>
+                    <strong>{item.name}</strong>
+                    <p>{item.prompt}</p>
+                    <p>
+                      Every {Math.max(1, Number(item.everyMinutes) || 1)}m · Last run{" "}
+                      {item.lastRunAt ? timestampLabel(item.lastRunAt) : "never"} · {item.totalRuns || 0} run(s)
+                    </p>
+                    <div className="drawer-actions">
+                      <ActionButton onClick={() => toggleTaskActive(item.id)} type="button">
+                        {item.active ? "Pause" : "Resume"}
+                      </ActionButton>
+                      <ActionButton onClick={() => void executeTask(item, "manual")} type="button">
+                        Run now
+                      </ActionButton>
+                      <ActionButton onClick={() => removeTask(item.id)} type="button">
+                        Delete
+                      </ActionButton>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <article className="drawer-card">
+                  <strong>No task yet.</strong>
+                </article>
+              )}
+            </div>
+          </section>
+
+          <section className="drawer-block">
+            <h3>Debug stream</h3>
+            <p>
+              Backend invoke events, browser errors, and rejected promises are captured here.
+            </p>
+            <div className="drawer-actions">
+              <ActionButton onClick={clearDebugEvents} type="button">
+                Clear logs
+              </ActionButton>
+            </div>
+            <WindowedList
+              className="drawer-list drawer-debug-list"
+              estimatedItemHeight={84}
+              items={debugEvents}
+              overscan={6}
+              renderItem={item => (
+                <article className={`drawer-card ${toneClass(String(item.kind || "").includes("error") ? "bad" : "neutral")}`} key={item.id}>
+                  <span>{item.kind || "event"}</span>
+                  <strong>{item.command || item.message || "debug event"}</strong>
+                  <p>
+                    {timestampLabel(item.at)}
+                    {Number.isFinite(item.durationMs) ? ` · ${item.durationMs}ms` : ""}
+                  </p>
+                  {item.error ? <p>{String(item.error)}</p> : null}
+                </article>
+              )}
+            />
+          </section>
         </section>
       );
     }
@@ -5592,6 +6211,24 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           <div className="topbar-context">
             <strong>{mission?.title || mission?.objective || workspace?.name || "Fluxio workspace"}</strong>
             <span>{workspace?.name || "Select a workspace"}</span>
+            <div className="topbar-context-actions">
+              {workspace?.workspace_id ? (
+                <ActionButton
+                  onClick={() => copyContextValue(workspace.workspace_id)}
+                  type="button"
+                >
+                  Copy workspace ID
+                </ActionButton>
+              ) : null}
+              {mission?.mission_id ? (
+                <ActionButton
+                  onClick={() => copyContextValue(mission.mission_id)}
+                  type="button"
+                >
+                  Copy mission ID
+                </ActionButton>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -5884,24 +6521,48 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p className="eyebrow">Workspaces</p>
                     <ActionButton onClick={() => setShowWorkspaceDialog(true)}>Add</ActionButton>
                   </div>
+                  <div className="fluxio-nav-search">
+                    <input
+                      onChange={event => setWorkspaceSearchQuery(event.target.value)}
+                      placeholder="Search projects, paths, or IDs"
+                      value={workspaceSearchQuery}
+                    />
+                  </div>
                   <div className="fluxio-nav-list">
                     {workspaceNavItems.length > 0 ? (
-                      workspaceNavItems.map(item => (
-                        <NavItem
-                          active={item.workspaceId === selectedWorkspaceId}
-                          badge={item.badge}
-                          context={item.context}
-                          icon="▣"
-                          key={item.workspaceId}
-                          onClick={() => setSelectedWorkspaceId(item.workspaceId)}
-                          stats={item.stats}
-                          subtitle={item.subtitle}
-                          title={item.title}
-                          tone={item.tone}
-                        />
-                      ))
+                      <WindowedList
+                        className="fluxio-nav-windowed"
+                        estimatedItemHeight={138}
+                        items={workspaceNavItems}
+                        renderItem={item => (
+                          <NavItem
+                            active={item.workspaceId === selectedWorkspaceId}
+                            badge={item.badge}
+                            context={item.context}
+                            draggable
+                            icon="▣"
+                            key={item.workspaceId}
+                            onClick={() => setSelectedWorkspaceId(item.workspaceId)}
+                            onCopy={copyContextValue}
+                            onDragOver={event => event.preventDefault()}
+                            onDragStart={() => handleWorkspaceDragStart(item.workspaceId)}
+                            onDrop={event => {
+                              event.preventDefault();
+                              handleWorkspaceDrop(item.workspaceId);
+                            }}
+                            stats={item.stats}
+                            subtitle={item.subtitle}
+                            title={item.title}
+                            tone={item.tone}
+                          />
+                        )}
+                      />
                     ) : (
-                      <p className="fluxio-empty-copy">Add one workspace to begin.</p>
+                      <p className="fluxio-empty-copy">
+                        {workspaceSearchQuery.trim()
+                          ? "No workspace matches this search."
+                          : "Add one workspace to begin."}
+                      </p>
                     )}
                   </div>
                 </section>
@@ -5911,24 +6572,48 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p className="eyebrow">Missions</p>
                     <ActionButton onClick={openMissionDialog}>New</ActionButton>
                   </div>
+                  <div className="fluxio-nav-search">
+                    <input
+                      onChange={event => setMissionSearchQuery(event.target.value)}
+                      placeholder="Search title, status, or runtime"
+                      value={missionSearchQuery}
+                    />
+                  </div>
                   <div className="fluxio-nav-list">
-                    {missionOptions.length > 0 ? (
-                      missionNavItems.map(item => (
-                        <NavItem
-                          active={item.missionId === selectedMissionId}
-                          badge={item.badge}
-                          context={item.context}
-                          icon="◆"
-                          key={item.missionId}
-                          onClick={() => setSelectedMissionId(item.missionId)}
-                          stats={item.stats}
-                          subtitle={item.subtitle}
-                          title={item.title}
-                          tone={item.tone}
-                        />
-                      ))
+                    {missionNavItems.length > 0 ? (
+                      <WindowedList
+                        className="fluxio-nav-windowed"
+                        estimatedItemHeight={140}
+                        items={missionNavItems}
+                        renderItem={item => (
+                          <NavItem
+                            active={item.missionId === selectedMissionId}
+                            badge={item.badge}
+                            context={item.context}
+                            draggable
+                            icon="◆"
+                            key={item.missionId}
+                            onClick={() => setSelectedMissionId(item.missionId)}
+                            onCopy={copyContextValue}
+                            onDragOver={event => event.preventDefault()}
+                            onDragStart={() => handleMissionDragStart(item.missionId)}
+                            onDrop={event => {
+                              event.preventDefault();
+                              handleMissionDrop(item.missionId);
+                            }}
+                            stats={item.stats}
+                            subtitle={item.subtitle}
+                            title={item.title}
+                            tone={item.tone}
+                          />
+                        )}
+                      />
                     ) : (
-                      <p className="fluxio-empty-copy">Mission thread appears after first launch.</p>
+                      <p className="fluxio-empty-copy">
+                        {missionSearchQuery.trim()
+                          ? "No mission matches this search."
+                          : "Mission thread appears after first launch."}
+                      </p>
                     )}
                   </div>
                 </section>
@@ -6305,12 +6990,29 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </ActionButton>
                     </div>
                   </div>
+                  <div className="agent-preset-row">
+                    {MODEL_QUICK_PRESETS.map(preset => (
+                      <ActionButton
+                        key={`idle-preset-${preset.id}`}
+                        onClick={() => applyModelQuickPreset(preset)}
+                        type="button"
+                      >
+                        {preset.label}
+                      </ActionButton>
+                    ))}
+                  </div>
                   <label htmlFor="thread-note-idle">{agentComposerLabel}</label>
                   <textarea
                     id="thread-note-idle"
                     onChange={event => setOperatorDraft(event.target.value)}
+                    onPaste={handleComposerPaste}
                     placeholder={agentComposerPlaceholder}
                     value={operatorDraft}
+                  />
+                  <ComposerAttachmentStrip
+                    attachments={operatorAttachments}
+                    onClear={clearOperatorAttachments}
+                    onRemove={removeOperatorAttachment}
                   />
                   <div className="thread-composer-actions">
                     <ActionButton onClick={handleAgentIdlePrimaryAction} type="button" variant="primary">
@@ -6710,12 +7412,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <textarea
                       id="builder-thread-note"
                       onChange={event => setOperatorDraft(event.target.value)}
+                      onPaste={handleComposerPaste}
                       placeholder={
                         builderSelectedReviewTarget
                           ? "Describe what is wrong with this block and what the model should change."
                           : "Capture a technical observation, routing decision, or runtime intervention plan."
                       }
                       value={operatorDraft}
+                    />
+                    <ComposerAttachmentStrip
+                      attachments={operatorAttachments}
+                      onClear={clearOperatorAttachments}
+                      onRemove={removeOperatorAttachment}
                     />
                     <div className="thread-composer-actions">
                       <ActionButton type="submit" variant="primary">
@@ -6888,20 +7596,64 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
               <section className={`agent-chat-stage ${agentIdleState === "no-turns" ? "agent-chat-stage-empty" : ""}`.trim()}>
                 {agentHasTurns ? (
-                  <section className="agent-conversation-shell">
-                    <div className="agent-conversation-feed">
-                      {agentConversationTurns.map(item => (
-                        <AgentChatMessage
-                          highlighted={highlightedTurnId === item.id}
-                          item={item}
-                          key={item.id}
-                          onFocusTrace={turnId => {
-                            setShowThinkingTrace(true);
-                            focusTranscriptTurn(turnId);
-                          }}
-                        />
-                      ))}
+                  <section
+                    className={`agent-conversation-shell ${splitViewEnabled && splitMission ? "split" : ""}`.trim()}
+                  >
+                    <div className="agent-conversation-main">
+                      <WindowedList
+                        className="agent-conversation-feed"
+                        estimatedItemHeight={148}
+                        items={agentConversationTurns}
+                        overscan={6}
+                        renderItem={item => (
+                          <AgentChatMessage
+                            highlighted={highlightedTurnId === item.id}
+                            item={item}
+                            key={item.id}
+                            onFocusTrace={turnId => {
+                              setShowThinkingTrace(true);
+                              focusTranscriptTurn(turnId);
+                            }}
+                          />
+                        )}
+                      />
                     </div>
+                    {splitViewEnabled && splitMission ? (
+                      <aside className="agent-conversation-secondary">
+                        <div className="agent-conversation-secondary-head">
+                          <span className="eyebrow">Split mission</span>
+                          <strong>{splitMission.title || splitMission.objective}</strong>
+                          <p>
+                            {runtimeLabel(splitMission.runtime_id)}
+                            {` · ${titleizeToken(splitMission?.state?.status || "draft")}`}
+                          </p>
+                        </div>
+                        {splitConversationTurns.length > 0 ? (
+                          <WindowedList
+                            className="agent-conversation-feed split"
+                            estimatedItemHeight={132}
+                            items={splitConversationTurns}
+                            overscan={4}
+                            renderItem={item => (
+                              <AgentChatMessage
+                                highlighted={highlightedTurnId === item.id}
+                                item={item}
+                                key={`split-${item.id}`}
+                                onFocusTrace={turnId => {
+                                  setShowThinkingTrace(true);
+                                  setSelectedMissionId(splitMission.mission_id);
+                                  focusTranscriptTurn(turnId);
+                                }}
+                              />
+                            )}
+                          />
+                        ) : (
+                          <p className="fluxio-empty-copy">
+                            Open this mission once to warm its chat cache for split view.
+                          </p>
+                        )}
+                      </aside>
+                    ) : null}
                   </section>
                 ) : (
                   <section className="agent-conversation-empty">
@@ -6933,8 +7685,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </div>
                     </div>
                     {showThinkingTrace ? (
-                      <div className="agent-trace-list">
-                        {agentTraceTurns.slice(-8).map(item => (
+                      <WindowedList
+                        className="agent-trace-list"
+                        estimatedItemHeight={186}
+                        items={agentTraceTurns}
+                        overscan={4}
+                        renderItem={item => (
                           <TranscriptMessage
                             highlighted={highlightedTurnId === item.id}
                             item={item}
@@ -6946,8 +7702,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                             pinned={pinnedNexusIds.includes(item.id)}
                             showTrace={showThinkingTrace}
                           />
-                        ))}
-                      </div>
+                        )}
+                      />
                     ) : (
                       <p className="fluxio-empty-copy">
                         Trace is hidden. Fluxio is still recording runtime decisions in the background.
@@ -7052,12 +7808,67 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <span className="mini-pill muted">
                       {modelAuthReady ? "Model auth ready" : "Model auth missing"}
                     </span>
+                    {mission ? <span className="mini-pill muted">{followUpDeliveryStatus}</span> : null}
+                  </div>
+                  {mission ? (
+                    <div className="agent-split-controls">
+                      <label className="check-field">
+                        <input
+                          checked={splitViewEnabled}
+                          onChange={event => setSplitViewEnabled(event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span>Enable split mission view</span>
+                      </label>
+                      <Field label="Second mission">
+                        <select
+                          disabled={!splitViewEnabled || splitMissionOptions.length === 0}
+                          onChange={event => setSplitMissionId(event.target.value)}
+                          value={splitMission?.mission_id || ""}
+                        >
+                          {splitMissionOptions.length === 0 ? (
+                            <option value="">No other mission available</option>
+                          ) : (
+                            splitMissionOptions.map(item => (
+                              <option key={`split-${item.mission_id}`} value={item.mission_id}>
+                                {item.title || item.objective}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </Field>
+                      {splitMission?.mission_id ? (
+                        <ActionButton
+                          onClick={() => setSelectedMissionId(splitMission.mission_id)}
+                          type="button"
+                        >
+                          Focus second mission
+                        </ActionButton>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="agent-preset-row">
+                    {MODEL_QUICK_PRESETS.map(preset => (
+                      <ActionButton
+                        key={`live-preset-${preset.id}`}
+                        onClick={() => applyModelQuickPreset(preset)}
+                        type="button"
+                      >
+                        {preset.label}
+                      </ActionButton>
+                    ))}
                   </div>
                   <textarea
                     id="thread-note"
                     onChange={event => setOperatorDraft(event.target.value)}
+                    onPaste={handleComposerPaste}
                     placeholder={agentComposerPlaceholder}
                     value={operatorDraft}
+                  />
+                  <ComposerAttachmentStrip
+                    attachments={operatorAttachments}
+                    onClear={clearOperatorAttachments}
+                    onRemove={removeOperatorAttachment}
                   />
                   <div className="thread-composer-actions">
                     <ActionButton onClick={() => void handleAgentRouteSave()} type="button">
