@@ -24,6 +24,17 @@ const STORAGE_KEYS = {
   liveSyncSeconds: "fluxio.live_sync.seconds",
   codeExecutionEnabled: "fluxio.openai.code_execution.enabled",
   codeExecutionMemory: "fluxio.openai.code_execution.memory",
+  workspaceSearch: "fluxio.sidebar.workspace.search",
+  missionSearch: "fluxio.sidebar.mission.search",
+  workspaceOrder: "fluxio.sidebar.workspace.order",
+  missionOrder: "fluxio.sidebar.mission.order",
+  splitViewEnabled: "fluxio.agent.split.enabled",
+  splitMissionId: "fluxio.agent.split.mission_id",
+  localTasks: "fluxio.tasks.local",
+  memoryPolicy: "fluxio.memory.policy",
+  memoryStore: "fluxio.memory.store",
+  debugEvents: "fluxio.debug.events",
+  persistedUiState: "fluxio.ui.state",
 };
 
 const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...listFixtureOptions()];
@@ -142,6 +153,54 @@ const ROUTE_MODEL_OPTIONS = [
   "MiniMax-M2.7",
   "MiniMax-M2.7-highspeed",
 ];
+const MODEL_QUICK_PRESETS = [
+  {
+    id: "coding_fast",
+    label: "Coding Fast",
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    effort: "medium",
+  },
+  {
+    id: "planning_deep",
+    label: "Planning Deep",
+    provider: "openai",
+    model: "gpt-5.4",
+    effort: "high",
+  },
+  {
+    id: "review_safe",
+    label: "Review Safe",
+    provider: "anthropic",
+    model: "claude-sonnet-4.5",
+    effort: "medium",
+  },
+  {
+    id: "budget_route",
+    label: "Budget Route",
+    provider: "minimax",
+    model: "MiniMax-M2.7",
+    effort: "low",
+  },
+];
+const DEFAULT_MEMORY_POLICY = {
+  missionScoped: true,
+  projectScoped: true,
+  includeInFollowUps: true,
+};
+const DEFAULT_TASK_FORM = {
+  name: "",
+  prompt: "",
+  trigger: "schedule",
+  everyMinutes: 30,
+  webhookToken: "",
+  active: true,
+};
+const MAX_TASK_LOG = 120;
+const MAX_DEBUG_LOG = 240;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_INLINE_ATTACHMENTS = 6;
+const WINDOWED_THRESHOLD = 60;
 
 const AGENT_BLOCKER_DRAWER_IDS = ["queue", "proof", "context"];
 const AGENT_BUILDER_ONLY_DRAWERS = ["builder", "skills", "runtime", "profiles", "settings"];
@@ -152,10 +211,87 @@ function hasTauriBackend() {
   return Boolean(globalThis.window?.__TAURI__ || globalThis.window?.__TAURI_INTERNALS__);
 }
 
-async function callBackend(command, payload = undefined, options = {}) {
+function loadStoredJson(key, fallback) {
   try {
-    return payload === undefined ? await invoke(command) : await invoke(command, payload);
+    const raw = localStorage.getItem(key);
+    if (!raw) {
+      return fallback;
+    }
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function copyTextValue(text) {
+  const value = String(text || "").trim();
+  if (!value) {
+    return Promise.resolve(false);
+  }
+  if (navigator?.clipboard?.writeText) {
+    return navigator.clipboard.writeText(value).then(() => true).catch(() => false);
+  }
+  try {
+    const temp = document.createElement("textarea");
+    temp.value = value;
+    temp.setAttribute("readonly", "true");
+    temp.style.position = "absolute";
+    temp.style.left = "-9999px";
+    document.body.appendChild(temp);
+    temp.select();
+    const ok = document.execCommand("copy");
+    temp.remove();
+    return Promise.resolve(Boolean(ok));
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
+const BACKEND_CALL_SUBSCRIBERS = new Set();
+
+function subscribeBackendCalls(handler) {
+  BACKEND_CALL_SUBSCRIBERS.add(handler);
+  return () => {
+    BACKEND_CALL_SUBSCRIBERS.delete(handler);
+  };
+}
+
+async function callBackend(command, payload = undefined, options = {}) {
+  const startedAt = performance.now();
+  try {
+    const response = payload === undefined ? await invoke(command) : await invoke(command, payload);
+    const event = {
+      id: `invoke-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      kind: "invoke.ok",
+      command,
+      durationMs: Math.round(performance.now() - startedAt),
+      at: new Date().toISOString(),
+    };
+    BACKEND_CALL_SUBSCRIBERS.forEach(handler => {
+      try {
+        handler(event);
+      } catch {
+        return;
+      }
+    });
+    return response;
   } catch (error) {
+    const event = {
+      id: `invoke-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      kind: "invoke.error",
+      command,
+      durationMs: Math.round(performance.now() - startedAt),
+      at: new Date().toISOString(),
+      error: String(error),
+    };
+    BACKEND_CALL_SUBSCRIBERS.forEach(handler => {
+      try {
+        handler(event);
+      } catch {
+        return;
+      }
+    });
     if (options.throwOnError) {
       throw error;
     }
@@ -284,19 +420,28 @@ function ToastHost({ items }) {
 
 function NavItem({
   active = false,
+  draggable = false,
   title,
   subtitle,
   context = "",
   stats = [],
   onClick,
+  onDragStart,
+  onDragOver,
+  onDrop,
   tone = "neutral",
   badge,
   icon = null,
+  onCopy = () => {},
 }) {
   return (
     <button
       className={`fluxio-nav-item ${active ? "active" : ""}`.trim()}
+      draggable={draggable}
       onClick={onClick}
+      onDragOver={onDragOver}
+      onDragStart={onDragStart}
+      onDrop={onDrop}
       type="button"
     >
       <div className="fluxio-nav-item-top">
@@ -307,7 +452,20 @@ function NavItem({
         <span className={toneClass(tone)}>{badge || titleizeToken(tone)}</span>
       </div>
       {subtitle ? <p>{subtitle}</p> : null}
-      {context ? <p className="fluxio-nav-context">{context}</p> : null}
+      {context ? (
+        <div className="nav-context-row">
+          <p className="fluxio-nav-context">{context}</p>
+          <ActionButton
+            onClick={event => {
+              event.stopPropagation();
+              onCopy(context);
+            }}
+            type="button"
+          >
+            Copy
+          </ActionButton>
+        </div>
+      ) : null}
       {stats.length > 0 ? (
         <div className="fluxio-nav-stats">
           {stats.map(item => (
@@ -488,6 +646,67 @@ function TopbarShortcut({ active = false, label, onClick, tone = "neutral" }) {
     >
       {label}
     </button>
+  );
+}
+
+function WindowedList({
+  className = "",
+  estimatedItemHeight = 140,
+  items = [],
+  overscan = 4,
+  renderItem,
+}) {
+  const hostRef = useRef(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) {
+      return undefined;
+    }
+    const syncSize = () => {
+      setViewportHeight(host.clientHeight || 0);
+    };
+    syncSize();
+    const resizeObserver = new ResizeObserver(syncSize);
+    resizeObserver.observe(host);
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return <div className={`windowed-list ${className}`.trim()} ref={hostRef} />;
+  }
+
+  if (items.length < WINDOWED_THRESHOLD) {
+    return (
+      <div className={`windowed-list ${className}`.trim()} ref={hostRef}>
+        {items.map((item, index) => renderItem(item, index))}
+      </div>
+    );
+  }
+
+  const safeHeight = Math.max(1, estimatedItemHeight);
+  const visibleCount = Math.ceil((viewportHeight || safeHeight * 4) / safeHeight);
+  const startIndex = Math.max(0, Math.floor(scrollTop / safeHeight) - overscan);
+  const endIndex = Math.min(items.length, startIndex + visibleCount + overscan * 2);
+  const topPad = startIndex * safeHeight;
+  const bottomPad = Math.max(0, (items.length - endIndex) * safeHeight);
+
+  return (
+    <div
+      className={`windowed-list ${className}`.trim()}
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
+      ref={hostRef}
+    >
+      <div style={{ height: `${topPad}px` }} />
+      {items.slice(startIndex, endIndex).map((item, index) =>
+        renderItem(item, startIndex + index),
+      )}
+      <div style={{ height: `${bottomPad}px` }} />
+    </div>
   );
 }
 
@@ -888,6 +1107,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     localStorage.getItem(STORAGE_KEYS.codeExecutionEnabled) === "true";
   const storedCodeExecutionMemory =
     localStorage.getItem(STORAGE_KEYS.codeExecutionMemory) || "4g";
+  const storedWorkspaceSearch = localStorage.getItem(STORAGE_KEYS.workspaceSearch) || "";
+  const storedMissionSearch = localStorage.getItem(STORAGE_KEYS.missionSearch) || "";
+  const storedWorkspaceOrder = loadStoredJson(STORAGE_KEYS.workspaceOrder, []);
+  const storedMissionOrder = loadStoredJson(STORAGE_KEYS.missionOrder, []);
+  const storedSplitViewEnabled = localStorage.getItem(STORAGE_KEYS.splitViewEnabled) === "true";
+  const storedSplitMissionId = localStorage.getItem(STORAGE_KEYS.splitMissionId) || "";
+  const storedLocalTasks = loadStoredJson(STORAGE_KEYS.localTasks, []);
+  const storedMemoryPolicy = loadStoredJson(STORAGE_KEYS.memoryPolicy, DEFAULT_MEMORY_POLICY);
+  const storedMemoryStore = loadStoredJson(STORAGE_KEYS.memoryStore, {
+    workspace: {},
+    mission: {},
+  });
+  const storedDebugEvents = loadStoredJson(STORAGE_KEYS.debugEvents, []);
+  const storedUiState = loadStoredJson(STORAGE_KEYS.persistedUiState, {});
 
   const [uiMode, setUiMode] = useState(
     ["agent", "builder"].includes(storedUiMode) ? storedUiMode : "agent",
@@ -928,16 +1161,44 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [lastPushReason, setLastPushReason] = useState("");
   const [liveSyncSuspended, setLiveSyncSuspended] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeDrawer, setActiveDrawer] = useState(null);
+  const [activeDrawer, setActiveDrawer] = useState(storedUiState.activeDrawer || null);
   const [operatorDraft, setOperatorDraft] = useState("");
-  const [operatorNotes, setOperatorNotes] = useState([]);
-  const [liveControlEvents, setLiveControlEvents] = useState([]);
+  const [operatorNotes, setOperatorNotes] = useState(storedUiState.operatorNotes || []);
+  const [liveControlEvents, setLiveControlEvents] = useState(storedUiState.liveControlEvents || []);
+  const [operatorAttachments, setOperatorAttachments] = useState([]);
   const [agentRouteRole, setAgentRouteRole] = useState("executor");
   const [agentRuntimeFocus, setAgentRuntimeFocus] = useState("all");
   const [showThinkingTrace, setShowThinkingTrace] = useState(true);
-  const [pinnedNexusIds, setPinnedNexusIds] = useState([]);
+  const [pinnedNexusIds, setPinnedNexusIds] = useState(storedUiState.pinnedNexusIds || []);
   const [highlightedTurnId, setHighlightedTurnId] = useState("");
-  const [selectedReviewTargetId, setSelectedReviewTargetId] = useState("");
+  const [selectedReviewTargetId, setSelectedReviewTargetId] = useState(
+    storedUiState.selectedReviewTargetId || "",
+  );
+  const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState(storedWorkspaceSearch);
+  const [missionSearchQuery, setMissionSearchQuery] = useState(storedMissionSearch);
+  const [workspaceOrder, setWorkspaceOrder] = useState(
+    Array.isArray(storedWorkspaceOrder) ? storedWorkspaceOrder : [],
+  );
+  const [missionOrder, setMissionOrder] = useState(
+    Array.isArray(storedMissionOrder) ? storedMissionOrder : [],
+  );
+  const [splitViewEnabled, setSplitViewEnabled] = useState(storedSplitViewEnabled);
+  const [splitMissionId, setSplitMissionId] = useState(storedSplitMissionId);
+  const [localTasks, setLocalTasks] = useState(
+    Array.isArray(storedLocalTasks) ? storedLocalTasks : [],
+  );
+  const [taskForm, setTaskForm] = useState(DEFAULT_TASK_FORM);
+  const [memoryPolicy, setMemoryPolicy] = useState({
+    ...DEFAULT_MEMORY_POLICY,
+    ...(storedMemoryPolicy || {}),
+  });
+  const [memoryStore, setMemoryStore] = useState({
+    workspace: storedMemoryStore?.workspace || {},
+    mission: storedMemoryStore?.mission || {},
+  });
+  const [debugEvents, setDebugEvents] = useState(
+    Array.isArray(storedDebugEvents) ? storedDebugEvents.slice(-MAX_DEBUG_LOG) : [],
+  );
   const [data, setData] = useState({
     snapshot: null,
     onboarding: null,
@@ -954,6 +1215,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const mountedRef = useRef(true);
   const currentMissionRef = useRef(null);
   const currentDelegatedSessionsRef = useRef([]);
+  const transcriptCacheRef = useRef({});
   const refreshPromiseRef = useRef(null);
   const queuedRefreshReasonRef = useRef("");
   const authPromptedRef = useRef(false);
@@ -998,6 +1260,105 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.codeExecutionMemory, codeExecutionMemory);
   }, [codeExecutionMemory]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.workspaceSearch, workspaceSearchQuery);
+  }, [workspaceSearchQuery]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.missionSearch, missionSearchQuery);
+  }, [missionSearchQuery]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.splitViewEnabled, splitViewEnabled ? "true" : "false");
+  }, [splitViewEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.splitMissionId, splitMissionId || "");
+  }, [splitMissionId]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.workspaceOrder, JSON.stringify(workspaceOrder));
+  }, [workspaceOrder]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.missionOrder, JSON.stringify(missionOrder));
+  }, [missionOrder]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.localTasks, JSON.stringify(localTasks));
+  }, [localTasks]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.memoryPolicy, JSON.stringify(memoryPolicy));
+  }, [memoryPolicy]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.memoryStore, JSON.stringify(memoryStore));
+  }, [memoryStore]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.debugEvents, JSON.stringify(debugEvents.slice(-MAX_DEBUG_LOG)));
+  }, [debugEvents]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      STORAGE_KEYS.persistedUiState,
+      JSON.stringify({
+        activeDrawer,
+        pinnedNexusIds,
+        selectedReviewTargetId,
+        operatorNotes: operatorNotes.slice(-40),
+        liveControlEvents: liveControlEvents.slice(-60),
+      }),
+    );
+  }, [activeDrawer, liveControlEvents, operatorNotes, pinnedNexusIds, selectedReviewTargetId]);
+
+  useEffect(() => {
+    return subscribeBackendCalls(event => {
+      setDebugEvents(current =>
+        [event, ...current].slice(0, MAX_DEBUG_LOG),
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    const onError = event => {
+      setDebugEvents(current =>
+        [
+          {
+            id: `window-error-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            kind: "window.error",
+            at: new Date().toISOString(),
+            message: event.message || "Unhandled browser error",
+            source: event.filename || "",
+            line: event.lineno || 0,
+            column: event.colno || 0,
+          },
+          ...current,
+        ].slice(0, MAX_DEBUG_LOG),
+      );
+    };
+    const onUnhandled = event => {
+      setDebugEvents(current =>
+        [
+          {
+            id: `window-unhandled-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            kind: "window.unhandledrejection",
+            at: new Date().toISOString(),
+            message: String(event.reason || "Unhandled rejection"),
+          },
+          ...current,
+        ].slice(0, MAX_DEBUG_LOG),
+      );
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onUnhandled);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onUnhandled);
+    };
+  }, []);
 
   useEffect(() => {
     setLiveControlEvents([]);
@@ -2103,6 +2464,120 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [],
   );
 
+  const clearOperatorAttachments = useCallback(() => {
+    setOperatorAttachments([]);
+  }, []);
+
+  const removeOperatorAttachment = useCallback(attachmentId => {
+    setOperatorAttachments(current => current.filter(item => item.id !== attachmentId));
+  }, []);
+
+  const handleComposerPaste = useCallback(
+    event => {
+      const items = Array.from(event.clipboardData?.items || []);
+      const imageItems = items.filter(item => item.kind === "file" && item.type.startsWith("image/"));
+      if (imageItems.length === 0) {
+        return;
+      }
+      event.preventDefault();
+
+      const slotsLeft = Math.max(0, MAX_INLINE_ATTACHMENTS - operatorAttachments.length);
+      if (slotsLeft <= 0) {
+        pushToast(`Only ${MAX_INLINE_ATTACHMENTS} inline attachments are allowed.`, "warn");
+        return;
+      }
+
+      const selectedItems = imageItems.slice(0, slotsLeft);
+      selectedItems.forEach((item, index) => {
+        const file = item.getAsFile();
+        if (!file) {
+          return;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          pushToast(
+            `Attachment ${file.name || index + 1} exceeds ${Math.round(
+              MAX_ATTACHMENT_BYTES / (1024 * 1024),
+            )}MB.`,
+            "warn",
+          );
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          setOperatorAttachments(current =>
+            [
+              {
+                id: `attachment-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                name: file.name || `pasted-image-${index + 1}.png`,
+                mime: file.type || "image/png",
+                size: file.size,
+                previewUrl: typeof reader.result === "string" ? reader.result : "",
+                createdAt: new Date().toISOString(),
+              },
+              ...current,
+            ].slice(0, MAX_INLINE_ATTACHMENTS),
+          );
+        };
+        reader.readAsDataURL(file);
+      });
+
+      pushToast("Image attachment added to the active composer.", "info");
+    },
+    [operatorAttachments.length, pushToast],
+  );
+
+  const applyModelQuickPreset = useCallback(
+    preset => {
+      if (!preset) {
+        return;
+      }
+      handleAgentRouteFieldChange("provider", preset.provider);
+      handleAgentRouteFieldChange("model", preset.model);
+      handleAgentRouteFieldChange("effort", preset.effort);
+      pushToast(`Applied preset: ${preset.label}`, "info");
+    },
+    [handleAgentRouteFieldChange, pushToast],
+  );
+
+  const runTaskPrompt = useCallback(
+    async (task, source = "schedule") => {
+      const prompt = String(task?.prompt || "").trim();
+      if (!prompt) {
+        return;
+      }
+      if (!mission?.mission_id || previewMode !== "live" || !hasTauriBackend()) {
+        appendOperatorEntry({
+          title: `Task queued (${source})`,
+          detail: prompt,
+          meta: "Task log only (no live mission selected)",
+          tone: "warn",
+        });
+        return;
+      }
+      try {
+        await callBackend(
+          "send_control_room_mission_follow_up_command",
+          { payload: { missionId: mission.mission_id, message: prompt, root: null } },
+          { throwOnError: true },
+        );
+        appendOperatorEntry({
+          title: `Task executed (${source})`,
+          detail: prompt,
+          meta: timestampLabel(new Date().toISOString()),
+          tone: "good",
+        });
+      } catch (error) {
+        appendOperatorEntry({
+          title: `Task failed (${source})`,
+          detail: `${prompt}\n\n${String(error)}`,
+          meta: timestampLabel(new Date().toISOString()),
+          tone: "bad",
+        });
+      }
+    },
+    [appendOperatorEntry, mission?.mission_id, previewMode],
+  );
+
   const handleOperatorNote = useCallback(
     event => {
       event.preventDefault();
@@ -2110,17 +2585,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
       markAction("composer:add-note");
+      const attachmentSummary = operatorAttachments
+        .map(item => `${item.name} (${Math.max(1, Math.round(item.size / 1024))}KB)`)
+        .join(", ");
       appendOperatorEntry({
         title: "Operator note",
-        detail: operatorDraft.trim(),
-        meta: "Local note",
+        detail: operatorAttachments.length
+          ? `${operatorDraft.trim()}\n\nAttachments: ${attachmentSummary}`
+          : operatorDraft.trim(),
+        meta: operatorAttachments.length
+          ? `Local note · ${operatorAttachments.length} attachment${operatorAttachments.length === 1 ? "" : "s"}`
+          : "Local note",
         tone: "neutral",
         channel: "note",
       });
+      if (mission?.mission_id) {
+        setMemoryStore(current => ({
+          ...current,
+          mission: {
+            ...current.mission,
+            [mission.mission_id]: operatorDraft.trim().slice(0, 600),
+          },
+        }));
+      }
+      if (workspace?.workspace_id) {
+        setMemoryStore(current => ({
+          ...current,
+          workspace: {
+            ...current.workspace,
+            [workspace.workspace_id]: operatorDraft.trim().slice(0, 600),
+          },
+        }));
+      }
       setOperatorDraft("");
+      clearOperatorAttachments();
       pushToast("Operator note added to this session.", "info");
     },
-    [appendOperatorEntry, markAction, operatorDraft, pushToast],
+    [
+      appendOperatorEntry,
+      clearOperatorAttachments,
+      markAction,
+      mission?.mission_id,
+      operatorAttachments,
+      operatorDraft,
+      pushToast,
+      workspace?.workspace_id,
+    ],
   );
 
   const handleAgentFollowUp = useCallback(async () => {
@@ -2177,8 +2687,36 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           `If the OpenAI route is active, use the python tool / code execution when it will ground the work. Prefer a ${codeExecutionMemory} container budget.`,
         );
       }
-      const composedFollowUp =
-        steeringLines.length > 0 ? `${steeringLines.join(" ")}\n\n${followUp}` : followUp;
+      const memorySnippets = [];
+      if (memoryPolicy.includeInFollowUps) {
+        if (memoryPolicy.projectScoped && workspace?.workspace_id) {
+          const workspaceMemo = String(memoryStore?.workspace?.[workspace.workspace_id] || "").trim();
+          if (workspaceMemo) {
+            memorySnippets.push(`Workspace memory: ${workspaceMemo}`);
+          }
+        }
+        if (memoryPolicy.missionScoped && mission?.mission_id) {
+          const missionMemo = String(memoryStore?.mission?.[mission.mission_id] || "").trim();
+          if (missionMemo) {
+            memorySnippets.push(`Mission memory: ${missionMemo}`);
+          }
+        }
+      }
+      const attachmentLines = operatorAttachments.map(
+        item => `[attachment:${item.name}|${item.mime}|${Math.max(1, Math.round(item.size / 1024))}KB]`,
+      );
+      const composedFollowUpParts = [];
+      if (steeringLines.length > 0) {
+        composedFollowUpParts.push(steeringLines.join(" "));
+      }
+      if (memorySnippets.length > 0) {
+        composedFollowUpParts.push(memorySnippets.join("\n"));
+      }
+      composedFollowUpParts.push(followUp);
+      if (attachmentLines.length > 0) {
+        composedFollowUpParts.push(`Attachments:\n${attachmentLines.join("\n")}`);
+      }
+      const composedFollowUp = composedFollowUpParts.filter(Boolean).join("\n\n");
       const hasActiveDelegatedRuntime = asList(mission?.delegated_runtime_sessions).some(session =>
         ["waiting_for_approval", "running", "launching"].includes(
           String(session?.status || "").trim().toLowerCase(),
@@ -2206,7 +2744,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         { payload: { missionId: mission.mission_id, message: composedFollowUp, root: null } },
         { throwOnError: true },
       );
+      setMemoryStore(current => ({
+        ...current,
+        mission: {
+          ...current.mission,
+          [mission.mission_id]: followUp.slice(0, 800),
+        },
+        workspace: workspace?.workspace_id
+          ? {
+              ...current.workspace,
+              [workspace.workspace_id]: followUp.slice(0, 800),
+            }
+          : current.workspace,
+      }));
       setOperatorDraft("");
+      clearOperatorAttachments();
       pushToast(sentLive ? "Follow-up sent live and recorded in the mission thread." : "Follow-up recorded in the mission thread.", "info");
     } catch (error) {
       pushToast(`Mission follow-up failed: ${error}`, "error");
@@ -2219,11 +2771,19 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     data.openClawStatus?.connected,
     markAction,
     mission,
+    memoryPolicy.includeInFollowUps,
+    memoryPolicy.missionScoped,
+    memoryPolicy.projectScoped,
+    memoryStore?.mission,
+    memoryStore?.workspace,
+    operatorAttachments,
     operatorDraft,
     previewMode,
     pushToast,
+    workspace?.workspace_id,
     workspaceProfileForm.routeOverrides,
     mission?.effectiveRouteContract?.roles,
+    clearOperatorAttachments,
   ]);
 
   const handleOpenClawConnect = useCallback(async () => {

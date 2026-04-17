@@ -9,6 +9,7 @@ Current source-of-truth docs:
 
 - `docs/FLUXIO_1_0_RELEASE.md`
 - `docs/FLUXIO_1_0_POLISH_PLAN.md`
+- `docs/CHATGPT_TERMINOLOGY_THEO_GAP.md`
 
 ## Fixed Next Steps
 
