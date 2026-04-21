@@ -16,6 +16,7 @@ import {
 } from "../../../../../desktop-ui/fluxioHelpers.js";
 import { ActionButton, Field, Modal, StatusPill } from "../../../../../desktop-ui/MissionControlPrimitives.jsx";
 import { buildMissionControlModel } from "../../../../../desktop-ui/missionControlModel.js";
+import { FluxioReferenceShell } from "./FluxioReferenceShell.jsx";
 
 const STORAGE_KEYS = {
   uiMode: "fluxio.ui.mode",
@@ -35,6 +36,7 @@ const STORAGE_KEYS = {
   memoryStore: "fluxio.memory.store",
   debugEvents: "fluxio.debug.events",
   persistedUiState: "fluxio.ui.state",
+  surface: "fluxio.ui.surface",
 };
 
 const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...listFixtureOptions()];
@@ -1198,9 +1200,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   });
   const storedDebugEvents = loadStoredJson(STORAGE_KEYS.debugEvents, []);
   const storedUiState = loadStoredJson(STORAGE_KEYS.persistedUiState, {});
+  const storedSurface =
+    searchParams.get("surface") ||
+    localStorage.getItem(STORAGE_KEYS.surface) ||
+    (storedUiMode === "builder" ? "builder" : "home");
+  const requestedAgentScene = searchParams.get("agentScene") || "";
 
   const [uiMode, setUiMode] = useState(
     ["agent", "builder"].includes(storedUiMode) ? storedUiMode : "agent",
+  );
+  const [surface, setSurface] = useState(
+    ["home", "agent", "builder", "general"].includes(storedSurface) ? storedSurface : "home",
+  );
+  const [agentScene, setAgentScene] = useState(
+    ["idle", "run", "live"].includes(requestedAgentScene) ? requestedAgentScene : "idle",
   );
   const [previewMode, setPreviewMode] = useState(
     FIXTURE_OPTIONS.some(option => option.id === storedPreviewMode) ? storedPreviewMode : "live",
@@ -1317,6 +1330,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.uiMode, uiMode);
   }, [uiMode]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.surface, surface);
+  }, [surface]);
+
+  useEffect(() => {
+    if (surface === "builder") {
+      if (uiMode !== "builder") {
+        setUiMode("builder");
+      }
+      return;
+    }
+    if (uiMode !== "agent") {
+      setUiMode("agent");
+    }
+  }, [surface, uiMode]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.previewMode, previewMode);
@@ -4253,6 +4282,85 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
   const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
+  const selectedModelLabel =
+    activeEffectiveRoute.model || selectedAgentRoute.model
+      ? `${activeEffectiveRoute.model || selectedAgentRoute.model}`
+      : `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} default`;
+  const selectedEffortLabel = titleizeToken(
+    activeEffectiveRoute.effort || selectedAgentRoute.effort || "medium",
+  );
+  const currentProjectLabel = mission?.title || workspace?.name || "SaaS Landing Page";
+
+  useEffect(() => {
+    if (surface !== "agent") {
+      return;
+    }
+    if (requestedAgentScene) {
+      return;
+    }
+    if (!mission) {
+      setAgentScene("idle");
+      return;
+    }
+    setAgentScene(current => (current === "live" ? "live" : "run"));
+  }, [mission, requestedAgentScene, surface]);
+
+  const handleReferenceSurfaceChange = useCallback(
+    nextSurface => {
+      markAction(`reference:surface:${nextSurface}`);
+      setSurface(nextSurface);
+      if (nextSurface === "agent") {
+        setActiveDrawer(null);
+        if (!requestedAgentScene) {
+          setAgentScene(mission ? "run" : "idle");
+        }
+        return;
+      }
+      if (nextSurface === "builder") {
+        setActiveDrawer(null);
+        return;
+      }
+      setActiveDrawer(null);
+    },
+    [markAction, mission, requestedAgentScene],
+  );
+
+  const handleReferenceSkillStudio = useCallback(() => {
+    markAction("reference:skill-studio");
+    pushToast("Skill Studio visual pass is scheduled next.", "info");
+  }, [markAction, pushToast]);
+
+  const handleReferenceSettings = useCallback(() => {
+    markAction("reference:settings");
+    pushToast("Settings visual pass is scheduled next.", "info");
+  }, [markAction, pushToast]);
+
+  const handleReferenceHistory = useCallback(() => {
+    markAction("reference:history");
+    pushToast("History drawer is not part of this reference pass.", "info");
+  }, [markAction, pushToast]);
+
+  const handleReferenceMore = useCallback(() => {
+    markAction("reference:more");
+    pushToast("Additional agent actions will land after this UI pass.", "info");
+  }, [markAction, pushToast]);
+
+  const handleReferenceAttach = useCallback(() => {
+    markAction("reference:attach");
+    pushToast("Paste or drag attachments into the composer.", "info");
+  }, [markAction, pushToast]);
+
+  const handleReferenceDictation = useCallback(async () => {
+    markAction("reference:dictation");
+    if (previewMode === "live" && hasTauriBackend()) {
+      const config = await callBackend("get_dictation_config");
+      if (config?.os_fallback_hint || config?.osFallbackHint) {
+        pushToast(config.os_fallback_hint || config.osFallbackHint, "info");
+        return;
+      }
+    }
+    pushToast("Dictation button is present; detailed voice flow lands in the next pass.", "info");
+  }, [markAction, previewMode, pushToast]);
 
   const openAuthDrawer = useCallback(() => {
     setUiMode("builder");
@@ -6160,6 +6268,266 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       </div>
     );
   }
+
+  return (
+    <>
+      <FluxioReferenceShell
+        agentScene={agentScene}
+        currentProjectLabel={currentProjectLabel}
+        draft={operatorDraft}
+        onAttach={handleReferenceAttach}
+        onChangeDraft={setOperatorDraft}
+        onDictation={() => void handleReferenceDictation()}
+        onHistory={handleReferenceHistory}
+        onIdleSubmit={handleAgentIdlePrimaryAction}
+        onMore={handleReferenceMore}
+        onOpenSettings={handleReferenceSettings}
+        onOpenSkillStudio={handleReferenceSkillStudio}
+        onPaste={handleComposerPaste}
+        onRuntimeChange={value => {
+          if (mission) {
+            setAgentRuntimeFocus(value);
+            return;
+          }
+          setMissionForm(current => ({ ...current, runtime: value }));
+        }}
+        onSend={() => {
+          if (mission) {
+            void handleAgentFollowUp();
+            return;
+          }
+          handleAgentIdlePrimaryAction();
+        }}
+        onSetAgentScene={setAgentScene}
+        onSetSurface={handleReferenceSurfaceChange}
+        runtimeOptions={runtimeOptions}
+        selectedEffortLabel={selectedEffortLabel}
+        selectedModelLabel={selectedModelLabel}
+        selectedRuntime={agentRuntimeSelectValue}
+        surface={surface}
+      />
+
+      <Modal
+        actions={
+          <ActionButton onClick={handleWorkspaceSubmit} type="submit" variant="primary">
+            Save workspace
+          </ActionButton>
+        }
+        onClose={() => setShowWorkspaceDialog(false)}
+        open={showWorkspaceDialog}
+        summary="Workspace ownership stays in T3 shell state. Legacy shell no longer controls this flow."
+        title="Add workspace"
+      >
+        <form className="dialog-form" onSubmit={handleWorkspaceSubmit}>
+          <Field label="Workspace name">
+            <input
+              onChange={event =>
+                setWorkspaceForm(current => ({ ...current, name: event.target.value }))
+              }
+              placeholder="Fluxio Platform"
+              value={workspaceForm.name}
+            />
+          </Field>
+          <Field label="Workspace path">
+            <input
+              onChange={event =>
+                setWorkspaceForm(current => ({ ...current, path: event.target.value }))
+              }
+              placeholder="C:/Users/paul/projects/vibe-coding-platform"
+              value={workspaceForm.path}
+            />
+          </Field>
+          <div className="field-row">
+            <Field label="Default runtime">
+              <select
+                onChange={event =>
+                  setWorkspaceForm(current => ({
+                    ...current,
+                    defaultRuntime: event.target.value,
+                  }))
+                }
+                value={workspaceForm.defaultRuntime}
+              >
+                <option value="openclaw">OpenClaw</option>
+                <option value="hermes">Hermes</option>
+              </select>
+            </Field>
+            <Field label="Operator profile">
+              <select
+                onChange={event =>
+                  setWorkspaceForm(current => ({ ...current, userProfile: event.target.value }))
+                }
+                value={workspaceForm.userProfile}
+              >
+                {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
+                  option => (
+                    <option key={option} value={option}>
+                      {titleizeToken(option)}
+                    </option>
+                  ),
+                )}
+              </select>
+            </Field>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        actions={
+          <ActionButton onClick={handleMissionSubmit} type="submit" variant="primary">
+            Launch mission
+          </ActionButton>
+        }
+        onClose={() => setShowMissionDialog(false)}
+        open={showMissionDialog}
+        summary="Mission launch remains available, but operational clutter is removed from the top bar."
+        title="Start mission"
+      >
+        <form className="dialog-form" onSubmit={handleMissionSubmit}>
+          <div className="field-row">
+            <Field label="Workspace">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, workspaceId: event.target.value }))
+                }
+                value={missionForm.workspaceId}
+              >
+                {workspaces.map(item => (
+                  <option key={item.workspace_id} value={item.workspace_id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Runtime">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, runtime: event.target.value }))
+                }
+                value={missionForm.runtime}
+              >
+                <option value="openclaw">OpenClaw</option>
+                <option value="hermes">Hermes</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="field-row">
+            <Field label="Run mode">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, mode: event.target.value }))
+                }
+                value={missionForm.mode}
+              >
+                <option value="Autopilot">Autopilot</option>
+                <option value="Deep Run">Deep Run</option>
+                <option value="Proof First">Proof First</option>
+              </select>
+            </Field>
+            <Field label="Profile">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, profile: event.target.value }))
+                }
+                value={missionForm.profile}
+              >
+                {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
+                  option => (
+                    <option key={option} value={option}>
+                      {titleizeToken(option)}
+                    </option>
+                  ),
+                )}
+              </select>
+            </Field>
+          </div>
+
+          <div className="field-row">
+            <Field label="Budget hours">
+              <input
+                min="1"
+                onChange={event =>
+                  setMissionForm(current => ({
+                    ...current,
+                    budgetHours: Number(event.target.value || 12),
+                  }))
+                }
+                type="number"
+                value={missionForm.budgetHours}
+              />
+            </Field>
+            <Field label="Run until">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, runUntil: event.target.value }))
+                }
+                value={missionForm.runUntil}
+              >
+                <option value="pause_on_failure">Pause on failure</option>
+                <option value="continue_until_blocked">Continue until blocked</option>
+              </select>
+            </Field>
+          </div>
+
+          <Field label="Mission objective">
+            <textarea
+              onChange={event =>
+                setMissionForm(current => ({ ...current, objective: event.target.value }))
+              }
+              placeholder={missionObjectivePlaceholder(missionForm.profile)}
+              value={missionForm.objective}
+            />
+          </Field>
+
+          <Field label="Success checks">
+            <textarea
+              onChange={event =>
+                setMissionForm(current => ({ ...current, successChecks: event.target.value }))
+              }
+              placeholder={missionChecksPlaceholder(missionForm.profile)}
+              value={missionForm.successChecks}
+            />
+          </Field>
+        </form>
+      </Modal>
+
+      <Modal
+        actions={
+          <div className="inline-actions">
+            <ActionButton onClick={handleClearTelegram}>Clear token</ActionButton>
+            <ActionButton onClick={handleSaveTelegram} type="submit" variant="primary">
+              Save escalation
+            </ActionButton>
+          </div>
+        }
+        onClose={() => setShowEscalationDialog(false)}
+        open={showEscalationDialog}
+        summary="Escalation stays accessible, but only opens when the operator needs it."
+        title="Configure Telegram escalation"
+      >
+        <form className="dialog-form" onSubmit={handleSaveTelegram}>
+          <Field label="Telegram bot token">
+            <input
+              onChange={event => setTelegramBotToken(event.target.value)}
+              placeholder="123456:ABCDEF..."
+              type="password"
+              value={telegramBotToken}
+            />
+          </Field>
+          <Field label="Telegram chat ID">
+            <input
+              onChange={event => setTelegramChatId(event.target.value)}
+              placeholder="123456789"
+              value={telegramChatId}
+            />
+          </Field>
+        </form>
+      </Modal>
+
+      <ToastHost items={toasts} />
+    </>
+  );
 
   return (
     <div
