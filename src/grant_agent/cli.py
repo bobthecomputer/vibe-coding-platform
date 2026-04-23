@@ -3119,6 +3119,19 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         args.budget_hours,
         args.run_until,
     )
+    code_execution_enabled = bool(
+        getattr(args, "code_execution", False)
+        or getattr(args, "code_execution_container_id", "")
+    )
+    code_execution_memory = str(
+        getattr(args, "code_execution_memory", "4g") or "4g"
+    )
+    code_execution_container_id = str(
+        getattr(args, "code_execution_container_id", "") or ""
+    )
+    code_execution_required = bool(
+        getattr(args, "code_execution_required", False)
+    )
     mission = store.create_mission(
         workspace_id=workspace.workspace_id,
         runtime_id=args.runtime,
@@ -3132,12 +3145,10 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         run_until_behavior=budget_settings["run_until_behavior"],
         deadline_at=budget_settings["deadline_at"],
         harness_id=workspace.preferred_harness,
-        code_execution_enabled=bool(
-            args.code_execution or args.code_execution_container_id
-        ),
-        code_execution_memory=args.code_execution_memory,
-        code_execution_container_id=args.code_execution_container_id or "",
-        code_execution_required=bool(args.code_execution_required),
+        code_execution_enabled=code_execution_enabled,
+        code_execution_memory=code_execution_memory,
+        code_execution_container_id=code_execution_container_id,
+        code_execution_required=code_execution_required,
     )
     if mission.run_budget.deadline_at:
         store.append_event(

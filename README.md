@@ -67,11 +67,11 @@ python -m grant_agent.cli release-readiness
 
 ## Desktop (Tauri)
 
-The desktop app now runs a single canonical frontend shell from the `t3code` tree:
+The desktop app now runs a single canonical frontend shell from the repo `web/` tree:
 
 - `src-tauri/` for tray/overlay/runtime logic
-- `t3code/apps/web/` for the live React workbench UI
-- `desktop-ui/` for shared view-model and shell components imported by the T3 web entrypoint
+- `web/` for the live React workbench UI
+- `desktop-ui/` for shared view-model and shell components imported by the web entrypoint
 
 Run:
 

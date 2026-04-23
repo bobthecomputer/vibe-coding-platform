@@ -6,26 +6,23 @@ The current repo already references `OpenClaw` and `Hermes` in product docs and 
 
 ## Verified Upstream Sources
 
-### T3 basis
+### Product ergonomics basis
 
-- T3 Stack / create-t3-app
-  - Link: <https://github.com/t3-oss/create-t3-app>
-  - Verified status: public and active
+- Modern full-stack app shells
+  - Verified status: public patterns, not code dependencies
   - Why it matters to Fluxio:
     - opinionated but modular defaults
     - strong full-stack ergonomics
     - emphasis on speed, safety, and composable setup
 
-- T3 Chat product
-  - Link: <https://t3.chat/>
-  - Verified status: public product site
+- Prompt-first chat products
+  - Verified status: public product patterns, not code dependencies
   - Why it matters to Fluxio:
     - prompt-first operator flow
     - fast model selection and thread ergonomics
     - strong consumer-facing UX expectations
   - Note:
-    - no official public source repo was verified during this pass
-    - treat this as a product reference, not a code dependency
+    - treat these as product references, not code dependencies
 
 ### OpenCode and continuation
 
@@ -76,14 +73,14 @@ What was missing was the upstream catalog itself:
 - no clean doc listing the GitHub links for the main inspirations
 - no distinction between active upstreams and historical references
 - no note that `OpenCode` has moved forward as `Crush`
-- no clarification that `T3 Chat` is a product reference while `create-t3-app` is the clean open-source T3 basis
+- no clarification that product references are not code dependencies
 
 ## Recommended Basis For Fluxio
 
 Use the sources for ideas, not for product cloning.
 
 - For application structure and opinionated developer ergonomics:
-  - lean on the `T3 Stack` mindset
+  - lean on modern full-stack app-shell patterns without importing stale scaffold code
 
 - For coding-agent workflow, session behavior, and configurable tool use:
   - study `OpenCode` historically, but prefer `Crush` as the live reference

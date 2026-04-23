@@ -1,29 +1,29 @@
 # Live UI Development
 
-Fluxio now runs with a T3-owned shell and style system under `t3code/apps/web/src/fluxio/*`.
+Fluxio now runs with its shell and style system under `web/src/fluxio/*`.
 
 ## What changed
 
-- `t3code/apps/web/src/fluxio/FluxioShell.jsx` now owns layout, state composition, and mission thread rendering.
-- `t3code/apps/web/src/fluxio/FluxioApp.tsx` now wraps the shell in a real error boundary with recoverable diagnostics.
-- `t3code/apps/web/src/fluxio/styles.css` now owns the visual system for the shell.
+- `web/src/fluxio/FluxioShell.jsx` now owns layout, state composition, and mission thread rendering.
+- `web/src/fluxio/FluxioApp.tsx` now wraps the shell in a real error boundary with recoverable diagnostics.
+- `web/src/fluxio/styles.css` now owns the visual system for the shell.
 - `desktop-ui/FluxioDesktop.jsx` is now a compatibility wrapper only.
-- `desktop-ui/styles.css` now imports the T3 shell stylesheet as a shim.
+- `desktop-ui/styles.css` now imports the web shell stylesheet as a shim.
 
-This removes split ownership between `t3code` and `desktop-ui` for the main app experience.
+This removes split ownership between the frontend entrypoint and `desktop-ui` for the main app experience.
 
 ## Current local setup
 
 - `package.json`
-  - `npm run frontend:dev` starts Vite for `t3code/apps/web`
-  - `npm run frontend:build` builds `t3code/apps/web/dist`
+  - `npm run frontend:dev` starts Vite for `web`
+  - `npm run frontend:build` builds `web/dist`
 - `src-tauri/tauri.conf.json`
   - `beforeDevCommand` runs the Vite dev server
   - `devUrl` points Tauri at the live frontend
-  - `frontendDist` points packaged builds to `t3code/apps/web/dist`
-- `t3code/apps/web/src/main.tsx`
+  - `frontendDist` points packaged builds to `web/dist`
+- `web/src/main.tsx`
   - mounts `FluxioApp`
-  - imports `t3code/apps/web/src/fluxio/styles.css`
+  - imports `web/src/fluxio/styles.css`
 
 ## Runtime review loop
 

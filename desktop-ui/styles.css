@@ -1,2 +1,2 @@
-/* Compatibility shim: style ownership moved to t3code/apps/web/src/fluxio/styles.css. */
-@import "../t3code/apps/web/src/fluxio/styles.css";
+/* Compatibility shim: style ownership moved to web/src/fluxio/styles.css. */
+@import "../web/src/fluxio/styles.css";

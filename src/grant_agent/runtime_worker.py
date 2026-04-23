@@ -12,7 +12,11 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from .subprocess_utils import background_creationflags
+try:
+    from .subprocess_utils import background_creationflags
+except ImportError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from grant_agent.subprocess_utils import background_creationflags
 
 STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
 HEARTBEAT_INTERVAL_SECONDS = max(

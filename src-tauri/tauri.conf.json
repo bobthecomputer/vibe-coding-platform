@@ -7,7 +7,7 @@
     "beforeBuildCommand": "npm run frontend:build",
     "beforeDevCommand": "npm run frontend:dev",
     "devUrl": "http://127.0.0.1:1420",
-    "frontendDist": "../t3code/apps/web/dist"
+    "frontendDist": "../web/dist"
   },
   "app": {
     "windows": [

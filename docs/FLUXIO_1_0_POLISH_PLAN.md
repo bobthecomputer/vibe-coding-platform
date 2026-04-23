@@ -33,13 +33,13 @@ This is the tighter `1.0 premium polish` checklist mapped onto the actual implem
 
 ### Today: ship the premium supervision shell
 
-- `t3code/apps/web/src/fluxio/FluxioApp.tsx`
+- `web/src/fluxio/FluxioApp.tsx`
   - keep one focused task and one dominant next-action surface in the center lane
   - make proof stronger than narration with a "what changed since your last look" surface
   - make the runtime lane explain itself: why this runtime now, continuity truth, execution location, and handoff history
   - keep the right rail strict: review boundaries, guardrails, runtime health, leverage, escalation
   - make the proof dialog useful for fast review instead of a raw diff dump
-- `t3code/apps/web/src/fluxio/fluxioBridge.ts`
+- `web/src/fluxio/fluxioBridge.ts`
   - upgrade the generated thread proof text so it includes runtime lane, continuity, execution location, and handoff rationale
   - upgrade diff summaries so review proof survives restarts and operator returns
   - keep proof copy grounded in the shared snapshot, not UI-only assumptions

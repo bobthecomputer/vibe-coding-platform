@@ -27,7 +27,7 @@ from .models import (
 from .execution_truth import derive_execution_target
 from .research import search_workspace
 from .runtimes import runtime_adapter_map
-from .runtime_supervisor import DelegatedRuntimeSupervisor
+from .runtime_supervisor import DelegatedRuntimeSupervisor, _pid_alive
 from .safety import risk_level_for_command
 
 PROFILE_EXECUTION_DEFAULTS = {
@@ -580,9 +580,17 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 workspace=delegated_workspace,
                 source_step_id=proposal.source_step_id,
             )
-            if session.status == "running":
-                time.sleep(0.2)
+            settle_deadline = time.monotonic() + 2.0
+            while (
+                session.status in {"launching", "running"}
+                and time.monotonic() < settle_deadline
+            ):
+                time.sleep(0.1)
                 session = supervisor.refresh_session(session)
+            if session.status in {"completed", "failed", "stopped"} and session.supervisor_pid:
+                release_deadline = time.monotonic() + 1.0
+                while _pid_alive(session.supervisor_pid) and time.monotonic() < release_deadline:
+                    time.sleep(0.05)
             snapshot = supervisor.build_session_snapshot(session)
             events = adapter.stream_events(delegated_mission) + supervisor.read_events(session)
             return _completed_record(

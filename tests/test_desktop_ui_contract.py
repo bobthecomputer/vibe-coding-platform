@@ -6,24 +6,24 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-INDEX_HTML = ROOT / "t3code" / "apps" / "web" / "index.html"
-MAIN_TSX = ROOT / "t3code" / "apps" / "web" / "src" / "main.tsx"
-FLUXIO_APP = ROOT / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx"
-FLUXIO_BRIDGE = ROOT / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts"
+INDEX_HTML = ROOT / "web" / "index.html"
+MAIN_TSX = ROOT / "web" / "src" / "main.tsx"
+FLUXIO_APP = ROOT / "web" / "src" / "fluxio" / "FluxioApp.tsx"
+FLUXIO_BRIDGE = ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts"
 HELPERS_JS = ROOT / "desktop-ui" / "fluxioHelpers.js"
 TAURI_CONF = ROOT / "src-tauri" / "tauri.conf.json"
 PACKAGE_JSON = ROOT / "package.json"
 
 
 class DesktopUiContractTests(unittest.TestCase):
-    def test_index_html_mounts_t3_web_root_and_entrypoint(self) -> None:
+    def test_index_html_mounts_web_root_and_entrypoint(self) -> None:
         html = INDEX_HTML.read_text(encoding="utf-8")
 
         self.assertIn('id="root"', html)
         self.assertIn('src="/src/main.tsx"', html)
         self.assertIn("DM+Sans", html)
 
-    def test_main_entry_mounts_fluxio_app_inside_t3_source_tree(self) -> None:
+    def test_main_entry_mounts_fluxio_app_inside_web_source_tree(self) -> None:
         main_tsx = MAIN_TSX.read_text(encoding="utf-8")
         fluxio_app = FLUXIO_APP.read_text(encoding="utf-8")
 
@@ -38,7 +38,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Timeline", fluxio_app)
         self.assertIn("Context, apps, and escalation", fluxio_app)
 
-    def test_bridge_exposes_t3_facing_facade_commands(self) -> None:
+    def test_bridge_exposes_fluxio_facade_commands(self) -> None:
         bridge = FLUXIO_BRIDGE.read_text(encoding="utf-8")
 
         self.assertIn("export async function getSnapshot", bridge)
@@ -49,9 +49,9 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("export function getFullThreadDiff", bridge)
         self.assertIn("export function replayEvents", bridge)
 
-    def test_tauri_frontend_dist_points_at_t3_web_build(self) -> None:
+    def test_tauri_frontend_dist_points_at_web_build(self) -> None:
         tauri_conf = json.loads(TAURI_CONF.read_text(encoding="utf-8"))
-        self.assertEqual(tauri_conf["build"]["frontendDist"], "../t3code/apps/web/dist")
+        self.assertEqual(tauri_conf["build"]["frontendDist"], "../web/dist")
 
     def test_package_json_exposes_desktop_verification_script(self) -> None:
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))

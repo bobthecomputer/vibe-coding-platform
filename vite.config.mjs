@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 const host = process.env.TAURI_DEV_HOST || "127.0.0.1";
 const port = Number(process.env.TAURI_DEV_PORT || "1420");
 const repoRoot = process.cwd();
-const webRoot = resolve(repoRoot, "t3code", "apps", "web");
+const webRoot = resolve(repoRoot, "web");
 const webSrc = resolve(webRoot, "src");
 
 export default defineConfig(({ command }) => ({

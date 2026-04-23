@@ -2,12 +2,12 @@
 
 ## Current Read
 
-Fluxio is materially closer to a usable supervised-agent product than it was before the T3 rebase, but the agent feature is still only partially trustworthy as a system. The main supervision shell is now strong enough to understand runs, approvals, proof, and restart continuity, yet the provider layer, plan-mode defaults, and skill packaging still drift in ways that make the product feel more complete than it actually is.
+Fluxio is materially closer to a usable supervised-agent product than it was before the current web rebase, but the agent feature is still only partially trustworthy as a system. The main supervision shell is now strong enough to understand runs, approvals, proof, and restart continuity, yet the provider layer, plan-mode defaults, and skill packaging still drift in ways that make the product feel more complete than it actually is.
 
 ## Findings
 
 - `P0: provider truth is still incomplete.`
-  The T3 orchestration stack only treats `codex` and `claudeAgent` as first-class providers, while MiniMax is absent from contracts, server settings, registries, and web registries. That means Fluxio cannot honestly promise provider portability yet; MiniMax currently belongs in the custom Codex `model_provider` path, not the first-class picker.
+  The current orchestration stack only treats `codex` and `claudeAgent` as first-class providers, while MiniMax is absent from contracts, server settings, registries, and web registries. That means Fluxio cannot honestly promise provider portability yet; MiniMax currently belongs in the custom Codex `model_provider` path, not the first-class picker.
 
 - `P0: custom-provider capability truth was unsafe.`
   Before this pass, custom Codex-provider model slugs inherited generic Codex reasoning and fast-mode controls. That is not honest for custom profiles such as MiniMax, which means the UI could imply controls the runtime does not actually support. Unknown custom models must stay capability-light until Fluxio has verified metadata for them.
@@ -38,4 +38,4 @@ Fluxio is materially closer to a usable supervised-agent product than it was bef
 
 ## Confidence
 
-This assessment is grounded directly in the current repo state: the Fluxio backend planning policy, the transplanted T3 provider contracts, Codex adapter/app-server integration, server settings, web draft defaults, and the current skill catalog. The MiniMax recommendation is based on current official MiniMax docs rather than local implementation, because the repo does not yet contain a first-class MiniMax provider.
+This assessment is grounded directly in the current repo state: the Fluxio backend planning policy, the current provider contracts, Codex adapter/app-server integration, server settings, web draft defaults, and the current skill catalog. The MiniMax recommendation is based on current official MiniMax docs rather than local implementation, because the repo does not yet contain a first-class MiniMax provider.

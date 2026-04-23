@@ -145,8 +145,8 @@ Do not start `P2` or `P3` before `P0` acceptance gates pass.
 
 ## Primary Code Targets in This Repo
 
-- Shell UI: `t3code/apps/web/src/fluxio/FluxioShell.jsx`
-- Shell styles: `t3code/apps/web/src/fluxio/styles.css`
+- Shell UI: `web/src/fluxio/FluxioShell.jsx`
+- Shell styles: `web/src/fluxio/styles.css`
 - Desktop bridge and runtime plumbing: `src-tauri/src/lib.rs`
 - Existing release polish context: `docs/FLUXIO_1_0_POLISH_PLAN.md`
 

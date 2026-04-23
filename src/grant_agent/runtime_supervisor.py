@@ -178,10 +178,19 @@ class DelegatedRuntimeSupervisor:
                 },
             )
 
+        worker_env = os.environ.copy()
+        python_path_entries = [str(self.root / "src")]
+        existing_python_path = str(worker_env.get("PYTHONPATH", "")).strip()
+        if existing_python_path:
+            python_path_entries.append(existing_python_path)
+        worker_env["PYTHONPATH"] = os.pathsep.join(
+            entry for entry in python_path_entries if entry
+        )
         process = subprocess.Popen(  # noqa: S603
             [
                 sys.executable,
-                str(self.worker_path),
+                "-m",
+                "grant_agent.runtime_worker",
                 "--session",
                 str(session_path),
                 "--cwd",
@@ -192,6 +201,7 @@ class DelegatedRuntimeSupervisor:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=_creationflags(),
+            env=worker_env,
         )
         session.supervisor_pid = process.pid
         session.status = "launching"
@@ -227,7 +237,15 @@ class DelegatedRuntimeSupervisor:
             payload.status = "running" if payload.pid else "launching"
             payload.detail = "Delegated runtime process is active."
         else:
-            payload.status = "completed" if payload.exit_code in {0, None} else "failed"
+            reloaded = self._load_session(payload.session_path)
+            if reloaded is not None and reloaded.exit_code is not None:
+                payload = self._sync_structured_state(reloaded)
+            elif payload.exit_code is None:
+                payload.detail = payload.last_event or payload.detail or "Delegated runtime state is settling."
+                _apply_heartbeat_truth(payload)
+                self._write_session(payload)
+                return payload
+            payload.status = "completed" if payload.exit_code == 0 else "failed"
             payload.detail = "Delegated runtime process is no longer active."
             payload.updated_at = utc_now_iso()
             _apply_heartbeat_truth(payload)

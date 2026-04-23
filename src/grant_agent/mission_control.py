@@ -374,6 +374,7 @@ class ControlRoomStore:
         return missions
 
     def save_missions(self, missions: list[Mission]) -> None:
+        self._invalidate_snapshot_caches()
         self._write_json_if_changed(
             self.missions_path,
             [asdict(item) for item in missions],
@@ -2510,20 +2511,20 @@ def _verify_desktop_script_contract(root: Path) -> tuple[bool, str]:
 
 def _verify_frontend_source_alignment(root: Path) -> tuple[bool, str]:
     required_paths = [
-        root / "t3code" / "apps" / "web" / "src" / "main.tsx",
-        root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx",
-        root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts",
+        root / "web" / "src" / "main.tsx",
+        root / "web" / "src" / "fluxio" / "FluxioApp.tsx",
+        root / "web" / "src" / "fluxio" / "fluxioBridge.ts",
     ]
     if any(not path.exists() for path in required_paths):
-        return False, "t3code frontend entrypoint files are missing."
+        return False, "web frontend entrypoint files are missing."
 
     vite_path = root / "vite.config.mjs"
     tauri_path = root / "src-tauri" / "tauri.conf.json"
     if not vite_path.exists() or not tauri_path.exists():
         return False, "Vite or Tauri desktop config is missing."
     vite_text = vite_path.read_text(encoding="utf-8")
-    if not _vite_targets_t3_web(vite_text):
-        return False, "vite.config.mjs is not aligned with t3code/apps/web."
+    if not _vite_targets_web_root(vite_text):
+        return False, "vite.config.mjs is not aligned with web/."
 
     tauri_payload = _load_json_file(tauri_path)
     if not isinstance(tauri_payload, dict):
@@ -2533,14 +2534,16 @@ def _verify_frontend_source_alignment(root: Path) -> tuple[bool, str]:
         .replace("\\", "/")
         .strip()
     )
-    if "t3code/apps/web/dist" not in frontend_dist:
-        return False, "src-tauri/tauri.conf.json is not aligned with t3code/apps/web/dist."
-    return True, "Frontend source-of-truth is aligned to t3code/apps/web."
+    if "web/dist" not in frontend_dist:
+        return False, "src-tauri/tauri.conf.json is not aligned with web/dist."
+    return True, "Frontend source-of-truth is aligned to web/."
 
 
-def _vite_targets_t3_web(vite_text: str) -> bool:
+def _vite_targets_web_root(vite_text: str) -> bool:
     normalized = vite_text.replace("\\", "/")
-    if "t3code/apps/web" in normalized:
+    if 'resolve(repoRoot, "web")' in normalized or "resolve(repoRoot, 'web')" in normalized:
+        return True
+    if re.search(r"\broot\s*:\s*['\"]web['\"]", normalized):
         return True
 
     for match in re.finditer(
@@ -2550,11 +2553,7 @@ def _vite_targets_t3_web(vite_text: str) -> bool:
     ):
         variable_name = match.group(1)
         args = match.group(2)
-        if not (
-            re.search(r"['\"]t3code['\"]", args)
-            and re.search(r"['\"]apps['\"]", args)
-            and re.search(r"['\"]web['\"]", args)
-        ):
+        if not re.search(r"['\"]web['\"]", args):
             continue
         root_refs_variable = re.search(
             rf"\broot\s*:\s*{re.escape(variable_name)}\b",

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -73,6 +73,13 @@ const CONTROL_ROOM_EVENT_NAME: &str = "control-room://changed";
 const CONTROL_ROOM_DELTA_EVENT_NAME: &str = "control-room://delta";
 const CONTROL_ROOM_WATCH_INTERVAL_MS: u64 = 250;
 const CONTROL_ROOM_WATCH_MAX_SESSIONS: usize = 8;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+const CODEX_IMPORT_CACHE_TTL_SECONDS: u64 = 20;
+const CODEX_SESSION_META_LIMIT: usize = 48;
+const CODEX_SESSION_SCAN_FILE_LIMIT: usize = 160;
+static CODEX_IMPORT_CACHE: OnceLock<Mutex<Option<(Instant, CodexImportSnapshot)>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1094,9 +1101,7 @@ fn validate_gateway_event(event: &GatewayInboundEvent) -> Result<(), String> {
 
     match event {
         GatewayInboundEvent::Clarify {
-            question,
-            choices,
-            ..
+            question, choices, ..
         } => {
             if question.trim().is_empty() {
                 return Err("clarify question is empty".to_string());
@@ -1184,7 +1189,8 @@ fn resolve_workspace_root(root_override: Option<String>) -> Result<PathBuf, Stri
 }
 
 fn modified_nanos(value: SystemTime) -> u128 {
-    value.duration_since(UNIX_EPOCH)
+    value
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
 }
@@ -1204,24 +1210,37 @@ fn count_codex_skill_dirs(skills_root: &Path) -> usize {
         .count()
 }
 
-fn collect_codex_session_files(root: &Path, files: &mut Vec<(PathBuf, SystemTime)>) {
+fn dir_entry_modified(entry: &fs::DirEntry) -> SystemTime {
+    entry
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(UNIX_EPOCH)
+}
+
+fn collect_codex_session_files(root: &Path, files: &mut Vec<(PathBuf, SystemTime)>, limit: usize) {
+    if files.len() >= limit {
+        return;
+    }
     let Ok(entries) = fs::read_dir(root) else {
         return;
     };
-    for entry in entries.flatten() {
+    let mut entries = entries.flatten().collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        modified_nanos(dir_entry_modified(right)).cmp(&modified_nanos(dir_entry_modified(left)))
+    });
+    for entry in entries {
+        if files.len() >= limit {
+            break;
+        }
         let path = entry.path();
         if path.is_dir() {
-            collect_codex_session_files(&path, files);
+            collect_codex_session_files(&path, files, limit);
             continue;
         }
         if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
             continue;
         }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(UNIX_EPOCH);
-        files.push((path, modified));
+        files.push((path, dir_entry_modified(&entry)));
     }
 }
 
@@ -1244,7 +1263,7 @@ fn collect_recent_codex_session_meta(
     limit: usize,
 ) -> HashMap<String, CodexSessionMetaPayload> {
     let mut files = Vec::new();
-    collect_codex_session_files(sessions_root, &mut files);
+    collect_codex_session_files(sessions_root, &mut files, CODEX_SESSION_SCAN_FILE_LIMIT);
     files.sort_by(|left, right| modified_nanos(right.1).cmp(&modified_nanos(left.1)));
 
     let mut recent = HashMap::new();
@@ -1313,7 +1332,7 @@ fn build_codex_import_snapshot() -> CodexImportSnapshot {
     let session_index_path = codex_home.join("session_index.jsonl");
     let sessions_root = codex_home.join("sessions");
     let skills_root = codex_home.join("skills");
-    let recent_meta = collect_recent_codex_session_meta(&sessions_root, 48);
+    let recent_meta = collect_recent_codex_session_meta(&sessions_root, CODEX_SESSION_META_LIMIT);
     let mut session_count = 0usize;
     let mut indexed_threads = Vec::new();
 
@@ -1328,7 +1347,10 @@ fn build_codex_import_snapshot() -> CodexImportSnapshot {
             }
         }
     } else {
-        notes.push("Codex session index was not found, so only partial import data is available.".to_string());
+        notes.push(
+            "Codex session index was not found, so only partial import data is available."
+                .to_string(),
+        );
     }
 
     indexed_threads.reverse();
@@ -1396,6 +1418,23 @@ fn build_codex_import_snapshot() -> CodexImportSnapshot {
     }
 }
 
+fn cached_codex_import_snapshot() -> CodexImportSnapshot {
+    let cache = CODEX_IMPORT_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((captured_at, snapshot)) = guard.as_ref() {
+            if captured_at.elapsed() < Duration::from_secs(CODEX_IMPORT_CACHE_TTL_SECONDS) {
+                return snapshot.clone();
+            }
+        }
+    }
+
+    let snapshot = build_codex_import_snapshot();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), snapshot.clone()));
+    }
+    snapshot
+}
+
 fn collect_control_room_signature_paths(root: &Path) -> Vec<PathBuf> {
     let mut paths = vec![
         root.join("config").join("connected_apps.json"),
@@ -1446,7 +1485,8 @@ fn collect_control_room_signature_paths(root: &Path) -> Vec<PathBuf> {
             })
             .collect();
         sessions.sort_by(|left, right| right.0.cmp(&left.0));
-        for (_modified, session_path) in sessions.into_iter().take(CONTROL_ROOM_WATCH_MAX_SESSIONS) {
+        for (_modified, session_path) in sessions.into_iter().take(CONTROL_ROOM_WATCH_MAX_SESSIONS)
+        {
             // High-churn event streams are pushed through the delta channel and should
             // not force a full control-room snapshot refresh.
             paths.push(session_path.join("state.json"));
@@ -1525,12 +1565,7 @@ fn runtime_event_paths(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn emit_control_room_delta(
-    app: &AppHandle,
-    root: &Path,
-    source: &str,
-    row: Value,
-) {
+fn emit_control_room_delta(app: &AppHandle, root: &Path, source: &str, row: Value) {
     let _ = app.emit(
         CONTROL_ROOM_DELTA_EVENT_NAME,
         json!({
@@ -1812,6 +1847,17 @@ fn build_autonomy_dashboard_snapshot(
     Ok(snapshot)
 }
 
+fn hide_child_console(command: &mut TokioCommand) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+    }
+}
+
 async fn run_agent_cli_json(
     app: &AppHandle,
     root_override: Option<String>,
@@ -1823,6 +1869,7 @@ async fn run_agent_cli_json(
     let workspace_root_text = workspace_root.to_string_lossy().to_string();
 
     let mut command = TokioCommand::new("python");
+    hide_child_console(&mut command);
     command.current_dir(&workspace_root);
     inject_agent_cli_pythonpath(&mut command, &workspace_root);
     command.arg("-m").arg("grant_agent.cli").arg(subcommand);
@@ -1890,11 +1937,7 @@ async fn run_agent_cli_json(
         return Err(format!(
             "grant_agent.cli {} failed: {}",
             subcommand,
-            if stderr.is_empty() {
-                stdout
-            } else {
-                stderr
-            }
+            if stderr.is_empty() { stdout } else { stderr }
         ));
     }
 
@@ -2308,9 +2351,7 @@ fn provider_keyring_user(provider_id: &str) -> Result<String, String> {
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
     {
-        return Err(
-            "Provider id must use only letters, numbers, '-', '_' or '.'".to_string(),
-        );
+        return Err("Provider id must use only letters, numbers, '-', '_' or '.'".to_string());
     }
 
     Ok(format!(
@@ -2592,6 +2633,7 @@ async fn run_local_stt_command(
     };
 
     let mut cmd = TokioCommand::new(command_name);
+    hide_child_console(&mut cmd);
     let args: Vec<String> = config
         .local_stt_args
         .iter()
@@ -2837,11 +2879,7 @@ fn queue_openclaw_payload(app: &AppHandle, payload: Value) -> Result<OpenClawSen
     Err("Unable to queue OpenClaw payload".to_string())
 }
 
-fn send_openclaw_action_result(
-    app: &AppHandle,
-    outcome: &ActionRequestOutcome,
-    source: &str,
-) {
+fn send_openclaw_action_result(app: &AppHandle, outcome: &ActionRequestOutcome, source: &str) {
     let payload = json!({
         "type": "action.result",
         "requestId": outcome.gateway_request_id.clone().unwrap_or_else(|| outcome.request_id.clone()),
@@ -2967,7 +3005,9 @@ fn position_overlay_window(window: &tauri::WebviewWindow) -> Result<(), String> 
     let centered_y = monitor_pos.y + ((monitor_size.height as i32 - window_size.height as i32) / 2);
 
     window
-        .set_position(Position::Physical(PhysicalPosition::new(centered_x, centered_y)))
+        .set_position(Position::Physical(PhysicalPosition::new(
+            centered_x, centered_y,
+        )))
         .map_err(|err| format!("Failed to position overlay: {err}"))
 }
 
@@ -3225,6 +3265,7 @@ async fn execute_node_command(app: &AppHandle, args: NodeCommandArgs) -> Result<
     }
 
     let mut command = TokioCommand::new(&args.command);
+    hide_child_console(&mut command);
     command.args(args.args.clone());
 
     if let Some(cwd) = args.cwd {
@@ -3589,7 +3630,11 @@ async fn local_api_state(
     match validate_local_api_auth(&headers) {
         Ok(true) => {}
         Ok(false) => {
-            append_audit_entry(&state.app, "localhost.unauthorized", json!({ "route": "/v1/state" }));
+            append_audit_entry(
+                &state.app,
+                "localhost.unauthorized",
+                json!({ "route": "/v1/state" }),
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "ok": false, "error": "Unauthorized" })),
@@ -3707,9 +3752,11 @@ async fn connect_openclaw_inner(
         let mut keep_running = true;
 
         while keep_running {
-            let connect_result =
-                timeout(Duration::from_secs(connect_timeout_seconds), connect_async(url.clone()))
-                    .await;
+            let connect_result = timeout(
+                Duration::from_secs(connect_timeout_seconds),
+                connect_async(url.clone()),
+            )
+            .await;
 
             let (ws_stream, _) = match connect_result {
                 Ok(Ok(result)) => {
@@ -3774,10 +3821,8 @@ async fn connect_openclaw_inner(
                 }
                 Err(_) => {
                     reconnect_attempt += 1;
-                    let timeout_error = format!(
-                        "Connection timed out after {}s",
-                        connect_timeout_seconds
-                    );
+                    let timeout_error =
+                        format!("Connection timed out after {}s", connect_timeout_seconds);
                     update_openclaw_status(&app_handle, |status| {
                         status.connected = false;
                         status.last_error = Some(timeout_error.clone());
@@ -3871,9 +3916,8 @@ async fn connect_openclaw_inner(
                             let lock_result = state.openclaw_state.lock();
                             if let Ok(mut openclaw) = lock_result {
                                 for item in restore.into_iter().rev() {
-                                    dropped_oldest =
-                                        openclaw.push_pending_outbound(item, true)
-                                            || dropped_oldest;
+                                    dropped_oldest = openclaw.push_pending_outbound(item, true)
+                                        || dropped_oldest;
                                 }
                                 openclaw.status.connected = false;
                                 openclaw.status.last_error = Some(err.to_string());
@@ -4160,9 +4204,7 @@ async fn handle_gateway_event(app: &AppHandle, event: GatewayInboundEvent) {
             let _ = app.emit("openclaw://message", json!({ "content": content }));
         }
         GatewayInboundEvent::Ack {
-            message_id,
-            status,
-            ..
+            message_id, status, ..
         } => {
             let acknowledged = acknowledge_pending_ack(app, &message_id);
             append_audit_entry(
@@ -4983,8 +5025,10 @@ fn has_openclaw_gateway_token() -> Result<bool, String> {
 
 #[tauri::command]
 fn send_openclaw_message(app: AppHandle, payload: OpenClawMessagePayload) -> Result<bool, String> {
-    let send_state =
-        queue_openclaw_payload(&app, json!({ "type": "user.message", "content": payload.message }))?;
+    let send_state = queue_openclaw_payload(
+        &app,
+        json!({ "type": "user.message", "content": payload.message }),
+    )?;
 
     append_audit_entry(
         &app,
@@ -5071,9 +5115,14 @@ async fn get_control_room_snapshot_command(
     app: AppHandle,
     payload: Option<AutonomyDashboardPayload>,
 ) -> Result<Value, String> {
-    let mut snapshot =
-        run_agent_cli_json(&app, payload.and_then(|item| item.root), "control-room", vec![], 180)
-            .await?;
+    let mut snapshot = run_agent_cli_json(
+        &app,
+        payload.and_then(|item| item.root),
+        "control-room",
+        vec![],
+        180,
+    )
+    .await?;
     let provider_presence = provider_secret_presence_snapshot(&CONTROL_ROOM_PROVIDER_IDS)?;
     if let Value::Object(root) = &mut snapshot {
         root.insert(
@@ -5119,7 +5168,54 @@ async fn get_control_room_snapshot_command(
 
 #[tauri::command]
 fn inspect_codex_import_command() -> Result<CodexImportSnapshot, String> {
-    Ok(build_codex_import_snapshot())
+    Ok(cached_codex_import_snapshot())
+}
+
+fn is_allowed_external_url(url: &str) -> bool {
+    let normalized = url.trim().to_ascii_lowercase();
+    [
+        "https://chatgpt.com/",
+        "https://platform.openai.com/",
+        "https://platform.minimax.io/",
+        "https://platform.minimaxi.com/",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
+#[tauri::command]
+async fn open_external_url_command(app: AppHandle, url: String) -> Result<bool, String> {
+    let target = url.trim().to_string();
+    if !is_allowed_external_url(&target) {
+        return Err("External URL is not allowlisted for provider authentication.".to_string());
+    }
+
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = TokioCommand::new("cmd");
+        command.arg("/C").arg("start").arg("").arg(&target);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = TokioCommand::new("open");
+        command.arg(&target);
+        command
+    } else {
+        let mut command = TokioCommand::new("xdg-open");
+        command.arg(&target);
+        command
+    };
+    hide_child_console(&mut command);
+    command
+        .spawn()
+        .map_err(|error| format!("Failed to open browser: {error}"))?;
+    append_audit_entry(&app, "provider.auth_url_opened", json!({ "url": target }));
+    Ok(true)
+}
+
+#[tauri::command]
+fn pick_folder_command() -> Result<Option<String>, String> {
+    Ok(rfd::FileDialog::new()
+        .pick_folder()
+        .map(|path| path.display().to_string()))
 }
 
 #[tauri::command]
@@ -5150,11 +5246,17 @@ async fn save_workspace_profile_command(
         "--default-runtime".to_string(),
         payload.default_runtime,
     ];
-    if let Some(workspace_id) = payload.workspace_id.filter(|value| !value.trim().is_empty()) {
+    if let Some(workspace_id) = payload
+        .workspace_id
+        .filter(|value| !value.trim().is_empty())
+    {
         args.push("--workspace-id".to_string());
         args.push(workspace_id);
     }
-    if let Some(user_profile) = payload.user_profile.filter(|value| !value.trim().is_empty()) {
+    if let Some(user_profile) = payload
+        .user_profile
+        .filter(|value| !value.trim().is_empty())
+    {
         args.push("--user-profile".to_string());
         args.push(user_profile);
     }
@@ -5180,7 +5282,14 @@ async fn save_workspace_profile_command(
     }
     if let Some(auto_optimize_routing) = payload.auto_optimize_routing {
         args.push("--auto-optimize-routing".to_string());
-        args.push(if auto_optimize_routing { "true" } else { "false" }.to_string());
+        args.push(
+            if auto_optimize_routing {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        );
     }
     if let Some(openai_codex_auth_mode) = payload
         .openai_codex_auth_mode
@@ -5383,7 +5492,14 @@ async fn run_agent_vibe_status_command(
     app: AppHandle,
     payload: Option<AutonomyDashboardPayload>,
 ) -> Result<Value, String> {
-    run_agent_cli_json(&app, payload.and_then(|item| item.root), "vibe-status", vec![], 120).await
+    run_agent_cli_json(
+        &app,
+        payload.and_then(|item| item.root),
+        "vibe-status",
+        vec![],
+        120,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -5420,7 +5536,10 @@ async fn run_agent_vibe_continue_command(
 }
 
 #[tauri::command]
-async fn run_agent_soak_command(app: AppHandle, payload: AgentSoakPayload) -> Result<Value, String> {
+async fn run_agent_soak_command(
+    app: AppHandle,
+    payload: AgentSoakPayload,
+) -> Result<Value, String> {
     let objective = payload.objective.trim().to_string();
     if objective.is_empty() {
         return Err("Soak objective cannot be empty".to_string());
@@ -5544,7 +5663,10 @@ mod tests {
         assert_eq!(state.status.pending_ack_count, 2);
         assert!(state.acknowledge_pending_ack("msg_1"));
         assert_eq!(state.status.pending_ack_count, 1);
-        assert_eq!(state.status.last_acked_message_id, Some("msg_1".to_string()));
+        assert_eq!(
+            state.status.last_acked_message_id,
+            Some("msg_1".to_string())
+        );
     }
 
     #[test]
@@ -5553,7 +5675,10 @@ mod tests {
         let wrapped = with_openclaw_envelope(payload);
         let obj = wrapped.as_object().expect("payload should be object");
 
-        assert_eq!(obj.get("type").and_then(Value::as_str), Some("user.message"));
+        assert_eq!(
+            obj.get("type").and_then(Value::as_str),
+            Some("user.message")
+        );
         assert!(obj.get("messageId").and_then(Value::as_str).is_some());
         assert!(obj.get("nonce").and_then(Value::as_str).is_some());
         assert_eq!(obj.get("ackRequested").and_then(Value::as_bool), Some(true));
@@ -5622,6 +5747,8 @@ pub fn run() {
             get_autonomy_dashboard_snapshot,
             get_control_room_snapshot_command,
             inspect_codex_import_command,
+            open_external_url_command,
+            pick_folder_command,
             get_onboarding_status_command,
             save_workspace_profile_command,
             start_control_room_mission_command,

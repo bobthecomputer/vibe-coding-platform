@@ -68,9 +68,9 @@ Hermes should read as healthy only when:
 
 If any of those conditions fail, treat Hermes as not ready.
 
-## T3-Style Review Loop
+## Product Review Loop
 
-Fluxio still needs to feel competitive with tools like T3 and Codex App during day-to-day building. Use this review loop when working on the product itself:
+Fluxio still needs to feel competitive with modern coding-agent apps during day-to-day building. Use this review loop when working on the product itself:
 
 1. Run `npm run tauri:dev`.
 2. Keep `Preview` on `Live Backend` when validating real mission truth.

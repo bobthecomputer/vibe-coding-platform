@@ -20,3 +20,8 @@ __pycache__/
 *.pyd
 node_modules/
 desktop-ui/dist/
+artifacts/
+web/dist/
+web/.tmp_frontend_build/
+src-tauri/target/
+.tmp_*/

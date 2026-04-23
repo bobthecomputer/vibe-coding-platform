@@ -424,10 +424,6 @@ def _recommended_next_actions(
         "openclaw": _command_version("openclaw"),
         "hermes": _command_version("hermes"),
     }
-    if not _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode):
-        status.append(
-            "Choose Codex auth (ChatGPT portal or API key) or MiniMax auth (OAuth or API key) before launching a mission."
-        )
     if wsl["required"] and not wsl["installed"]:
         status.append("Install WSL2 and reboot before backend setup.")
     if not checks["node"]["installed"]:
@@ -440,6 +436,14 @@ def _recommended_next_actions(
         status.append("Use Setup -> Install OpenClaw (one click install + onboarding).")
     if not checks["hermes"]["installed"]:
         status.append("Use Setup -> Install Hermes (one click in WSL2, includes setup).")
+    if (
+        _workspace_count(root)
+        and not _launched_mission_count(root)
+        and not _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode)
+    ):
+        status.append(
+            "Choose Codex auth (ChatGPT portal or API key) or MiniMax auth (OAuth or API key) before launching a mission."
+        )
     if (root / "src-tauri").exists() and (not shutil.which("cargo") or not shutil.which("rustc")):
         status.append("Install Rust and Cargo before relying on the packaged Tauri desktop path.")
     if not _workspace_count(root):
@@ -503,22 +507,11 @@ def _build_tutorial(
     minimax_auth_mode = str(
         workspace_contract.get("minimax_auth_mode", "none")
     ).strip().lower()
-    model_auth_ready = _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode)
     missions = _launched_mission_count(root)
     workspaces = _workspace_count(root)
     phone_ready = _phone_destination_count(root) > 0
 
     steps = [
-        TutorialStep(
-            step_id="authenticate_model",
-            title="Authenticate a model",
-            description=(
-                "Choose Codex via ChatGPT portal or API key, or choose MiniMax via OAuth or API key, before doing anything else."
-            ),
-            status="completed" if model_auth_ready else "pending",
-            cta_label="Open auth",
-            panel="Auth",
-        ),
         TutorialStep(
             step_id="detect_environment",
             title="Check local setup",
@@ -588,7 +581,14 @@ def _build_guidance_cards(
                 panel="Guidance",
             )
         )
-    if tutorial["currentStepId"] == "authenticate_model":
+    workspace_contract = _primary_workspace_contract(root)
+    openai_codex_auth_mode = _normalize_openai_codex_auth_mode(
+        workspace_contract.get("openai_codex_auth_mode", "none")
+    )
+    minimax_auth_mode = str(
+        workspace_contract.get("minimax_auth_mode", "none")
+    ).strip().lower()
+    if _workspace_count(root) and not _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode):
         cards.append(
             GuidanceCard(
                 card_id="auth.model",
@@ -1071,7 +1071,7 @@ def _build_setup_health(
             "dependencyId": "model_auth",
             "label": "Model auth",
             "category": "agent_runtime",
-            "required": True,
+            "required": False,
             "installed": model_auth_configured,
             "version": (
                 _openai_codex_auth_label(openai_codex_auth_mode)

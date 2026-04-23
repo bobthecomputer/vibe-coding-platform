@@ -717,26 +717,26 @@ class MissionControlTests(unittest.TestCase):
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
             (root / "src-tauri").mkdir(parents=True)
-            (root / "t3code" / "apps" / "web" / "src" / "main.tsx").write_text(
+            (root / "web" / "src" / "main.tsx").write_text(
                 "export {};\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
                 "export function FluxioApp() { return null; }\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
                 "export const bridge = {};\n",
                 encoding="utf-8",
             )
             (root / "vite.config.mjs").write_text(
-                'export default { root: "t3code/apps/web" };\n',
+                'export default { root: "web" };\n',
                 encoding="utf-8",
             )
             (root / "src-tauri" / "tauri.conf.json").write_text(
-                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                '{"build":{"frontendDist":"../web/dist"}}\n',
                 encoding="utf-8",
             )
             (root / "package.json").write_text(
@@ -797,17 +797,17 @@ class MissionControlTests(unittest.TestCase):
     def test_release_readiness_accepts_dynamic_vite_web_root_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
             (root / "src-tauri").mkdir()
-            (root / "t3code" / "apps" / "web" / "src" / "main.tsx").write_text(
+            (root / "web" / "src" / "main.tsx").write_text(
                 "export {};\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
                 "export function FluxioApp() { return null; }\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
                 "export const bridge = {};\n",
                 encoding="utf-8",
             )
@@ -815,7 +815,7 @@ class MissionControlTests(unittest.TestCase):
                 (
                     'import { resolve } from "node:path";\n'
                     'const repoRoot = process.cwd();\n'
-                    'const webRoot = resolve(repoRoot, "t3code", "apps", "web");\n'
+                    'const webRoot = resolve(repoRoot, "web");\n'
                     "export default {\n"
                     "  root: webRoot,\n"
                     "};\n"
@@ -823,7 +823,7 @@ class MissionControlTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "src-tauri" / "tauri.conf.json").write_text(
-                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                '{"build":{"frontendDist":"../web/dist"}}\n',
                 encoding="utf-8",
             )
             (root / "package.json").write_text(
@@ -882,26 +882,26 @@ class MissionControlTests(unittest.TestCase):
     def test_release_readiness_reports_proof_readiness_when_missions_exist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
             (root / "src-tauri").mkdir(parents=True)
-            (root / "t3code" / "apps" / "web" / "src" / "main.tsx").write_text(
+            (root / "web" / "src" / "main.tsx").write_text(
                 "export {};\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
                 "export function FluxioApp() { return null; }\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
                 "export const bridge = {};\n",
                 encoding="utf-8",
             )
             (root / "vite.config.mjs").write_text(
-                'export default { root: "t3code/apps/web" };\n',
+                'export default { root: "web" };\n',
                 encoding="utf-8",
             )
             (root / "src-tauri" / "tauri.conf.json").write_text(
-                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                '{"build":{"frontendDist":"../web/dist"}}\n',
                 encoding="utf-8",
             )
             (root / "package.json").write_text(
@@ -999,23 +999,23 @@ class MissionControlTests(unittest.TestCase):
             root = pathlib.Path(temp_dir)
             (root / "README.md").write_text("# Demo\n", encoding="utf-8")
             (root / "src-tauri").mkdir(parents=True, exist_ok=True)
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio").mkdir(
+            (root / "web" / "src" / "fluxio").mkdir(
                 parents=True, exist_ok=True
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
                 "export default function FluxioApp() { return null; }\n",
                 encoding="utf-8",
             )
-            (root / "t3code" / "apps" / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
                 "export const bridge = {};\n",
                 encoding="utf-8",
             )
             (root / "vite.config.mjs").write_text(
-                'export default { root: "t3code/apps/web" };\n',
+                'export default { root: "web" };\n',
                 encoding="utf-8",
             )
             (root / "src-tauri" / "tauri.conf.json").write_text(
-                '{"build":{"frontendDist":"../t3code/apps/web/dist"}}\n',
+                '{"build":{"frontendDist":"../web/dist"}}\n',
                 encoding="utf-8",
             )
             (root / "package.json").write_text(

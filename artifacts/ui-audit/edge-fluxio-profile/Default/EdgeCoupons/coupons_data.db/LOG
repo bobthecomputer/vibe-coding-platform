@@ -1,5 +1,0 @@
-2026/04/10-21:00:45.110 1238 Creating DB C:\Users\paul\projects\vibe-coding-platform\artifacts\ui-audit\edge-fluxio-profile\Default\EdgeCoupons/coupons_data.db since it was missing.
-2026/04/10-21:00:45.120 1238 Reusing MANIFEST C:\Users\paul\projects\vibe-coding-platform\artifacts\ui-audit\edge-fluxio-profile\Default\EdgeCoupons/coupons_data.db/MANIFEST-000001
-2026/04/10-21:00:45.315 50a4 Level-0 table #5: started
-2026/04/10-21:00:45.446 50a4 Level-0 table #5: 682105 bytes OK
-2026/04/10-21:00:45.447 50a4 Delete type=0 #3

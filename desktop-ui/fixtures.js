@@ -578,7 +578,7 @@ const liveReviewFixture = (() => {
       },
       execution_scope: {
         strategy: 'workspace_root',
-        execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/t3code/apps/web',
+        execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/web',
       },
       plan_revisions: [
         {
@@ -619,7 +619,7 @@ const liveReviewFixture = (() => {
           heartbeat_status: 'healthy',
           heartbeat_age_seconds: 12,
           execution_target: 'workspace_root',
-          execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/t3code/apps/web',
+          execution_root: 'C:/Users/paul/Projects/vibe-coding-platform/web',
           execution_target_detail: 'Workspace-root review lane for skill packages and management metadata.',
           updated_at: now,
           pending_approval: {},
@@ -1148,7 +1148,7 @@ const longRunResumedFixture = (() => {
           lastPauseReason: 'Delegated runtime lane is still active and restart-safe.',
         },
       },
-      changed_files: ['desktop-ui/FluxioDesktop.jsx', 'desktop-ui/styles.css', 'artifacts/ui-audit/long-run-proof.png'],
+      changed_files: ['desktop-ui/FluxioDesktop.jsx', 'desktop-ui/styles.css'],
       proof_artifacts: ['Completion report draft', 'Verification proof bundle assembled', 'Return summary pending operator review'],
       route_configs: [
         { role: 'planner', provider: 'openai', model: 'gpt-5.4', budget_class: 'premium', explanation: 'Stronger planner for long unattended loops.' },
