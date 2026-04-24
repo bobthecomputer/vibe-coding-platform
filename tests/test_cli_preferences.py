@@ -168,8 +168,8 @@ class CliPreferenceTests(unittest.TestCase):
             )
             planner = next(item for item in result["route_configs"] if item["role"] == "planner")
             executor = next(item for item in result["route_configs"] if item["role"] == "executor")
-            self.assertEqual(planner["model"], "gpt-5.4")
-            self.assertEqual(executor["model"], "gpt-5.4")
+            self.assertEqual(planner["model"], "gpt-5.5")
+            self.assertEqual(executor["model"], "gpt-5.5")
             self.assertNotEqual(result["execution_scope"]["execution_root"], str(root))
             self.assertEqual(result["execution_scope"]["execution_target"], "worktree")
             self.assertEqual(
@@ -324,3 +324,4 @@ class CliPreferenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

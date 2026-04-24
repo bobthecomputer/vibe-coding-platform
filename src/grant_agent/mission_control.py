@@ -67,7 +67,7 @@ MISSION_TITLE_PREFIXES = [
     r"^(let's|lets)\s+",
 ]
 ROUTE_OVERRIDE_ROLES = {"planner", "executor", "verifier"}
-OPENAI_CODEX_AUTH_MODES = {"none", "chatgpt", "api"}
+OPENAI_CODEX_AUTH_MODES = {"none", "api", "oauth"}
 MINIMAX_AUTH_MODES = {"none", "minimax-portal-oauth", "minimax-api"}
 MINIMAX_SETUP_ACTION_IDS = {
     "minimax-global-oauth",
@@ -85,10 +85,11 @@ RELEASE_READINESS_WEIGHTS = {
 }
 PROVIDER_ENV_HINTS = {
     "openai": "OPENAI_API_KEY",
-    "openai-codex": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "minimax": "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_API_KEY",
+    "minimax-portal": "MINIMAX_OAUTH_TOKEN",
 }
 
 
@@ -129,31 +130,44 @@ def normalize_route_overrides(route_overrides: object) -> list[dict]:
 
 def normalize_minimax_auth_mode(value: object) -> str:
     normalized = str(value or "none").strip().lower()
-    if normalized in {"minimax-portal-oauth", "minimax_api", "minimax-api"}:
-        return "minimax-portal-oauth" if "portal" in normalized else "minimax-api"
+    if normalized in {
+        "minimax-portal-oauth",
+        "minimax-global-oauth",
+        "minimax-cn-oauth",
+        "oauth",
+        "oauth-cn",
+        "portal",
+        "portal-oauth",
+        "minimax_oauth",
+    }:
+        return "minimax-portal-oauth"
+    if normalized in {"minimax_api", "minimax-api", "minimax-global-api", "minimax-cn-api"}:
+        return "minimax-api"
     return normalized if normalized in MINIMAX_AUTH_MODES else "none"
 
 
 def normalize_openai_codex_auth_mode(value: object) -> str:
     normalized = str(value or "none").strip().lower()
     if normalized in {"chatgpt", "chatgpt-portal", "portal", "oauth", "chatgpt-oauth"}:
-        return "chatgpt"
+        return "oauth"
     if normalized in {"api", "api-key", "api_key"}:
         return "api"
+    if normalized in {"codex-oauth", "openai-codex-oauth", "chatgpt_oauth"}:
+        return "oauth"
     return normalized if normalized in OPENAI_CODEX_AUTH_MODES else "none"
 
 
 def openai_codex_auth_label(mode: str) -> str:
-    if mode == "chatgpt":
-        return "ChatGPT portal"
     if mode == "api":
         return "API key"
+    if mode == "oauth":
+        return "OpenAI Codex OAuth"
     return "not configured"
 
 
 def minimax_auth_label(mode: str) -> str:
     if mode == "minimax-portal-oauth":
-        return "OAuth portal"
+        return "MiniMax OpenClaw OAuth"
     if mode == "minimax-api":
         return "API key"
     return "not configured"
@@ -184,16 +198,26 @@ def _latest_minimax_setup_action(setup_history: list[dict]) -> dict:
 def _minimax_setup_status_for_workspace(
     workspace: WorkspaceProfile | dict,
     setup_history: list[dict],
+    *,
+    auth_presence: dict[str, bool],
 ) -> dict:
     workspace_payload = (
         asdict(workspace) if hasattr(workspace, "__dataclass_fields__") else dict(workspace)
     )
     mode = normalize_minimax_auth_mode(workspace_payload.get("minimax_auth_mode"))
+    api_key_present = bool(
+        auth_presence.get("minimax", False) or auth_presence.get("minimax-cn", False)
+    )
+    oauth_present = bool(auth_presence.get("minimax-portal", False))
+    configured = (mode == "minimax-api" and api_key_present) or (
+        mode == "minimax-portal-oauth" and oauth_present
+    )
     latest = _latest_minimax_setup_action(setup_history)
     return {
         "authMode": mode,
         "authPath": minimax_auth_label(mode),
-        "configured": mode != "none",
+        "configured": configured,
+        "authPresent": configured,
         "lastActionResult": latest,
         "lastCheckedAt": latest.get("executedAt", "") or workspace_payload.get("updated_at", ""),
     }
@@ -215,10 +239,11 @@ def _openai_codex_setup_status_for_workspace(
     )
     effective_mode = mode
     configured = False
-    if mode == "chatgpt":
-        configured = True
-    elif mode == "api":
+    oauth_present = bool(auth_presence.get("openai-codex", False))
+    if mode == "api":
         configured = api_key_present
+    elif mode == "oauth":
+        configured = oauth_present
     elif api_key_present:
         effective_mode = "api"
         configured = True
@@ -456,6 +481,44 @@ class ControlRoomStore:
         workspaces.append(workspace)
         self.save_workspaces(workspaces)
         return workspace
+
+    def delete_workspace(self, workspace_id: str) -> tuple[WorkspaceProfile, int]:
+        workspaces = self.load_workspaces()
+        target = next(
+            (item for item in workspaces if item.workspace_id == workspace_id),
+            None,
+        )
+        if target is None:
+            raise ValueError(f"Unknown workspace id: {workspace_id}")
+        if len(workspaces) <= 1:
+            raise ValueError(
+                "Cannot delete the last workspace. Add another workspace first."
+            )
+
+        remaining_workspaces = [
+            item for item in workspaces if item.workspace_id != workspace_id
+        ]
+        self.save_workspaces(remaining_workspaces)
+
+        missions = self.load_missions()
+        removed_missions = [
+            item for item in missions if item.workspace_id == workspace_id
+        ]
+        remaining_missions = [
+            item for item in missions if item.workspace_id != workspace_id
+        ]
+        self._rebalance_workspace_queue_in_place(remaining_missions)
+        self.save_missions(remaining_missions)
+
+        histories = self.load_workspace_actions()
+        if workspace_id in histories:
+            histories.pop(workspace_id, None)
+            self.workspace_actions_path.write_text(
+                json.dumps(histories, indent=2),
+                encoding="utf-8",
+            )
+
+        return target, len(removed_missions)
 
     def create_mission(
         self,
@@ -738,6 +801,7 @@ class ControlRoomStore:
                     "minimaxSetupStatus": _minimax_setup_status_for_workspace(
                         workspace,
                         setup_history,
+                        auth_presence=provider_auth_presence,
                     ),
                     "runtimeStatus": runtime_lookup.get(runtime_id),
                     "gitSnapshot": git_snapshot,
@@ -905,6 +969,7 @@ class ControlRoomStore:
             or _minimax_setup_status_for_workspace(
                 self._default_workspace_profile(),
                 setup_history,
+                auth_presence=provider_auth_presence,
             ),
         }
         efficiency_autotune = _build_efficiency_autotune_snapshot(
@@ -1248,6 +1313,10 @@ def _provider_auth_presence_from_env() -> dict[str, bool]:
     presence: dict[str, bool] = {}
     for provider_id, env_name in PROVIDER_ENV_HINTS.items():
         presence[provider_id] = bool(str(os.environ.get(env_name, "")).strip())
+    if str(os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT", "")).strip():
+        presence["openai-codex"] = True
+    if str(os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")).strip():
+        presence["minimax-portal"] = True
     return presence
 
 
@@ -1386,34 +1455,39 @@ def _provider_truth_for_mission(
     )
     if active_provider in {"openai", "openai-codex"}:
         api_key_present = bool(
-            auth_presence.get("openai", False) or auth_presence.get("openai-codex", False)
+            auth_presence.get("openai", False)
         )
+        oauth_present = bool(auth_presence.get("openai-codex", False))
         auth_present = (
-            openai_auth_mode == "chatgpt"
-            or (openai_auth_mode == "api" and api_key_present)
+            (openai_auth_mode == "api" and api_key_present)
+            or (openai_auth_mode == "oauth" and oauth_present)
             or api_key_present
         )
         auth_mode = (
             openai_auth_mode
             if openai_auth_mode != "none"
-            else ("api" if api_key_present else "none")
+            else ("api" if api_key_present else ("oauth" if oauth_present else "none"))
         )
         auth_path = openai_codex_auth_label(auth_mode)
     elif active_provider in {"minimax", "minimax-portal", "minimax-cn"}:
         api_key_present = bool(
             auth_presence.get("minimax", False)
             or auth_presence.get("minimax-cn", False)
-            or auth_presence.get(active_provider, False)
         )
+        oauth_present = bool(auth_presence.get("minimax-portal", False))
         auth_present = (
-            minimax_auth_mode == "minimax-portal-oauth"
-            or (minimax_auth_mode == "minimax-api" and api_key_present)
+            (minimax_auth_mode == "minimax-api" and api_key_present)
+            or (minimax_auth_mode == "minimax-portal-oauth" and oauth_present)
             or api_key_present
         )
         auth_mode = (
             minimax_auth_mode
             if minimax_auth_mode != "none"
-            else ("minimax-api" if api_key_present else "none")
+            else (
+                "minimax-api"
+                if api_key_present
+                else ("minimax-portal-oauth" if oauth_present else "none")
+            )
         )
         auth_path = minimax_auth_label(auth_mode)
     else:

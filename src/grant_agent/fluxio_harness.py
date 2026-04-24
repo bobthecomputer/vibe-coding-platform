@@ -54,6 +54,8 @@ DEFAULT_FLUXIO_MERGE_POLICY = "best_score"
 VALID_MERGE_POLICIES = {"best_score", "consensus", "risk_averse"}
 DELEGATED_FOLLOW_BUDGET_SECONDS = 12
 AUTONOMY_HISTORY_LIMIT = 12
+PREMIUM_OPENAI_MODEL = "gpt-5.5"
+EFFICIENT_OPENAI_MODEL = "gpt-5.4-mini"
 RUNTIME_CONSTITUTION_TEXT = (
     "Fluxio hybrid harness coordinates planning, execution, verification, delegated runtimes, "
     "and resumable continuity. Prefer small grounded actions, preserve proof, compact context "
@@ -289,21 +291,21 @@ def recommended_model_routes(
         item["role"]: item for item in normalize_route_overrides(route_overrides or [])
     }
     if strategy == "uniform_quality":
-        planner = ("openai", "gpt-5.4")
-        executor = ("openai", "gpt-5.4")
+        planner = ("openai", PREMIUM_OPENAI_MODEL)
+        executor = ("openai", PREMIUM_OPENAI_MODEL)
     elif strategy == "budget_first":
-        planner = ("openai", "gpt-5.4-mini")
-        executor = ("openai", "gpt-5.4-mini")
+        planner = ("openai", EFFICIENT_OPENAI_MODEL)
+        executor = ("openai", EFFICIENT_OPENAI_MODEL)
     else:
-        planner = ("openai", "gpt-5.4")
-        executor = ("openai", "gpt-5.4-mini")
+        planner = ("openai", PREMIUM_OPENAI_MODEL)
+        executor = ("openai", EFFICIENT_OPENAI_MODEL)
     routes = [
         ModelRouteConfig(
             role="planner",
             provider=planner[0],
             model=planner[1],
             effort="high",
-            budget_class="premium" if planner[1] == "gpt-5.4" else "efficient",
+            budget_class="premium" if planner[1] == PREMIUM_OPENAI_MODEL else "efficient",
             explanation=(
                 "Planner route resolved from workspace strategy."
                 if strategy_source == "strategy"
@@ -315,7 +317,7 @@ def recommended_model_routes(
             provider=executor[0],
             model=executor[1],
             effort="medium",
-            budget_class="efficient" if executor[1] != "gpt-5.4" else "premium",
+            budget_class="premium" if executor[1] == PREMIUM_OPENAI_MODEL else "efficient",
             explanation=(
                 "Executor route resolved from workspace strategy."
                 if strategy_source == "strategy"
@@ -325,7 +327,7 @@ def recommended_model_routes(
         ModelRouteConfig(
             role="verifier",
             provider="openai",
-            model="gpt-5.4",
+            model=PREMIUM_OPENAI_MODEL,
             effort="high",
             budget_class="premium",
             explanation="Verifier route resolved from profile confidence defaults.",
@@ -333,7 +335,7 @@ def recommended_model_routes(
         ModelRouteConfig(
             role="summarizer",
             provider="openai",
-            model="gpt-5.4-mini",
+            model=EFFICIENT_OPENAI_MODEL,
             effort="medium",
             budget_class="efficient",
             explanation="Summaries stay efficient unless overridden.",
@@ -341,7 +343,7 @@ def recommended_model_routes(
         ModelRouteConfig(
             role="skill_curator",
             provider="openai",
-            model="gpt-5.4-mini",
+            model=EFFICIENT_OPENAI_MODEL,
             effort="medium",
             budget_class="efficient",
             explanation="Skill curation is efficient and reviewable by default.",
@@ -349,7 +351,7 @@ def recommended_model_routes(
         ModelRouteConfig(
             role="guide_author",
             provider="openai",
-            model="gpt-5.4-mini",
+            model=EFFICIENT_OPENAI_MODEL,
             effort="medium",
             budget_class="efficient",
             explanation="Guidance and onboarding copy stay concise and adaptive to the selected profile.",
@@ -1980,11 +1982,11 @@ class FluxioHarness:
         executor = next((item for item in route_configs if item.role == "executor"), None)
         if not planner or not executor:
             return "profile_default"
-        if planner.model == "gpt-5.4" and executor.model == "gpt-5.4":
+        if planner.model == PREMIUM_OPENAI_MODEL and executor.model == PREMIUM_OPENAI_MODEL:
             return "uniform_quality"
-        if planner.model == "gpt-5.4-mini" and executor.model == "gpt-5.4-mini":
+        if planner.model == EFFICIENT_OPENAI_MODEL and executor.model == EFFICIENT_OPENAI_MODEL:
             return "budget_first"
-        if planner.model == "gpt-5.4" and executor.model == "gpt-5.4-mini":
+        if planner.model == PREMIUM_OPENAI_MODEL and executor.model == EFFICIENT_OPENAI_MODEL:
             return "planner_premium_executor_efficient"
         return "custom"
 

@@ -180,8 +180,8 @@ class FluxioHarnessTests(unittest.TestCase):
             resumed_executor = next(
                 item for item in resumed["route_configs"] if item["role"] == "executor"
             )
-            self.assertEqual(resumed_planner["model"], "gpt-5.4")
-            self.assertEqual(resumed_executor["model"], "gpt-5.4")
+            self.assertEqual(resumed_planner["model"], "gpt-5.5")
+            self.assertEqual(resumed_executor["model"], "gpt-5.5")
 
     def test_recommended_routes_apply_role_overrides_first(self) -> None:
         routes = recommended_model_routes(
@@ -198,7 +198,7 @@ class FluxioHarnessTests(unittest.TestCase):
         )
         planner = next(item for item in routes if item.role == "planner")
         executor = next(item for item in routes if item.role == "executor")
-        self.assertEqual(planner.model, "gpt-5.4")
+        self.assertEqual(planner.model, "gpt-5.5")
         self.assertEqual(executor.provider, "minimax")
         self.assertEqual(executor.model, "MiniMax-M2.7-highspeed")
         self.assertIn("override", executor.explanation.lower())
@@ -290,3 +290,4 @@ class FluxioHarnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

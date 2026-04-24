@@ -1,19 +1,19 @@
 :root {
   color-scheme: dark;
-  --bg: #141416;
-  --bg-alt: #1a1a1c;
-  --panel: #202024;
-  --panel-soft: #18181b;
-  --line: rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --text: #f5f5f5;
-  --muted: #a8a8b3;
+  --bg: #111313;
+  --bg-alt: #171a19;
+  --panel: #202321;
+  --panel-soft: #161918;
+  --line: rgba(234, 228, 214, 0.08);
+  --line-strong: rgba(234, 228, 214, 0.2);
+  --text: #f4f0e8;
+  --muted: #aaa395;
   --good: #22c55e;
   --warn: #f59e0b;
   --bad: #ef4444;
-  --accent: #8ecb6f;
-  --accent-soft: rgba(142, 203, 111, 0.16);
-  --shadow: 0 16px 40px rgba(0, 0, 0, 0.36);
+  --accent: #d6a84f;
+  --accent-soft: rgba(214, 168, 79, 0.16);
+  --shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
 }
 
 * {
@@ -36,11 +36,11 @@ body:has(.reference-shell),
 body:has(.reference-shell) {
   min-height: 100dvh;
   background:
-    radial-gradient(circle at 24% -8%, rgba(143, 100, 255, 0.18), transparent 30%),
-    radial-gradient(circle at 82% 12%, rgba(223, 170, 73, 0.08), transparent 24%),
-    radial-gradient(circle at 50% 110%, rgba(143, 100, 255, 0.13), transparent 34%),
+    radial-gradient(circle at 18% -8%, rgba(214, 168, 79, 0.16), transparent 30%),
+    radial-gradient(circle at 82% 12%, rgba(83, 118, 96, 0.12), transparent 26%),
+    radial-gradient(circle at 50% 110%, rgba(214, 168, 79, 0.09), transparent 34%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 16%),
-    #090d14;
+    #0d1110;
   background-attachment: fixed, fixed, fixed, fixed, scroll;
 }
 
@@ -49,6 +49,7 @@ body {
   color: var(--text);
   font:
     14px/1.45 "Segoe UI Variable Text",
+    "Aptos",
     "Segoe UI",
     system-ui,
     sans-serif;
@@ -65,6 +66,8 @@ input,
 textarea {
   font-family:
     "Segoe UI Variable Display",
+    "Aptos Display",
+    "Aptos",
     "Segoe UI",
     system-ui,
     sans-serif;
@@ -1851,6 +1854,37 @@ button.builder-review-target:hover {
   gap: 10px;
 }
 
+.agent-control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  gap: 10px;
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.12), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+  padding: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 18px 46px rgba(0, 0, 0, 0.22);
+}
+
+.agent-control-grid::before {
+  content: "Route selector";
+  position: absolute;
+  top: -10px;
+  left: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: #111216;
+  color: var(--muted);
+  padding: 3px 9px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .agent-composer-hint {
   margin: 0;
   color: var(--muted);
@@ -2009,9 +2043,12 @@ button.builder-review-target:hover {
 .context-item,
 .audit-item {
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #232327;
-  padding: 10px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(244, 240, 232, 0.04), rgba(244, 240, 232, 0.012)),
+    #202321;
+  padding: 12px;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.16);
 }
 
 .thread-event strong,
@@ -2138,7 +2175,10 @@ button.builder-review-target:hover {
 
 .fluxio-drawer {
   border-left: 1px solid var(--line);
-  background: #1a1a1d;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(214, 168, 79, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(244, 240, 232, 0.035), transparent 18%),
+    #161918;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
@@ -2230,11 +2270,14 @@ button.builder-review-target:hover {
 
 .drawer-block {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #1d1d21;
-  padding: 10px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(244, 240, 232, 0.035), transparent 72%),
+    rgba(23, 26, 25, 0.92);
+  padding: 12px;
+  box-shadow: inset 0 1px 0 rgba(244, 240, 232, 0.04);
 }
 
 .drawer-block ul {
@@ -2365,6 +2408,100 @@ button.builder-review-target:hover {
   margin-top: 0;
 }
 
+.runtime-account-card {
+  position: relative;
+  overflow: hidden;
+  gap: 14px;
+  border-color: rgba(214, 168, 79, 0.2);
+  background:
+    radial-gradient(circle at 86% 0%, rgba(214, 168, 79, 0.18), transparent 30%),
+    linear-gradient(135deg, rgba(244, 240, 232, 0.06), rgba(244, 240, 232, 0.012) 58%),
+    #1a1d1b;
+}
+
+.runtime-account-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.32;
+  background-image:
+    linear-gradient(rgba(244, 240, 232, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244, 240, 232, 0.025) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: linear-gradient(180deg, #000, transparent 72%);
+}
+
+.runtime-account-card > * {
+  position: relative;
+}
+
+.runtime-account-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.runtime-account-head strong {
+  margin-top: 6px;
+  font-size: 18px;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.runtime-auth-dot {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runtime-auth-dot.good {
+  border-color: rgba(34, 197, 94, 0.26);
+  background: rgba(34, 197, 94, 0.09);
+  color: #8ee5ae;
+}
+
+.runtime-auth-dot.warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.1);
+  color: #f4c36d;
+}
+
+.runtime-auth-ledger {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.runtime-auth-ledger > div {
+  min-width: 0;
+  border: 1px solid rgba(244, 240, 232, 0.08);
+  border-radius: 14px;
+  background: rgba(13, 17, 16, 0.42);
+  padding: 12px;
+}
+
+.runtime-auth-ledger strong {
+  margin: 6px 0 2px;
+  font-size: 14px;
+}
+
+.runtime-auth-ledger p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .confidence-headline {
   display: flex;
   align-items: baseline;
@@ -2415,7 +2552,7 @@ button.builder-review-target:hover {
 }
 
 .context-grid.compact-metrics {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .status-pill {
@@ -2437,23 +2574,41 @@ button.builder-review-target:hover {
 
 .action-btn {
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  background: rgba(244, 240, 232, 0.035);
   color: var(--text);
-  padding: 7px 11px;
+  padding: 8px 12px;
+  font-weight: 650;
   transition:
-    background 120ms ease,
-    border-color 120ms ease;
+    background 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .action-btn:hover:enabled {
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.065);
+  background: rgba(244, 240, 232, 0.075);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.2);
 }
 
 .action-btn.primary {
-  border-color: rgba(255, 255, 255, 0.12);
-  background: var(--accent-soft);
+  border-color: rgba(214, 168, 79, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 224, 155, 0.18), rgba(214, 168, 79, 0.12)),
+    var(--accent-soft);
+  color: #fff7e4;
+}
+
+.action-btn.secondary {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.08);
+  color: #d6f8df;
+}
+
+.action-btn:active:enabled {
+  transform: translateY(0) scale(0.985);
 }
 
 .action-btn:disabled {
@@ -2471,6 +2626,56 @@ button.builder-review-target:hover {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.field select,
+.reference-shell select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(245, 245, 245, 0.72) 50%) calc(100% - 18px) 50% / 6px 6px no-repeat,
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(16, 17, 22, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 28px rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  min-height: 44px;
+  padding: 10px 38px 10px 13px;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.field select:hover,
+.reference-shell select:hover {
+  border-color: rgba(245, 158, 11, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 14px 34px rgba(0, 0, 0, 0.24);
+}
+
+.field select:focus,
+.reference-shell select:focus {
+  border-color: rgba(245, 158, 11, 0.48);
+  box-shadow:
+    0 0 0 3px rgba(245, 158, 11, 0.12),
+    0 14px 34px rgba(0, 0, 0, 0.26);
+  outline: none;
+}
+
+.field select:active,
+.reference-shell select:active {
+  transform: translateY(1px);
+}
+
+.field select option,
+.reference-shell select option {
+  background: #222328;
+  color: #f7f3ea;
 }
 
 .field-row {
@@ -2640,6 +2845,10 @@ button.builder-review-target:hover {
   .agent-composer-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .context-grid.compact-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1120px) {
@@ -2726,6 +2935,7 @@ button.builder-review-target:hover {
 
   .builder-studio-ribbon,
   .context-grid.compact-metrics,
+  .runtime-auth-ledger,
   .agent-composer-toolbar {
     grid-template-columns: 1fr;
   }
@@ -3020,21 +3230,6 @@ body::-webkit-scrollbar-thumb {
 
 .reference-sidebar-profile-copy span {
   color: var(--ref-muted);
-}
-
-.reference-sidebar-settings {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: auto 18px 12px;
-  min-height: 50px;
-  border: 1px solid var(--ref-line);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--ref-text);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
-  padding: 0 14px;
-  text-align: left;
 }
 
 .reference-main {
@@ -3549,6 +3744,13 @@ body::-webkit-scrollbar-thumb {
   margin-top: 10px;
 }
 
+.reference-agent-support-grid.single {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 960px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
 .reference-support-panel,
 .reference-run-summary {
   display: grid;
@@ -3727,6 +3929,24 @@ body::-webkit-scrollbar-thumb {
   gap: 12px;
 }
 
+.reference-slash-panel.in-composer {
+  margin-top: 0;
+  padding: 16px;
+  border-color: rgba(128, 199, 111, 0.28);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(128, 199, 111, 0.13), transparent 38%),
+    rgba(13, 17, 24, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.reference-slash-panel.in-composer .reference-builder-section-head span {
+  color: rgba(224, 231, 255, 0.7);
+}
+
+.reference-slash-panel.in-composer .reference-command-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .reference-command-card {
   display: grid;
   gap: 10px;
@@ -3739,17 +3959,67 @@ body::-webkit-scrollbar-thumb {
   text-align: left;
 }
 
+.reference-command-card.kind-skill {
+  border-color: rgba(31, 182, 143, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(31, 182, 143, 0.13), transparent 34%),
+    rgba(255, 255, 255, 0.025);
+}
+
+.reference-command-card.kind-comment {
+  border-color: rgba(245, 158, 11, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.12), transparent 34%),
+    rgba(255, 255, 255, 0.025);
+}
+
 .reference-command-card p,
 .reference-command-head span {
   margin: 0;
   color: var(--ref-muted);
 }
 
+.reference-command-card code {
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--ref-muted);
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
 .reference-command-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+}
+
+.reference-command-head strong {
+  min-width: 0;
+  flex: 1;
+}
+
+.reference-command-token {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
+    rgba(0, 0, 0, 0.18);
+  color: var(--ref-text) !important;
+  font-size: 12px !important;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 1100px) {
+  .reference-slash-panel.in-composer .reference-command-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .reference-inline-select select {
@@ -5508,24 +5778,20 @@ body::-webkit-scrollbar-thumb {
 
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-brand,
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-rail-item,
-.reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-settings,
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-profile,
 .reference-shell[data-sidebar-behavior="auto"] .reference-brand,
 .reference-shell[data-sidebar-behavior="auto"] .reference-rail-item,
-.reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-settings,
 .reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-profile {
   justify-content: center;
 }
 
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-brand strong,
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-rail-item span,
-.reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-settings span,
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-group > span,
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-profile-copy,
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-profile > svg,
 .reference-shell[data-sidebar-behavior="auto"] .reference-brand strong,
 .reference-shell[data-sidebar-behavior="auto"] .reference-rail-item span,
-.reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-settings span,
 .reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-group > span,
 .reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-profile-copy,
 .reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-profile > svg {
@@ -5537,9 +5803,7 @@ body::-webkit-scrollbar-thumb {
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-brand,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-brand,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-rail-item,
-.reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-sidebar-settings,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-rail-item,
-.reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-sidebar-settings,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-sidebar-profile,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-sidebar-profile {
   justify-content: flex-start;
@@ -5548,9 +5812,7 @@ body::-webkit-scrollbar-thumb {
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-brand strong,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-brand strong,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-rail-item span,
-.reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-sidebar-settings span,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-rail-item span,
-.reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-sidebar-settings span,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-sidebar-group > span,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:focus-within) .reference-sidebar-group > span,
 .reference-shell[data-sidebar-behavior="auto"]:has(.reference-sidebar:hover) .reference-sidebar-profile-copy,
@@ -5568,13 +5830,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .reference-shell[data-sidebar-behavior="collapsed"] .reference-rail-item,
-.reference-shell[data-sidebar-behavior="collapsed"] .reference-sidebar-settings,
 .reference-shell[data-sidebar-behavior="auto"] .reference-rail-item {
-  padding-left: 0;
-  padding-right: 0;
-}
-
-.reference-shell[data-sidebar-behavior="auto"] .reference-sidebar-settings {
   padding-left: 0;
   padding-right: 0;
 }

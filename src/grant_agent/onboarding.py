@@ -58,28 +58,56 @@ def _primary_workspace_contract(root: Path) -> dict:
 
 def _minimax_auth_label(mode: str) -> str:
     normalized = str(mode or "none").strip().lower()
-    if normalized == "minimax-portal-oauth":
-        return "OAuth portal"
+    if normalized in {
+        "minimax-portal-oauth",
+        "minimax-global-oauth",
+        "minimax-cn-oauth",
+        "oauth",
+        "oauth-cn",
+    }:
+        return "MiniMax OpenClaw OAuth"
     if normalized == "minimax-api":
         return "API key"
     return "not configured"
 
 
+def _normalize_minimax_auth_mode(value: object) -> str:
+    normalized = str(value or "none").strip().lower()
+    if normalized in {
+        "minimax-portal-oauth",
+        "minimax-global-oauth",
+        "minimax-cn-oauth",
+        "oauth",
+        "oauth-cn",
+        "portal-oauth",
+    }:
+        return "minimax-portal-oauth"
+    if normalized in {"minimax-api", "minimax_api", "minimax-global-api", "minimax-cn-api"}:
+        return "minimax-api"
+    return "none"
+
+
+def _minimax_openclaw_oauth_present() -> bool:
+    return bool(str(os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")).strip())
+
+
 def _normalize_openai_codex_auth_mode(value: object) -> str:
     normalized = str(value or "none").strip().lower()
     if normalized in {"chatgpt", "chatgpt-portal", "portal", "oauth", "chatgpt-oauth"}:
-        return "chatgpt"
+        return "oauth"
     if normalized in {"api", "api-key", "api_key"}:
         return "api"
-    return normalized if normalized in {"none", "chatgpt", "api"} else "none"
+    if normalized in {"codex-oauth", "openai-codex-oauth", "chatgpt_oauth"}:
+        return "oauth"
+    return normalized if normalized in {"none", "api", "oauth"} else "none"
 
 
 def _openai_codex_auth_label(mode: str) -> str:
     normalized = _normalize_openai_codex_auth_mode(mode)
-    if normalized == "chatgpt":
-        return "ChatGPT portal"
     if normalized == "api":
         return "API key"
+    if normalized == "oauth":
+        return "OpenAI Codex OAuth"
     return "not configured"
 
 
@@ -87,13 +115,13 @@ def _model_auth_ready(
     openai_codex_auth_mode: str,
     minimax_auth_mode: str,
 ) -> bool:
+    minimax_mode = _normalize_minimax_auth_mode(minimax_auth_mode)
     return _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {
-        "chatgpt",
         "api",
-    } or str(minimax_auth_mode or "").strip().lower() in {
-        "minimax-portal-oauth",
-        "minimax-api",
-    }
+        "oauth",
+    } or minimax_mode == "minimax-api" or (
+        minimax_mode == "minimax-portal-oauth" and _minimax_openclaw_oauth_present()
+    )
 
 
 def _command_version(command_name: str, version_args: list[str] | None = None) -> dict:
@@ -414,9 +442,9 @@ def _recommended_next_actions(
     openai_codex_auth_mode = _normalize_openai_codex_auth_mode(
         workspace_contract.get("openai_codex_auth_mode", "none")
     )
-    minimax_auth_mode = str(
+    minimax_auth_mode = _normalize_minimax_auth_mode(
         workspace_contract.get("minimax_auth_mode", "none")
-    ).strip().lower()
+    )
     checks = checks or {
         "node": _command_version("node"),
         "python": _command_version("python"),
@@ -442,7 +470,7 @@ def _recommended_next_actions(
         and not _model_auth_ready(openai_codex_auth_mode, minimax_auth_mode)
     ):
         status.append(
-            "Choose Codex auth (ChatGPT portal or API key) or MiniMax auth (OAuth or API key) before launching a mission."
+            "Save an OpenAI API key or MiniMax API key before launching a model-backed mission. ChatGPT app connection is configured separately through ChatGPT Apps/MCP."
         )
     if (root / "src-tauri").exists() and (not shutil.which("cargo") or not shutil.which("rustc")):
         status.append("Install Rust and Cargo before relying on the packaged Tauri desktop path.")
@@ -1027,21 +1055,20 @@ def _build_setup_health(
     )
     model_auth_summary = (
         f"Primary model auth is configured through {_openai_codex_auth_label(openai_codex_auth_mode)}."
-        if _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {"chatgpt", "api"}
+        if _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {"api", "oauth"}
         else (
             f"Primary model auth is configured through {_minimax_auth_label(minimax_auth_mode)}."
-            if minimax_auth_mode in {"minimax-portal-oauth", "minimax-api"}
-            else "Choose Codex or MiniMax auth in Builder -> Runtime before launching a mission."
+            if _model_auth_ready("none", minimax_auth_mode)
+            else "Save an OpenAI API key, connect OpenAI Codex OAuth, or save a MiniMax API key in Builder -> Runtime before launching a model-backed mission."
         )
     )
-    minimax_auth_configured = minimax_auth_mode in {
-        "minimax-portal-oauth",
-        "minimax-api",
-    }
+    minimax_auth_configured = minimax_auth_mode == "minimax-api" or (
+        minimax_auth_mode == "minimax-portal-oauth" and _minimax_openclaw_oauth_present()
+    )
     minimax_auth_details = (
         f"MiniMax auth path is configured through {_minimax_auth_label(minimax_auth_mode)}."
         if minimax_auth_configured
-        else "Choose one MiniMax auth path so OpenClaw can route MiniMax runs safely."
+        else "Save a MiniMax API key, or complete and verify MiniMax auth in OpenClaw outside this app before routing MiniMax runs."
     )
     tauri_required = (root / "src-tauri").exists()
     cargo_check = (
@@ -1075,7 +1102,7 @@ def _build_setup_health(
             "installed": model_auth_configured,
             "version": (
                 _openai_codex_auth_label(openai_codex_auth_mode)
-                if _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {"chatgpt", "api"}
+                if _normalize_openai_codex_auth_mode(openai_codex_auth_mode) in {"api", "oauth"}
                 else _minimax_auth_label(minimax_auth_mode)
             ),
             "details": model_auth_summary,
@@ -1192,6 +1219,7 @@ def _build_setup_health(
                         "command": openclaw_update.get("command", ""),
                         "followUp": openclaw_update.get("follow_up", ""),
                         "autoRunFollowUp": True,
+                        "autoRunVerify": True,
                         "kind": "repair",
                         "platform": platform_name,
                     }
@@ -1238,6 +1266,7 @@ def _build_setup_health(
                         "command": hermes_update.get("command", ""),
                         "followUp": hermes_update.get("follow_up", ""),
                         "autoRunFollowUp": True,
+                        "autoRunVerify": True,
                         "kind": "repair",
                         "platform": "wsl2" if str(checks["hermes"].get("command", "")).startswith("wsl:") else platform_name,
                     }
@@ -1271,24 +1300,18 @@ def _build_setup_health(
                 {
                     "actionId": "minimax-global-oauth",
                     "label": "MiniMax global OAuth",
-                    "description": "Open OpenClaw setup docs and choose MiniMax Global OAuth.",
-                    "command": _shell_open_url_command(
-                        MINIMAX_GLOBAL_OPENCLAW_DOCS,
-                        platform_name,
-                    ),
-                    "followUp": "In OpenClaw setup, select MiniMax Global — OAuth (minimax.io), then authorize OpenClaw.",
+                    "description": "Run OpenClaw's MiniMax portal OAuth flow for the global endpoint.",
+                    "command": "openclaw models auth login --provider minimax-portal --method oauth",
+                    "followUp": "Fluxio launches this in an interactive terminal from MiniMax auth setup, then verifies ~/.minimax/oauth_creds.json.",
                     "kind": "auth",
                     "platform": platform_name,
                 },
                 {
                     "actionId": "minimax-cn-oauth",
                     "label": "MiniMax CN OAuth",
-                    "description": "Open OpenClaw CN docs and choose MiniMax CN OAuth.",
-                    "command": _shell_open_url_command(
-                        MINIMAX_CN_OPENCLAW_DOCS,
-                        platform_name,
-                    ),
-                    "followUp": "In OpenClaw setup, select the MiniMax CN OAuth auth method, then authorize OpenClaw.",
+                    "description": "Run OpenClaw's MiniMax portal OAuth flow for the CN endpoint.",
+                    "command": "openclaw models auth login --provider minimax-portal --method oauth-cn",
+                    "followUp": "Fluxio launches this in an interactive terminal from MiniMax auth setup, then verifies ~/.minimax/oauth_creds.json.",
                     "kind": "auth",
                     "platform": platform_name,
                 },

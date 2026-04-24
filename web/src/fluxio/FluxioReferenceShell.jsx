@@ -161,6 +161,7 @@ function FlowSidebar({
   currentModeLabel = "Agent Mode",
   favoriteFlows = [],
   flowProjects = [],
+  onRequestAction,
   onOpenSettings,
   onSelectFlow,
   onSelectProject,
@@ -173,7 +174,11 @@ function FlowSidebar({
         <ChevronDown size={16} strokeWidth={1.9} />
       </div>
 
-      <button className="reference-search-shell" type="button">
+      <button
+        className="reference-search-shell"
+        onClick={() => onRequestAction?.("flow:search")}
+        type="button"
+      >
         <Search size={16} strokeWidth={1.9} />
         <span>Search conversations...</span>
         <Edit3 size={15} strokeWidth={1.9} />
@@ -200,7 +205,11 @@ function FlowSidebar({
       <section className="reference-flow-section">
         <div className="reference-flow-section-head">
           <span>Projects</span>
-          <button className="reference-mini-icon" type="button">
+          <button
+            className="reference-mini-icon"
+            onClick={() => onRequestAction?.("flow:add-project")}
+            type="button"
+          >
             <Plus size={14} strokeWidth={2} />
           </button>
         </div>
@@ -237,7 +246,18 @@ function FlowSidebar({
                       <em>{flow.updated}</em>
                     </button>
                   ))}
-                  {project.hasMore ? <button className="reference-show-more" type="button">Show all</button> : null}
+                  {project.hasMore ? (
+                    <button
+                      className="reference-show-more"
+                      onClick={() => {
+                        onSelectProject(project.id);
+                        onRequestAction?.("flow:show-all", { workspaceId: project.id });
+                      }}
+                      type="button"
+                    >
+                      Show all
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -280,7 +300,7 @@ function SectionPillTabs({ tabs = [], value, onChange }) {
   );
 }
 
-function HomeSurface({ onOpenSurface }) {
+function HomeSurface({ onOpenSurface, onRequestAction }) {
   return (
     <section className="reference-home-surface">
       <div className="reference-home-header">
@@ -288,7 +308,7 @@ function HomeSurface({ onOpenSurface }) {
           <h1>Agent Workspace</h1>
           <p>Build. Orchestrate. Ship.</p>
         </div>
-        <IconButton icon={CircleHelp} label="Help" onClick={() => {}} />
+        <IconButton icon={CircleHelp} label="Help" onClick={() => onRequestAction?.("home:help")} />
       </div>
 
       <div className="reference-home-hero">
@@ -398,25 +418,55 @@ function RuntimeCapabilityPills({ capabilities = [] }) {
   );
 }
 
-function SlashCommandPanel({ commands = [], draft = "", onUseCommand }) {
+function SlashCommandPanel({ className, commands = [], draft = "", onUseCommand }) {
   const query = String(draft || "").trim().toLowerCase();
   const filteredCommands = query.startsWith("/")
     ? commands.filter(item => {
-        const haystack = `${item.command} ${item.label || ""} ${item.detail || ""} ${item.harness || ""}`.toLowerCase();
+        const haystack = `${item.command} ${item.label || ""} ${item.detail || ""} ${item.harness || ""} ${item.kind || ""}`.toLowerCase();
         return haystack.includes(query);
       })
     : commands;
-  const visibleCommands = filteredCommands.slice(0, 8);
+  const priorityFor = item => {
+    const kind = String(item.kind || "").toLowerCase();
+    if (kind === "comment") {
+      return 0;
+    }
+    if (kind === "skill") {
+      return 1;
+    }
+    if (kind === "codex") {
+      return 3;
+    }
+    return 2;
+  };
+  const visibleCommands = filteredCommands
+    .slice()
+    .sort((left, right) => priorityFor(left) - priorityFor(right))
+    .slice(0, 8);
+  const commandTitle = item => item.label || item.command;
+  const commandBadge = item => {
+    const kind = String(item.kind || item.harness || "command").toLowerCase();
+    if (kind === "skill") {
+      return "S";
+    }
+    if (kind === "comment") {
+      return "C";
+    }
+    if (kind === "codex") {
+      return "Cx";
+    }
+    return "/";
+  };
 
   return (
-    <article className="reference-support-panel">
+    <article className={cx("reference-support-panel reference-slash-panel", className)}>
       <div className="reference-builder-section-head">
         <div>
-          <strong>Harness Commands</strong>
+          <strong>Slash Commands</strong>
           <span>
             {query.startsWith("/")
               ? "Filtered by the composer. Clicking inserts the command."
-              : "Built from the active harness surfaces and local installed skills."}
+              : "Built from the active runtime command catalog and local installed skills."}
           </span>
         </div>
       </div>
@@ -424,15 +474,17 @@ function SlashCommandPanel({ commands = [], draft = "", onUseCommand }) {
         <div className="reference-command-grid">
           {visibleCommands.map(item => (
             <button
-              className="reference-command-card"
+              className={cx("reference-command-card", item.kind && `kind-${item.kind}`)}
               key={`${item.harness}-${item.command}`}
               onClick={() => onUseCommand(item.command)}
               type="button"
             >
               <div className="reference-command-head">
-                <strong>{item.command}</strong>
+                <span className="reference-command-token">{commandBadge(item)}</span>
+                <strong>{commandTitle(item)}</strong>
                 <span>{item.harness}</span>
               </div>
+              {item.label ? <code>{item.command}</code> : null}
               <p>{item.detail}</p>
             </button>
           ))}
@@ -453,14 +505,17 @@ function AgentIdleSurface(props) {
     runtimeStatus,
     selectedModelLabel,
     selectedEffortLabel,
+    selectedHarnessMeta = [],
     slashCommands = [],
     onAttach,
     onChangeDraft,
     onDictation,
     onIdleSubmit,
+    onRequestAction,
     onPaste,
     onRuntimeChange,
   } = props;
+  const showSlashCommands = String(draft || "").trim().startsWith("/");
 
   return (
     <section className="reference-agent-idle">
@@ -477,13 +532,22 @@ function AgentIdleSurface(props) {
         onPaste={onPaste}
         onSubmit={onIdleSubmit}
         placeholder="Ask your agent anything..."
-      />
+      >
+        {showSlashCommands ? (
+          <SlashCommandPanel
+            className="in-composer"
+            commands={slashCommands}
+            draft={draft}
+            onUseCommand={onUseSlashCommand}
+          />
+        ) : null}
+      </ComposerDock>
 
       <div className="reference-config-grid">
         <ConfigCard
           accent="neutral"
-          copy="Routing Strategy Balanced"
-          title="Harness"
+          copy={runtimeStatus?.detected ? "Runtime detected and available for launch." : "Runtime readiness is checked by the backend."}
+          title="Runtime"
           titleIcon={WandSparkles}
         >
           <label className="reference-select-shell">
@@ -495,22 +559,22 @@ function AgentIdleSurface(props) {
               ))}
             </select>
           </label>
-          <div className="reference-card-metric-stack">
-            <MetricLine label="Cost Priority" value="Medium" />
-            <MetricLine label="Latency Priority" value="Medium" />
-          </div>
+          {selectedHarnessMeta.length > 0 ? (
+            <div className="reference-card-metric-stack">
+              {selectedHarnessMeta.map(item => (
+                <MetricLine key={`${item.label}-${item.value}`} label={item.label} value={item.value} />
+              ))}
+            </div>
+          ) : null}
         </ConfigCard>
 
         <ConfigCard
           accent="neutral"
-          copy="Temperature 0.6"
+          copy="Model selection only. Advanced sampling and provider limits stay managed by the runtime unless backend policy explicitly overrides them."
           title="Model"
           titleIcon={Bot}
         >
           <div className="reference-pill-select">{selectedModelLabel}</div>
-          <div className="reference-card-metric-stack">
-            <MetricLine label="Max Tokens" value="4096" />
-          </div>
         </ConfigCard>
 
         <ConfigCard
@@ -527,13 +591,21 @@ function AgentIdleSurface(props) {
           copy="2 active rules"
           title="Rules"
           titleIcon={BookOpen}
-          footer={<button className="reference-link-button" type="button">Advanced settings</button>}
+          footer={(
+            <button
+              className="reference-link-button"
+              onClick={() => onRequestAction?.("idle:advanced-settings")}
+              type="button"
+            >
+              Advanced settings
+            </button>
+          )}
         >
           <div className="reference-pill-select">Project Rules</div>
         </ConfigCard>
       </div>
 
-      <div className="reference-agent-support-grid">
+      <div className="reference-agent-support-grid single">
         <article className="reference-support-panel">
           <div className="reference-builder-section-head">
             <div>
@@ -551,12 +623,14 @@ function AgentIdleSurface(props) {
           </div>
           <RuntimeCapabilityPills capabilities={asList(runtimeStatus?.capabilities)} />
         </article>
-
-        <SlashCommandPanel commands={slashCommands} draft={draft} onUseCommand={onUseSlashCommand} />
       </div>
 
       <div className="reference-idle-footer">
-        <button className="reference-reset-button" type="button">
+        <button
+          className="reference-reset-button"
+          onClick={() => onRequestAction?.("idle:reset-defaults")}
+          type="button"
+        >
           <RefreshCw size={16} strokeWidth={1.9} />
           <span>Reset to defaults</span>
         </button>
@@ -596,12 +670,14 @@ function AgentRunningSurface(props) {
     onChangeDraft,
     onDictation,
     onPaste,
+    onRequestAction,
     onRuntimeChange,
     onSend,
   } = props;
   const [detailTab, setDetailTab] = useState("feedback");
   const processMoments = timelineMoments.slice(-4);
   const renderedMessages = messages.length > 0 ? messages : [];
+  const showSlashCommands = String(draft || "").trim().startsWith("/");
 
   return (
     <section className="reference-agent-run">
@@ -658,9 +734,9 @@ function AgentRunningSurface(props) {
                     ) : null}
                     <div className="reference-report-foot">
                       <div className="reference-report-actions">
-                        <button type="button">Copy</button>
-                        <button type="button">Comment</button>
-                        <button type="button">Retry</button>
+                        <button onClick={() => onRequestAction?.("run:message-copy", { messageId: item.id })} type="button">Copy</button>
+                        <button onClick={() => onRequestAction?.("run:message-comment", { messageId: item.id })} type="button">Comment</button>
+                        <button onClick={() => onRequestAction?.("run:message-retry", { messageId: item.id })} type="button">Retry</button>
                       </div>
                       <span>{item.meta || "Now"}</span>
                     </div>
@@ -717,8 +793,8 @@ function AgentRunningSurface(props) {
                   <p>{item.body}</p>
                   {item.role === "assistant" ? (
                     <div className="reference-feedback-actions">
-                      <button type="button">Change applied</button>
-                      <button type="button">View change</button>
+                      <button onClick={() => onRequestAction?.("run:feedback-apply", { feedbackId: item.id })} type="button">Change applied</button>
+                      <button onClick={() => onRequestAction?.("run:feedback-view", { feedbackId: item.id })} type="button">View change</button>
                     </div>
                   ) : null}
                 </article>
@@ -739,33 +815,38 @@ function AgentRunningSurface(props) {
       >
         <div className="reference-docked-controls">
           <label className="reference-inline-select">
-            <span>Harness</span>
+            <span>Runtime</span>
             <select onChange={event => onRuntimeChange(event.target.value)} value={selectedRuntime}>
               <option value={selectedRuntime}>{selectedRuntimeLabel}</option>
             </select>
           </label>
           <label className="reference-inline-select">
             <span>Model</span>
-            <select value={selectedModelLabel}>
+            <select disabled value={selectedModelLabel}>
               <option>{selectedModelLabel}</option>
             </select>
           </label>
           <label className="reference-inline-select">
             <span>Effort</span>
-            <select value={selectedEffortLabel}>
+            <select disabled value={selectedEffortLabel}>
               <option>{selectedEffortLabel}</option>
             </select>
           </label>
           <label className="reference-inline-select">
             <span>Rules</span>
-            <select value="Project Rules">
+            <select disabled value="Project Rules">
               <option>Project Rules</option>
             </select>
           </label>
         </div>
 
-        {String(draft || "").trim().startsWith("/") ? (
-          <SlashCommandPanel commands={slashCommands} draft={draft} onUseCommand={onUseSlashCommand} />
+        {showSlashCommands ? (
+          <SlashCommandPanel
+            className="in-composer"
+            commands={slashCommands}
+            draft={draft}
+            onUseCommand={onUseSlashCommand}
+          />
         ) : null}
       </ComposerDock>
     </section>
@@ -782,13 +863,19 @@ function LivePreviewSurface(props) {
     onChangeDraft,
     onDictation,
     onPaste,
+    onRequestAction,
     onSend,
+    onUseSlashCommand,
     projectLabel,
+    slashCommands = [],
     timelineMoments = [],
   } = props;
+  const [previewTab, setPreviewTab] = useState("preview");
+  const [previewDevice, setPreviewDevice] = useState("desktop");
   const assistantMoments = timelineMoments.slice(-3);
   const latestUserMessage = [...messages].reverse().find(item => item.role === "user");
   const latestAssistantMessage = [...messages].reverse().find(item => item.role === "assistant");
+  const showSlashCommands = String(draft || "").trim().startsWith("/");
 
   return (
     <section className="reference-live-surface">
@@ -881,24 +968,69 @@ function LivePreviewSurface(props) {
           onPaste={onPaste}
           onSubmit={onSend}
           placeholder="Ask your agent anything..."
-        />
+        >
+          {showSlashCommands ? (
+            <SlashCommandPanel
+              className="in-composer"
+              commands={slashCommands}
+              draft={draft}
+              onUseCommand={onUseSlashCommand}
+            />
+          ) : null}
+        </ComposerDock>
       </div>
 
       <div className="reference-preview-stage">
         <div className="reference-preview-toolbar">
           <div className="reference-preview-tabs">
-            <button className="active" type="button">Preview</button>
-            <button type="button">Files</button>
-            <button type="button">Terminal</button>
+            <button
+              className={previewTab === "preview" ? "active" : ""}
+              onClick={() => setPreviewTab("preview")}
+              type="button"
+            >
+              Preview
+            </button>
+            <button
+              className={previewTab === "files" ? "active" : ""}
+              onClick={() => setPreviewTab("files")}
+              type="button"
+            >
+              Files
+            </button>
+            <button
+              className={previewTab === "terminal" ? "active" : ""}
+              onClick={() => setPreviewTab("terminal")}
+              type="button"
+            >
+              Terminal
+            </button>
           </div>
           <div className="reference-preview-actions">
             <div className="reference-device-toggle">
-              <button className="active" type="button"><Monitor size={16} strokeWidth={1.9} /></button>
-              <button type="button"><Laptop size={16} strokeWidth={1.9} /></button>
-              <button type="button"><Smartphone size={16} strokeWidth={1.9} /></button>
+              <button
+                className={previewDevice === "desktop" ? "active" : ""}
+                onClick={() => setPreviewDevice("desktop")}
+                type="button"
+              >
+                <Monitor size={16} strokeWidth={1.9} />
+              </button>
+              <button
+                className={previewDevice === "laptop" ? "active" : ""}
+                onClick={() => setPreviewDevice("laptop")}
+                type="button"
+              >
+                <Laptop size={16} strokeWidth={1.9} />
+              </button>
+              <button
+                className={previewDevice === "mobile" ? "active" : ""}
+                onClick={() => setPreviewDevice("mobile")}
+                type="button"
+              >
+                <Smartphone size={16} strokeWidth={1.9} />
+              </button>
             </div>
-            <IconButton icon={RefreshCw} label="Refresh preview" onClick={() => {}} />
-            <IconButton icon={Expand} label="Expand preview" onClick={() => {}} />
+            <IconButton icon={RefreshCw} label="Refresh preview" onClick={() => onRequestAction?.("live:refresh-preview")} />
+            <IconButton icon={Expand} label="Expand preview" onClick={() => onRequestAction?.("live:expand-preview")} />
           </div>
         </div>
 
@@ -919,7 +1051,13 @@ function LivePreviewSurface(props) {
                 <span>Pricing</span>
                 <span>Resources</span>
               </nav>
-              <button className="reference-browser-cta" type="button">Get Started</button>
+              <button
+                className="reference-browser-cta"
+                onClick={() => onRequestAction?.("live:cta-start")}
+                type="button"
+              >
+                Get Started
+              </button>
             </div>
 
             <div className="reference-browser-hero">
@@ -933,8 +1071,8 @@ function LivePreviewSurface(props) {
                   "Live preview updates reflect the latest active mission decisions and UI edits."}
               </p>
               <div className="reference-browser-actions">
-                <button className="primary" type="button">Start Building</button>
-                <button className="secondary" type="button">View Demo</button>
+                <button className="primary" onClick={() => onRequestAction?.("live:start-building")} type="button">Start Building</button>
+                <button className="secondary" onClick={() => onRequestAction?.("live:view-demo")} type="button">View Demo</button>
               </div>
               <div className="reference-browser-benefits">
                 <span>No credit card required</span>
@@ -951,8 +1089,8 @@ function LivePreviewSurface(props) {
               </div>
               <p>{latestUserMessage?.title || "Add feedback or ask the agent..."}</p>
               <div className="reference-preview-comment-foot">
-                <button type="button">😊</button>
-                <button className="send" type="button">Send</button>
+                <button onClick={() => onRequestAction?.("live:comment-emoji")} type="button">😊</button>
+                <button className="send" onClick={() => onRequestAction?.("live:comment-send")} type="button">Send</button>
               </div>
             </div>
 
@@ -1097,6 +1235,7 @@ function BuilderSurface(props) {
     flowProjects = [],
     onBackFromBuilder,
     onOpenBuilderDetail,
+    onRequestAction,
     onSelectFlow,
     onSelectProject,
     projectLabel,
@@ -1106,9 +1245,47 @@ function BuilderSurface(props) {
     selectedProjectId,
     timelineMoments = [],
   } = props;
+  const [builderSearch, setBuilderSearch] = useState("");
+  const [builderPage, setBuilderPage] = useState(1);
+  const [detailFlowSearch, setDetailFlowSearch] = useState("");
+  const [detailTab, setDetailTab] = useState("flows");
+  const [detailPreviewTab, setDetailPreviewTab] = useState("preview");
+  const [detailFeedbackTab, setDetailFeedbackTab] = useState("feedback");
+  const pageSize = 8;
+  const builderSearchQuery = String(builderSearch || "").trim().toLowerCase();
+  const filteredBuilderRows =
+    builderSearchQuery.length === 0
+      ? builderRows
+      : builderRows.filter(row =>
+          [row.name, row.description, row.status, row.id]
+            .map(value => String(value || "").toLowerCase())
+            .some(value => value.includes(builderSearchQuery)),
+        );
+  const totalPages = Math.max(1, Math.ceil(filteredBuilderRows.length / pageSize));
+  const effectiveBuilderPage = Math.min(builderPage, totalPages);
+  const pageStart = (effectiveBuilderPage - 1) * pageSize;
+  const pagedBuilderRows = filteredBuilderRows.slice(pageStart, pageStart + pageSize);
   const selectedRow = builderRows.find(item => item.selected) || builderRows[0] || null;
   const activeProject =
     flowProjects.find(item => item.id === selectedProjectId) || flowProjects[0] || null;
+  const detailFlowQuery = String(detailFlowSearch || "").trim().toLowerCase();
+  const detailFlowProjects =
+    detailFlowQuery.length === 0
+      ? flowProjects
+      : flowProjects
+          .map(project => {
+            const filteredFlows = asList(project.flows).filter(flow =>
+              [flow.title, flow.status, flow.updated]
+                .map(value => String(value || "").toLowerCase())
+                .some(value => value.includes(detailFlowQuery)),
+            );
+            const projectMatches = String(project.title || "").toLowerCase().includes(detailFlowQuery);
+            return {
+              ...project,
+              flows: projectMatches ? asList(project.flows) : filteredFlows,
+            };
+          })
+          .filter(project => asList(project.flows).length > 0);
   const builderHighlights = [
     ["Success rate", `${selectedRow?.successRate ?? 0}%`],
     ["Runs", `${selectedRow?.runs ?? 0}`],
@@ -1116,6 +1293,13 @@ function BuilderSurface(props) {
     ["Last update", selectedRow?.updated || selectedRow?.lastRunMeta || "—"],
   ];
   const builderMetrics = buildBuilderMetrics(builderRows);
+  const openBuilderDetailFromKey = (event, rowId) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    onOpenBuilderDetail(rowId);
+  };
 
   if (builderDetailOpen && selectedRow) {
     return (
@@ -1130,17 +1314,21 @@ function BuilderSurface(props) {
             <StatusBadge label={selectedRow.status} tone={selectedRow.statusTone} />
           </div>
           <div className="reference-detail-tabs">
-            <button type="button">Overview</button>
-            <button className="active" type="button">Flows</button>
-            <button type="button">Files</button>
-            <button type="button">Settings</button>
+            <button className={detailTab === "overview" ? "active" : ""} onClick={() => setDetailTab("overview")} type="button">Overview</button>
+            <button className={detailTab === "flows" ? "active" : ""} onClick={() => setDetailTab("flows")} type="button">Flows</button>
+            <button className={detailTab === "files" ? "active" : ""} onClick={() => setDetailTab("files")} type="button">Files</button>
+            <button className={detailTab === "settings" ? "active" : ""} onClick={() => setDetailTab("settings")} type="button">Settings</button>
           </div>
           <label className="reference-search-field">
             <Search size={18} strokeWidth={1.9} />
-            <input placeholder="Search flows..." />
+            <input
+              onChange={event => setDetailFlowSearch(event.target.value)}
+              placeholder="Search flows..."
+              value={detailFlowSearch}
+            />
           </label>
           <div className="reference-flow-detail-list">
-            {flowProjects.map(project => (
+            {detailFlowProjects.map(project => (
               <div className="reference-flow-detail-group" key={project.id}>
                 <button className="reference-project-row" onClick={() => onSelectProject(project.id)} type="button">
                   <div className="reference-project-row-title">
@@ -1254,21 +1442,29 @@ function BuilderSurface(props) {
 
         <div className="reference-builder-detail-column right">
           <div className="reference-builder-detail-actions">
-            <button className="reference-topbar-pill active" type="button">
+            <button className="reference-topbar-pill active" onClick={() => onRequestAction?.("builder:detail-live-preview", { missionId: selectedRow.id })} type="button">
               <Monitor size={16} strokeWidth={1.9} />
               <span>Live Preview</span>
             </button>
-            <button className="reference-outline-button" type="button">
+            <button
+              className="reference-outline-button"
+              onClick={() => onRequestAction?.("builder:open-in-builder", { missionId: selectedRow.id })}
+              type="button"
+            >
               <Hammer size={16} strokeWidth={1.9} />
               <span>Open in Builder</span>
             </button>
-            <IconButton icon={MoreHorizontal} label="More" onClick={() => {}} />
+            <IconButton
+              icon={MoreHorizontal}
+              label="More"
+              onClick={() => onRequestAction?.("builder:detail-more", { missionId: selectedRow.id })}
+            />
           </div>
           <article className="reference-builder-preview-panel">
             <div className="reference-detail-tabs compact">
-              <button className="active" type="button">Preview</button>
-              <button type="button">Files</button>
-              <button type="button">Changes ({changedItems.length})</button>
+              <button className={detailPreviewTab === "preview" ? "active" : ""} onClick={() => setDetailPreviewTab("preview")} type="button">Preview</button>
+              <button className={detailPreviewTab === "files" ? "active" : ""} onClick={() => setDetailPreviewTab("files")} type="button">Files</button>
+              <button className={detailPreviewTab === "changes" ? "active" : ""} onClick={() => setDetailPreviewTab("changes")} type="button">Changes ({changedItems.length})</button>
             </div>
             <div className="reference-builder-preview-surface">
               <div className="reference-browser-brand">
@@ -1282,18 +1478,21 @@ function BuilderSurface(props) {
             <h2>{selectedRow.name}</h2>
               <p>{changedItems[0] || "No live preview changes have been recorded for this flow yet."}</p>
               <div className="reference-browser-actions">
-                <button className="primary" type="button">Primary Action</button>
-                <button className="secondary" type="button">Secondary</button>
+                <button className="primary" onClick={() => onRequestAction?.("builder:detail-primary", { missionId: selectedRow.id })} type="button">Primary Action</button>
+                <button className="secondary" onClick={() => onRequestAction?.("builder:detail-secondary", { missionId: selectedRow.id })} type="button">Secondary</button>
               </div>
             </div>
           </article>
           <article className="reference-feedback-panel builder">
             <div className="reference-feedback-tabs">
-              <button className="active" type="button">Feedback</button>
-              <button type="button">Notes</button>
+              <button className={detailFeedbackTab === "feedback" ? "active" : ""} onClick={() => setDetailFeedbackTab("feedback")} type="button">Feedback</button>
+              <button className={detailFeedbackTab === "notes" ? "active" : ""} onClick={() => setDetailFeedbackTab("notes")} type="button">Notes</button>
             </div>
             <div className="reference-feedback-list">
-              {feedbackItems.slice(0, 3).map(item => (
+              {feedbackItems
+                .filter(item => (detailFeedbackTab === "feedback" ? item.role !== "note" : true))
+                .slice(0, 3)
+                .map(item => (
                 <article className="reference-feedback-item" key={item.id}>
                   <div className="reference-feedback-meta">
                     <strong>{item.author}</strong>
@@ -1302,8 +1501,8 @@ function BuilderSurface(props) {
                   <p>{item.body}</p>
                   {item.role === "assistant" ? (
                     <div className="reference-feedback-actions">
-                      <button type="button">Change applied</button>
-                      <button type="button">View change</button>
+                      <button onClick={() => onRequestAction?.("builder:feedback-apply", { feedbackId: item.id, missionId: selectedRow.id })} type="button">Change applied</button>
+                      <button onClick={() => onRequestAction?.("builder:feedback-view", { feedbackId: item.id, missionId: selectedRow.id })} type="button">View change</button>
                     </div>
                   ) : null}
                 </article>
@@ -1327,11 +1526,19 @@ function BuilderSurface(props) {
           <p>Build, run, and iterate on all your vibe coding projects.</p>
         </div>
         <div className="reference-builder-head-actions">
-          <button className="reference-outline-button strong" type="button">
+          <button
+            className="reference-outline-button strong"
+            onClick={() => onRequestAction?.("builder:new-project")}
+            type="button"
+          >
             <Plus size={18} strokeWidth={1.9} />
             <span>New Project</span>
           </button>
-          <IconButton icon={LayoutGrid} label="Grid view" onClick={() => {}} />
+          <IconButton
+            icon={LayoutGrid}
+            label="Grid view"
+            onClick={() => onRequestAction?.("builder:toggle-view")}
+          />
         </div>
       </div>
 
@@ -1372,25 +1579,36 @@ function BuilderSurface(props) {
         <div className="reference-builder-toolbar">
           <label className="reference-search-field">
             <Search size={18} strokeWidth={1.9} />
-            <input placeholder="Search projects..." />
+            <input
+              onChange={event => {
+                setBuilderSearch(event.target.value);
+                setBuilderPage(1);
+              }}
+              placeholder="Search projects..."
+              value={builderSearch}
+            />
           </label>
-          <button className="reference-select-button" type="button">
+          <button className="reference-select-button" onClick={() => onRequestAction?.("builder:filter-status")} type="button">
             <span>Status</span>
             <ChevronDown size={16} strokeWidth={1.9} />
           </button>
-          <button className="reference-select-button" type="button">
+          <button className="reference-select-button" onClick={() => onRequestAction?.("builder:filter-stack")} type="button">
             <span>Tech Stack</span>
             <ChevronDown size={16} strokeWidth={1.9} />
           </button>
-          <button className="reference-select-button" type="button">
+          <button className="reference-select-button" onClick={() => onRequestAction?.("builder:filter-updated")} type="button">
             <span>Last Updated</span>
             <ChevronDown size={16} strokeWidth={1.9} />
           </button>
-          <button className="reference-select-button compact" type="button">
+          <button className="reference-select-button compact" onClick={() => onRequestAction?.("builder:filters")} type="button">
             <Filter size={17} strokeWidth={1.9} />
             <span>Filters</span>
           </button>
-          <IconButton icon={Settings} label="Builder settings" onClick={() => {}} />
+          <IconButton
+            icon={Settings}
+            label="Builder settings"
+            onClick={() => onRequestAction?.("builder:settings")}
+          />
         </div>
 
         <div className="reference-builder-table">
@@ -1405,13 +1623,20 @@ function BuilderSurface(props) {
             <span />
           </div>
 
-          {builderRows.map(row => {
+          {pagedBuilderRows.map(row => {
             const successRate =
               typeof row.successRate === "number" && Number.isFinite(row.successRate)
                 ? Math.max(0, Math.min(100, row.successRate))
                 : null;
             return (
-              <button className={cx("reference-builder-row action", row.selected && "selected")} key={row.id} onClick={() => onOpenBuilderDetail(row.id)} type="button">
+              <article
+                className={cx("reference-builder-row action", row.selected && "selected")}
+                key={row.id}
+                onClick={() => onOpenBuilderDetail(row.id)}
+                onKeyDown={event => openBuilderDetailFromKey(event, row.id)}
+                role="button"
+                tabIndex={0}
+              >
                 <div className="reference-project-cell">
                   <div className="reference-project-icon">
                     <Code2 size={18} strokeWidth={1.9} />
@@ -1440,32 +1665,49 @@ function BuilderSurface(props) {
                 </div>
                 <strong>{row.runs}</strong>
                 <span className="reference-updated">{row.updated}</span>
-                <IconButton icon={MoreHorizontal} label="Project actions" onClick={() => {}} />
-              </button>
+                <IconButton
+                  icon={MoreHorizontal}
+                  label="Project actions"
+                  onClick={event => {
+                    event.stopPropagation();
+                    onRequestAction?.("builder:project-actions", { missionId: row.id });
+                  }}
+                />
+              </article>
             );
           })}
-          {!builderRows.length ? (
+          {!filteredBuilderRows.length ? (
             <div className="reference-builder-empty-state">
-              <strong>No builder runs yet</strong>
-              <p>Start a mission from Agent Mode or create a workspace run; Builder will populate from real mission activity.</p>
+              <strong>{builderRows.length ? "No matches found" : "No builder runs yet"}</strong>
+              <p>
+                {builderRows.length
+                  ? "Try a different project search term."
+                  : "Start a mission from Agent Mode or create a workspace run; Builder will populate from real mission activity."}
+              </p>
             </div>
           ) : null}
         </div>
 
         <div className="reference-builder-pagination">
           <span>
-            {builderRows.length > 0
-              ? `Showing 1 to ${Math.min(builderRows.length, 8)} of ${builderRows.length} projects`
+            {filteredBuilderRows.length > 0
+              ? `Showing ${pageStart + 1} to ${Math.min(pageStart + pageSize, filteredBuilderRows.length)} of ${filteredBuilderRows.length} projects`
               : "No projects to show yet"}
           </span>
-          {builderRows.length > 0 ? (
+          {filteredBuilderRows.length > 0 ? (
             <div className="reference-page-buttons">
-              <button disabled type="button">‹</button>
-              <button className="active" type="button">1</button>
-              {builderRows.length > 8 ? <button type="button">2</button> : null}
-              {builderRows.length > 16 ? <button type="button">3</button> : null}
-              {builderRows.length > 24 ? <button type="button">4</button> : null}
-              <button disabled={builderRows.length <= 8} type="button">›</button>
+              <button disabled={effectiveBuilderPage <= 1} onClick={() => setBuilderPage(page => Math.max(1, page - 1))} type="button">‹</button>
+              {Array.from({ length: totalPages }, (_, index) => index + 1).slice(0, 6).map(page => (
+                <button
+                  className={page === effectiveBuilderPage ? "active" : ""}
+                  key={`builder-page-${page}`}
+                  onClick={() => setBuilderPage(page)}
+                  type="button"
+                >
+                  {page}
+                </button>
+              ))}
+              <button disabled={effectiveBuilderPage >= totalPages} onClick={() => setBuilderPage(page => Math.min(totalPages, page + 1))} type="button">›</button>
             </div>
           ) : null}
         </div>
@@ -1474,7 +1716,7 @@ function BuilderSurface(props) {
   );
 }
 
-function SkillHubSurface({ studioState }) {
+function SkillHubSurface({ onRequestAction, studioState }) {
   const {
     activeRuleSetId,
     activeSkillIds = [],
@@ -1501,6 +1743,24 @@ function SkillHubSurface({ studioState }) {
   const overridesValue = asList(selectedItem?.overrides)
     .map(item => `${item.target} :: ${item.mode} :: ${item.detail}`)
     .join("\n");
+  const [skillSearch, setSkillSearch] = useState("");
+  const searchTerm = String(skillSearch || "").trim().toLowerCase();
+  const visibleSkills =
+    searchTerm.length === 0
+      ? skills
+      : skills.filter(item =>
+          [item.name, item.summary, item.description]
+            .map(value => String(value || "").toLowerCase())
+            .some(value => value.includes(searchTerm)),
+        );
+  const visibleRuleSets =
+    searchTerm.length === 0
+      ? ruleSets
+      : ruleSets.filter(item =>
+          [item.name, item.summary, item.description]
+            .map(value => String(value || "").toLowerCase())
+            .some(value => value.includes(searchTerm)),
+        );
 
   return (
     <section className="reference-skill-surface detail-mode">
@@ -1515,7 +1775,7 @@ function SkillHubSurface({ studioState }) {
           </div>
         </div>
         <div className="reference-builder-head-actions">
-          <button className="reference-outline-button" type="button">
+          <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:version-history")} type="button">
             <History size={16} strokeWidth={1.9} />
             <span>Version History</span>
           </button>
@@ -1526,7 +1786,7 @@ function SkillHubSurface({ studioState }) {
           <button className="reference-black-button" onClick={onPublish} type="button">
             Publish
           </button>
-          <IconButton icon={MoreHorizontal} label="More actions" onClick={() => {}} />
+          <IconButton icon={MoreHorizontal} label="More actions" onClick={() => onRequestAction?.("skills:more-actions")} />
         </div>
       </div>
 
@@ -1543,18 +1803,22 @@ function SkillHubSurface({ studioState }) {
 
           <label className="reference-search-field">
             <Search size={18} strokeWidth={1.9} />
-            <input placeholder="Search skills & rule sets..." />
+            <input
+              onChange={event => setSkillSearch(event.target.value)}
+              placeholder="Search skills & rule sets..."
+              value={skillSearch}
+            />
           </label>
 
           <div className="reference-studio-list-section">
             <div className="reference-builder-section-head">
               <strong>Skills</strong>
-              <button className="reference-mini-icon" type="button">
+              <button className="reference-mini-icon" onClick={() => onRequestAction?.("skills:add-skill")} type="button">
                 <Plus size={14} strokeWidth={2} />
               </button>
             </div>
             <div className="reference-skill-list">
-              {skills.map(item => (
+              {visibleSkills.map(item => (
                 <button
                   className={cx("reference-skill-row", selectedItem?.id === item.id && "active")}
                   key={item.id}
@@ -1580,12 +1844,12 @@ function SkillHubSurface({ studioState }) {
           <div className="reference-studio-list-section">
             <div className="reference-builder-section-head">
               <strong>Rule Sets</strong>
-              <button className="reference-mini-icon" type="button">
+              <button className="reference-mini-icon" onClick={() => onRequestAction?.("skills:add-rule-set")} type="button">
                 <Plus size={14} strokeWidth={2} />
               </button>
             </div>
             <div className="reference-skill-list">
-              {ruleSets.map(item => (
+              {visibleRuleSets.map(item => (
                 <button
                   className={cx("reference-skill-row", selectedItem?.id === item.id && "active")}
                   key={item.id}
@@ -1604,7 +1868,7 @@ function SkillHubSurface({ studioState }) {
             </div>
           </div>
 
-          <button className="reference-studio-archive" type="button">
+          <button className="reference-studio-archive" onClick={() => onRequestAction?.("skills:view-archived")} type="button">
             <BookOpen size={16} strokeWidth={1.9} />
             <span>View archived</span>
           </button>
@@ -1616,8 +1880,8 @@ function SkillHubSurface({ studioState }) {
               <div className="reference-builder-section-head">
                 <strong>{selectedItem.badge}</strong>
                 <div className="reference-inline-actions">
-                  <button className="reference-link-button" type="button">Edit</button>
-                  <button className="reference-link-button" type="button">Preview</button>
+                  <button className="reference-link-button" onClick={() => onRequestAction?.("skills:edit-item", { itemId: selectedItem.id })} type="button">Edit</button>
+                  <button className="reference-link-button" onClick={() => onRequestAction?.("skills:preview-item", { itemId: selectedItem.id })} type="button">Preview</button>
                 </div>
               </div>
 
@@ -1639,14 +1903,15 @@ function SkillHubSurface({ studioState }) {
         <article className="reference-skill-panel reference-studio-assistant">
           <div className="reference-builder-section-head">
             <strong>Ask a model</strong>
-            <button className="reference-link-button" type="button">Collapse</button>
+            <button className="reference-link-button" onClick={() => onRequestAction?.("skills:collapse-assistant")} type="button">Collapse</button>
           </div>
           <div className="reference-inline-form-row">
             <SurfaceField label="Model">
               <select
                 onChange={event => onAssistantFieldChange("model", event.target.value)}
-                value={assistant.model || "GPT-4o"}
+                value={assistant.model || "gpt-5.5"}
               >
+                <option value="gpt-5.5">gpt-5.5</option>
                 <option value="GPT-4o">GPT-4o</option>
                 <option value="gpt-5.4-mini">gpt-5.4-mini</option>
                 <option value="gpt-5.4">gpt-5.4</option>
@@ -1709,7 +1974,7 @@ function SkillHubSurface({ studioState }) {
               value={assistant.prompt || ""}
             />
             <div className="reference-composer-footer compact">
-              <button className="reference-tool-button" type="button">
+              <button className="reference-tool-button" onClick={() => onRequestAction?.("skills:attach-context")} type="button">
                 <Paperclip size={18} strokeWidth={1.9} />
               </button>
               <button className="reference-send-button solid" onClick={onAssistantSubmit} type="button">
@@ -1876,7 +2141,7 @@ function SkillHubSurface({ studioState }) {
   );
 }
 
-function SettingsSurface({ settingsState }) {
+function SettingsSurface({ onRequestAction, settingsState }) {
   const {
     activeRuleSet,
     activeTab = "general",
@@ -1903,6 +2168,7 @@ function SettingsSurface({ settingsState }) {
     onWorkspaceProfileFieldChange,
     privacy = { conversationRetention: "90 days", fileRetention: "30 days" },
     providers = [],
+    chatgptConnection = {},
     routeOptions = { harnesses: [], providers: [], efforts: [], models: [], routingStrategies: [], executionTargets: [] },
     runtimes = [],
     sidebarBehaviorOptions = [],
@@ -1977,7 +2243,7 @@ function SettingsSurface({ settingsState }) {
                   <option value="experimental">Experimental</option>
                 </select>
               </SurfaceField>
-              <SurfaceField label="Preferred harness">
+              <SurfaceField label="Preferred runtime">
                 <select
                   onChange={event => onWorkspaceProfileFieldChange("preferredHarness", event.target.value)}
                   value={workspaceProfileForm.preferredHarness}
@@ -2088,7 +2354,7 @@ function SettingsSurface({ settingsState }) {
                 <div className="reference-theme-toggle">
                   <button className={appearance.theme === "light" ? "active" : ""} onClick={() => onSetAppearance("theme", "light")} type="button"><SunMedium size={18} strokeWidth={1.9} /><span>Light</span></button>
                   <button className={appearance.theme === "dark" ? "active" : ""} onClick={() => onSetAppearance("theme", "dark")} type="button"><Moon size={18} strokeWidth={1.9} /><span>Dark</span></button>
-                  <button type="button"><Monitor size={18} strokeWidth={1.9} /><span>System</span></button>
+                  <button className={appearance.theme === "system" ? "active" : ""} onClick={() => onSetAppearance("theme", "system")} type="button"><Monitor size={18} strokeWidth={1.9} /><span>System</span></button>
                 </div>
               </div>
               <div className="reference-settings-block">
@@ -2271,6 +2537,34 @@ function SettingsSurface({ settingsState }) {
           </article>
 
           <article className="reference-settings-card">
+            <strong>ChatGPT App Connection</strong>
+            <p>
+              A real ChatGPT connection is an app/connector backed by an MCP server. Opening
+              ChatGPT in a browser does not authenticate Fluxio or connect this desktop app.
+            </p>
+            <div className="reference-two-column-grid">
+              <SurfaceField label="Current Fluxio local API">
+                <input readOnly value={chatgptConnection.localApiUrl || "Local API not running"} />
+              </SurfaceField>
+              <SurfaceField label="ChatGPT-compatible MCP endpoint">
+                <input readOnly value={chatgptConnection.mcpEndpoint || "Not implemented yet"} />
+              </SurfaceField>
+            </div>
+            <p className="reference-surface-footnote">
+              To connect from ChatGPT, create a ChatGPT app/connector for a remote MCP server.
+              Fluxio currently exposes a secured local REST API; the MCP bridge still needs to be
+              exposed before ChatGPT can connect directly.
+            </p>
+            <div className="reference-settings-actions split">
+              {asList(chatgptConnection.links).map(link => (
+                <button className="reference-outline-button" key={link.label} onClick={link.onClick} type="button">
+                  {link.label}
+                </button>
+              ))}
+            </div>
+          </article>
+
+          <article className="reference-settings-card">
             <strong>Workspace Auth Paths</strong>
             <div className="reference-two-column-grid">
               <SurfaceField label="OpenAI / Codex auth path">
@@ -2306,7 +2600,7 @@ function SettingsSurface({ settingsState }) {
           </article>
 
           <article className="reference-settings-card">
-            <strong>Harness Availability</strong>
+            <strong>Runtime Availability</strong>
             <div className="reference-provider-grid">
               {runtimes.map(runtime => (
                 <article className={cx("reference-provider-card", runtime.detected && "connected")} key={runtime.runtime_id}>
@@ -2341,7 +2635,7 @@ function SettingsSurface({ settingsState }) {
             <div className="reference-settings-summary-grid">
               <article><span>Name</span><strong>{activeRuleSet?.name || "—"}</strong></article>
               <article><span>Approval mode</span><strong>{activeRuleSet?.approvalMode || "—"}</strong></article>
-              <article><span>Harness</span><strong>{workspaceProfileForm.preferredHarness}</strong></article>
+              <article><span>Runtime</span><strong>{workspaceProfileForm.preferredHarness}</strong></article>
               <article><span>Execution target</span><strong>{workspaceProfileForm.executionTargetPreference}</strong></article>
             </div>
           </article>
@@ -2455,11 +2749,11 @@ function SettingsSurface({ settingsState }) {
               <input readOnly value={privacy.fileRetention} />
             </SurfaceField>
             <div className="reference-settings-actions split">
-              <button className="reference-outline-button" type="button">
+              <button className="reference-outline-button" onClick={() => onRequestAction?.("settings:export-data")} type="button">
                 <FileText size={16} strokeWidth={1.9} />
                 <span>Export Data</span>
               </button>
-              <button className="reference-danger-button" type="button">Delete Workspace</button>
+              <button className="reference-danger-button" onClick={() => onRequestAction?.("settings:delete-workspace")} type="button">Delete Workspace</button>
             </div>
           </article>
           <article className="reference-settings-card">
@@ -2499,6 +2793,7 @@ export function FluxioReferenceShell(props) {
     onOpenSettings,
     onOpenSkillStudio,
     onPaste,
+    onRequestAction,
     onRuntimeChange,
     onSend,
     onSelectFlow,
@@ -2511,6 +2806,7 @@ export function FluxioReferenceShell(props) {
     settingsState,
     selectedEffortLabel,
     selectedModelLabel,
+    selectedHarnessMeta,
     selectedProjectId,
     selectedRuntime,
     slashCommands,
@@ -2527,11 +2823,11 @@ export function FluxioReferenceShell(props) {
 
   const mainContent =
     surface === "home" ? (
-      <HomeSurface onOpenSurface={onSetSurface} />
+      <HomeSurface onOpenSurface={onSetSurface} onRequestAction={onRequestAction} />
     ) : surface === "skills" ? (
-      <SkillHubSurface studioState={skillStudioState} />
+      <SkillHubSurface onRequestAction={onRequestAction} studioState={skillStudioState} />
     ) : surface === "settings" ? (
-      <SettingsSurface settingsState={settingsState} />
+      <SettingsSurface onRequestAction={onRequestAction} settingsState={settingsState} />
     ) : surface === "agent" && agentScene === "idle" ? (
       <AgentIdleSurface
         draft={draft}
@@ -2539,12 +2835,14 @@ export function FluxioReferenceShell(props) {
         onChangeDraft={onChangeDraft}
         onDictation={onDictation}
         onIdleSubmit={onIdleSubmit}
+        onRequestAction={onRequestAction}
         onPaste={onPaste}
         onRuntimeChange={onRuntimeChange}
         onUseSlashCommand={onInsertSlashCommand}
         runtimeOptions={runtimeOptions}
         runtimeStatus={runtimeStatus}
         selectedEffortLabel={selectedEffortLabel}
+        selectedHarnessMeta={selectedHarnessMeta}
         selectedModelLabel={selectedModelLabel}
         selectedRuntime={selectedRuntime}
         slashCommands={slashCommands}
@@ -2559,6 +2857,7 @@ export function FluxioReferenceShell(props) {
         onChangeDraft={onChangeDraft}
         onDictation={onDictation}
         onPaste={onPaste}
+        onRequestAction={onRequestAction}
         onRuntimeChange={onRuntimeChange}
         onSend={onSend}
         onUseSlashCommand={onInsertSlashCommand}
@@ -2579,8 +2878,11 @@ export function FluxioReferenceShell(props) {
         onChangeDraft={onChangeDraft}
         onDictation={onDictation}
         onPaste={onPaste}
+        onRequestAction={onRequestAction}
         onSend={onSend}
+        onUseSlashCommand={onInsertSlashCommand}
         projectLabel={currentProjectLabel}
+        slashCommands={slashCommands}
         timelineMoments={timelineMoments}
       />
     ) : surface === "builder" ? (
@@ -2592,6 +2894,7 @@ export function FluxioReferenceShell(props) {
         flowProjects={flowProjects}
         onBackFromBuilder={onBackFromBuilder}
         onOpenBuilderDetail={onOpenBuilderDetail}
+        onRequestAction={onRequestAction}
         onOpenSkillStudio={onOpenSkillStudio}
         onSelectFlow={onSelectFlow}
         onSelectProject={onSelectProject}
@@ -2642,14 +2945,16 @@ export function FluxioReferenceShell(props) {
                 label="Skill Studio"
                 onClick={onOpenSkillStudio}
               />
+              <RailItem
+                active={surface === "settings"}
+                icon={Settings}
+                label="Settings"
+                onClick={onOpenSettings}
+              />
             </div>
           </nav>
         </div>
 
-        <button className="reference-sidebar-settings" onClick={onOpenSettings} type="button">
-          <Settings size={18} strokeWidth={1.9} />
-          <span>Settings</span>
-        </button>
         <SidebarProfile />
       </aside>
 
@@ -2660,6 +2965,7 @@ export function FluxioReferenceShell(props) {
               currentModeLabel="Agent Mode"
               favoriteFlows={favoriteFlows}
               flowProjects={flowProjects}
+              onRequestAction={onRequestAction}
               onOpenSettings={onOpenSettings}
               onSelectFlow={onSelectFlow}
               onSelectProject={onSelectProject}
@@ -2706,3 +3012,4 @@ export function FluxioReferenceShell(props) {
     </div>
   );
 }
+

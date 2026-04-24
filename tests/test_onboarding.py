@@ -195,7 +195,9 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(openclaw["stage"], "update_available")
         self.assertEqual(hermes["stage"], "update_available")
         self.assertEqual(openclaw["repairActions"][0]["actionId"], "update_openclaw")
+        self.assertTrue(openclaw["repairActions"][0]["autoRunVerify"])
         self.assertEqual(hermes["repairActions"][0]["actionId"], "update_hermes")
+        self.assertTrue(hermes["repairActions"][0]["autoRunVerify"])
         self.assertEqual(hermes["currentHealthStatus"], "update_available")
         self.assertEqual(hermes["lastVerificationResult"], "outdated")
         self.assertEqual(hermes["managementMode"], "fluxio_managed")
@@ -527,3 +529,4 @@ class OnboardingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

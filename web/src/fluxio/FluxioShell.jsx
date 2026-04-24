@@ -57,9 +57,10 @@ const LIVE_SYNC_OPTIONS = [
 ];
 const DEFAULT_OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:8765";
 const PROVIDER_AUTH_URLS = {
-  openaiPortal: "https://chatgpt.com/auth/login",
+  chatgptDeveloperModeDocs: "https://platform.openai.com/docs/guides/developer-mode",
+  openaiMcpDocs: "https://platform.openai.com/docs/mcp/",
   openaiApiKeys: "https://platform.openai.com/api-keys",
-  minimaxPortal: "https://platform.minimax.io/docs/token-plan/openclaw",
+  minimaxOpenClawDocs: "https://platform.minimax.io/docs/token-plan/openclaw",
   minimaxApiKeys: "https://platform.minimax.io/user-center/basic-information/interface-key",
 };
 
@@ -95,12 +96,12 @@ const ROUTING_STRATEGY_OPTIONS = [
 
 const MINIMAX_AUTH_OPTIONS = [
   { value: "none", label: "Not Configured" },
-  { value: "minimax-portal-oauth", label: "MiniMax Portal OAuth" },
+  { value: "minimax-portal-oauth", label: "MiniMax OpenClaw OAuth" },
   { value: "minimax-api", label: "MiniMax API Key" },
 ];
 const OPENAI_CODEX_AUTH_OPTIONS = [
   { value: "none", label: "Not Configured" },
-  { value: "chatgpt", label: "ChatGPT Portal" },
+  { value: "oauth", label: "OpenAI Codex OAuth" },
   { value: "api", label: "API Key" },
 ];
 
@@ -138,7 +139,7 @@ const PROVIDER_SECRET_OPTIONS = [
   {
     id: "openai",
     label: "OpenAI / Codex",
-    env: "OPENAI_API_KEY",
+    env: "OPENAI_API_KEY / Codex OAuth",
     note: "Used for GPT and Codex-family routes.",
   },
   {
@@ -156,11 +157,18 @@ const PROVIDER_SECRET_OPTIONS = [
   {
     id: "minimax",
     label: "MiniMax",
-    env: "MINIMAX_API_KEY",
-    note: "Used when a route targets MiniMax with API-key auth. Portal OAuth does not require a stored key.",
+    env: "MINIMAX_API_KEY / minimax-portal OAuth",
+    note: "Used when a route targets MiniMax with API-key auth. Portal/OAuth setup alone does not mark model auth ready.",
   },
 ];
+const PROVIDER_AUTH_PRESENCE_IDS = [
+  ...PROVIDER_SECRET_OPTIONS.map(item => item.id),
+  "openai-codex",
+  "minimax-cn",
+  "minimax-portal",
+];
 const ROUTE_MODEL_OPTIONS = [
+  "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
   "codex",
@@ -181,7 +189,7 @@ const MODEL_QUICK_PRESETS = [
     id: "planning_deep",
     label: "Planning Deep",
     provider: "openai",
-    model: "gpt-5.4",
+    model: "gpt-5.5",
     effort: "high",
   },
   {
@@ -273,6 +281,22 @@ const OPENCLAW_SLASH_COMMANDS = [
   { command: "/plugins", harness: "OpenClaw", detail: "Inspect or mutate plugin state." },
   { command: "/mcp", harness: "OpenClaw", detail: "Show or update OpenClaw-managed MCP config." },
 ];
+const COMMENT_SLASH_COMMANDS = [
+  {
+    command: "/comment",
+    harness: "Composer",
+    kind: "comment",
+    label: "Comment selected block",
+    detail: "Insert a review comment for the current block, proof item, or runtime trace.",
+  },
+  {
+    command: "/note",
+    harness: "Composer",
+    kind: "comment",
+    label: "Operator note",
+    detail: "Leave a local note on the current mission without changing the route.",
+  },
+];
 
 function splitEditorLines(value) {
   return String(value || "")
@@ -307,7 +331,7 @@ function buildDefaultRoutePlan(routeOverrides) {
           provider: match.provider || "openai",
           model:
             match.model ||
-            (role === "planner" ? "gpt-5.4" : role === "executor" ? "gpt-5.4-mini" : "claude-sonnet-4.5"),
+            (role === "planner" ? "gpt-5.5" : role === "executor" ? "gpt-5.4-mini" : "gpt-5.5"),
           effort:
             match.effort || (role === "planner" ? "high" : role === "executor" ? "medium" : "medium"),
         },
@@ -358,7 +382,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           "Do not introduce new libraries without justification.",
         ],
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -390,7 +414,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           "Keep transport retries bounded and observable.",
         ],
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -418,7 +442,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           "Keep entity naming consistent across storage and UI.",
         ],
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -446,7 +470,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           "Keep correctness and a11y intact while optimizing.",
         ],
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -474,7 +498,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           "Never expose secrets in logs or UI copy.",
         ],
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -532,7 +556,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           channel: "#security-alerts",
         },
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -567,7 +591,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           channel: "#frontend-review",
         },
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -602,7 +626,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           channel: "#release-approvals",
         },
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -643,7 +667,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           channel: "#docs-review",
         },
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -678,7 +702,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
           channel: "#finance-alerts",
         },
         assistant: {
-          model: "GPT-4o",
+          model: "gpt-5.5",
           effort: "Balanced",
           prompt: "",
           conversation: [],
@@ -954,6 +978,17 @@ const AGENT_QUEUED_PAUSE_STATES = ["queued", "resume_available"];
 
 function hasTauriBackend() {
   return Boolean(globalThis.window?.__TAURI__ || globalThis.window?.__TAURI_INTERNALS__);
+}
+
+function resolveInitialPreviewMode(searchParams) {
+  const explicitFixture = searchParams.get("fixture");
+  if (explicitFixture) {
+    return explicitFixture;
+  }
+  if (hasTauriBackend()) {
+    return "live";
+  }
+  return localStorage.getItem(STORAGE_KEYS.previewMode) || "live";
 }
 
 function loadStoredJson(key, fallback) {
@@ -1676,6 +1711,28 @@ function updateRouteOverride(routeOverrides, role, patch) {
   );
 }
 
+function normalizeOpenAICodexAuthMode(value) {
+  const normalized = String(value || "none").trim().toLowerCase();
+  if (["chatgpt", "chatgpt-portal", "portal", "chatgpt-oauth", "chatgpt_oauth", "codex-oauth", "openai-codex-oauth", "oauth"].includes(normalized)) {
+    return "oauth";
+  }
+  if (["api", "api-key", "api_key"].includes(normalized)) {
+    return "api";
+  }
+  return OPENAI_CODEX_AUTH_OPTIONS.some(option => option.value === normalized) ? normalized : "none";
+}
+
+function normalizeMiniMaxAuthMode(value) {
+  const normalized = String(value || "none").trim().toLowerCase();
+  if (["minimax-portal-oauth", "minimax-global-oauth", "minimax-cn-oauth", "oauth", "oauth-cn", "portal-oauth"].includes(normalized)) {
+    return "minimax-portal-oauth";
+  }
+  if (["minimax-api", "minimax_api", "minimax-global-api", "minimax-cn-api"].includes(normalized)) {
+    return "minimax-api";
+  }
+  return MINIMAX_AUTH_OPTIONS.some(option => option.value === normalized) ? normalized : "none";
+}
+
 function profileFormFromWorkspace(workspace, fallbackProfile) {
   const overrides = Array.isArray(workspace?.route_overrides) ? workspace.route_overrides : [];
   const existingByRole = new Map(overrides.map(item => [String(item.role || "").toLowerCase(), item]));
@@ -1684,8 +1741,8 @@ function profileFormFromWorkspace(workspace, fallbackProfile) {
     preferredHarness: workspace?.preferred_harness || "fluxio_hybrid",
     routingStrategy: workspace?.routing_strategy || "profile_default",
     autoOptimizeRouting: Boolean(workspace?.auto_optimize_routing),
-    openaiCodexAuthMode: workspace?.openai_codex_auth_mode || "none",
-    minimaxAuthMode: workspace?.minimax_auth_mode || "none",
+    openaiCodexAuthMode: normalizeOpenAICodexAuthMode(workspace?.openai_codex_auth_mode),
+    minimaxAuthMode: normalizeMiniMaxAuthMode(workspace?.minimax_auth_mode),
     commitMessageStyle: workspace?.commit_message_style || "scoped",
     executionTargetPreference: workspace?.execution_target_preference || "profile_default",
     routeOverrides: ROUTE_ROLE_OPTIONS.map(role => {
@@ -1989,8 +2046,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const storedUiMode = searchParams.get("mode") || localStorage.getItem(STORAGE_KEYS.uiMode) || "agent";
   const storedChatId = localStorage.getItem(STORAGE_KEYS.telegramChatId) || "";
-  const storedPreviewMode =
-    searchParams.get("fixture") || localStorage.getItem(STORAGE_KEYS.previewMode) || "live";
+  const storedPreviewMode = resolveInitialPreviewMode(searchParams);
   const storedLiveSyncSeconds = localStorage.getItem(STORAGE_KEYS.liveSyncSeconds) || "off";
   const storedCodeExecutionEnabled =
     localStorage.getItem(STORAGE_KEYS.codeExecutionEnabled) === "true";
@@ -2461,7 +2517,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             callBackend("get_openclaw_status"),
             callBackend("has_openclaw_gateway_token"),
             callBackend("get_provider_secret_presence_command", {
-              providerIds: PROVIDER_SECRET_OPTIONS.map(item => item.id),
+              providerIds: PROVIDER_AUTH_PRESENCE_IDS,
             }),
           ]);
 
@@ -2475,7 +2531,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             : null) ||
           providerSecretPresencePrimary ||
           (await callBackend("get_provider_secret_presence_command", {
-            provider_ids: PROVIDER_SECRET_OPTIONS.map(item => item.id),
+            providerIds: PROVIDER_AUTH_PRESENCE_IDS,
           })) ||
           {};
 
@@ -3061,6 +3117,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
     try {
       const nextProfile = formOverride || workspaceProfileForm;
+      const normalizedProfile = {
+        ...nextProfile,
+        openaiCodexAuthMode: normalizeOpenAICodexAuthMode(nextProfile.openaiCodexAuthMode),
+        minimaxAuthMode: normalizeMiniMaxAuthMode(nextProfile.minimaxAuthMode),
+      };
       await callBackend(
         "save_workspace_profile_command",
         {
@@ -3070,19 +3131,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             name: workspace.name,
             path: workspace.root_path,
             defaultRuntime: workspace.default_runtime,
-            userProfile: nextProfile.userProfile,
-            preferredHarness: nextProfile.preferredHarness,
-            routingStrategy: nextProfile.routingStrategy,
-            routeOverrides: saveableRouteOverrides(nextProfile.routeOverrides),
-            autoOptimizeRouting: Boolean(nextProfile.autoOptimizeRouting),
-            openaiCodexAuthMode: nextProfile.openaiCodexAuthMode,
-            minimaxAuthMode: nextProfile.minimaxAuthMode,
-            commitMessageStyle: nextProfile.commitMessageStyle,
-            executionTargetPreference: nextProfile.executionTargetPreference,
+            userProfile: normalizedProfile.userProfile,
+            preferredHarness: normalizedProfile.preferredHarness,
+            routingStrategy: normalizedProfile.routingStrategy,
+            routeOverrides: saveableRouteOverrides(normalizedProfile.routeOverrides),
+            autoOptimizeRouting: Boolean(normalizedProfile.autoOptimizeRouting),
+            openaiCodexAuthMode: normalizedProfile.openaiCodexAuthMode,
+            minimaxAuthMode: normalizedProfile.minimaxAuthMode,
+            commitMessageStyle: normalizedProfile.commitMessageStyle,
+            executionTargetPreference: normalizedProfile.executionTargetPreference,
           },
         },
         { throwOnError: true },
       );
+      setWorkspaceProfileForm(normalizedProfile);
       pushToast("Workspace policy saved.", "info");
       await refreshAll("workspace-policy-save");
     } catch (error) {
@@ -3102,7 +3164,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
       if (previewMode !== "live" || !hasTauriBackend()) {
-        pushToast(`Harness preference staged as ${titleizeToken(nextHarness)} in preview mode.`, "info");
+        pushToast(`Runtime preference staged as ${titleizeToken(nextHarness)} in preview mode.`, "info");
         return;
       }
 
@@ -3121,18 +3183,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               routingStrategy: workspaceProfileForm.routingStrategy,
               routeOverrides: saveableRouteOverrides(workspaceProfileForm.routeOverrides),
               autoOptimizeRouting: Boolean(workspaceProfileForm.autoOptimizeRouting),
-              openaiCodexAuthMode: workspaceProfileForm.openaiCodexAuthMode,
-              minimaxAuthMode: workspaceProfileForm.minimaxAuthMode,
+              openaiCodexAuthMode: normalizeOpenAICodexAuthMode(workspaceProfileForm.openaiCodexAuthMode),
+              minimaxAuthMode: normalizeMiniMaxAuthMode(workspaceProfileForm.minimaxAuthMode),
               commitMessageStyle: workspaceProfileForm.commitMessageStyle,
               executionTargetPreference: workspaceProfileForm.executionTargetPreference,
             },
           },
           { throwOnError: true },
         );
-        pushToast(`Harness switched to ${titleizeToken(nextHarness)}.`, "info");
+        pushToast(`Runtime switched to ${titleizeToken(nextHarness)}.`, "info");
         await refreshAll(`workspace-harness-${nextHarness}`);
       } catch (error) {
-        pushToast(`Harness switch failed: ${error}`, "error");
+        pushToast(`Runtime switch failed: ${error}`, "error");
       }
     },
     [markAction, previewMode, pushToast, refreshAll, workspace, workspaceProfileForm],
@@ -5415,14 +5477,27 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const minimaxSecretReady = Boolean(
     providerSecretPresence.minimax || providerSecretPresence["minimax-cn"],
   );
+  const minimaxOpenClawOAuthReady = Boolean(providerSecretPresence["minimax-portal"]);
   const minimaxAuthReady = Boolean(
-    minimaxProviderStatus?.authPresent || minimaxProviderStatus?.configured || minimaxSecretReady,
+    minimaxProviderStatus?.authPresent ||
+      minimaxProviderStatus?.configured ||
+      minimaxSecretReady ||
+      minimaxOpenClawOAuthReady,
   );
   const minimaxAuthPath = String(
     minimaxProviderStatus?.authPath ||
-      (minimaxSecretReady ? "API key" : "not configured"),
+      (minimaxOpenClawOAuthReady ? "MiniMax OpenClaw OAuth" : minimaxSecretReady ? "API key" : "not configured"),
   );
   const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
+  const localhostStatus =
+    snapshot?.localhostStatus && typeof snapshot.localhostStatus === "object"
+      ? snapshot.localhostStatus
+      : {};
+  const localhostPort = Number(localhostStatus.port || 0);
+  const localhostApiBaseUrl =
+    localhostStatus.running && localhostPort > 0
+      ? `http://127.0.0.1:${localhostPort}`
+      : "";
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
   const selectedModelLabel =
     activeEffectiveRoute.model || selectedAgentRoute.model
@@ -5436,12 +5511,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     runtimeStatusById.get(agentRuntimeSelectValue) ||
     runtimeStatusById.get(mission?.runtime_id) ||
     null;
+  const selectedHarnessMeta = useMemo(() => {
+    const readiness = referenceRuntimeStatus?.detected ? "Ready" : "Needs setup";
+    const capabilities = asList(referenceRuntimeStatus?.capabilities).length;
+    return [
+      { label: "Backend", value: readiness },
+      { label: "Capabilities", value: capabilities > 0 ? String(capabilities) : "Pending" },
+    ];
+  }, [referenceRuntimeStatus]);
   const referenceMissionLoop = mission?.missionLoop || null;
   const referenceSlashCommands = useMemo(() => {
     const runtimeScoped = agentRuntimeSelectValue === "hermes" ? HERMES_SLASH_COMMANDS : OPENCLAW_SLASH_COMMANDS;
     const studioSkillCommands = referenceStudio.skills.map(item => ({
       command: `/${commandSlug(item.name)}`,
       harness: "Skill",
+      kind: "skill",
+      label: item.name,
       detail: item.summary || item.description || "Workspace skill",
     }));
     const codexSkillCommands =
@@ -5451,11 +5536,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             .map(item => ({
               command: `/codex-${commandSlug(item.threadName || item.id)}`,
               harness: "Codex",
+              kind: "codex",
+              label: item.threadName || "Recent Codex thread",
               detail: item.cwd || item.source || "Recent Codex thread",
             }))
         : [];
     return uniqBy(
-      [...runtimeScoped, ...studioSkillCommands, ...codexSkillCommands],
+      [...runtimeScoped, ...COMMENT_SLASH_COMMANDS, ...studioSkillCommands, ...codexSkillCommands],
       item => `${item.harness}:${item.command}`,
     );
   }, [
@@ -5753,6 +5840,405 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [markAction, surface],
   );
 
+  const handleReferenceAction = useCallback(
+    async (actionId, payload = {}) => {
+      const normalizedAction = String(actionId || "").trim();
+      if (!normalizedAction) {
+        return;
+      }
+      markAction(`reference:action:${normalizedAction}`);
+
+      if (normalizedAction === "home:help") {
+        setSurface("settings");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        pushToast("Open Settings to review workspace controls, runtime auth, and routing.", "info");
+        return;
+      }
+
+      if (normalizedAction === "flow:add-project" || normalizedAction === "builder:new-project") {
+        setSurface("builder");
+        setBuilderDetailOpen(false);
+        setWorkspaceForm({
+          ...DEFAULT_WORKSPACE_FORM,
+          defaultRuntime: workspace?.default_runtime || DEFAULT_WORKSPACE_FORM.defaultRuntime,
+          userProfile: workspace?.user_profile || profileId || DEFAULT_WORKSPACE_FORM.userProfile,
+        });
+        setShowWorkspaceDialog(true);
+        if (previewMode !== "live") {
+          pushToast("Preview mode is read-only. Switch back to Live Backend before saving.", "warn");
+        }
+        return;
+      }
+
+      if (normalizedAction === "flow:search") {
+        setSurface("agent");
+        setAgentScene(mission ? "run" : "idle");
+        pushToast("Use the project and flow lists to jump across current mission threads.", "info");
+        return;
+      }
+
+      if (normalizedAction === "flow:show-all") {
+        const workspaceId = String(payload?.workspaceId || "");
+        if (workspaceId) {
+          setSelectedWorkspaceId(workspaceId);
+          setSurface("builder");
+          setBuilderDetailOpen(false);
+          return;
+        }
+        pushToast("No workspace selected for this flow group.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "idle:advanced-settings") {
+        setSurface("settings");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "idle:reset-defaults") {
+        setOperatorDraft("");
+        setMissionForm({
+          ...DEFAULT_MISSION_FORM,
+          workspaceId: workspace?.workspace_id || "",
+          runtime: workspace?.default_runtime || DEFAULT_MISSION_FORM.runtime,
+          profile: workspace?.user_profile || profileId || DEFAULT_MISSION_FORM.profile,
+        });
+        setAgentRuntimeFocus("all");
+        pushToast("Composer and mission defaults were reset.", "info");
+        return;
+      }
+
+      if (normalizedAction === "live:refresh-preview") {
+        await refreshAll("reference-preview-refresh");
+        return;
+      }
+
+      if (normalizedAction === "live:expand-preview") {
+        setSurface("agent");
+        setAgentScene("live");
+        setBuilderDetailOpen(false);
+        return;
+      }
+
+      if (
+        normalizedAction === "live:cta-start" ||
+        normalizedAction === "live:start-building" ||
+        normalizedAction === "live:view-demo" ||
+        normalizedAction === "live:comment-emoji" ||
+        normalizedAction === "live:comment-send"
+      ) {
+        setSurface("agent");
+        setAgentScene(mission ? "run" : "idle");
+        if (normalizedAction === "live:comment-send") {
+          if (mission) {
+            void handleAgentFollowUp();
+          } else {
+            handleAgentIdlePrimaryAction();
+          }
+          return;
+        }
+        pushToast("Preview action routed to the active agent thread.", "info");
+        return;
+      }
+
+      if (normalizedAction === "run:message-copy") {
+        const messageId = String(payload?.messageId || "");
+        const message = referenceAgentMessages.find(item => item.id === messageId);
+        const copied = await copyTextValue(message?.title || "");
+        pushToast(copied ? "Message copied." : "Unable to copy message text.", copied ? "info" : "warn");
+        return;
+      }
+
+      if (normalizedAction === "run:message-comment") {
+        const messageId = String(payload?.messageId || "");
+        const message = referenceAgentMessages.find(item => item.id === messageId);
+        if (message?.title) {
+          setOperatorDraft(`Comment on: ${message.title}\n`);
+          pushToast("Added a comment seed to the composer.", "info");
+          return;
+        }
+        pushToast("No message is selected for comment.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "run:message-retry") {
+        if (mission) {
+          void handleAgentFollowUp();
+        } else {
+          handleAgentIdlePrimaryAction();
+        }
+        return;
+      }
+
+      if (normalizedAction === "run:feedback-apply" || normalizedAction === "run:feedback-view") {
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        pushToast("Opened Builder detail for feedback review.", "info");
+        return;
+      }
+
+      if (normalizedAction === "builder:toggle-view") {
+        pushToast("Grid view is coming soon. Table view remains active.", "info");
+        return;
+      }
+
+      if (
+        normalizedAction === "builder:filter-status" ||
+        normalizedAction === "builder:filter-stack" ||
+        normalizedAction === "builder:filter-updated" ||
+        normalizedAction === "builder:filters"
+      ) {
+        pushToast("Advanced Builder filters are coming soon.", "info");
+        return;
+      }
+
+      if (normalizedAction === "builder:settings") {
+        setSurface("settings");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "builder:detail-live-preview") {
+        setSurface("agent");
+        setAgentScene("live");
+        setBuilderDetailOpen(false);
+        return;
+      }
+
+      if (normalizedAction === "builder:detail-primary") {
+        if (mission) {
+          setSurface("agent");
+          setAgentScene("run");
+          void handleAgentFollowUp();
+          return;
+        }
+        pushToast("Open a mission first to run Builder primary actions.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "builder:detail-secondary") {
+        setSurface("settings");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "builder:project-actions" || normalizedAction === "builder:open-in-builder") {
+        const missionId = String(payload?.missionId || "");
+        if (missionId) {
+          handleReferenceMissionSelect({
+            missionId,
+            nextSurface: "builder",
+            openBuilderDetail: true,
+          });
+          return;
+        }
+        pushToast("No project is selected yet.", "info");
+        return;
+      }
+
+      if (normalizedAction === "builder:feedback-apply" || normalizedAction === "builder:feedback-view") {
+        const feedbackId = String(payload?.feedbackId || "");
+        const feedback = referenceFeedbackItems.find(item => item.id === feedbackId);
+        if (feedback?.body) {
+          setOperatorDraft(feedback.body);
+          pushToast("Feedback copied into the composer.", "info");
+          return;
+        }
+        pushToast("Feedback item could not be resolved.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "builder:detail-more" || normalizedAction === "skills:more-actions") {
+        setSurface("settings");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "skills:version-history") {
+        pushToast("Version history will include saved drafts and publish events.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:add-skill") {
+        setReferenceStudio(current => {
+          const base = asList(current.skills)[0] || buildDefaultReferenceStudio(workspaceProfileForm.routeOverrides).skills[0];
+          const nextId = `skill-${Date.now()}`;
+          const nextName = `Custom Skill ${asList(current.skills).length + 1}`;
+          const nextSkill = {
+            ...base,
+            id: nextId,
+            status: "Draft",
+            name: nextName,
+            summary: "New workspace skill draft.",
+            description: "",
+            assistant: {
+              ...(base.assistant || {}),
+              prompt: "",
+              conversation: [],
+              proposal: null,
+            },
+          };
+          return {
+            ...current,
+            collectionTab: "skill",
+            selectedSkillId: nextId,
+            skills: [nextSkill, ...asList(current.skills)],
+          };
+        });
+        pushToast("Created a new draft skill.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:add-rule-set") {
+        setReferenceStudio(current => {
+          const base = asList(current.ruleSets)[0] || buildDefaultReferenceStudio(workspaceProfileForm.routeOverrides).ruleSets[0];
+          const nextId = `rule-${Date.now()}`;
+          const nextName = `Custom Rule Set ${asList(current.ruleSets).length + 1}`;
+          const nextRule = {
+            ...base,
+            id: nextId,
+            status: "Draft",
+            name: nextName,
+            summary: "New workspace rule set draft.",
+            description: "",
+            assistant: {
+              ...(base.assistant || {}),
+              prompt: "",
+              conversation: [],
+              proposal: null,
+            },
+          };
+          return {
+            ...current,
+            collectionTab: "rule",
+            selectedRuleId: nextId,
+            ruleSets: [nextRule, ...asList(current.ruleSets)],
+          };
+        });
+        pushToast("Created a new draft rule set.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:view-archived") {
+        pushToast("No archived studio items are available in this workspace.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:edit-item" || normalizedAction === "skills:preview-item") {
+        pushToast("Edit and preview mode are already active in Skill Studio.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:collapse-assistant") {
+        pushToast("Assistant panel collapse will be available in the next UI pass.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:attach-context") {
+        pushToast("Paste context directly into the prompt while attachment upload is finalized.", "info");
+        return;
+      }
+
+      if (normalizedAction === "settings:export-data") {
+        if (previewMode !== "live" || !hasTauriBackend()) {
+          pushToast("Preview mode cannot export control-room data.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "export_control_room_data_command",
+            { payload: { root: null } },
+            { throwOnError: true },
+          );
+          const exportPath = String(response?.exportPath || "").trim();
+          if (!exportPath) {
+            pushToast("Control-room export completed, but no path was returned.", "warn");
+            return;
+          }
+          const copied = await copyTextValue(exportPath);
+          pushToast(
+            copied
+              ? `Control-room data exported to ${pathLeaf(exportPath)}. Path copied to clipboard.`
+              : `Control-room data exported to ${exportPath}.`,
+            "info",
+          );
+        } catch (error) {
+          pushToast(`Control-room export failed: ${error}`, "error");
+        }
+        return;
+      }
+
+      if (normalizedAction === "settings:delete-workspace") {
+        const workspaceId =
+          selectedWorkspaceId || workspace?.workspace_id || workspaces[0]?.workspace_id || "";
+        if (!workspaceId) {
+          pushToast("No workspace is selected for deletion.", "warn");
+          return;
+        }
+        if (previewMode !== "live" || !hasTauriBackend()) {
+          pushToast("Preview mode cannot delete workspace profiles.", "warn");
+          return;
+        }
+        const workspaceName =
+          workspace?.workspace_id === workspaceId
+            ? workspace?.name || workspaceId
+            : workspaces.find(item => item.workspace_id === workspaceId)?.name || workspaceId;
+        const confirmed = window.confirm(
+          `Delete workspace \"${workspaceName}\" and all missions scoped to it? This cannot be undone.`,
+        );
+        if (!confirmed) {
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "delete_workspace_profile_command",
+            { payload: { root: null, workspaceId } },
+            { throwOnError: true },
+          );
+          const removedMissionCount = Number(response?.removedMissionCount || 0);
+          setBuilderDetailOpen(false);
+          setSurface("home");
+          setSelectedWorkspaceId(null);
+          setSelectedMissionId(null);
+          await refreshAll("workspace-delete");
+          pushToast(
+            `Workspace deleted (${removedMissionCount} mission${removedMissionCount === 1 ? "" : "s"} removed).`,
+            "info",
+          );
+        } catch (error) {
+          pushToast(`Workspace delete failed: ${error}`, "error");
+        }
+        return;
+      }
+
+      pushToast("This action is not available yet in the current shell.", "info");
+    },
+    [
+      handleAgentFollowUp,
+      handleAgentIdlePrimaryAction,
+      handleReferenceMissionSelect,
+      markAction,
+      previewMode,
+      profileId,
+      pushToast,
+      refreshAll,
+      referenceAgentMessages,
+      referenceFeedbackItems,
+      workspace?.default_runtime,
+      workspace?.name,
+      workspace?.workspace_id,
+      workspace?.user_profile,
+      workspaceProfileForm.routeOverrides,
+      workspaces,
+      selectedWorkspaceId,
+    ],
+  );
+
   const handleReferenceBuilderBack = useCallback(() => {
     markAction("reference:builder:back");
     setBuilderDetailOpen(false);
@@ -5964,7 +6450,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Write a refinement request first.", "warn");
       return;
     }
-    const requestedModel = assistant.model || "GPT-4o";
+    const requestedModel = assistant.model || "gpt-5.5";
     const requestedEffort = assistant.effort || "Balanced";
     const baseConversation = [
       {
@@ -6102,6 +6588,28 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     setProviderSecretDrafts(current => ({ ...current, [providerId]: value }));
   }, []);
 
+  const openProviderGuideUrl = useCallback(
+    async (url, label) => {
+      if (previewMode !== "live" || !hasTauriBackend()) {
+        pushToast(`Preview mode cannot open ${label}.`, "warn");
+        return false;
+      }
+      try {
+        await callBackend(
+          "open_external_url_command",
+          { url },
+          { throwOnError: true },
+        );
+        pushToast(`${label} opened in your browser.`, "info");
+        return true;
+      } catch (error) {
+        pushToast(`Could not open ${label}: ${error}`, "error");
+        return false;
+      }
+    },
+    [previewMode, pushToast],
+  );
+
   const openProviderAuthUrl = useCallback(
     async (url, label) => {
       if (previewMode !== "live" || !hasTauriBackend()) {
@@ -6127,40 +6635,114 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const handleReferenceQuickAuth = useCallback(
     async providerId => {
       if (providerId === "openai") {
-        const opened = await openProviderAuthUrl(PROVIDER_AUTH_URLS.openaiPortal, "ChatGPT login");
-        if (!opened) {
+        if (previewMode !== "live" || !hasTauriBackend()) {
+          pushToast("Preview mode cannot start OpenAI Codex OAuth.", "warn");
           return;
         }
-        const nextProfile = {
-          ...workspaceProfileForm,
-          openaiCodexAuthMode: "chatgpt",
-        };
-        setWorkspaceProfileForm(nextProfile);
-        await saveWorkspacePolicy(nextProfile);
-        pushToast("ChatGPT portal auth preference saved.", "info");
+        try {
+          const result = await callBackend(
+            "start_openai_codex_oauth_command",
+            undefined,
+            { throwOnError: true },
+          );
+          let finalResult = result;
+          if (result?.status === "manual_required") {
+            const pastedCallback = window.prompt(
+              `${result.message || "Paste the final OpenAI redirect URL to finish sign-in."}\n\nAuth URL:\n${result.authUrl || ""}`,
+              "",
+            );
+            if (!pastedCallback) {
+              pushToast("OpenAI Codex OAuth is waiting for manual completion.", "warn");
+              return;
+            }
+            finalResult = await callBackend(
+              "complete_openai_codex_oauth_command",
+              { payload: { callback: pastedCallback } },
+              { throwOnError: true },
+            );
+          }
+          if (finalResult?.authenticated) {
+            const nextProfile = {
+              ...workspaceProfileForm,
+              openaiCodexAuthMode: "oauth",
+            };
+            setWorkspaceProfileForm(nextProfile);
+            await saveWorkspacePolicy(nextProfile);
+            pushToast("OpenAI Codex OAuth connected.", "info");
+            await refreshAll("openai-codex-oauth");
+          } else {
+            pushToast(finalResult?.message || "OpenAI Codex OAuth did not complete.", "warn");
+          }
+        } catch (error) {
+          pushToast(`OpenAI Codex OAuth failed: ${error}`, "error");
+        }
         return;
       }
       if (providerId === "minimax") {
-        const opened = await openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxPortal, "MiniMax portal");
-        if (!opened) {
+        if (previewMode !== "live" || !hasTauriBackend()) {
+          pushToast("Preview mode cannot start MiniMax OpenClaw OAuth.", "warn");
           return;
         }
+        try {
+          const result = await callBackend(
+            "start_minimax_openclaw_auth_command",
+            { payload: { region: "global" } },
+            { throwOnError: true },
+          );
+          const nextProfile = {
+            ...workspaceProfileForm,
+            minimaxAuthMode: "minimax-portal-oauth",
+          };
+          setWorkspaceProfileForm(nextProfile);
+          await saveWorkspacePolicy(nextProfile);
+          if (result?.status?.authenticated) {
+            pushToast("MiniMax OpenClaw OAuth is already verified.", "info");
+          } else {
+            pushToast("MiniMax OpenClaw OAuth terminal opened. Finish the login there, then verify auth.", "info");
+          }
+          await refreshAll("minimax-openclaw-oauth-started");
+        } catch (error) {
+          pushToast(`MiniMax OpenClaw OAuth failed to start: ${error}`, "error");
+        }
+      }
+    },
+    [
+      callBackend,
+      previewMode,
+      pushToast,
+      refreshAll,
+      saveWorkspacePolicy,
+      workspaceProfileForm,
+    ],
+  );
+
+  const verifyMiniMaxOpenClawAuth = useCallback(async () => {
+    if (previewMode !== "live" || !hasTauriBackend()) {
+      pushToast("Preview mode cannot verify MiniMax OpenClaw OAuth.", "warn");
+      return;
+    }
+    try {
+      const status = await callBackend(
+        "get_minimax_openclaw_auth_status_command",
+        undefined,
+        { throwOnError: true },
+      );
+      if (status?.authenticated) {
         const nextProfile = {
           ...workspaceProfileForm,
           minimaxAuthMode: "minimax-portal-oauth",
         };
         setWorkspaceProfileForm(nextProfile);
         await saveWorkspacePolicy(nextProfile);
-        pushToast("MiniMax portal auth preference saved.", "info");
+        pushToast("MiniMax OpenClaw OAuth verified.", "info");
+      } else {
+        pushToast(status?.message || "MiniMax OpenClaw OAuth is not verified yet.", "warn");
       }
-    },
-    [
-      openProviderAuthUrl,
-      saveWorkspacePolicy,
-      pushToast,
-      workspaceProfileForm,
-    ],
-  );
+      await refreshAll("minimax-openclaw-oauth-verified");
+    } catch (error) {
+      pushToast(`Could not verify MiniMax OpenClaw OAuth: ${error}`, "error");
+    }
+  }, [callBackend, previewMode, pushToast, refreshAll, saveWorkspacePolicy, workspaceProfileForm]);
 
   const handleReferenceWorkspaceProfileFieldChange = useCallback((field, value) => {
     setWorkspaceProfileForm(current => ({
@@ -6502,9 +7084,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <span>OpenAI / Codex auth</span>
                 <strong>{`${openAICodexAuthPath} · ${openAICodexAuthReady ? "Ready" : "Missing"}`}</strong>
                 <p>
-                  {openAICodexAuthPath.toLowerCase().includes("chatgpt")
-                    ? "Portal auth is configured for Codex sign-in."
-                    : "Saved API keys are injected into Fluxio runtime launches."}
+                  Use OpenAI Codex OAuth for subscription-backed Codex/OpenClaw routes, or save an API key for direct API-key routes.
                 </p>
               </article>
               <article className="context-item">
@@ -6512,7 +7092,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <strong>{`${minimaxAuthPath} · ${minimaxAuthReady ? "Ready" : "Missing"}`}</strong>
                 <p>
                   {minimaxAuthPath.toLowerCase().includes("oauth")
-                    ? "Portal OAuth is treated as a valid runtime auth path even without a stored API key."
+                    ? "MiniMax OAuth uses OpenClaw provider minimax-portal with method oauth or oauth-cn; Fluxio verifies the OpenClaw credential file before treating it as ready."
                     : "Save a MiniMax API key when the route is configured for API-key auth."}
                 </p>
               </article>
@@ -6559,12 +7139,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <div className="drawer-list">
               {PROVIDER_SECRET_OPTIONS.map(item => {
                 const hasSecret = Boolean(providerSecretPresence[item.id]);
+                const providerAuthReady =
+                  item.id === "openai"
+                    ? openAICodexAuthReady
+                    : item.id === "minimax"
+                      ? minimaxAuthReady
+                      : hasSecret;
                 const providerTruthRow =
                   (providerSetupStatus && typeof providerSetupStatus === "object"
                     ? providerSetupStatus[item.id]
                     : null) || {};
                 return (
-                  <article className={`drawer-card ${toneClass(hasSecret ? "good" : "warn")}`} key={`provider-${item.id}`}>
+                  <article className={`drawer-card ${toneClass(providerAuthReady ? "good" : "warn")}`} key={`provider-${item.id}`}>
                     <span>{item.env}</span>
                     <strong>{item.label}</strong>
                     <p>{item.note}</p>
@@ -6581,7 +7167,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     {item.id === "openai" ? (
                       <div className="drawer-actions">
                         <ActionButton onClick={() => void handleReferenceQuickAuth("openai")}>
-                          Connect ChatGPT
+                          Connect Codex OAuth
                         </ActionButton>
                         <ActionButton onClick={() => void openProviderAuthUrl(PROVIDER_AUTH_URLS.openaiApiKeys, "OpenAI API keys")}>
                           Open API keys
@@ -6591,7 +7177,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     {item.id === "minimax" ? (
                       <div className="drawer-actions">
                         <ActionButton onClick={() => void handleReferenceQuickAuth("minimax")}>
-                          Connect MiniMax
+                          MiniMax OpenClaw OAuth
                         </ActionButton>
                         <ActionButton onClick={() => void openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxApiKeys, "MiniMax API keys")}>
                           Open API keys
@@ -6704,6 +7290,64 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <strong>{data.openClawHasToken ? "Stored" : "Missing"}</strong>
                 <p>{openClawStatus?.lastError || "No gateway error reported."}</p>
               </article>
+              <article className="context-item">
+                <span>Model accounts</span>
+                <strong>{modelAuthReady ? "Connected" : "Missing"}</strong>
+                <p>
+                  {modelAuthReady
+                    ? `${openAICodexAuthReady ? openAICodexAuthPath : minimaxAuthPath} is ready for model routing.`
+                    : "Connect Codex OAuth, MiniMax OpenClaw OAuth, or an API key before routing OpenClaw model runs."}
+                </p>
+              </article>
+            </div>
+
+            <div className="drawer-card runtime-account-card">
+              <div className="runtime-account-head">
+                <div>
+                  <span>Accounts used by OpenClaw</span>
+                  <strong>Connect model accounts</strong>
+                </div>
+                <p className={modelAuthReady ? "runtime-auth-dot good" : "runtime-auth-dot warn"}>
+                  {modelAuthReady ? "ready" : "missing"}
+                </p>
+              </div>
+              <div className="runtime-auth-ledger">
+                <div>
+                  <span>Codex</span>
+                  <strong>{openAICodexAuthReady ? "OAuth ready" : "Needs OAuth"}</strong>
+                  <p>{openAICodexAuthPath}</p>
+                </div>
+                <div>
+                  <span>MiniMax</span>
+                  <strong>{minimaxAuthReady ? "Portal ready" : "Needs portal"}</strong>
+                  <p>{minimaxAuthPath}</p>
+                </div>
+              </div>
+              <p>
+                Gateway tokens move messages. Model identity comes from provider accounts: Codex
+                OAuth, MiniMax portal OAuth, or direct API keys.
+              </p>
+              <div className="drawer-actions">
+                <ActionButton onClick={() => void handleReferenceQuickAuth("openai")} variant={openAICodexAuthReady ? "secondary" : "primary"}>
+                  {openAICodexAuthReady ? "Codex OAuth connected" : "Connect Codex OAuth"}
+                </ActionButton>
+                <ActionButton onClick={() => void handleReferenceQuickAuth("minimax")} variant={minimaxAuthReady ? "secondary" : "primary"}>
+                  {minimaxAuthReady ? "MiniMax OAuth connected" : "Start MiniMax OAuth"}
+                </ActionButton>
+                <ActionButton onClick={() => void verifyMiniMaxOpenClawAuth()}>
+                  Verify MiniMax
+                </ActionButton>
+                <ActionButton onClick={() => {
+                  setReferenceSettingsTab("providers");
+                  setSurface("settings");
+                  setActiveDrawer(null);
+                }}>
+                  Open account settings
+                </ActionButton>
+              </div>
+              <p className="drawer-footnote">
+                MiniMax uses OpenClaw provider <code>minimax-portal</code> with method <code>oauth</code> or <code>oauth-cn</code>; Fluxio checks OpenClaw's auth profile store before marking it ready.
+              </p>
             </div>
 
             <Field label="Gateway URL">
@@ -6963,7 +7607,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   )}
                 </select>
               </Field>
-              <Field label="Preferred harness">
+              <Field label="Preferred runtime">
                 <select
                   onChange={event =>
                     setWorkspaceProfileForm(current => ({
@@ -7131,7 +7775,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ))}
             </div>
             <p className="drawer-footnote">
-              Leave a role blank to keep using the routing strategy default. Planner, executor, and verifier overrides are saved into workspace policy and forwarded to the harness.
+              Leave a role blank to keep using the routing strategy default. Planner, executor, and verifier overrides are saved into workspace policy and forwarded to the runtime.
             </p>
           </section>
 
@@ -7575,7 +8219,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   )}
                 </select>
               </Field>
-              <Field label="Preferred harness">
+              <Field label="Preferred runtime">
                 <select
                   onChange={event =>
                     setWorkspaceProfileForm(current => ({
@@ -8128,26 +8772,48 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       openai: OPENAI_CODEX_AUTH_OPTIONS,
       minimax: MINIMAX_AUTH_OPTIONS,
     },
+    chatgptConnection: {
+      localApiUrl: localhostApiBaseUrl ? `${localhostApiBaseUrl}/v1/state` : "",
+      mcpEndpoint: "",
+      links: [
+        {
+          label: "ChatGPT app docs",
+          onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.chatgptDeveloperModeDocs, "ChatGPT app connection docs"),
+        },
+        {
+          label: "MCP server docs",
+          onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.openaiMcpDocs, "OpenAI MCP server docs"),
+        },
+      ],
+    },
     runtimes: asList(snapshot?.runtimes),
     providers: PROVIDER_SECRET_OPTIONS.map(item => ({
       ...item,
       quickAuth:
         item.id === "openai"
           ? {
-              label: openAICodexAuthReady ? "Open ChatGPT login" : "Connect ChatGPT",
+              label: "Connect Codex OAuth",
               ready: openAICodexAuthReady,
-              detail: openAICodexAuthPath,
+              detail: "Run the OpenAI Codex PKCE OAuth flow, or use API keys for direct model calls.",
             }
           : item.id === "minimax"
             ? {
-                label: minimaxAuthReady ? "Open MiniMax portal" : "Connect MiniMax",
+                label: "MiniMax OpenClaw OAuth",
                 ready: minimaxAuthReady,
-                detail: minimaxAuthPath,
+                detail: "Launch OpenClaw's minimax-portal OAuth flow or save a MiniMax API key.",
               }
             : null,
       authLinks:
         item.id === "openai"
           ? [
+              {
+                label: "ChatGPT app docs",
+                onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.chatgptDeveloperModeDocs, "ChatGPT app connection docs"),
+              },
+              {
+                label: "MCP server docs",
+                onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.openaiMcpDocs, "OpenAI MCP server docs"),
+              },
               {
                 label: "OpenAI API keys",
                 onClick: () => void openProviderAuthUrl(PROVIDER_AUTH_URLS.openaiApiKeys, "OpenAI API keys"),
@@ -8155,6 +8821,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             ]
           : item.id === "minimax"
             ? [
+                {
+                  label: "Verify OpenClaw OAuth",
+                  onClick: () => void verifyMiniMaxOpenClawAuth(),
+                },
+                {
+                  label: "MiniMax OpenClaw docs",
+                  onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.minimaxOpenClawDocs, "MiniMax OpenClaw docs"),
+                },
                 {
                   label: "MiniMax API keys",
                   onClick: () => void openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxApiKeys, "MiniMax API keys"),
@@ -8278,6 +8952,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         onOpenSettings={handleReferenceSettings}
         onOpenSkillStudio={handleReferenceSkillStudio}
         onPaste={handleComposerPaste}
+        onRequestAction={(actionId, payload) => void handleReferenceAction(actionId, payload)}
         onSelectFlow={missionId =>
           handleReferenceMissionSelect({
             missionId,
@@ -8307,6 +8982,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         runtimeOptions={runtimeOptions}
         runtimeStatus={referenceRuntimeStatus}
         selectedEffortLabel={selectedEffortLabel}
+        selectedHarnessMeta={selectedHarnessMeta}
         selectedModelLabel={selectedModelLabel}
         selectedProjectId={referenceSidebarProjectId}
         selectedRuntime={agentRuntimeSelectValue}
@@ -9886,7 +10562,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Harnesses</p>
+                    <p className="eyebrow">Runtimes</p>
                     <h3>{titleizeToken(workspaceProfileForm.preferredHarness)}</h3>
                     <div className="builder-inline-list">
                       <span>Production: {titleizeToken(snapshot.harnessLab?.productionHarness || workspaceProfileForm.preferredHarness)}</span>
@@ -9895,14 +10571,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                           ? snapshot.harnessLab.shadowCandidates.map(item => titleizeToken(item)).join(", ")
                           : "None"}
                       </span>
-                      <span>{snapshot.harnessLab?.recommendation || "Builder keeps the production and shadow harnesses visible here."}</span>
+                      <span>{snapshot.harnessLab?.recommendation || "Builder keeps the production and shadow runtimes visible here."}</span>
                     </div>
                     <div className="drawer-actions">
                       <ActionButton onClick={() => void applyPreferredHarness("fluxio_hybrid")} variant="primary">
                         Use Fluxio Hybrid
                       </ActionButton>
                       <ActionButton onClick={() => void applyPreferredHarness("legacy_autonomous_engine")}>
-                        Use Legacy Harness
+                        Use Legacy Runtime
                       </ActionButton>
                       <ActionButton onClick={() => setActiveDrawer("runtime")} type="button">
                         Compare both
@@ -9917,9 +10593,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <div className="builder-inline-list">
                       <span>{bridgeSummary.callbackReady} approval callback{bridgeSummary.callbackReady === 1 ? "" : "s"} ready</span>
                       <span>{bridgeSummary.totalApps} connected app definition{bridgeSummary.totalApps === 1 ? "" : "s"}</span>
-                      <span>Use Builder to compare Hermes and OpenClaw bridge hand-offs.</span>
+                      <span>{modelAuthReady ? "Model account ready" : "Model account missing"}</span>
                     </div>
-                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime bridge</ActionButton>
+                    <div className="drawer-actions">
+                      <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime bridge</ActionButton>
+                      <ActionButton onClick={() => void handleReferenceQuickAuth(openAICodexAuthReady ? "minimax" : "openai")}>
+                        Connect model account
+                      </ActionButton>
+                    </div>
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
@@ -10530,3 +11211,4 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     </div>
   );
 }
+

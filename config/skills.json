@@ -106,5 +106,161 @@
       "Design the workspace panel to show branch, dirty state, and safe deploy actions",
       "Refine the skill studio for non-technical and expert users"
     ]
+  },
+  {
+    "name": "browser_use_local_inspection",
+    "description": "Use the Browser Use local-browser workflow for localhost, file, and in-app browser inspection with screenshots and interaction proof.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string" },
+        "checks": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["target"]
+    },
+    "permissions": ["browser_preview", "file_read"],
+    "action_kinds": ["browser_preview", "ui_regression"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Open the local desktop preview and verify the model selector drawer",
+      "Capture before and after screenshots for a UI regression"
+    ]
+  },
+  {
+    "name": "leon_lin_design_taste",
+    "description": "Package the installed high-taste design guidance into Fluxio: strong hierarchy, anti-generic layouts, expressive typography, and production-grade UI polish.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "surface": { "type": "string" },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["surface"]
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "action_kinds": ["ui_redesign", "design_review", "frontend_polish"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Redesign the model selector without generic AI gradients",
+      "Audit the drawer UI for hierarchy, spacing, and state clarity"
+    ]
+  },
+  {
+    "name": "high_end_visual_design",
+    "description": "Apply agency-grade visual design: nested surfaces, calibrated spacing, premium motion, clear state hierarchy, and non-generic component structure.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "component": { "type": "string" },
+        "goals": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["component"]
+    },
+    "permissions": ["file_read", "file_write"],
+    "action_kinds": ["ui_redesign", "component_polish"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Upgrade controls to nested, haptic selector islands",
+      "Replace flat cards with intentional surface hierarchy"
+    ]
+  },
+  {
+    "name": "gpt_taste_frontend_motion",
+    "description": "Use strict frontend taste rules for bold layout variance, cleaner typography, dense bento logic, and motion that avoids default AI-looking UI.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string" },
+        "motion_level": { "type": "string" }
+      },
+      "required": ["target"]
+    },
+    "permissions": ["file_read", "file_write"],
+    "action_kinds": ["ui_redesign", "motion_design"],
+    "profile_suitability": ["advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Improve a selector drawer with richer hover and active states",
+      "Audit a bento dashboard for empty cells and weak hierarchy"
+    ]
+  },
+  {
+    "name": "frontend_image_direction",
+    "description": "Generate or interpret premium website image references, then translate the visual direction into implementable frontend layout and styling.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "asset_or_surface": { "type": "string" },
+        "style_direction": { "type": "string" }
+      },
+      "required": ["asset_or_surface"]
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "action_kinds": ["image_direction", "ui_redesign"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Use a screenshot as visual direction for a drawer redesign",
+      "Create a compact UI mockup direction before implementing CSS"
+    ]
+  },
+  {
+    "name": "industrial_brutalist_ui",
+    "description": "Apply raw mechanical UI direction for analyst/operator surfaces: Swiss grids, dense evidence, sharp divisions, and terminal-grade clarity.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "surface": { "type": "string" },
+        "density": { "type": "string" }
+      },
+      "required": ["surface"]
+    },
+    "permissions": ["file_read", "file_write"],
+    "action_kinds": ["ui_redesign", "operator_interface"],
+    "profile_suitability": ["advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Make a runtime status panel feel more like an operator console",
+      "Refine dense controls without losing readability"
+    ]
+  },
+  {
+    "name": "minimalist_editorial_ui",
+    "description": "Use restrained editorial UI rules for warm monochrome surfaces, typographic contrast, flat bento layouts, and calm premium product screens.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "surface": { "type": "string" },
+        "tone": { "type": "string" }
+      },
+      "required": ["surface"]
+    },
+    "permissions": ["file_read", "file_write"],
+    "action_kinds": ["ui_redesign", "component_polish"],
+    "profile_suitability": ["beginner", "builder", "advanced"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Simplify noisy settings controls",
+      "Give a model selector a calmer editorial hierarchy"
+    ]
   }
 ]

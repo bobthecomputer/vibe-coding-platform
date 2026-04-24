@@ -5397,6 +5397,7 @@ dependencies = [
  "active-win-pos-rs",
  "arboard",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "futures-util",
  "keyring",
@@ -5413,6 +5414,7 @@ dependencies = [
  "tauri-plugin-log",
  "tokio",
  "tokio-tungstenite",
+ "urlencoding",
  "uuid",
 ]
 

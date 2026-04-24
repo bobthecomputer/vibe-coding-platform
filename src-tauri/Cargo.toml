@@ -33,5 +33,7 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 arboard = "3.6.1"
 active-win-pos-rs = "0.9.1"
 sha2 = "0.10"
+base64 = "0.22"
+urlencoding = "2.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15"

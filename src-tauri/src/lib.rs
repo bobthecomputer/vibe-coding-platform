@@ -3,6 +3,7 @@ use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
+    net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -58,6 +59,14 @@ const OPENCLAW_KEYRING_SERVICE: &str = "vibe-coding-platform";
 const OPENCLAW_KEYRING_USER: &str = "openclaw-gateway-token";
 const LOCALHOST_API_KEYRING_USER: &str = "localhost-api-token";
 const PROVIDER_KEYRING_USER_PREFIX: &str = "provider-secret:";
+const OPENAI_CODEX_OAUTH_KEYRING_USER: &str = "openai-codex-oauth";
+const OPENAI_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const OPENAI_CODEX_OAUTH_ISSUER: &str = "https://auth.openai.com";
+const OPENAI_CODEX_OAUTH_PORT: u16 = 1455;
+const OPENAI_CODEX_OAUTH_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const MINIMAX_OPENCLAW_PROVIDER_ID: &str = "minimax-portal";
+const MINIMAX_OPENCLAW_CREDENTIALS_RELATIVE_PATH: &str = ".minimax/oauth_creds.json";
 const TELEGRAM_BOT_KEYRING_USER: &str = "telegram-phone-bot-token";
 const AGENT_PROVIDER_ENV_MAPPINGS: [(&str, &[&str]); 4] = [
     ("OPENAI_API_KEY", &["openai", "openai-codex"]),
@@ -65,7 +74,14 @@ const AGENT_PROVIDER_ENV_MAPPINGS: [(&str, &[&str]); 4] = [
     ("OPENROUTER_API_KEY", &["openrouter"]),
     ("MINIMAX_API_KEY", &["minimax", "minimax-cn"]),
 ];
-const CONTROL_ROOM_PROVIDER_IDS: [&str; 4] = ["openai", "anthropic", "openrouter", "minimax"];
+const CONTROL_ROOM_PROVIDER_IDS: [&str; 6] = [
+    "openai",
+    "openai-codex",
+    "anthropic",
+    "openrouter",
+    "minimax",
+    "minimax-portal",
+];
 const OPENCLAW_MAX_PENDING_OUTBOUND: usize = 256;
 const OPENCLAW_MAX_RECENT_EVENT_IDS: usize = 512;
 const OPENCLAW_MAX_PENDING_ACKS: usize = 512;
@@ -700,6 +716,7 @@ struct OverlayAppState {
     openclaw_state: Mutex<OpenClawState>,
     night_mode_state: Mutex<NightModeState>,
     localhost_status: Mutex<LocalhostStatus>,
+    openai_codex_oauth_pending: Mutex<Option<OpenAiCodexOAuthPending>>,
     audit_lock: Mutex<()>,
     space_is_held: AtomicBool,
     localhost_started: AtomicBool,
@@ -723,6 +740,7 @@ impl OverlayAppState {
             openclaw_state: Mutex::new(OpenClawState::new()),
             night_mode_state: Mutex::new(NightModeState::new()),
             localhost_status: Mutex::new(localhost_status),
+            openai_codex_oauth_pending: Mutex::new(None),
             audit_lock: Mutex::new(()),
             space_is_held: AtomicBool::new(false),
             localhost_started: AtomicBool::new(false),
@@ -730,6 +748,13 @@ impl OverlayAppState {
             control_room_watch_started: AtomicBool::new(false),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct OpenAiCodexOAuthPending {
+    code_verifier: String,
+    state: String,
+    redirect_uri: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -865,6 +890,13 @@ struct WorkspaceSavePayload {
     minimax_auth_mode: Option<String>,
     commit_message_style: Option<String>,
     execution_target_preference: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceDeletePayload {
+    root: Option<String>,
+    workspace_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1016,6 +1048,76 @@ struct OpenClawMessagePayload {
 struct LocalhostConfigPayload {
     enabled: bool,
     port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiCodexOAuthCompletePayload {
+    callback: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiCodexOAuthCredential {
+    access: String,
+    refresh: String,
+    expires: Option<i64>,
+    account_id: Option<String>,
+    id_token: Option<String>,
+    client_id: String,
+    issuer: String,
+    stored_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiCodexOAuthStatus {
+    authenticated: bool,
+    account_id: Option<String>,
+    expires: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiCodexOAuthResponse {
+    status: String,
+    authenticated: bool,
+    account_id: Option<String>,
+    expires: Option<i64>,
+    auth_url: Option<String>,
+    redirect_uri: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MinimaxOpenClawAuthStartPayload {
+    region: Option<String>,
+    set_default: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MinimaxOpenClawAuthStatus {
+    authenticated: bool,
+    provider_id: String,
+    region: Option<String>,
+    expires: Option<i64>,
+    credentials_path: String,
+    auth_store_path: String,
+    source: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MinimaxOpenClawAuthStartResponse {
+    launched: bool,
+    provider_id: String,
+    method: String,
+    command: String,
+    status: MinimaxOpenClawAuthStatus,
+    message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2392,6 +2494,239 @@ fn clear_provider_secret(provider_id: &str) -> Result<(), String> {
     }
 }
 
+fn load_openai_codex_oauth_credential() -> Result<Option<OpenAiCodexOAuthCredential>, String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, OPENAI_CODEX_OAUTH_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    match entry.get_password() {
+        Ok(raw) => serde_json::from_str::<OpenAiCodexOAuthCredential>(&raw)
+            .map(Some)
+            .map_err(|err| format!("Failed to parse OpenAI Codex OAuth credential: {err}")),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!(
+            "Failed to read OpenAI Codex OAuth credential: {err}"
+        )),
+    }
+}
+
+fn save_openai_codex_oauth_credential(
+    credential: &OpenAiCodexOAuthCredential,
+) -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, OPENAI_CODEX_OAUTH_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    let raw = serde_json::to_string(credential)
+        .map_err(|err| format!("Failed to serialize OpenAI Codex OAuth credential: {err}"))?;
+    entry
+        .set_password(&raw)
+        .map_err(|err| format!("Failed to save OpenAI Codex OAuth credential: {err}"))
+}
+
+fn clear_openai_codex_oauth_credential() -> Result<(), String> {
+    let entry = keyring::Entry::new(OPENCLAW_KEYRING_SERVICE, OPENAI_CODEX_OAUTH_KEYRING_USER)
+        .map_err(|err| format!("Failed to open secure credential store: {err}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(format!(
+            "Failed to clear OpenAI Codex OAuth credential: {err}"
+        )),
+    }
+}
+
+fn user_home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn minimax_openclaw_credentials_path() -> PathBuf {
+    user_home_dir().join(MINIMAX_OPENCLAW_CREDENTIALS_RELATIVE_PATH)
+}
+
+fn openclaw_state_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os("OPENCLAW_STATE_DIR") {
+        let path = PathBuf::from(value);
+        return if path.is_absolute() {
+            path
+        } else {
+            user_home_dir().join(path)
+        };
+    }
+    let home = user_home_dir();
+    let new_state = home.join(".openclaw");
+    if new_state.exists() {
+        return new_state;
+    }
+    let legacy_state = home.join(".clawdbot");
+    if legacy_state.exists() {
+        return legacy_state;
+    }
+    new_state
+}
+
+fn openclaw_agent_dir() -> PathBuf {
+    if let Some(value) =
+        std::env::var_os("OPENCLAW_AGENT_DIR").or_else(|| std::env::var_os("PI_CODING_AGENT_DIR"))
+    {
+        let path = PathBuf::from(value);
+        return if path.is_absolute() {
+            path
+        } else {
+            user_home_dir().join(path)
+        };
+    }
+    openclaw_state_dir()
+        .join("agents")
+        .join("main")
+        .join("agent")
+}
+
+fn openclaw_auth_profile_store_path() -> PathBuf {
+    openclaw_agent_dir().join("auth-profiles.json")
+}
+
+fn current_unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn load_minimax_openclaw_oauth_credential() -> Result<Option<Value>, String> {
+    let path = minimax_openclaw_credentials_path();
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read MiniMax OpenClaw OAuth credentials at {}: {error}",
+            path.display()
+        )
+    })?;
+    let value = serde_json::from_str::<Value>(&raw).map_err(|error| {
+        format!(
+            "Failed to parse MiniMax OpenClaw OAuth credentials at {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(Some(value))
+}
+
+fn minimax_openclaw_profile_from_store() -> Result<Option<Value>, String> {
+    let path = openclaw_auth_profile_store_path();
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read OpenClaw auth profile store at {}: {error}",
+            path.display()
+        )
+    })?;
+    let value = serde_json::from_str::<Value>(&raw).map_err(|error| {
+        format!(
+            "Failed to parse OpenClaw auth profile store at {}: {error}",
+            path.display()
+        )
+    })?;
+    let profiles = value
+        .get("profiles")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "OpenClaw auth profile store at {} does not contain a profiles object.",
+                path.display()
+            )
+        })?;
+    for (profile_id, credential) in profiles {
+        let provider = credential
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let credential_type = credential.get("type").and_then(Value::as_str).unwrap_or("");
+        if provider == MINIMAX_OPENCLAW_PROVIDER_ID && credential_type == "oauth" {
+            let mut credential = credential.clone();
+            if let Value::Object(ref mut map) = credential {
+                map.insert("profileId".to_string(), Value::String(profile_id.clone()));
+            }
+            return Ok(Some(credential));
+        }
+    }
+    Ok(None)
+}
+
+fn minimax_openclaw_oauth_status() -> Result<MinimaxOpenClawAuthStatus, String> {
+    let credentials_path = minimax_openclaw_credentials_path();
+    let auth_store_path = openclaw_auth_profile_store_path();
+    let profile_credential = minimax_openclaw_profile_from_store()?;
+    let external_credential = if profile_credential.is_some() {
+        None
+    } else {
+        load_minimax_openclaw_oauth_credential()?
+    };
+    let (authenticated, expires, source) = if let Some(value) = profile_credential {
+        let access_token = value
+            .get("access")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let refresh_token = value
+            .get("refresh")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        (
+            !access_token.is_empty() || !refresh_token.is_empty(),
+            value.get("expires").and_then(Value::as_i64),
+            Some("openclaw-auth-profile".to_string()),
+        )
+    } else {
+        match external_credential {
+            Some(value) => {
+                let access_token = value
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let refresh_token = value
+                    .get("refresh_token")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let expires = value.get("expiry_date").and_then(Value::as_i64);
+                let valid_expiry = expires
+                    .map(|expiry| expiry > current_unix_millis())
+                    .unwrap_or(false);
+                (
+                    !access_token.is_empty() && !refresh_token.is_empty() && valid_expiry,
+                    expires,
+                    Some("minimax-cli-credentials".to_string()),
+                )
+            }
+            None => (false, None, None),
+        }
+    };
+    let message = if authenticated {
+        "MiniMax OpenClaw OAuth credentials are present.".to_string()
+    } else {
+        "MiniMax OpenClaw OAuth credentials are missing, incomplete, or expired.".to_string()
+    };
+    Ok(MinimaxOpenClawAuthStatus {
+        authenticated,
+        provider_id: MINIMAX_OPENCLAW_PROVIDER_ID.to_string(),
+        region: None,
+        expires,
+        credentials_path: credentials_path.display().to_string(),
+        auth_store_path: auth_store_path.display().to_string(),
+        source,
+        message,
+    })
+}
+
+fn has_minimax_openclaw_oauth_credential() -> Result<bool, String> {
+    Ok(minimax_openclaw_oauth_status()?.authenticated)
+}
+
 fn provider_secret_for_ids(provider_ids: &[&str]) -> Result<Option<String>, String> {
     for provider_id in provider_ids {
         if let Some(secret) = load_provider_secret(provider_id)? {
@@ -2404,7 +2739,14 @@ fn provider_secret_for_ids(provider_ids: &[&str]) -> Result<Option<String>, Stri
 fn provider_secret_presence_snapshot(provider_ids: &[&str]) -> Result<Value, String> {
     let mut output = serde_json::Map::new();
     for provider_id in provider_ids {
-        let has_secret = load_provider_secret(provider_id)?.is_some();
+        let has_secret = if *provider_id == "openai-codex" {
+            load_provider_secret(provider_id)?.is_some()
+                || load_openai_codex_oauth_credential()?.is_some()
+        } else if *provider_id == MINIMAX_OPENCLAW_PROVIDER_ID {
+            load_provider_secret(provider_id)?.is_some() || has_minimax_openclaw_oauth_credential()?
+        } else {
+            load_provider_secret(provider_id)?.is_some()
+        };
         output.insert((*provider_id).to_string(), Value::Bool(has_secret));
     }
     Ok(Value::Object(output))
@@ -2415,6 +2757,12 @@ fn inject_agent_cli_provider_env(command: &mut TokioCommand) -> Result<(), Strin
         if let Some(secret) = provider_secret_for_ids(provider_ids)? {
             command.env(env_name, secret);
         }
+    }
+    if load_openai_codex_oauth_credential()?.is_some() {
+        command.env("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT", "1");
+    }
+    if has_minimax_openclaw_oauth_credential()? {
+        command.env("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "1");
     }
     Ok(())
 }
@@ -4972,10 +5320,268 @@ fn get_provider_secret_presence_command(
 ) -> Result<HashMap<String, bool>, String> {
     let mut output = HashMap::new();
     for provider_id in provider_ids.unwrap_or_default() {
-        let has_secret = load_provider_secret(&provider_id)?.is_some();
+        let has_secret = if provider_id == "openai-codex" {
+            load_provider_secret(&provider_id)?.is_some()
+                || load_openai_codex_oauth_credential()?.is_some()
+        } else if provider_id == MINIMAX_OPENCLAW_PROVIDER_ID {
+            load_provider_secret(&provider_id)?.is_some()
+                || has_minimax_openclaw_oauth_credential()?
+        } else {
+            load_provider_secret(&provider_id)?.is_some()
+        };
         output.insert(provider_id, has_secret);
     }
     Ok(output)
+}
+
+#[tauri::command]
+fn get_openai_codex_oauth_status_command() -> Result<OpenAiCodexOAuthStatus, String> {
+    let credential = load_openai_codex_oauth_credential()?;
+    Ok(OpenAiCodexOAuthStatus {
+        authenticated: credential.is_some(),
+        account_id: credential.as_ref().and_then(|item| item.account_id.clone()),
+        expires: credential.as_ref().and_then(|item| item.expires),
+    })
+}
+
+#[tauri::command]
+fn clear_openai_codex_oauth_command(app: AppHandle) -> Result<bool, String> {
+    clear_openai_codex_oauth_credential()?;
+    append_audit_entry(
+        &app,
+        "openai_codex.oauth_cleared",
+        json!({ "cleared": true }),
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+async fn start_openai_codex_oauth_command(
+    app: AppHandle,
+) -> Result<OpenAiCodexOAuthResponse, String> {
+    let (code_verifier, code_challenge) = generate_openai_codex_pkce();
+    let state = generate_oauth_random_value();
+    let redirect_uri = format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}/auth/callback");
+    let auth_url = build_openai_codex_authorize_url(&redirect_uri, &code_challenge, &state);
+    let listener = match StdTcpListener::bind(("127.0.0.1", OPENAI_CODEX_OAUTH_PORT)) {
+        Ok(listener) => listener,
+        Err(error) => {
+            {
+                let oauth_state = app.state::<OverlayAppState>();
+                let mut pending = oauth_state
+                    .openai_codex_oauth_pending
+                    .lock()
+                    .map_err(|_| "Failed to lock OpenAI Codex OAuth state.".to_string())?;
+                *pending = Some(OpenAiCodexOAuthPending {
+                    code_verifier,
+                    state,
+                    redirect_uri: redirect_uri.clone(),
+                });
+            }
+            open_url_in_browser(&auth_url).await?;
+            append_audit_entry(
+                &app,
+                "openai_codex.oauth_manual_required",
+                json!({ "reason": error.to_string(), "redirectUri": redirect_uri }),
+            );
+            return Ok(OpenAiCodexOAuthResponse {
+                status: "manual_required".to_string(),
+                authenticated: false,
+                account_id: None,
+                expires: None,
+                auth_url: Some(auth_url),
+                redirect_uri: Some(redirect_uri),
+                message: format!(
+                    "Could not bind localhost callback port {OPENAI_CODEX_OAUTH_PORT}: {error}. Paste the final redirect URL to finish sign-in."
+                ),
+            });
+        }
+    };
+    listener
+        .set_nonblocking(false)
+        .map_err(|error| format!("Failed to configure OAuth callback listener: {error}"))?;
+    listener
+        .set_ttl(64)
+        .map_err(|error| format!("Failed to configure OAuth callback listener: {error}"))?;
+    open_url_in_browser(&auth_url).await?;
+    append_audit_entry(
+        &app,
+        "openai_codex.oauth_started",
+        json!({ "redirectUri": redirect_uri }),
+    );
+    let callback = tokio::task::spawn_blocking(move || {
+        listener
+            .set_nonblocking(false)
+            .map_err(|error| format!("Failed to configure OAuth callback listener: {error}"))?;
+        let (stream, _) = listener
+            .accept()
+            .map_err(|error| format!("Failed to accept OAuth callback: {error}"))?;
+        read_oauth_callback_from_stream(stream)
+    })
+    .await
+    .map_err(|error| format!("OpenAI Codex OAuth callback task failed: {error}"))??;
+    let (code, returned_state) = parse_oauth_callback(&callback)?;
+    if returned_state != state {
+        return Err("OpenAI Codex OAuth callback state did not match.".to_string());
+    }
+    let credential = exchange_openai_codex_oauth_code(&code, &redirect_uri, &code_verifier).await?;
+    save_openai_codex_oauth_credential(&credential)?;
+    append_audit_entry(
+        &app,
+        "openai_codex.oauth_saved",
+        json!({ "accountId": credential.account_id, "expires": credential.expires }),
+    );
+    emit_control_room_changed(&app, "openai_codex.oauth_saved");
+    Ok(oauth_response_from_credential(
+        "authenticated",
+        &credential,
+        "OpenAI Codex OAuth credentials saved.",
+    ))
+}
+
+#[tauri::command]
+async fn complete_openai_codex_oauth_command(
+    app: AppHandle,
+    payload: OpenAiCodexOAuthCompletePayload,
+) -> Result<OpenAiCodexOAuthResponse, String> {
+    let pending = {
+        let oauth_state = app.state::<OverlayAppState>();
+        let pending = oauth_state
+            .openai_codex_oauth_pending
+            .lock()
+            .map_err(|_| "Failed to lock OpenAI Codex OAuth state.".to_string())?
+            .clone();
+        pending.ok_or_else(|| {
+            "No OpenAI Codex OAuth flow is waiting for manual completion.".to_string()
+        })?
+    };
+    let (code, returned_state) = parse_oauth_callback(&payload.callback)?;
+    if returned_state != pending.state {
+        return Err("OpenAI Codex OAuth callback state did not match.".to_string());
+    }
+    let credential =
+        exchange_openai_codex_oauth_code(&code, &pending.redirect_uri, &pending.code_verifier)
+            .await?;
+    save_openai_codex_oauth_credential(&credential)?;
+    {
+        let oauth_state = app.state::<OverlayAppState>();
+        let mut pending = oauth_state
+            .openai_codex_oauth_pending
+            .lock()
+            .map_err(|_| "Failed to lock OpenAI Codex OAuth state.".to_string())?;
+        *pending = None;
+    }
+    append_audit_entry(
+        &app,
+        "openai_codex.oauth_saved",
+        json!({ "accountId": credential.account_id, "expires": credential.expires }),
+    );
+    emit_control_room_changed(&app, "openai_codex.oauth_saved");
+    Ok(oauth_response_from_credential(
+        "authenticated",
+        &credential,
+        "OpenAI Codex OAuth credentials saved.",
+    ))
+}
+
+fn minimax_openclaw_method_for_region(
+    region: Option<&str>,
+) -> Result<(&'static str, Option<String>), String> {
+    let normalized = region
+        .unwrap_or("global")
+        .trim()
+        .to_ascii_lowercase()
+        .replace('_', "-");
+    match normalized.as_str() {
+        "" | "global" | "international" | "minimax-global" => {
+            Ok(("oauth", Some("global".to_string())))
+        }
+        "cn" | "china" | "minimax-cn" => Ok(("oauth-cn", Some("cn".to_string()))),
+        _ => Err(format!(
+            "Unsupported MiniMax OAuth region \"{normalized}\". Use global or cn."
+        )),
+    }
+}
+
+fn launch_minimax_openclaw_auth_terminal(command_line: &str) -> Result<(), String> {
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = TokioCommand::new("cmd");
+        command
+            .arg("/C")
+            .arg("start")
+            .arg("MiniMax OpenClaw OAuth")
+            .arg("cmd")
+            .arg("/K")
+            .arg(command_line);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = TokioCommand::new("osascript");
+        command.arg("-e").arg(format!(
+            "tell application \"Terminal\" to do script \"{}\"",
+            command_line.replace('\\', "\\\\").replace('"', "\\\"")
+        ));
+        command
+    } else {
+        let mut command = TokioCommand::new("sh");
+        command.arg("-lc").arg(format!(
+            "x-terminal-emulator -e sh -lc '{}' || gnome-terminal -- sh -lc '{}'",
+            command_line.replace('\'', "'\\''"),
+            command_line.replace('\'', "'\\''")
+        ));
+        command
+    };
+    command
+        .spawn()
+        .map_err(|error| format!("Failed to open MiniMax OpenClaw auth terminal: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_minimax_openclaw_auth_status_command() -> Result<MinimaxOpenClawAuthStatus, String> {
+    minimax_openclaw_oauth_status()
+}
+
+#[tauri::command]
+fn start_minimax_openclaw_auth_command(
+    app: AppHandle,
+    payload: Option<MinimaxOpenClawAuthStartPayload>,
+) -> Result<MinimaxOpenClawAuthStartResponse, String> {
+    let payload = payload.unwrap_or(MinimaxOpenClawAuthStartPayload {
+        region: None,
+        set_default: None,
+    });
+    let (method, region) = minimax_openclaw_method_for_region(payload.region.as_deref())?;
+    let mut command_parts = vec![
+        "openclaw".to_string(),
+        "models".to_string(),
+        "auth".to_string(),
+        "login".to_string(),
+        "--provider".to_string(),
+        MINIMAX_OPENCLAW_PROVIDER_ID.to_string(),
+        "--method".to_string(),
+        method.to_string(),
+    ];
+    if payload.set_default.unwrap_or(false) {
+        command_parts.push("--set-default".to_string());
+    }
+    let command_line = command_parts.join(" ");
+    launch_minimax_openclaw_auth_terminal(&command_line)?;
+    append_audit_entry(
+        &app,
+        "minimax_openclaw.oauth_terminal_started",
+        json!({ "providerId": MINIMAX_OPENCLAW_PROVIDER_ID, "method": method, "region": region }),
+    );
+    emit_control_room_changed(&app, "minimax_openclaw.oauth_terminal_started");
+    let mut status = minimax_openclaw_oauth_status()?;
+    status.region = region.clone();
+    Ok(MinimaxOpenClawAuthStartResponse {
+        launched: true,
+        provider_id: MINIMAX_OPENCLAW_PROVIDER_ID.to_string(),
+        method: method.to_string(),
+        command: command_line,
+        status,
+        message: "MiniMax OpenClaw OAuth terminal launched. Finish the interactive login there, then verify auth in Fluxio.".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -5125,6 +5731,15 @@ async fn get_control_room_snapshot_command(
     .await?;
     let provider_presence = provider_secret_presence_snapshot(&CONTROL_ROOM_PROVIDER_IDS)?;
     if let Value::Object(root) = &mut snapshot {
+        let localhost_status = app
+            .state::<OverlayAppState>()
+            .localhost_status
+            .lock()
+            .map_err(|_| "Failed to read localhost status".to_string())?
+            .clone();
+        let localhost_status_value =
+            serde_json::to_value(localhost_status).map_err(|error| error.to_string())?;
+        root.insert("localhostStatus".to_string(), localhost_status_value);
         root.insert(
             "providerSecretPresence".to_string(),
             provider_presence.clone(),
@@ -5142,15 +5757,7 @@ async fn get_control_room_snapshot_command(
                     .entry(provider_id.to_string())
                     .or_insert_with(|| Value::Object(serde_json::Map::new()));
                 if let Value::Object(provider_payload) = provider_entry {
-                    let auth_mode = provider_payload
-                        .get("authMode")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .trim()
-                        .to_ascii_lowercase();
-                    let effective_auth_present = auth_present
-                        || (provider_id == "openai" && auth_mode == "chatgpt")
-                        || (provider_id == "minimax" && auth_mode == "minimax-portal-oauth");
+                    let effective_auth_present = auth_present;
                     provider_payload.insert(
                         "authPresent".to_string(),
                         Value::Bool(effective_auth_present),
@@ -5171,10 +5778,265 @@ fn inspect_codex_import_command() -> Result<CodexImportSnapshot, String> {
     Ok(cached_codex_import_snapshot())
 }
 
+fn base64_url_no_pad(bytes: impl AsRef<[u8]>) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_oauth_random_value() -> String {
+    let mut bytes = Vec::with_capacity(64);
+    for _ in 0..4 {
+        bytes.extend_from_slice(Uuid::new_v4().as_bytes());
+    }
+    base64_url_no_pad(bytes)
+}
+
+fn generate_openai_codex_pkce() -> (String, String) {
+    let code_verifier = generate_oauth_random_value();
+    let digest = Sha256::digest(code_verifier.as_bytes());
+    (code_verifier, base64_url_no_pad(digest))
+}
+
+fn build_openai_codex_authorize_url(
+    redirect_uri: &str,
+    code_challenge: &str,
+    state: &str,
+) -> String {
+    let query = [
+        ("response_type", "code"),
+        ("client_id", OPENAI_CODEX_OAUTH_CLIENT_ID),
+        ("redirect_uri", redirect_uri),
+        ("scope", OPENAI_CODEX_OAUTH_SCOPE),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("state", state),
+        ("originator", "fluxio-desktop"),
+    ]
+    .into_iter()
+    .map(|(key, value)| format!("{key}={}", urlencoding::encode(value)))
+    .collect::<Vec<_>>()
+    .join("&");
+    format!("{OPENAI_CODEX_OAUTH_ISSUER}/oauth/authorize?{query}")
+}
+
+async fn open_url_in_browser(target: &str) -> Result<(), String> {
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = TokioCommand::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler").arg(target);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = TokioCommand::new("open");
+        command.arg(target);
+        command
+    } else {
+        let mut command = TokioCommand::new("xdg-open");
+        command.arg(target);
+        command
+    };
+    hide_child_console(&mut command);
+    command
+        .spawn()
+        .map_err(|error| format!("Failed to open browser: {error}"))?;
+    Ok(())
+}
+
+fn read_oauth_callback_from_stream(mut stream: StdTcpStream) -> Result<String, String> {
+    let mut reader = BufReader::new(
+        stream
+            .try_clone()
+            .map_err(|error| format!("Failed to read OAuth callback: {error}"))?,
+    );
+    let mut request_line = String::new();
+    reader
+        .read_line(&mut request_line)
+        .map_err(|error| format!("Failed to read OAuth callback request: {error}"))?;
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| "OAuth callback did not include a request path.".to_string())?
+        .to_string();
+    let body = if path.starts_with("/auth/callback") {
+        "Authentication successful. Return to Fluxio to continue."
+    } else {
+        "Fluxio received an unexpected OAuth callback path."
+    };
+    let status = if path.starts_with("/auth/callback") {
+        "200 OK"
+    } else {
+        "404 Not Found"
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.as_bytes().len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|error| format!("Failed to write OAuth callback response: {error}"))?;
+    if !path.starts_with("/auth/callback") {
+        return Err("OAuth callback path was not /auth/callback.".to_string());
+    }
+    Ok(format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}{path}"))
+}
+
+fn parse_oauth_callback(callback: &str) -> Result<(String, String), String> {
+    let trimmed = callback.trim();
+    let parse_target = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else if trimmed.starts_with("/auth/callback") {
+        format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}{trimmed}")
+    } else {
+        format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}/auth/callback?code={trimmed}")
+    };
+    let url = reqwest::Url::parse(&parse_target)
+        .map_err(|error| format!("OAuth callback URL is invalid: {error}"))?;
+    if url.path() != "/auth/callback" {
+        return Err("OAuth callback URL must use /auth/callback.".to_string());
+    }
+    let mut code = String::new();
+    let mut state = String::new();
+    let mut oauth_error = String::new();
+    let mut oauth_error_description = String::new();
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "code" => code = value.into_owned(),
+            "state" => state = value.into_owned(),
+            "error" => oauth_error = value.into_owned(),
+            "error_description" => oauth_error_description = value.into_owned(),
+            _ => {}
+        }
+    }
+    if !oauth_error.is_empty() {
+        return Err(format!(
+            "OpenAI Codex OAuth returned {oauth_error}: {oauth_error_description}"
+        ));
+    }
+    if code.trim().is_empty() {
+        return Err("OAuth callback did not include an authorization code.".to_string());
+    }
+    Ok((code, state))
+}
+
+fn parse_jwt_payload(jwt: &str) -> Option<Value> {
+    let payload = jwt.split('.').nth(1)?;
+    let bytes = {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()?
+    };
+    serde_json::from_slice::<Value>(&bytes).ok()
+}
+
+fn claim_string(payload: &Value, path: &[&str]) -> Option<String> {
+    let mut current = payload;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str().map(ToString::to_string)
+}
+
+fn extract_openai_codex_account_id(access_token: &str, id_token: &str) -> Option<String> {
+    for token in [access_token, id_token] {
+        let Some(payload) = parse_jwt_payload(token) else {
+            continue;
+        };
+        if let Some(value) = claim_string(
+            &payload,
+            &["https://api.openai.com/auth", "chatgpt_account_id"],
+        ) {
+            return Some(value);
+        }
+        if let Some(value) = claim_string(&payload, &["chatgpt_account_id"]) {
+            return Some(value);
+        }
+        if let Some(value) = claim_string(&payload, &["account_id"]) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn extract_jwt_expiration(jwt: &str) -> Option<i64> {
+    parse_jwt_payload(jwt)?.get("exp")?.as_i64()
+}
+
+async fn exchange_openai_codex_oauth_code(
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> Result<OpenAiCodexOAuthCredential, String> {
+    #[derive(Deserialize)]
+    struct TokenResponse {
+        id_token: String,
+        access_token: String,
+        refresh_token: String,
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{OPENAI_CODEX_OAUTH_ISSUER}/oauth/token"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("client_id", OPENAI_CODEX_OAUTH_CLIENT_ID),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .await
+        .map_err(|error| format!("OpenAI Codex OAuth token exchange failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "unreadable response body".to_string());
+        return Err(format!(
+            "OpenAI Codex OAuth token endpoint returned {status}: {body}"
+        ));
+    }
+    let tokens = response
+        .json::<TokenResponse>()
+        .await
+        .map_err(|error| format!("OpenAI Codex OAuth token response was invalid: {error}"))?;
+    let account_id = extract_openai_codex_account_id(&tokens.access_token, &tokens.id_token);
+    let expires = extract_jwt_expiration(&tokens.access_token)
+        .or_else(|| extract_jwt_expiration(&tokens.id_token));
+    Ok(OpenAiCodexOAuthCredential {
+        access: tokens.access_token,
+        refresh: tokens.refresh_token,
+        expires,
+        account_id,
+        id_token: Some(tokens.id_token),
+        client_id: OPENAI_CODEX_OAUTH_CLIENT_ID.to_string(),
+        issuer: OPENAI_CODEX_OAUTH_ISSUER.to_string(),
+        stored_at: now_utc_iso(),
+    })
+}
+
+fn oauth_response_from_credential(
+    status: &str,
+    credential: &OpenAiCodexOAuthCredential,
+    message: &str,
+) -> OpenAiCodexOAuthResponse {
+    OpenAiCodexOAuthResponse {
+        status: status.to_string(),
+        authenticated: true,
+        account_id: credential.account_id.clone(),
+        expires: credential.expires,
+        auth_url: None,
+        redirect_uri: None,
+        message: message.to_string(),
+    }
+}
+
 fn is_allowed_external_url(url: &str) -> bool {
     let normalized = url.trim().to_ascii_lowercase();
     [
-        "https://chatgpt.com/",
+        "https://auth.openai.com/",
         "https://platform.openai.com/",
         "https://platform.minimax.io/",
         "https://platform.minimaxi.com/",
@@ -5190,23 +6052,7 @@ async fn open_external_url_command(app: AppHandle, url: String) -> Result<bool, 
         return Err("External URL is not allowlisted for provider authentication.".to_string());
     }
 
-    let mut command = if cfg!(target_os = "windows") {
-        let mut command = TokioCommand::new("cmd");
-        command.arg("/C").arg("start").arg("").arg(&target);
-        command
-    } else if cfg!(target_os = "macos") {
-        let mut command = TokioCommand::new("open");
-        command.arg(&target);
-        command
-    } else {
-        let mut command = TokioCommand::new("xdg-open");
-        command.arg(&target);
-        command
-    };
-    hide_child_console(&mut command);
-    command
-        .spawn()
-        .map_err(|error| format!("Failed to open browser: {error}"))?;
+    open_url_in_browser(&target).await?;
     append_audit_entry(&app, "provider.auth_url_opened", json!({ "url": target }));
     Ok(true)
 }
@@ -5321,6 +6167,37 @@ async fn save_workspace_profile_command(
     }
     let response = run_agent_cli_json(&app, payload.root, "workspace-save", args, 180).await?;
     emit_control_room_changed(&app, "workspace.saved");
+    Ok(response)
+}
+
+#[tauri::command]
+async fn delete_workspace_profile_command(
+    app: AppHandle,
+    payload: WorkspaceDeletePayload,
+) -> Result<Value, String> {
+    let args = vec!["--workspace-id".to_string(), payload.workspace_id];
+    let response = run_agent_cli_json(&app, payload.root, "workspace-delete", args, 180).await?;
+    emit_control_room_changed(&app, "workspace.deleted");
+    Ok(response)
+}
+
+#[tauri::command]
+async fn export_control_room_data_command(
+    app: AppHandle,
+    payload: Option<AutonomyDashboardPayload>,
+) -> Result<Value, String> {
+    let root_override = payload.and_then(|item| item.root);
+    let workspace_root = resolve_workspace_root(root_override.clone())?;
+    let response =
+        run_agent_cli_json(&app, root_override, "control-room-export", vec![], 180).await?;
+    append_audit_entry(
+        &app,
+        "control_room.exported",
+        json!({
+            "workspaceRoot": workspace_root.to_string_lossy().to_string(),
+            "exportPath": response.get("exportPath").and_then(Value::as_str).unwrap_or(""),
+        }),
+    );
     Ok(response)
 }
 
@@ -5732,6 +6609,12 @@ pub fn run() {
             clear_provider_secret_command,
             has_provider_secret_command,
             get_provider_secret_presence_command,
+            get_openai_codex_oauth_status_command,
+            start_openai_codex_oauth_command,
+            complete_openai_codex_oauth_command,
+            clear_openai_codex_oauth_command,
+            get_minimax_openclaw_auth_status_command,
+            start_minimax_openclaw_auth_command,
             get_openclaw_status,
             connect_openclaw_gateway,
             disconnect_openclaw_gateway,
@@ -5750,7 +6633,9 @@ pub fn run() {
             open_external_url_command,
             pick_folder_command,
             get_onboarding_status_command,
+            export_control_room_data_command,
             save_workspace_profile_command,
+            delete_workspace_profile_command,
             start_control_room_mission_command,
             apply_control_room_mission_action_command,
             send_control_room_mission_follow_up_command,

@@ -91,8 +91,13 @@ SUPPORTED_EXECUTION_TARGET_PREFERENCES = (
 )
 SUPPORTED_OPENAI_CODEX_AUTH_MODES = (
     "none",
-    "chatgpt",
     "api",
+    "oauth",
+    "chatgpt",
+    "chatgpt-portal",
+    "chatgpt-oauth",
+    "codex-oauth",
+    "openai-codex-oauth",
 )
 SUPPORTED_MINIMAX_AUTH_MODES = (
     "none",
@@ -849,6 +854,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     control_room_cmd.add_argument("--root", default=".", help="Project root path")
 
+    control_room_export_cmd = subparsers.add_parser(
+        "control-room-export",
+        help="Export a control-room data snapshot to a JSON artifact",
+    )
+    control_room_export_cmd.add_argument("--root", default=".", help="Project root path")
+    control_room_export_cmd.add_argument(
+        "--output",
+        default="",
+        help="Optional JSON path for the export artifact",
+    )
+
     onboarding_cmd = subparsers.add_parser(
         "onboarding-status", help="Return Windows-first onboarding diagnostics"
     )
@@ -927,6 +943,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(SUPPORTED_MINIMAX_AUTH_MODES),
         help="MiniMax auth contract mode for this workspace",
     )
+
+    workspace_delete_cmd = subparsers.add_parser(
+        "workspace-delete", help="Delete a managed workspace profile and scoped missions"
+    )
+    workspace_delete_cmd.add_argument("--root", default=".", help="Project root path")
+    workspace_delete_cmd.add_argument("--workspace-id", required=True, help="Workspace id")
 
     mission_start_cmd = subparsers.add_parser(
         "mission-start", help="Create a mission and run its first control-plane cycle"
@@ -3034,6 +3056,41 @@ def cmd_control_room(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_control_room_export(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    snapshot = store.build_snapshot()
+    if "onboarding" not in snapshot:
+        snapshot["onboarding"] = detect_onboarding_status(root)
+    output_value = str(getattr(args, "output", "") or "").strip()
+    if output_value:
+        output_path = Path(output_value).expanduser().resolve()
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        output_path = (
+            root / ".agent_control" / "exports" / f"fluxio-control-room-export-{stamp}.json"
+        )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    export_payload = {
+        "exportedAt": datetime.now(timezone.utc).isoformat(),
+        "workspaceRoot": str(root),
+        "snapshot": snapshot,
+    }
+    output_path.write_text(json.dumps(export_payload, indent=2), encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "exportPath": str(output_path),
+                "bytes": output_path.stat().st_size,
+                "snapshot": snapshot,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def cmd_onboarding_status(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     print(json.dumps(detect_onboarding_status(root), indent=2))
@@ -3088,6 +3145,23 @@ def cmd_workspace_save(args: argparse.Namespace) -> int:
         workspace_id=args.workspace_id,
     )
     payload = {"workspace": asdict(workspace), "snapshot": store.build_snapshot()}
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_workspace_delete(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    store = ControlRoomStore(root)
+    try:
+        workspace, removed_mission_count = store.delete_workspace(args.workspace_id)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 1
+    payload = {
+        "workspace": asdict(workspace),
+        "removedMissionCount": removed_mission_count,
+        "snapshot": store.build_snapshot(),
+    }
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -3637,6 +3711,9 @@ def main() -> int:
     if args.command == "control-room":
         return cmd_control_room(args)
 
+    if args.command == "control-room-export":
+        return cmd_control_room_export(args)
+
     if args.command == "onboarding-status":
         return cmd_onboarding_status(args)
 
@@ -3645,6 +3722,9 @@ def main() -> int:
 
     if args.command == "workspace-save":
         return cmd_workspace_save(args)
+
+    if args.command == "workspace-delete":
+        return cmd_workspace_delete(args)
 
     if args.command == "mission-start":
         return cmd_mission_start(args)

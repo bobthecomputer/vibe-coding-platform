@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from grant_agent.cli import cmd_mission_follow_up
+from grant_agent.cli import cmd_mission_follow_up, cmd_workspace_delete
 from grant_agent.mission_control import (
     ControlRoomStore,
     _build_git_actions,
@@ -32,6 +32,68 @@ from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
 class MissionControlTests(unittest.TestCase):
+    def test_delete_workspace_removes_scoped_missions_and_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            secondary_root = root / "secondary"
+            secondary_root.mkdir(parents=True, exist_ok=True)
+
+            store = ControlRoomStore(root)
+            primary = store.load_workspaces()[0]
+            secondary = store.upsert_workspace(
+                name="Secondary",
+                root_path=str(secondary_root),
+                default_runtime="openclaw",
+                user_profile="builder",
+            )
+            mission = store.create_mission(
+                workspace_id=secondary.workspace_id,
+                runtime_id="openclaw",
+                objective="Secondary workspace mission",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=1800,
+            )
+            store.append_workspace_action(
+                secondary.workspace_id,
+                {
+                    "actionId": "validate_workspace",
+                    "result": {"ok": True},
+                    "workspaceId": secondary.workspace_id,
+                },
+            )
+
+            removed_workspace, removed_mission_count = store.delete_workspace(
+                secondary.workspace_id
+            )
+
+            self.assertEqual(removed_workspace.workspace_id, secondary.workspace_id)
+            self.assertEqual(removed_mission_count, 1)
+            remaining_workspace_ids = {
+                item.workspace_id for item in store.load_workspaces()
+            }
+            self.assertIn(primary.workspace_id, remaining_workspace_ids)
+            self.assertNotIn(secondary.workspace_id, remaining_workspace_ids)
+            remaining_mission_ids = {item.mission_id for item in store.load_missions()}
+            self.assertNotIn(mission.mission_id, remaining_mission_ids)
+            self.assertNotIn(secondary.workspace_id, store.load_workspace_actions())
+
+    def test_workspace_delete_command_rejects_last_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            exit_code = cmd_workspace_delete(
+                argparse.Namespace(root=str(root), workspace_id=workspace.workspace_id)
+            )
+            self.assertEqual(exit_code, 1)
+
     def test_cli_mission_follow_up_records_thread_and_runtime_lane(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -187,8 +249,77 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("currentCyclePhase", mission_payload["missionLoop"])
             self.assertIn("timeBudget", mission_payload["missionLoop"])
 
-    def test_minimax_portal_auth_marks_provider_truth_ready_without_api_key(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
+    def test_minimax_portal_auth_does_not_mark_provider_truth_ready_without_openclaw_oauth(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MINIMAX_API_KEY": "",
+                "MINIMAX_CN_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "MINIMAX_OAUTH_TOKEN": "",
+                "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+            },
+            clear=False,
+        ), tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspaces = store.load_workspaces()
+            workspace = workspaces[0]
+            workspace.minimax_auth_mode = "minimax-portal-oauth"
+            workspace.route_overrides = [
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                    "effort": "medium",
+                }
+            ]
+            store.save_workspaces(workspaces)
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="openclaw",
+                objective="Route execution through MiniMax",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=3600,
+            )
+            mission.state.current_cycle_phase = "execute"
+            mission.effective_route_contract = {
+                "roles": [
+                    {
+                        "role": "executor",
+                        "provider": "minimax",
+                        "model": "MiniMax-M2.7",
+                        "effort": "medium",
+                    }
+                ]
+            }
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+            self.assertFalse(mission_payload["providerTruth"]["authPresent"])
+            self.assertEqual(
+                mission_payload["providerTruth"]["authPath"],
+                "MiniMax OpenClaw OAuth",
+            )
+
+    def test_minimax_portal_auth_marks_provider_truth_ready_with_openclaw_oauth(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MINIMAX_API_KEY": "",
+                "MINIMAX_CN_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "1",
+            },
+            clear=False,
+        ), tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             (root / "README.md").write_text("# Demo\n", encoding="utf-8")
             store = ControlRoomStore(root)
@@ -234,7 +365,7 @@ class MissionControlTests(unittest.TestCase):
             self.assertTrue(mission_payload["providerTruth"]["authPresent"])
             self.assertEqual(
                 mission_payload["providerTruth"]["authPath"],
-                "OAuth portal",
+                "MiniMax OpenClaw OAuth",
             )
 
     def test_second_mission_is_queued_behind_active_workspace_mission(self) -> None:
