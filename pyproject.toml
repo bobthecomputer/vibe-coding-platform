@@ -13,6 +13,7 @@ authors = [{ name = "Paul" }]
 
 [project.scripts]
 grant-agent = "grant_agent.cli:main"
+grand-agent-web = "grant_agent.web_backend:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

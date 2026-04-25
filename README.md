@@ -80,6 +80,15 @@ npm install
 npm run tauri:dev
 ```
 
+Private NAS web console:
+
+```bash
+python scripts/nas_setup.py
+python scripts/run_web_backend.py --host 0.0.0.0 --port 47880
+```
+
+See `docs/SYNOLOGY_NAS_SETUP.md`. Admin credentials are generated locally under `.agent_control/` and are not committed.
+
 Implemented backend features:
 
 - Hold-to-open overlay (`Ctrl+Space`, fallback `Ctrl+Shift+Space`), tray controls, persisted settings.

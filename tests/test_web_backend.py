@@ -47,6 +47,27 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertFalse(cleared["openai"])
             self.assertFalse(cleared["openai-codex"])
 
+    def test_admin_config_is_local_and_password_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            self.assertEqual(backend.username, "admin")
+            self.assertTrue((root / ".agent_control" / "grand_agent_web_admin.json").exists())
+            self.assertTrue((root / ".agent_control" / "grand_agent_admin_password.txt").exists())
+            self.assertIsNone(backend.login({"username": "admin", "password": "wrong"}))
+            password_text = (root / ".agent_control" / "grand_agent_admin_password.txt").read_text(
+                encoding="utf-8"
+            )
+            password_line = next(line for line in password_text.splitlines() if line.startswith("Password: "))
+            token = backend.login(
+                {
+                    "username": "admin",
+                    "password": password_line.replace("Password: ", "", 1),
+                }
+            )
+            self.assertIsInstance(token, str)
+
 
 if __name__ == "__main__":
     unittest.main()

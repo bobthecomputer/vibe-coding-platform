@@ -29,6 +29,7 @@ async function callFluxioBackend(command: string, payload: JsonRecord | null = n
 
   const response = await fetch(`${webBackendBaseUrl()}/api/backend`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ command, payload }),
   });

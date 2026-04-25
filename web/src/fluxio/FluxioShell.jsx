@@ -1090,6 +1090,7 @@ async function callBackend(command, payload = undefined, options = {}) {
       const apiUrl = `${base}/api/backend`;
       const httpResponse = await fetch(apiUrl, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command, payload: payload ?? null }),
       });

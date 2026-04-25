@@ -2,6 +2,18 @@ import React from "react";
 
 import { FluxioShellApp } from "./FluxioShell.jsx";
 
+function hasTauriBackend() {
+  return Boolean((globalThis as any).window?.__TAURI__ || (globalThis as any).window?.__TAURI_INTERNALS__);
+}
+
+function webBackendBaseUrl(): string {
+  const configured =
+    (import.meta as any).env?.VITE_FLUXIO_BACKEND_URL ||
+    (globalThis as any).window?.__FLUXIO_BACKEND_URL__ ||
+    "";
+  return String(configured || "").trim().replace(/\/$/, "");
+}
+
 function SidebarProvider({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
@@ -94,8 +106,119 @@ function makeBootDiagnostics(): string[] {
   ];
 }
 
+type AuthState = {
+  checked: boolean;
+  authenticated: boolean;
+  productName: string;
+  user: { username?: string; displayName?: string; role?: string } | null;
+  error: string;
+};
+
+function GrandAgentLogin({
+  auth,
+  onAuthenticated,
+}: {
+  auth: AuthState;
+  onAuthenticated: (next: AuthState) => void;
+}) {
+  const [username, setUsername] = React.useState("admin");
+  const [password, setPassword] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState(auth.error || "");
+
+  const submit = React.useCallback(
+    async (event: React.FormEvent) => {
+      event.preventDefault();
+      setSubmitting(true);
+      setError("");
+      try {
+        const response = await fetch(`${webBackendBaseUrl()}/api/auth/login`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.ok === false) {
+          throw new Error(payload?.error || "Login failed.");
+        }
+        onAuthenticated({
+          checked: true,
+          authenticated: true,
+          productName: payload?.data?.productName || "Grand Agent",
+          user: payload?.data?.user || { username, role: "admin" },
+          error: "",
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [onAuthenticated, password, username],
+  );
+
+  return (
+    <main className="grand-login-screen">
+      <section className="grand-login-shell">
+        <div className="grand-login-hero">
+          <p className="grand-login-kicker">Private NAS control room</p>
+          <h1>Grand Agent</h1>
+          <p>
+            Sign in to supervise local agents, NAS bridge jobs, runtime setup, and provider status
+            without exposing credentials in the open-source branch.
+          </p>
+          <div className="grand-login-proof" aria-label="Security posture">
+            <span>Local admin</span>
+            <span>HttpOnly session</span>
+            <span>No API keys in Git</span>
+          </div>
+        </div>
+        <form className="grand-login-panel" onSubmit={submit}>
+          <div>
+            <span className="grand-login-mark" aria-hidden="true">GA</span>
+            <h2>Admin Login</h2>
+            <p>Use the password generated during NAS setup.</p>
+          </div>
+          <label>
+            <span>Username</span>
+            <input
+              autoComplete="username"
+              onChange={event => setUsername(event.target.value)}
+              value={username}
+            />
+          </label>
+          <label>
+            <span>Password</span>
+            <input
+              autoComplete="current-password"
+              onChange={event => setPassword(event.target.value)}
+              type="password"
+              value={password}
+            />
+          </label>
+          {error ? <p className="grand-login-error">{error}</p> : null}
+          <button disabled={submitting || !username.trim() || !password} type="submit">
+            {submitting ? "Checking..." : "Enter Grand Agent"}
+          </button>
+          <p className="grand-login-note">
+            The admin file lives under `.agent_control` and stays out of Git.
+          </p>
+        </form>
+      </section>
+    </main>
+  );
+}
+
 export function FluxioApp() {
   const [instanceKey, setInstanceKey] = React.useState(0);
+  const [auth, setAuth] = React.useState<AuthState>({
+    checked: hasTauriBackend(),
+    authenticated: hasTauriBackend(),
+    productName: "Grand Agent",
+    user: null,
+    error: "",
+  });
   const lastActionRef = React.useRef("boot:initialize");
   const bootDiagnosticsRef = React.useRef<string[]>(makeBootDiagnostics());
 
@@ -121,10 +244,65 @@ export function FluxioApp() {
     };
   }, []);
 
+  React.useEffect(() => {
+    if (hasTauriBackend()) {
+      return;
+    }
+    let cancelled = false;
+    const checkAuth = async () => {
+      try {
+        const response = await fetch(`${webBackendBaseUrl()}/api/auth/status`, {
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled) {
+          return;
+        }
+        setAuth({
+          checked: true,
+          authenticated: Boolean(payload?.data?.authenticated),
+          productName: payload?.data?.productName || "Grand Agent",
+          user: payload?.data?.user || null,
+          error: "",
+        });
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setAuth({
+          checked: true,
+          authenticated: false,
+          productName: "Grand Agent",
+          user: null,
+          error: "Local backend is offline. Start `npm run web:backend` on the NAS or workstation.",
+        });
+      }
+    };
+    void checkAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const recoverShell = React.useCallback(() => {
     lastActionRef.current = "recover:manual";
     setInstanceKey(current => current + 1);
   }, []);
+
+  if (!auth.checked) {
+    return (
+      <main className="grand-login-screen">
+        <section className="grand-login-loading">
+          <span />
+          <p>Checking Grand Agent session...</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!auth.authenticated) {
+    return <GrandAgentLogin auth={auth} onAuthenticated={setAuth} />;
+  }
 
   return (
     <SidebarProvider>

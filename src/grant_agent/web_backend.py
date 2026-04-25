@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
 import webbrowser
+from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -17,6 +22,10 @@ from .subprocess_utils import hidden_windows_subprocess_kwargs
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47880
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
+ADMIN_CONFIG_RELATIVE_PATH = ".agent_control/grand_agent_web_admin.json"
+ADMIN_PASSWORD_RELATIVE_PATH = ".agent_control/grand_agent_admin_password.txt"
+SESSION_COOKIE_NAME = "grand_agent_session"
+PASSWORD_ITERATIONS = 240_000
 PROVIDER_ENV = {
     "openai": ("OPENAI_API_KEY",),
     "openai-codex": ("OPENAI_API_KEY", "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"),
@@ -33,7 +42,11 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    origin = handler.headers.get("Origin")
+    if origin:
+        handler.send_header("Access-Control-Allow-Origin", origin)
+        handler.send_header("Vary", "Origin")
+    handler.send_header("Access-Control-Allow-Credentials", "true")
     handler.send_header("Access-Control-Allow-Headers", "content-type, authorization")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     handler.end_headers()
@@ -56,6 +69,110 @@ def _as_payload(value: object) -> dict[str, Any]:
     if isinstance(nested, dict):
         return nested
     return value
+
+
+def _utc_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _password_hash(password: str, salt: bytes, iterations: int = PASSWORD_ITERATIONS) -> str:
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        iterations,
+    )
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _hash_record(password: str) -> dict[str, object]:
+    salt = secrets.token_bytes(24)
+    return {
+        "algorithm": "pbkdf2_sha256",
+        "iterations": PASSWORD_ITERATIONS,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "hash": _password_hash(password, salt),
+    }
+
+
+def _verify_password(password: str, record: dict[str, object]) -> bool:
+    if not password or record.get("algorithm") != "pbkdf2_sha256":
+        return False
+    try:
+        salt = base64.b64decode(str(record.get("salt") or ""))
+        iterations = int(record.get("iterations") or PASSWORD_ITERATIONS)
+    except (ValueError, TypeError):
+        return False
+    candidate = _password_hash(password, salt, iterations)
+    return hmac.compare_digest(candidate, str(record.get("hash") or ""))
+
+
+def _write_private_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def ensure_admin_config(root: Path, *, reset_password: bool = False) -> tuple[dict[str, object], str | None]:
+    control_dir = root / ".agent_control"
+    config_path = root / ADMIN_CONFIG_RELATIVE_PATH
+    password_path = root / ADMIN_PASSWORD_RELATIVE_PATH
+    env_password = os.environ.get("GRAND_AGENT_ADMIN_PASSWORD")
+    env_user = os.environ.get("GRAND_AGENT_ADMIN_USER", "admin").strip() or "admin"
+    if env_password:
+        return (
+            {
+                "username": env_user,
+                "displayName": "Admin",
+                "role": "admin",
+                "password": _hash_record(env_password),
+                "sessionSecret": os.environ.get("GRAND_AGENT_SESSION_SECRET") or secrets.token_urlsafe(48),
+                "source": "environment",
+                "createdAt": _utc_now(),
+            },
+            None,
+        )
+
+    if config_path.exists() and not reset_password:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and payload.get("password"):
+            return payload, None
+
+    password = secrets.token_urlsafe(18)
+    payload = {
+        "username": env_user,
+        "displayName": "Paul Admin" if env_user == "admin" else env_user,
+        "role": "admin",
+        "password": _hash_record(password),
+        "sessionSecret": secrets.token_urlsafe(48),
+        "source": "local_config",
+        "createdAt": _utc_now(),
+    }
+    _write_private_json(config_path, payload)
+    control_dir.mkdir(parents=True, exist_ok=True)
+    password_path.write_text(
+        "\n".join(
+            [
+                "Grand Agent local admin login",
+                f"URL: http://127.0.0.1:{DEFAULT_PORT}",
+                f"Username: {payload['username']}",
+                f"Password: {password}",
+                "",
+                "This file is ignored by git. Delete it after storing the password.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(password_path, 0o600)
+    except OSError:
+        pass
+    return payload, password
 
 
 def _run_cli(
@@ -148,10 +265,99 @@ def _codex_import_snapshot() -> dict[str, Any]:
 
 
 class FluxioWebBackend:
-    def __init__(self, root: Path, static_root: Path) -> None:
+    def __init__(self, root: Path, static_root: Path, *, reset_admin_password: bool = False) -> None:
         self.root = root.resolve()
         self.static_root = static_root.resolve()
         self.provider_secrets: dict[str, str] = {}
+        self.admin_config, self.generated_admin_password = ensure_admin_config(
+            self.root,
+            reset_password=reset_admin_password,
+        )
+        self.sessions: dict[str, dict[str, str]] = {}
+
+    @property
+    def username(self) -> str:
+        return str(self.admin_config.get("username") or "admin")
+
+    @property
+    def role(self) -> str:
+        return str(self.admin_config.get("role") or "admin")
+
+    def session_status(self, handler: BaseHTTPRequestHandler) -> dict[str, object]:
+        authenticated = self.is_authenticated(handler)
+        return {
+            "authenticated": authenticated,
+            "user": (
+                {
+                    "username": self.username,
+                    "displayName": self.admin_config.get("displayName") or "Admin",
+                    "role": self.role,
+                }
+                if authenticated
+                else None
+            ),
+            "loginRequired": True,
+            "productName": "Grand Agent",
+        }
+
+    def is_authenticated(self, handler: BaseHTTPRequestHandler) -> bool:
+        header = handler.headers.get("Cookie") or ""
+        parsed = cookies.SimpleCookie()
+        try:
+            parsed.load(header)
+        except cookies.CookieError:
+            return False
+        morsel = parsed.get(SESSION_COOKIE_NAME)
+        if not morsel:
+            return False
+        token = morsel.value
+        session = self.sessions.get(token)
+        return bool(session and session.get("role") == "admin")
+
+    def login(self, payload: dict[str, Any]) -> str | None:
+        username = str(payload.get("username") or "").strip()
+        password = str(payload.get("password") or "")
+        if username != self.username:
+            return None
+        record = self.admin_config.get("password")
+        if not isinstance(record, dict) or not _verify_password(password, record):
+            return None
+        token = secrets.token_urlsafe(32)
+        self.sessions[token] = {
+            "username": self.username,
+            "role": self.role,
+            "createdAt": _utc_now(),
+        }
+        return token
+
+    def logout(self, handler: BaseHTTPRequestHandler) -> None:
+        header = handler.headers.get("Cookie") or ""
+        parsed = cookies.SimpleCookie()
+        try:
+            parsed.load(header)
+        except cookies.CookieError:
+            parsed = cookies.SimpleCookie()
+        morsel = parsed.get(SESSION_COOKIE_NAME)
+        if morsel:
+            self.sessions.pop(morsel.value, None)
+        self._clear_session_cookie(handler)
+
+    def _set_session_cookie(self, handler: BaseHTTPRequestHandler, token: str) -> None:
+        cookie = cookies.SimpleCookie()
+        cookie[SESSION_COOKIE_NAME] = token
+        cookie[SESSION_COOKIE_NAME]["path"] = "/"
+        cookie[SESSION_COOKIE_NAME]["httponly"] = True
+        cookie[SESSION_COOKIE_NAME]["samesite"] = "Lax"
+        if os.environ.get("GRAND_AGENT_COOKIE_SECURE") == "1":
+            cookie[SESSION_COOKIE_NAME]["secure"] = True
+        for value in cookie.values():
+            handler.send_header("Set-Cookie", value.OutputString())
+
+    def _clear_session_cookie(self, handler: BaseHTTPRequestHandler) -> None:
+        handler.send_header(
+            "Set-Cookie",
+            f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+        )
 
     def _provider_env(self) -> dict[str, str]:
         env: dict[str, str] = {}
@@ -368,13 +574,92 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             if parsed.path == "/health":
-                _json_response(self, 200, {"ok": True, "backend": "fluxio-web", "root": str(backend.root)})
+                _json_response(
+                    self,
+                    200,
+                    {
+                        "ok": True,
+                        "backend": "grand-agent-web",
+                        "loginRequired": True,
+                    },
+                )
+                return
+            if parsed.path == "/api/auth/status":
+                _json_response(self, 200, {"ok": True, "data": backend.session_status(self)})
                 return
             backend.serve_file(self)
 
         def do_POST(self) -> None:  # noqa: N802
-            if urlparse(self.path).path != "/api/backend":
+            path = urlparse(self.path).path
+            if path == "/api/auth/login":
+                try:
+                    payload = _read_json_body(self)
+                    token = backend.login(payload)
+                    if not token:
+                        _json_response(
+                            self,
+                            401,
+                            {
+                                "ok": False,
+                                "error": "Invalid Grand Agent admin username or password.",
+                            },
+                        )
+                        return
+                    self.send_response(200)
+                    backend._set_session_cookie(self, token)
+                    response_payload = {
+                        "ok": True,
+                        "data": {
+                            "authenticated": True,
+                            "user": {
+                                "username": backend.username,
+                                "displayName": backend.admin_config.get("displayName") or "Admin",
+                                "role": backend.role,
+                            },
+                            "loginRequired": True,
+                            "productName": "Grand Agent",
+                        },
+                    }
+                    body = json.dumps(response_payload, indent=2).encode("utf-8")
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    origin = self.headers.get("Origin")
+                    if origin:
+                        self.send_header("Access-Control-Allow-Origin", origin)
+                        self.send_header("Vary", "Origin")
+                    self.send_header("Access-Control-Allow-Credentials", "true")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as exc:
+                    _json_response(self, 500, {"ok": False, "error": str(exc)})
+                return
+            if path == "/api/auth/logout":
+                self.send_response(200)
+                backend.logout(self)
+                body = json.dumps({"ok": True, "data": {"authenticated": False}}).encode("utf-8")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                origin = self.headers.get("Origin")
+                if origin:
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Vary", "Origin")
+                self.send_header("Access-Control-Allow-Credentials", "true")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path != "/api/backend":
                 _json_response(self, 404, {"ok": False, "error": "Unknown API route"})
+                return
+            if not backend.is_authenticated(self):
+                _json_response(
+                    self,
+                    401,
+                    {
+                        "ok": False,
+                        "error": "Grand Agent login is required.",
+                        "loginRequired": True,
+                    },
+                )
                 return
             try:
                 payload = _read_json_body(self)
@@ -396,11 +681,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=int(os.environ.get("FLUXIO_WEB_PORT", DEFAULT_PORT)))
     parser.add_argument("--root", default=os.environ.get("FLUXIO_WORKSPACE_ROOT", str(DEFAULT_ROOT)))
     parser.add_argument("--static-root", default=os.environ.get("FLUXIO_STATIC_ROOT", str(DEFAULT_ROOT / "web" / "dist")))
+    parser.add_argument(
+        "--reset-admin-password",
+        action="store_true",
+        help="Generate a fresh local admin password file under .agent_control.",
+    )
     args = parser.parse_args(argv)
 
-    backend = FluxioWebBackend(Path(args.root), Path(args.static_root))
+    backend = FluxioWebBackend(
+        Path(args.root),
+        Path(args.static_root),
+        reset_admin_password=args.reset_admin_password,
+    )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(backend))
-    print(f"Fluxio web backend listening on http://{args.host}:{args.port}", flush=True)
+    password_path = backend.root / ADMIN_PASSWORD_RELATIVE_PATH
+    if backend.generated_admin_password:
+        print(
+            f"Grand Agent admin password generated at {password_path}",
+            flush=True,
+        )
+    print(f"Grand Agent web backend listening on http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
