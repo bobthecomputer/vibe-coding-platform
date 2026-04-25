@@ -9,6 +9,36 @@ const COMMANDS: Record<string, string> = {
   "workspace.action": "apply_control_room_workspace_action_command",
 };
 
+function hasTauriBackend(): boolean {
+  return Boolean((globalThis as any).window?.__TAURI__ || (globalThis as any).window?.__TAURI_INTERNALS__);
+}
+
+function webBackendBaseUrl(): string {
+  const configured =
+    (import.meta as any).env?.VITE_FLUXIO_BACKEND_URL ||
+    (globalThis as any).window?.__FLUXIO_BACKEND_URL__ ||
+    "";
+  return String(configured || "").trim().replace(/\/$/, "");
+}
+
+async function callFluxioBackend(command: string, payload: JsonRecord | null = null): Promise<JsonRecord> {
+  if (hasTauriBackend()) {
+    const result = payload === null ? await invoke(command) : await invoke(command, payload);
+    return asRecord(result);
+  }
+
+  const response = await fetch(`${webBackendBaseUrl()}/api/backend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ command, payload }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.error || `${command} failed with HTTP ${response.status}`);
+  }
+  return asRecord(result?.data);
+}
+
 function asList(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? (value as JsonRecord[]) : [];
 }
@@ -22,7 +52,7 @@ function asRecord(value: unknown): JsonRecord {
 
 export async function getSnapshot(root: string | null = null): Promise<JsonRecord> {
   try {
-    const snapshot = await invoke("get_control_room_snapshot_command", {
+    const snapshot = await callFluxioBackend("get_control_room_snapshot_command", {
       payload: { root },
     });
     return asRecord(snapshot);
@@ -39,7 +69,7 @@ export async function dispatchCommand(
   if (!tauriCommand) {
     throw new Error(`Unsupported bridge command: ${command}`);
   }
-  const result = await invoke(tauriCommand, { payload });
+  const result = await callFluxioBackend(tauriCommand, { payload });
   return asRecord(result);
 }
 

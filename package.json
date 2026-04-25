@@ -6,6 +6,8 @@
   "scripts": {
     "frontend:dev": "vite --config vite.config.mjs",
     "frontend:build": "vite build --config vite.config.mjs",
+    "web:backend": "powershell -NoProfile -Command \"$env:PYTHONPATH='src'; python -m grant_agent.web_backend\"",
+    "web:serve": "npm run frontend:build && powershell -NoProfile -Command \"$env:PYTHONPATH='src'; python -m grant_agent.web_backend\"",
     "verify:desktop": "python -m pytest tests -q && npm run frontend:build && npm run tauri build -- --debug",
     "dev": "tauri dev",
     "dev:live": "powershell -NoProfile -Command \"Get-Process vibe-coding-platform,cargo -ErrorAction SilentlyContinue | Stop-Process -Force\"; tauri dev",

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
@@ -242,6 +243,109 @@ class AppCapabilityStandardTests(unittest.TestCase):
             )
             self.assertTrue(sessions["mind-tower"]["approval_callback"]["available"])
             self.assertIn("Mind Tower", {item["name"] for item in snapshot["discoveredApps"]})
+
+    def test_synology_fast_sync_bridge_uses_http_status_when_available(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/api/status":
+                    payload = {
+                        "message": "Fast Sync ready on LAN.",
+                        "selectedMode": "tailscale",
+                        "selectedHost": "synology.local",
+                        "targetReady": True,
+                        "targetRoot": "/volume1/Cowork",
+                        "sourceRoot": "C:/Users/paul/projects/Cowork",
+                    }
+                elif self.path == "/api/job":
+                    payload = {
+                        "state": "running",
+                        "direction": "upload",
+                        "completedFiles": 3,
+                        "remainingFiles": 2,
+                        "currentPath": "web/index.html",
+                    }
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                workspace_root = pathlib.Path(temp_dir) / "vibe-coding-platform"
+                workspace_root.mkdir(parents=True)
+                (workspace_root / "config").mkdir()
+                (workspace_root / ".agent_control").mkdir()
+                cowork_root = workspace_root.parent / "Cowork"
+                (cowork_root / "synology_fast_ui").mkdir(parents=True)
+                (cowork_root / "synology-fast-ui.py").write_text("print('ok')\n", encoding="utf-8")
+                (workspace_root / "config" / "connected_apps.json").write_text(
+                    json.dumps(
+                        [
+                            {
+                                "manifest_id": "manifest_synology_fast_sync",
+                                "schema_version": "fluxio.app-capability/v0-draft",
+                                "app_id": "synology-fast-sync",
+                                "name": "Synology Fast Sync",
+                                "description": "Fast sync bridge",
+                                "bridge": {
+                                    "transport": "http",
+                                    "endpoint": f"http://127.0.0.1:{server.server_port}",
+                                    "healthcheck": "/api/status",
+                                    "event_stream": "/api/job",
+                                },
+                                "auth": {"mode": "local_session", "scopes": ["sync.status"]},
+                                "permissions": ["task.run", "context.read"],
+                                "tasks": [
+                                    {
+                                        "task_id": "monitor-fast-sync",
+                                        "label": "Monitor Fast Sync output",
+                                        "description": "Monitor",
+                                    }
+                                ],
+                                "context_surfaces": [
+                                    {
+                                        "surface_id": "sync-status",
+                                        "label": "Sync Status",
+                                        "description": "Status",
+                                        "access": "read",
+                                    }
+                                ],
+                                "action_hooks": [
+                                    {
+                                        "hook_id": "start-sync-selection",
+                                        "label": "Start Sync Selection",
+                                        "description": "Queue selected transfer",
+                                        "mutability": "write",
+                                    }
+                                ],
+                            }
+                        ],
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+
+                thread = __import__("threading").Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                snapshot = build_connected_apps_snapshot(workspace_root)
+                session = snapshot["connectedSessions"][0]
+                self.assertEqual(session["app_id"], "synology-fast-sync")
+                self.assertEqual(session["status"], "connected")
+                self.assertEqual(session["approval_callback"]["channel"], "mobile_web")
+                self.assertIn("Upload output", session["latest_task_result"]["resultSummary"])
+                self.assertIn("Fast Sync ready", session["context_preview"][0]["summary"])
+        finally:
+            server.shutdown()
 
 
 if __name__ == "__main__":

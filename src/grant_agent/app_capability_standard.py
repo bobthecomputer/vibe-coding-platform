@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -19,6 +21,7 @@ from .models import (
 SCHEMA_VERSION = "fluxio.app-capability/v0-draft"
 BRIDGE_VERSION = "fluxio.bridge/v0-draft"
 FOLLOW_ON_APP_IDS = {"solantir-terminal"}
+BRIDGE_HTTP_TIMEOUT_SECONDS = 0.35
 
 
 def manifest_schema() -> dict:
@@ -131,9 +134,12 @@ def build_connected_apps_snapshot(root: Path) -> dict:
     if state:
         _save_session_state(root, state)
 
+    connected_names = [
+        session.app_name for session in connected_sessions if session.status == "connected"
+    ]
     recommendation = (
-        "OratioViva and Mind Tower are live reference integrations. Solantir remains in manifest-only follow-on review."
-        if any(session.status == "connected" for session in connected_sessions)
+        f"{', '.join(connected_names)} bridge session(s) are live. Solantir remains in manifest-only follow-on review."
+        if connected_names
         else "Connected apps are loaded, but live bridge sessions are not healthy yet."
     )
 
@@ -201,6 +207,17 @@ def _build_live_session(
         )
         return session, asdict(handshake)
 
+    if manifest.app_id == "synology-fast-sync":
+        return (
+            _build_synology_fast_sync_session(
+                manifest=manifest,
+                app_root=app_root,
+                previous_state=previous_state,
+                grants=grants,
+            ),
+            asdict(handshake),
+        )
+
     context_preview = _context_preview_for_app(manifest.app_id, app_root, manifest)
     task_history = _task_history_for_app(
         manifest=manifest,
@@ -244,6 +261,75 @@ def _build_live_session(
         approval_callback=approval_callback,
     )
     return session, asdict(handshake)
+
+
+def _build_synology_fast_sync_session(
+    *,
+    manifest: AppCapabilityManifest,
+    app_root: Path,
+    previous_state: dict,
+    grants: list[CapabilityGrant],
+) -> ConnectedAppSession:
+    bridge_endpoint = manifest.bridge.get("endpoint", "http://127.0.0.1:8765")
+    status_payload = _read_bridge_json(bridge_endpoint, "/api/status")
+    job_payload = _read_bridge_json(bridge_endpoint, "/api/job") if status_payload else {}
+    bridge_online = bool(status_payload)
+
+    context_preview = _synology_context_preview(
+        manifest=manifest,
+        app_root=app_root,
+        status_payload=status_payload,
+    )
+    task_history = _synology_task_history(
+        manifest=manifest,
+        status_payload=status_payload,
+        job_payload=job_payload,
+        previous_task_history=previous_state.get("task_history", []),
+    )
+    latest_task_result = task_history[-1] if task_history else {}
+    notes = [
+        "Cowork Synology Fast Sync files are present and registered as a local app bridge.",
+        "Use the Fast Sync web surface for large project upload/download output.",
+    ]
+    if bridge_online:
+        notes.insert(0, str(status_payload.get("message") or "Synology Fast Sync bridge is online."))
+    else:
+        notes.insert(
+            0,
+            "Synology Fast Sync UI is not responding on the configured local endpoint.",
+        )
+
+    return ConnectedAppSession(
+        session_id=previous_state.get("session_id") or f"bridge_{manifest.app_id}",
+        app_id=manifest.app_id,
+        app_name=manifest.name,
+        status="connected" if bridge_online else "available",
+        bridge_health="healthy" if bridge_online else "offline",
+        manifest_id=manifest.manifest_id,
+        granted_capabilities=grants,
+        active_tasks=[
+            "Fast Sync copy"
+            for state in [job_payload.get("state")]
+            if state in {"preparing", "running"}
+        ],
+        last_seen_at=utc_now_iso(),
+        notes=notes,
+        handshake_status="connected" if bridge_online else "endpoint_offline",
+        bridge_transport=manifest.bridge.get("transport", "http"),
+        bridge_endpoint=bridge_endpoint,
+        app_root=str(app_root),
+        context_preview=context_preview,
+        task_history=task_history[-4:],
+        latest_task_result=latest_task_result,
+        approval_callback={
+            "available": True,
+            "channel": "mobile_web",
+            "detail": (
+                "Fast Sync output is browser-readable; bind the service to a LAN or Tailscale "
+                "address when you want the phone to operate the same bridge."
+            ),
+        },
+    )
 
 
 def _build_follow_on_session(root: Path, manifest: AppCapabilityManifest) -> ConnectedAppSession:
@@ -398,6 +484,111 @@ def _task_history_for_app(
     return []
 
 
+def _synology_context_preview(
+    *,
+    manifest: AppCapabilityManifest,
+    app_root: Path,
+    status_payload: dict,
+) -> list[dict]:
+    surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+    status_items = []
+    if status_payload:
+        selected_mode = str(status_payload.get("selectedMode") or "offline")
+        selected_host = str(status_payload.get("selectedHost") or "")
+        status_items = [
+            f"Mode: {selected_mode}",
+            f"Host: {selected_host or 'not selected'}",
+            f"Target: {status_payload.get('targetRoot') or 'not mapped'}",
+        ]
+
+    return [
+        {
+            "surfaceId": surface.surface_id if surface else "sync-status",
+            "label": surface.label if surface else "Sync Status",
+            "summary": (
+                str(status_payload.get("message"))
+                if status_payload
+                else "Cowork Fast Sync backend is installed but the local web bridge is offline."
+            ),
+            "items": status_items
+            or [
+                str(app_root / "synology-fast-ui.py"),
+                str(app_root / "synology_fast_ui"),
+            ],
+            "access": surface.access if surface else "read",
+        }
+    ]
+
+
+def _synology_task_history(
+    *,
+    manifest: AppCapabilityManifest,
+    status_payload: dict,
+    job_payload: dict,
+    previous_task_history: list[dict],
+) -> list[dict]:
+    task = manifest.tasks[0] if manifest.tasks else None
+    previous_created_at = ""
+    if previous_task_history:
+        previous_created_at = str(previous_task_history[-1].get("createdAt", ""))
+    job_state = str(job_payload.get("state") or "offline")
+    direction = str(job_payload.get("direction") or "")
+    completed_files = _safe_int(job_payload.get("completedFiles"))
+    remaining_files = _safe_int(job_payload.get("remainingFiles"))
+    result_summary = (
+        f"Fast Sync job is {job_state}."
+        if not status_payload
+        else (
+            f"{status_payload.get('selectedMode') or 'offline'} path selected; "
+            f"{completed_files} file(s) completed and {remaining_files} remaining."
+        )
+    )
+    if direction:
+        result_summary = f"{direction.title()} output: {result_summary}"
+
+    return [
+        {
+            "taskId": task.task_id if task else "monitor-fast-sync",
+            "label": task.label if task else "Monitor Fast Sync output",
+            "status": "running" if job_state in {"preparing", "running"} else "completed",
+            "sourceKind": "connected_app",
+            "resultSummary": result_summary,
+            "createdAt": previous_created_at or utc_now_iso(),
+            "completedAt": "" if job_state in {"preparing", "running"} else utc_now_iso(),
+            "approvalStatus": "not_required",
+            "payload": {
+                "targetReady": bool(status_payload.get("targetReady")) if status_payload else False,
+                "targetRoot": str(status_payload.get("targetRoot") or "") if status_payload else "",
+                "sourceRoot": str(status_payload.get("sourceRoot") or "") if status_payload else "",
+                "selectedMode": str(status_payload.get("selectedMode") or "") if status_payload else "",
+                "currentPath": str(job_payload.get("currentPath") or ""),
+            },
+        }
+    ]
+
+
+def _read_bridge_json(endpoint: str, path: str) -> dict:
+    base = str(endpoint or "").rstrip("/")
+    if not base:
+        return {}
+    if base.endswith("/fluxio"):
+        base = base[: -len("/fluxio")]
+    url = f"{base}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=BRIDGE_HTTP_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _approval_callback_for_app(app_id: str, app_root: Path) -> dict:
     if app_id == "mind-tower":
         telegram_listener = (
@@ -482,6 +673,7 @@ def _candidate_app_roots(root: Path, app_id: str) -> list[Path]:
         "oratio-viva": [base / "OratioViva", base / "oratio-viva"],
         "mind-tower": [base / "mind-tower", base / "MindTower"],
         "solantir-terminal": [base / "Solantir", base / "solantir"],
+        "synology-fast-sync": [base / "Cowork"],
     }
     return lookup.get(app_id, [base / app_id])
 
