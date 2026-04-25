@@ -179,7 +179,11 @@ class DelegatedRuntimeSupervisor:
             )
 
         worker_env = os.environ.copy()
-        python_path_entries = [str(self.root / "src")]
+        package_src_root = Path(__file__).resolve().parents[1]
+        python_path_entries = [str(package_src_root)]
+        workspace_src_root = self.root / "src"
+        if workspace_src_root.exists():
+            python_path_entries.append(str(workspace_src_root))
         existing_python_path = str(worker_env.get("PYTHONPATH", "")).strip()
         if existing_python_path:
             python_path_entries.append(existing_python_path)

@@ -2335,6 +2335,43 @@ button.builder-review-target:hover {
   overflow: auto;
 }
 
+.bridge-output-summary,
+.bridge-context-item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 8px;
+}
+
+.bridge-output-summary span,
+.bridge-context-item span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bridge-output-summary strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.bridge-context-list {
+  display: grid;
+  gap: 6px;
+}
+
+.bridge-context-item p {
+  margin: 0;
+}
+
+.bridge-card-actions {
+  align-items: center;
+  justify-content: space-between;
+}
+
 .roadmap-grid {
   display: grid;
   gap: 8px;
@@ -2906,10 +2943,40 @@ button.builder-review-target:hover {
 @media (max-width: 860px) {
   .fluxio-shell {
     grid-template-rows: auto auto minmax(0, 1fr);
+    height: auto;
+    min-height: 100dvh;
   }
 
   .fluxio-topbar {
     grid-template-columns: 1fr;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+
+  .fluxio-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .fluxio-main {
+    order: 1;
+  }
+
+  .fluxio-sidebar {
+    order: 2;
+    max-height: none;
+  }
+
+  .fluxio-drawer {
+    order: 3;
+    max-height: none;
+  }
+
+  .fluxio-sidebar-scroll,
+  .drawer-content {
+    max-height: none;
+    overflow: visible;
   }
 
   .field-row {
@@ -2958,11 +3025,29 @@ button.builder-review-target:hover {
   }
 
   .agent-docked-composer {
-    position: static;
+    bottom: 0;
+    position: sticky;
+    z-index: 12;
   }
 
   .agent-message {
     width: 100%;
+  }
+
+  .agent-shell,
+  .agent-chat-stage {
+    min-height: 58dvh;
+  }
+
+  .agent-conversation-shell,
+  .agent-conversation-main,
+  .agent-conversation-feed {
+    min-height: 44dvh;
+  }
+
+  .bridge-card-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

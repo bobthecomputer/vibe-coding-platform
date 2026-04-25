@@ -96,6 +96,56 @@
     }
   },
   {
+    "manifest_id": "manifest_synology_fast_sync",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "synology-fast-sync",
+    "name": "Synology Fast Sync",
+    "description": "Cowork fast-path project upload/download UI exposed as a local bridge for proof and mobile review.",
+    "bridge": {
+      "transport": "http",
+      "endpoint": "http://127.0.0.1:8765",
+      "healthcheck": "/api/status",
+      "event_stream": "/api/job",
+      "workspace_root": "C:/Users/paul/projects/Cowork"
+    },
+    "auth": {
+      "mode": "local_session",
+      "scopes": ["sync.status", "sync.job.read", "sync.selection.write"]
+    },
+    "permissions": ["task.run", "context.read", "approval.callback"],
+    "tasks": [
+      {
+        "task_id": "monitor-fast-sync",
+        "label": "Monitor Fast Sync output",
+        "description": "Read current Synology Fast Sync mapping, job progress, and latest transfer output.",
+        "requires_approval": false
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "sync-status",
+        "label": "Sync Status",
+        "description": "Current LAN/Tailscale route, source root, target root, and transfer state.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "start-sync-selection",
+        "label": "Start Sync Selection",
+        "description": "Queue a selected upload or download through the Fast Sync bridge.",
+        "mutability": "write",
+        "risk_level": "medium",
+        "requires_approval": true
+      }
+    ],
+    "ui_hints": {
+      "category": "storage",
+      "requiresUserPresent": true,
+      "mobileSurface": true
+    }
+  },
+  {
     "manifest_id": "manifest_solantir_terminal",
     "schema_version": "fluxio.app-capability/v0-draft",
     "app_id": "solantir-terminal",

@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 const host = process.env.TAURI_DEV_HOST || "127.0.0.1";
 const port = Number(process.env.TAURI_DEV_PORT || "1420");
+const backendTarget = process.env.FLUXIO_WEB_BACKEND_URL || "http://127.0.0.1:47880";
 const repoRoot = process.cwd();
 const webRoot = resolve(repoRoot, "web");
 const webSrc = resolve(webRoot, "src");
@@ -30,6 +31,10 @@ export default defineConfig(({ command }) => ({
       protocol: "ws",
       host,
       port,
+    },
+    proxy: {
+      "/api": backendTarget,
+      "/health": backendTarget,
     },
   },
   preview: {

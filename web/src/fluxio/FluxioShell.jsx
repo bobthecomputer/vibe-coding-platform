@@ -980,6 +980,26 @@ function hasTauriBackend() {
   return Boolean(globalThis.window?.__TAURI__ || globalThis.window?.__TAURI_INTERNALS__);
 }
 
+function webBackendBaseUrl() {
+  const configured =
+    import.meta.env?.VITE_FLUXIO_BACKEND_URL ||
+    globalThis.window?.__FLUXIO_BACKEND_URL__ ||
+    "";
+  return String(configured || "").trim().replace(/\/$/, "");
+}
+
+function canAttemptWebBackend() {
+  if (webBackendBaseUrl()) {
+    return true;
+  }
+  const host = String(globalThis.window?.location?.hostname || "").toLowerCase();
+  return ["localhost", "127.0.0.1", "::1"].includes(host);
+}
+
+function hasCommandBackend() {
+  return hasTauriBackend() || canAttemptWebBackend();
+}
+
 function resolveInitialPreviewMode(searchParams) {
   const explicitFixture = searchParams.get("fixture");
   if (explicitFixture) {
@@ -1062,10 +1082,26 @@ function subscribeBackendCalls(handler) {
 async function callBackend(command, payload = undefined, options = {}) {
   const startedAt = performance.now();
   try {
-    const response = payload === undefined ? await invoke(command) : await invoke(command, payload);
+    let response;
+    if (hasTauriBackend()) {
+      response = payload === undefined ? await invoke(command) : await invoke(command, payload);
+    } else {
+      const base = webBackendBaseUrl();
+      const apiUrl = `${base}/api/backend`;
+      const httpResponse = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command, payload: payload ?? null }),
+      });
+      const result = await httpResponse.json().catch(() => ({}));
+      if (!httpResponse.ok || result?.ok === false) {
+        throw new Error(result?.error || `${command} failed with HTTP ${httpResponse.status}`);
+      }
+      response = result?.data;
+    }
     const event = {
       id: `invoke-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      kind: "invoke.ok",
+      kind: hasTauriBackend() ? "invoke.ok" : "http.ok",
       command,
       durationMs: Math.round(performance.now() - startedAt),
       at: new Date().toISOString(),
@@ -1081,7 +1117,7 @@ async function callBackend(command, payload = undefined, options = {}) {
   } catch (error) {
     const event = {
       id: `invoke-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      kind: "invoke.error",
+      kind: hasTauriBackend() ? "invoke.error" : "http.error",
       command,
       durationMs: Math.round(performance.now() - startedAt),
       at: new Date().toISOString(),
@@ -2388,7 +2424,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const refreshCodexImportSnapshot = useCallback(
     async ({ showToast = false } = {}) => {
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         setCodexImportSnapshot(DEFAULT_CODEX_IMPORT_SNAPSHOT);
         localStorage.removeItem(STORAGE_KEYS.codexImportSnapshot);
         if (showToast) {
@@ -2473,7 +2509,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           return;
         }
 
-        if (!hasTauriBackend()) {
+        if (!hasCommandBackend()) {
           const fallbackPayload = buildFixtureSnapshot("live_review");
           setData(current => ({
             ...current,
@@ -2563,6 +2599,28 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           setLastPushReason(reason);
         }
       } catch (error) {
+        if (!hasTauriBackend()) {
+          const fallbackPayload = buildFixtureSnapshot("live_review");
+          setData(current => ({
+            ...current,
+            snapshot: fallbackPayload.snapshot,
+            onboarding: fallbackPayload.onboarding,
+            pendingApprovals: fallbackPayload.pendingApprovals,
+            pendingQuestions: fallbackPayload.pendingQuestions,
+            telegramReady: fallbackPayload.telegramReady,
+            previewMeta: {
+              id: "fallback",
+              name: "Local Fallback",
+              description:
+                "Fluxio web backend is unavailable, so the website is showing a local supervision fixture.",
+            },
+            openClawStatus: null,
+            openClawHasToken: false,
+            openClawMessages: [],
+            providerSecretPresence: {},
+          }));
+          setCodexImportSnapshot(DEFAULT_CODEX_IMPORT_SNAPSHOT);
+        }
         pushToast(`Refresh failed: ${error}`, "error");
       } finally {
         if (mountedRef.current) {
@@ -3029,7 +3087,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       if (!mission) {
         return;
       }
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast("Preview mode is read-only for mission actions.", "warn");
         return;
       }
@@ -3053,7 +3111,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const runWorkspaceAction = useCallback(
     async (surface, actionId, approved = false) => {
       markAction(`workspace:${surface}:${actionId}`);
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast("Preview mode is read-only for setup actions.", "warn");
         return;
       }
@@ -3110,7 +3168,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Select a workspace first.", "warn");
       return;
     }
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot save workspace policy.", "warn");
       return;
     }
@@ -3163,7 +3221,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         pushToast("Select a workspace first.", "warn");
         return;
       }
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast(`Runtime preference staged as ${titleizeToken(nextHarness)} in preview mode.`, "info");
         return;
       }
@@ -3215,7 +3273,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Select a workspace before saving route controls.", "warn");
       return;
     }
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Route controls are staged in preview mode.", "info");
       return;
     }
@@ -3507,7 +3565,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
 
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast("Preview mode cannot save workspaces.", "warn");
         setShowWorkspaceDialog(false);
         return;
@@ -3541,7 +3599,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleReferencePickWorkspaceFolder = useCallback(async () => {
     markAction("reference:workspace-folder");
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot open the folder picker.", "warn");
       return null;
     }
@@ -3573,7 +3631,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         pushToast("Workspace path is required.", "warn");
         return false;
       }
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast("Preview mode cannot import workspaces.", "warn");
         return false;
       }
@@ -3659,7 +3717,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
 
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast("Preview mode cannot launch missions.", "warn");
         setShowMissionDialog(false);
         return;
@@ -3714,7 +3772,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     async event => {
       event.preventDefault();
       markAction("submit:telegram");
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast("Preview mode cannot change escalation settings.", "warn");
         setShowEscalationDialog(false);
         return;
@@ -3741,7 +3799,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleClearTelegram = useCallback(async () => {
     markAction("clear:telegram");
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot clear escalation settings.", "warn");
       return;
     }
@@ -3761,7 +3819,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Enter a Telegram chat ID first.", "warn");
       return;
     }
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot send escalation pings.", "warn");
       return;
     }
@@ -3889,7 +3947,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       if (!prompt) {
         return false;
       }
-      if (!mission?.mission_id || previewMode !== "live" || !hasTauriBackend()) {
+      if (!mission?.mission_id || previewMode !== "live" || !hasCommandBackend()) {
         appendOperatorEntry({
           title: `Task queued (${source})`,
           detail: prompt,
@@ -4149,7 +4207,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Write a follow-up first.", "warn");
       return;
     }
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot send runtime follow-ups.", "warn");
       return;
     }
@@ -4324,7 +4382,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleOpenClawConnect = useCallback(async () => {
     markAction("runtime:openclaw-connect");
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
       return;
     }
@@ -4343,7 +4401,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleOpenClawDisconnect = useCallback(async () => {
     markAction("runtime:openclaw-disconnect");
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
       return;
     }
@@ -4362,7 +4420,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Paste a gateway token first.", "warn");
       return;
     }
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
       return;
     }
@@ -4382,7 +4440,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleOpenClawClearToken = useCallback(async () => {
     markAction("runtime:openclaw-clear-token");
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot change OpenClaw gateway state.", "warn");
       return;
     }
@@ -4402,7 +4460,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Paste a provider API key first.", "warn");
       return;
     }
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot change provider authentication.", "warn");
       return;
     }
@@ -4430,7 +4488,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleProviderSecretClear = useCallback(async providerId => {
     markAction(`provider-secret:clear:${providerId}`);
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot change provider authentication.", "warn");
       return;
     }
@@ -4746,10 +4804,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
   const bridgeSummary = useMemo(() => {
     const connected = bridgeSessions.filter(item => item?.status === "connected").length;
-    const callbackReady = bridgeSessions.filter(item => item?.approval_callback).length;
+    const callbackReady = bridgeSessions.filter(item => item?.approval_callback?.available).length;
+    const mobileReady = bridgeSessions.filter(
+      item => item?.approval_callback?.channel === "mobile_web" || item?.ui_hints?.mobileSurface,
+    ).length;
     return {
       connected,
       callbackReady,
+      mobileReady,
       totalApps: asList(snapshot?.bridgeLab?.discoveredApps).length,
       recommendation:
         snapshot?.bridgeLab?.recommendation ||
@@ -6145,7 +6207,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
 
       if (normalizedAction === "settings:export-data") {
-        if (previewMode !== "live" || !hasTauriBackend()) {
+        if (previewMode !== "live" || !hasCommandBackend()) {
           pushToast("Preview mode cannot export control-room data.", "warn");
           return;
         }
@@ -6180,7 +6242,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           pushToast("No workspace is selected for deletion.", "warn");
           return;
         }
-        if (previewMode !== "live" || !hasTauriBackend()) {
+        if (previewMode !== "live" || !hasCommandBackend()) {
           pushToast("Preview mode cannot delete workspace profiles.", "warn");
           return;
         }
@@ -6590,7 +6652,33 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const openProviderGuideUrl = useCallback(
     async (url, label) => {
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
+        pushToast(`Preview mode cannot open ${label}.`, "warn");
+        return false;
+      }
+      try {
+        await callBackend(
+          "open_external_url_command",
+          { url },
+          { throwOnError: true },
+        );
+        pushToast(`${label} opened in your browser.`, "info");
+        return true;
+      } catch (error) {
+        pushToast(`Could not open ${label}: ${error}`, "error");
+        return false;
+      }
+    },
+    [previewMode, pushToast],
+  );
+
+  const openBridgeEndpoint = useCallback(
+    async (url, label) => {
+      if (!url) {
+        pushToast(`${label} has no bridge endpoint yet.`, "warn");
+        return false;
+      }
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast(`Preview mode cannot open ${label}.`, "warn");
         return false;
       }
@@ -6612,7 +6700,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const openProviderAuthUrl = useCallback(
     async (url, label) => {
-      if (previewMode !== "live" || !hasTauriBackend()) {
+      if (previewMode !== "live" || !hasCommandBackend()) {
         pushToast(`Preview mode cannot open ${label}.`, "warn");
         return false;
       }
@@ -6635,7 +6723,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const handleReferenceQuickAuth = useCallback(
     async providerId => {
       if (providerId === "openai") {
-        if (previewMode !== "live" || !hasTauriBackend()) {
+        if (previewMode !== "live" || !hasCommandBackend()) {
           pushToast("Preview mode cannot start OpenAI Codex OAuth.", "warn");
           return;
         }
@@ -6679,7 +6767,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
       if (providerId === "minimax") {
-        if (previewMode !== "live" || !hasTauriBackend()) {
+        if (previewMode !== "live" || !hasCommandBackend()) {
           pushToast("Preview mode cannot start MiniMax OpenClaw OAuth.", "warn");
           return;
         }
@@ -6717,7 +6805,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
 
   const verifyMiniMaxOpenClawAuth = useCallback(async () => {
-    if (previewMode !== "live" || !hasTauriBackend()) {
+    if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot verify MiniMax OpenClaw OAuth.", "warn");
       return;
     }
@@ -7536,6 +7624,22 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </strong>
                     <p>{titleizeToken(session.bridge_health || "unknown")} bridge health</p>
                     {Array.isArray(session.notes) && session.notes.length > 0 ? <p>{session.notes[0]}</p> : null}
+                    {session.latest_task_result?.resultSummary ? (
+                      <div className="bridge-output-summary">
+                        <span>{session.latest_task_result.label || "Latest output"}</span>
+                        <strong>{session.latest_task_result.resultSummary}</strong>
+                      </div>
+                    ) : null}
+                    {asList(session.context_preview).length > 0 ? (
+                      <div className="bridge-context-list">
+                        {asList(session.context_preview).slice(0, 2).map(surface => (
+                          <div className="bridge-context-item" key={`${session.session_id}-${surface.surfaceId || surface.label}`}>
+                            <span>{surface.label || "Context"}</span>
+                            <p>{surface.summary || "No summary reported."}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     {Array.isArray(session.active_tasks) && session.active_tasks.length > 0 ? (
                       <div className="pill-row">
                         {session.active_tasks.slice(0, 3).map(item => (
@@ -7545,6 +7649,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         ))}
                       </div>
                     ) : null}
+                    <div className="drawer-actions bridge-card-actions">
+                      {session.bridge_endpoint ? (
+                        <ActionButton
+                          onClick={() => void openBridgeEndpoint(session.bridge_endpoint, session.app_name || session.app_id)}
+                          type="button"
+                        >
+                          Open bridge
+                        </ActionButton>
+                      ) : null}
+                      {session.approval_callback?.available ? (
+                        <span className="mini-pill">
+                          {titleizeToken(session.approval_callback.channel || "callback")} ready
+                        </span>
+                      ) : null}
+                    </div>
                   </article>
                 ))
               ) : (
@@ -9571,6 +9690,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         <strong>{bridgeSummary.totalApps}</strong>
                         <em>apps</em>
                       </span>
+                      <span className="fluxio-nav-stat tone-good">
+                        <strong>{bridgeSummary.mobileReady}</strong>
+                        <em>mobile</em>
+                      </span>
                     </div>
                   </article>
                 </section>
@@ -10592,6 +10715,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p>{bridgeSummary.recommendation}</p>
                     <div className="builder-inline-list">
                       <span>{bridgeSummary.callbackReady} approval callback{bridgeSummary.callbackReady === 1 ? "" : "s"} ready</span>
+                      <span>{bridgeSummary.mobileReady} mobile bridge{bridgeSummary.mobileReady === 1 ? "" : "s"} reviewable</span>
                       <span>{bridgeSummary.totalApps} connected app definition{bridgeSummary.totalApps === 1 ? "" : "s"}</span>
                       <span>{modelAuthReady ? "Model account ready" : "Model account missing"}</span>
                     </div>
