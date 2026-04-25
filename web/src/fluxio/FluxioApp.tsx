@@ -1,5 +1,7 @@
 import React from "react";
+import { Fingerprint, HardDrive, LockKeyhole, Network, ShieldCheck } from "lucide-react";
 
+import topologyImage from "./assets/grand-agent-topology.png";
 import { FluxioShellApp } from "./FluxioShell.jsx";
 
 function hasTauriBackend() {
@@ -161,24 +163,51 @@ function GrandAgentLogin({
   return (
     <main className="grand-login-screen">
       <section className="grand-login-shell">
-        <div className="grand-login-hero">
-          <p className="grand-login-kicker">Private NAS control room</p>
+        <aside className="grand-login-hero">
+          <p className="grand-login-kicker">
+            <span aria-hidden="true" />
+            Systemology login
+          </p>
           <h1>Grand Agent</h1>
           <p>
-            Sign in to supervise local agents, NAS bridge jobs, runtime setup, and provider status
-            without exposing credentials in the open-source branch.
+            Your private control layer for local agents, NAS bridge jobs, runtime setup, and
+            provider readiness. Credentials stay on the host, outside the open-source branch.
           </p>
-          <div className="grand-login-proof" aria-label="Security posture">
-            <span>Local admin</span>
-            <span>HttpOnly session</span>
-            <span>No API keys in Git</span>
+          <div className="grand-login-status-grid" aria-label="Security posture">
+            <div>
+              <HardDrive aria-hidden="true" size={18} />
+              <span>NAS host</span>
+              <strong>Private node</strong>
+            </div>
+            <div>
+              <LockKeyhole aria-hidden="true" size={18} />
+              <span>Session</span>
+              <strong>HttpOnly</strong>
+            </div>
+            <div>
+              <ShieldCheck aria-hidden="true" size={18} />
+              <span>Repository</span>
+              <strong>No secrets</strong>
+            </div>
           </div>
-        </div>
+        </aside>
         <form className="grand-login-panel" onSubmit={submit}>
-          <div>
-            <span className="grand-login-mark" aria-hidden="true">GA</span>
-            <h2>Admin Login</h2>
-            <p>Use the password generated during NAS setup.</p>
+          <div className="grand-login-panel-head">
+            <span className="grand-login-mark" aria-hidden="true">
+              <Fingerprint size={22} />
+            </span>
+            <div>
+              <span className="grand-login-eyebrow">Administrator</span>
+              <h2>Enter the control room</h2>
+              <p>Use the password generated during NAS setup.</p>
+            </div>
+          </div>
+          <div className="grand-login-topology" aria-label="Local agent topology preview">
+            <img alt="" src={topologyImage} />
+            <div>
+              <Network aria-hidden="true" size={17} />
+              <span>Local agent topology</span>
+            </div>
           </div>
           <label>
             <span>Username</span>
