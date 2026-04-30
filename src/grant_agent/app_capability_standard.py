@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 import uuid
@@ -160,7 +161,7 @@ def build_connected_apps_snapshot(root: Path) -> dict:
         "bridgeHandshakes": handshakes,
         "phases": [
             "Phase A: manifest and policy contract",
-            "Phase B: live reference integrations for OratioViva and Mind Tower",
+            "Phase B: live reference integrations for OratioViva plus storage and cloud bridges",
             "Phase C: Solantir follow-on after the bridge standard is proven",
         ],
         "discoveredApps": [asdict(item) for item in manifests],
@@ -188,6 +189,28 @@ def _build_live_session(
         requires_user_present=bool(manifest.ui_hints.get("requiresUserPresent", False)),
     )
 
+    if manifest.app_id == "cloud-drive-sync":
+        return (
+            _build_cloud_drive_session(
+                root=root,
+                manifest=manifest,
+                previous_state=previous_state,
+                grants=grants,
+            ),
+            asdict(handshake),
+        )
+
+    if manifest.app_id == "synology-fast-sync":
+        return (
+            _build_synology_fast_sync_session(
+                manifest=manifest,
+                app_root=app_root or root,
+                previous_state=previous_state,
+                grants=grants,
+            ),
+            asdict(handshake),
+        )
+
     if app_root is None or not app_root.exists():
         session = ConnectedAppSession(
             session_id=session_id,
@@ -206,17 +229,6 @@ def _build_live_session(
             ],
         )
         return session, asdict(handshake)
-
-    if manifest.app_id == "synology-fast-sync":
-        return (
-            _build_synology_fast_sync_session(
-                manifest=manifest,
-                app_root=app_root,
-                previous_state=previous_state,
-                grants=grants,
-            ),
-            asdict(handshake),
-        )
 
     context_preview = _context_preview_for_app(manifest.app_id, app_root, manifest)
     task_history = _task_history_for_app(
@@ -271,24 +283,34 @@ def _build_synology_fast_sync_session(
     grants: list[CapabilityGrant],
 ) -> ConnectedAppSession:
     bridge_endpoint = manifest.bridge.get("endpoint", "http://127.0.0.1:8765")
+    public_endpoint = str(manifest.bridge.get("public_endpoint") or bridge_endpoint).rstrip("/")
     status_payload = _read_bridge_json(bridge_endpoint, "/api/status")
     job_payload = _read_bridge_json(bridge_endpoint, "/api/job") if status_payload else {}
     bridge_online = bool(status_payload)
+    bridge_plan = _synology_bridge_plan(manifest, status_payload, job_payload)
 
     context_preview = _synology_context_preview(
         manifest=manifest,
         app_root=app_root,
         status_payload=status_payload,
+        job_payload=job_payload,
+        bridge_plan=bridge_plan,
     )
     task_history = _synology_task_history(
         manifest=manifest,
         status_payload=status_payload,
         job_payload=job_payload,
+        bridge_plan=bridge_plan,
         previous_task_history=previous_state.get("task_history", []),
     )
     latest_task_result = task_history[-1] if task_history else {}
+    app_root_exists = bool(app_root.exists())
     notes = [
-        "Cowork Synology Fast Sync files are present and registered as a local app bridge.",
+        (
+            "Cowork Synology Fast Sync files are present and registered as a local app bridge."
+            if app_root_exists
+            else "Synology bridge metadata is loaded even though the mapped app root is not available on this host."
+        ),
         "Use the Fast Sync web surface for large project upload/download output.",
     ]
     if bridge_online:
@@ -328,6 +350,103 @@ def _build_synology_fast_sync_session(
                 "Fast Sync output is browser-readable; bind the service to a LAN or Tailscale "
                 "address when you want the phone to operate the same bridge."
             ),
+        },
+        ui_hints={
+            **manifest.ui_hints,
+            "bridgeRole": "nas_storage",
+            "sourceRoot": bridge_plan.get("sourceRoot", ""),
+            "targetRoot": bridge_plan.get("targetRoot", ""),
+            "selectedMode": bridge_plan.get("selectedMode", ""),
+            "selectedHost": bridge_plan.get("selectedHost", ""),
+            "controlProtocol": bridge_plan.get("controlProtocol", ""),
+            "controlPort": bridge_plan.get("controlPort", 0),
+            "requestedSshPort": bridge_plan.get("requestedSshPort", 0),
+            "observedSshPort": bridge_plan.get("observedSshPort", 0),
+            "sshPortStatus": bridge_plan.get("sshPortStatus", ""),
+            "sshUser": bridge_plan.get("sshUser", ""),
+            "remoteProjectRoot": bridge_plan.get("remoteProjectRoot", ""),
+            "safeDirections": bridge_plan.get("safeDirections", []),
+            "activeDirection": bridge_plan.get("activeDirection", ""),
+            "targetReady": bridge_plan.get("targetReady", False),
+            "activationRequired": bridge_plan.get("activationRequired", False),
+            "activationProject": bridge_plan.get("activationProject", ""),
+            "activationHint": bridge_plan.get("activationHint", ""),
+            "publicEndpoint": public_endpoint,
+            "preferredTransport": manifest.bridge.get("preferred_transport", ""),
+            "httpsReady": public_endpoint.startswith("https://"),
+            "requiresApprovalForWrite": bool(
+                bridge_plan.get("requiresApprovalForWrite", True)
+            ),
+        },
+    )
+
+
+def _build_cloud_drive_session(
+    *,
+    root: Path,
+    manifest: AppCapabilityManifest,
+    previous_state: dict,
+    grants: list[CapabilityGrant],
+) -> ConnectedAppSession:
+    bridge_plan = _cloud_drive_bridge_plan(root, manifest)
+    context_preview = _cloud_drive_context_preview(manifest, bridge_plan)
+    task_history = _cloud_drive_task_history(
+        manifest=manifest,
+        bridge_plan=bridge_plan,
+        previous_task_history=previous_state.get("task_history", []),
+    )
+    latest_task_result = task_history[-1] if task_history else {}
+    connected = bool(bridge_plan.get("mountedRoots") or bridge_plan.get("googleLoginReady"))
+    notes = [
+        "Cloud Drive Bridge is registered as a storage bridge for Google Drive and mounted folders.",
+        "Writes stay approval-gated so cloud and NAS copies cannot be changed silently.",
+    ]
+    if bridge_plan.get("googleLoginReady"):
+        notes.insert(0, "Google Drive login state is present on this machine.")
+    elif bridge_plan.get("mountedRoots"):
+        notes.insert(0, "Mounted cloud-drive folders were detected on this machine.")
+    else:
+        notes.insert(0, "Cloud storage is ready to configure, but no Google login or mounted folder is detected yet.")
+
+    return ConnectedAppSession(
+        session_id=previous_state.get("session_id") or f"bridge_{manifest.app_id}",
+        app_id=manifest.app_id,
+        app_name=manifest.name,
+        status="connected" if connected else "available",
+        bridge_health="healthy" if connected else "configure",
+        manifest_id=manifest.manifest_id,
+        granted_capabilities=grants,
+        active_tasks=[],
+        last_seen_at=utc_now_iso(),
+        notes=notes,
+        handshake_status="connected" if connected else "configuration_pending",
+        bridge_transport=manifest.bridge.get("transport", "local_mount_oauth"),
+        bridge_endpoint=manifest.bridge.get("endpoint", "local://cloud-drive"),
+        app_root=str(root),
+        context_preview=context_preview,
+        task_history=task_history[-4:],
+        latest_task_result=latest_task_result,
+        approval_callback={
+            "available": True,
+            "channel": "desktop_oauth",
+            "detail": (
+                "Google login should be launched by the desktop credential service; mounted "
+                "folders can be used without sending raw cloud tokens to the browser."
+            ),
+        },
+        ui_hints={
+            **manifest.ui_hints,
+            "bridgeRole": "cloud_storage",
+            "sourceRoot": bridge_plan.get("sourceRoot", ""),
+            "targetRoot": bridge_plan.get("primaryRoot", ""),
+            "selectedMode": bridge_plan.get("selectedMode", ""),
+            "selectedHost": bridge_plan.get("selectedProvider", ""),
+            "safeDirections": bridge_plan.get("safeDirections", []),
+            "activeDirection": bridge_plan.get("activeDirection", ""),
+            "targetReady": bool(bridge_plan.get("targetReady")),
+            "requiresApprovalForWrite": True,
+            "mountedRoots": bridge_plan.get("mountedRoots", []),
+            "googleLoginReady": bool(bridge_plan.get("googleLoginReady")),
         },
     )
 
@@ -399,20 +518,6 @@ def _context_preview_for_app(
                 "access": manifest.context_surfaces[0].access if manifest.context_surfaces else "read",
             }
         ]
-    if app_id == "mind-tower":
-        service_dirs = sorted(
-            path.name for path in (app_root / "services").iterdir() if path.is_dir()
-        ) if (app_root / "services").exists() else []
-        admin_files = _count_files(app_root / "apps" / "admin")
-        return [
-            {
-                "surfaceId": "monitoring-dashboard",
-                "label": "Monitoring Dashboard",
-                "summary": f"{admin_files} admin files and {len(service_dirs)} service modules detected.",
-                "items": service_dirs[:6],
-                "access": manifest.context_surfaces[0].access if manifest.context_surfaces else "read",
-            }
-        ]
     return []
 
 
@@ -450,37 +555,6 @@ def _task_history_for_app(
             }
         ]
 
-    if manifest.app_id == "mind-tower":
-        service_dirs = sorted(
-            path.name for path in (app_root / "services").iterdir() if path.is_dir()
-        ) if (app_root / "services").exists() else []
-        telegram_available = (
-            app_root
-            / "services"
-            / "monitor-worker"
-            / "src"
-            / "mindtower_worker"
-            / "telegram_listener.py"
-        ).exists()
-        return [
-            {
-                "taskId": manifest.tasks[0].task_id,
-                "label": manifest.tasks[0].label,
-                "status": "completed",
-                "sourceKind": "connected_app",
-                "resultSummary": "Ran the local monitoring digest bridge task and captured session proof.",
-                "createdAt": utc_now_iso(),
-                "completedAt": utc_now_iso(),
-                "approvalStatus": "callback_ready" if telegram_available else "not_required",
-                "payload": {
-                    "services": service_dirs[:6],
-                    "workspaceRoot": str(app_root),
-                    "surfaceRead": "monitoring-dashboard",
-                    "callbackChannel": "telegram" if telegram_available else "",
-                },
-            }
-        ]
-
     return []
 
 
@@ -489,17 +563,28 @@ def _synology_context_preview(
     manifest: AppCapabilityManifest,
     app_root: Path,
     status_payload: dict,
+    job_payload: dict,
+    bridge_plan: dict,
 ) -> list[dict]:
     surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
-    status_items = []
-    if status_payload:
-        selected_mode = str(status_payload.get("selectedMode") or "offline")
-        selected_host = str(status_payload.get("selectedHost") or "")
-        status_items = [
-            f"Mode: {selected_mode}",
-            f"Host: {selected_host or 'not selected'}",
-            f"Target: {status_payload.get('targetRoot') or 'not mapped'}",
-        ]
+    selected_mode = str(bridge_plan.get("selectedMode") or "offline")
+    selected_host = str(bridge_plan.get("selectedHost") or "")
+    status_items = [
+        f"Mode: {selected_mode}",
+        f"Host: {selected_host or 'not selected'}",
+        f"Control: {bridge_plan.get('controlProtocol') or 'not configured'}:{bridge_plan.get('controlPort') or '-'}",
+        f"Port note: {bridge_plan.get('sshPortStatus') or 'operator configured'}",
+        f"Remote user: {bridge_plan.get('sshUser') or 'not configured'}",
+        f"Computer: {bridge_plan.get('sourceRoot') or 'not mapped'}",
+        f"NAS: {bridge_plan.get('targetRoot') or 'not mapped'}",
+        f"Remote root: {bridge_plan.get('remoteProjectRoot') or 'not configured'}",
+        f"Active transfer: {bridge_plan.get('activeDirection') or 'none'}",
+        f"Queued writes need approval: {'yes' if bridge_plan.get('requiresApprovalForWrite') else 'no'}",
+    ]
+    if job_payload.get("currentPath"):
+        status_items.append(f"Current file: {job_payload.get('currentPath')}")
+    if bridge_plan.get("activationRequired"):
+        status_items.append(str(bridge_plan.get("activationHint") or "Activate the storage project before mapping."))
 
     return [
         {
@@ -525,6 +610,7 @@ def _synology_task_history(
     manifest: AppCapabilityManifest,
     status_payload: dict,
     job_payload: dict,
+    bridge_plan: dict,
     previous_task_history: list[dict],
 ) -> list[dict]:
     task = manifest.tasks[0] if manifest.tasks else None
@@ -539,7 +625,7 @@ def _synology_task_history(
         f"Fast Sync job is {job_state}."
         if not status_payload
         else (
-            f"{status_payload.get('selectedMode') or 'offline'} path selected; "
+            f"{bridge_plan.get('selectedMode') or 'offline'} path selected; "
             f"{completed_files} file(s) completed and {remaining_files} remaining."
         )
     )
@@ -557,14 +643,307 @@ def _synology_task_history(
             "completedAt": "" if job_state in {"preparing", "running"} else utc_now_iso(),
             "approvalStatus": "not_required",
             "payload": {
-                "targetReady": bool(status_payload.get("targetReady")) if status_payload else False,
-                "targetRoot": str(status_payload.get("targetRoot") or "") if status_payload else "",
-                "sourceRoot": str(status_payload.get("sourceRoot") or "") if status_payload else "",
-                "selectedMode": str(status_payload.get("selectedMode") or "") if status_payload else "",
+                "targetReady": bool(bridge_plan.get("targetReady")),
+                "targetRoot": str(bridge_plan.get("targetRoot") or ""),
+                "sourceRoot": str(bridge_plan.get("sourceRoot") or ""),
+                "selectedMode": str(bridge_plan.get("selectedMode") or ""),
+                "selectedHost": str(bridge_plan.get("selectedHost") or ""),
+                "controlProtocol": str(bridge_plan.get("controlProtocol") or ""),
+                "controlPort": _safe_int(bridge_plan.get("controlPort")),
+                "requestedSshPort": _safe_int(bridge_plan.get("requestedSshPort")),
+                "observedSshPort": _safe_int(bridge_plan.get("observedSshPort")),
+                "sshPortStatus": str(bridge_plan.get("sshPortStatus") or ""),
+                "sshUser": str(bridge_plan.get("sshUser") or ""),
+                "remoteProjectRoot": str(bridge_plan.get("remoteProjectRoot") or ""),
+                "safeDirections": list(bridge_plan.get("safeDirections", [])),
+                "activeDirection": str(bridge_plan.get("activeDirection") or ""),
+                "requiresApprovalForWrite": bool(bridge_plan.get("requiresApprovalForWrite")),
+                "activationRequired": bool(bridge_plan.get("activationRequired")),
+                "activationProject": str(bridge_plan.get("activationProject") or ""),
+                "activationHint": str(bridge_plan.get("activationHint") or ""),
+                "activationCommand": str(bridge_plan.get("activationCommand") or ""),
+                "bridgePlan": bridge_plan,
                 "currentPath": str(job_payload.get("currentPath") or ""),
             },
         }
     ]
+
+
+def _cloud_drive_context_preview(manifest: AppCapabilityManifest, bridge_plan: dict) -> list[dict]:
+    surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+    mounted_roots = list(bridge_plan.get("mountedRoots", []))
+    items = [
+        f"Provider: {bridge_plan.get('selectedProvider') or 'not selected'}",
+        f"Computer: {bridge_plan.get('sourceRoot') or 'not mapped'}",
+        f"Primary cloud folder: {bridge_plan.get('primaryRoot') or 'not mounted'}",
+        f"Google login: {'ready' if bridge_plan.get('googleLoginReady') else 'not configured'}",
+        f"Queued writes need approval: {'yes' if bridge_plan.get('requiresApprovalForWrite') else 'no'}",
+    ]
+    items.extend(str(item.get("root", "")) for item in mounted_roots[:4] if item.get("root"))
+    return [
+        {
+            "surfaceId": surface.surface_id if surface else "cloud-drive-status",
+            "label": surface.label if surface else "Cloud Drive Status",
+            "summary": bridge_plan.get("summary", ""),
+            "items": items,
+            "access": surface.access if surface else "read",
+        }
+    ]
+
+
+def _cloud_drive_task_history(
+    *,
+    manifest: AppCapabilityManifest,
+    bridge_plan: dict,
+    previous_task_history: list[dict],
+) -> list[dict]:
+    task = manifest.tasks[0] if manifest.tasks else None
+    previous_created_at = ""
+    if previous_task_history:
+        previous_created_at = str(previous_task_history[-1].get("createdAt", ""))
+    return [
+        {
+            "taskId": task.task_id if task else "monitor-cloud-drive",
+            "label": task.label if task else "Monitor Cloud Drive bridge",
+            "status": "completed",
+            "sourceKind": "connected_app",
+            "resultSummary": bridge_plan.get("summary", "Cloud-drive bridge state was refreshed."),
+            "createdAt": previous_created_at or utc_now_iso(),
+            "completedAt": utc_now_iso(),
+            "approvalStatus": "not_required",
+            "payload": {
+                "targetReady": bool(bridge_plan.get("targetReady")),
+                "targetRoot": str(bridge_plan.get("primaryRoot") or ""),
+                "sourceRoot": str(bridge_plan.get("sourceRoot") or ""),
+                "selectedMode": str(bridge_plan.get("selectedMode") or ""),
+                "selectedHost": str(bridge_plan.get("selectedProvider") or ""),
+                "safeDirections": list(bridge_plan.get("safeDirections", [])),
+                "activeDirection": str(bridge_plan.get("activeDirection") or ""),
+                "requiresApprovalForWrite": bool(bridge_plan.get("requiresApprovalForWrite")),
+                "bridgePlan": bridge_plan,
+                "cloudProviders": list(bridge_plan.get("providers", [])),
+                "mountedRoots": list(bridge_plan.get("mountedRoots", [])),
+                "googleLoginReady": bool(bridge_plan.get("googleLoginReady")),
+            },
+        }
+    ]
+
+
+def _cloud_drive_bridge_plan(root: Path, manifest: AppCapabilityManifest) -> dict:
+    source_root = str(
+        manifest.bridge.get("source_root")
+        or manifest.bridge.get("workspace_root")
+        or root.resolve()
+    )
+    mounted_roots = _discover_cloud_drive_roots()
+    google_login_ready = _google_drive_oauth_present(root)
+    primary = mounted_roots[0] if mounted_roots else {}
+    selected_provider = str(primary.get("provider") or manifest.ui_hints.get("primaryProvider") or "google-drive")
+    primary_root = str(primary.get("root") or "")
+    target_ready = bool(primary_root or google_login_ready)
+    safe_directions = ["upload", "download"] if target_ready else []
+    summary = (
+        f"{selected_provider} bridge ready at {primary_root}."
+        if primary_root
+        else (
+            "Google Drive OAuth is ready; select a cloud folder before queuing transfers."
+            if google_login_ready
+            else "Cloud Drive bridge is waiting for Google login or a mounted cloud folder."
+        )
+    )
+    return {
+        "mode": "cloud_drive_bridge",
+        "selectedMode": "google_oauth" if google_login_ready else ("mounted_folder" if primary_root else "configure"),
+        "selectedProvider": selected_provider,
+        "sourceRoot": source_root,
+        "primaryRoot": primary_root,
+        "targetRoot": primary_root,
+        "mountedRoots": mounted_roots,
+        "providers": list(manifest.ui_hints.get("providers", [])),
+        "googleLoginReady": google_login_ready,
+        "activeDirection": "",
+        "safeDirections": safe_directions,
+        "targetReady": target_ready,
+        "requiresApprovalForWrite": True,
+        "writePolicy": "preview_then_approve",
+        "conflictPolicy": "keep_newer_and_log",
+        "loginUrl": "https://drive.google.com/drive/my-drive",
+        "desktopClientUrl": "https://www.google.com/drive/download/",
+        "summary": summary,
+    }
+
+
+def _discover_cloud_drive_roots() -> list[dict]:
+    candidates: list[tuple[str, Path]] = []
+    for env_name, provider in (
+        ("FLUXIO_CLOUD_DRIVE_ROOT", "local-mounted-drive"),
+        ("FLUXIO_GOOGLE_DRIVE_ROOT", "google-drive"),
+        ("GOOGLE_DRIVE_ROOT", "google-drive"),
+        ("OneDrive", "onedrive"),
+        ("OneDriveConsumer", "onedrive"),
+        ("OneDriveCommercial", "onedrive"),
+        ("DROPBOX", "dropbox"),
+    ):
+        value = str(os.environ.get(env_name, "")).strip()
+        if value:
+            candidates.append((provider, Path(value)))
+
+    home = Path.home()
+    candidates.extend(
+        [
+            ("google-drive", Path("G:/My Drive")),
+            ("google-drive", Path("G:/Shared drives")),
+            ("google-drive", home / "Google Drive"),
+            ("google-drive", home / "My Drive"),
+            ("onedrive", home / "OneDrive"),
+            ("dropbox", home / "Dropbox"),
+        ]
+    )
+
+    seen: set[str] = set()
+    roots: list[dict] = []
+    for provider, path in candidates:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            resolved = path.expanduser()
+        key = str(resolved).lower()
+        if key in seen or not resolved.exists():
+            continue
+        seen.add(key)
+        roots.append({"provider": provider, "root": str(resolved)})
+    return roots
+
+
+def _google_drive_oauth_present(root: Path) -> bool:
+    if str(os.environ.get("FLUXIO_GOOGLE_DRIVE_OAUTH_PRESENT", "")).strip():
+        return True
+    for env_name in ("GOOGLE_DRIVE_OAUTH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"):
+        if str(os.environ.get(env_name, "")).strip():
+            return True
+    for candidate in (
+        root / ".agent_control" / "google_drive_token.json",
+        Path.home() / ".config" / "syntelos" / "google_drive_token.json",
+        Path.home() / ".config" / "fluxio" / "google_drive_token.json",
+    ):
+        if candidate.exists():
+            return True
+    return False
+
+
+def _synology_bridge_plan(
+    manifest: AppCapabilityManifest,
+    status_payload: dict,
+    job_payload: dict,
+) -> dict:
+    selected_mode = str(
+        status_payload.get("selectedMode")
+        or manifest.bridge.get("connection_mode")
+        or "offline"
+    ) if status_payload or manifest.bridge else "offline"
+    selected_host = str(
+        status_payload.get("selectedHost")
+        or manifest.bridge.get("nas_host")
+        or ""
+    ) if status_payload or manifest.bridge else ""
+    source_root = str(
+        status_payload.get("sourceRoot")
+        or manifest.bridge.get("source_root")
+        or manifest.bridge.get("workspace_root")
+        or ""
+    ) if status_payload or manifest.bridge else ""
+    target_root = str(
+        status_payload.get("targetRoot")
+        or manifest.bridge.get("target_root")
+        or ""
+    ) if status_payload or manifest.bridge else ""
+    remote_project_root = str(
+        manifest.bridge.get("remote_project_root")
+        or manifest.bridge.get("remote_root")
+        or ""
+    ).strip()
+    if remote_project_root:
+        if not target_root:
+            target_root = remote_project_root
+        elif _looks_windows_drive_path(target_root):
+            if not Path(target_root).expanduser().exists():
+                target_root = remote_project_root
+    active_direction = str(job_payload.get("direction") or "").strip().lower()
+    target_path_exists = bool(target_root and Path(target_root).expanduser().exists())
+    target_ready = bool(status_payload.get("targetReady")) if status_payload else target_path_exists
+    activation_project = str(manifest.bridge.get("activation_project") or "Core")
+    activation_command = str(
+        manifest.bridge.get("activation_command")
+        or manifest.bridge.get("map_command")
+        or ""
+    )
+    control_protocol = str(manifest.bridge.get("control_protocol") or "ssh").strip().lower()
+    requested_ssh_port = _safe_int(manifest.bridge.get("requested_ssh_port"))
+    observed_ssh_port = _safe_int(manifest.bridge.get("ssh_port"))
+    control_port = _safe_int(
+        manifest.bridge.get("control_port")
+        or requested_ssh_port
+        or observed_ssh_port
+        or 22
+    )
+    ssh_port_status = str(manifest.bridge.get("ssh_port_status") or "").strip()
+    ssh_user = str(manifest.bridge.get("ssh_user") or "").strip()
+    activation_required = bool(
+        source_root
+        and target_root
+        and not target_ready
+        and (selected_mode in {"tailscale", "lan"} or selected_host)
+    )
+    activation_hint = (
+        f"Activate the {activation_project} project or run the Synology mapper before using {target_root}."
+        if activation_required
+        else ""
+    )
+    requires_approval_for_write = _as_bool(
+        manifest.bridge.get("requires_approval_for_write"),
+        default=True,
+    )
+    auto_sync_enabled = _as_bool(manifest.bridge.get("auto_sync"), default=False)
+    configured_write_policy = str(manifest.bridge.get("write_policy") or "").strip()
+    write_policy = (
+        configured_write_policy
+        or (
+            "preview_then_approve"
+            if requires_approval_for_write
+            else "automatic_bidirectional"
+        )
+    )
+    safe_directions = []
+    if source_root and target_ready:
+        safe_directions = ["upload", "download"]
+    return {
+        "mode": "bidirectional_bridge",
+        "selectedMode": selected_mode,
+        "selectedHost": selected_host,
+        "controlProtocol": control_protocol,
+        "controlPort": control_port,
+        "requestedSshPort": requested_ssh_port or control_port,
+        "observedSshPort": observed_ssh_port,
+        "sshPortStatus": ssh_port_status,
+        "sshUser": ssh_user,
+        "remoteProjectRoot": remote_project_root,
+        "sourceRoot": source_root,
+        "targetRoot": target_root,
+        "activeDirection": active_direction,
+        "safeDirections": safe_directions,
+        "targetReady": target_ready,
+        "activationRequired": activation_required,
+        "activationProject": activation_project,
+        "activationHint": activation_hint,
+        "activationCommand": activation_command,
+        "requiresApprovalForWrite": requires_approval_for_write,
+        "autoSyncEnabled": auto_sync_enabled and not requires_approval_for_write,
+        "writePolicy": write_policy,
+        "conflictPolicy": str(status_payload.get("conflictPolicy") or "keep_newer_and_log"),
+        "continuousRunRole": (
+            "NAS keeps the service online while the desktop keeps local working files editable."
+        ),
+    }
 
 
 def _read_bridge_json(endpoint: str, path: str) -> dict:
@@ -589,22 +968,24 @@ def _safe_int(value: object) -> int:
         return 0
 
 
+def _looks_windows_drive_path(value: str) -> bool:
+    return len(value) >= 3 and value[1] == ":" and value[2] in {"/", "\\"}
+
+
+def _as_bool(value: object, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _approval_callback_for_app(app_id: str, app_root: Path) -> dict:
-    if app_id == "mind-tower":
-        telegram_listener = (
-            app_root
-            / "services"
-            / "monitor-worker"
-            / "src"
-            / "mindtower_worker"
-            / "telegram_listener.py"
-        )
-        if telegram_listener.exists():
-            return {
-                "available": True,
-                "channel": "telegram",
-                "detail": "Telegram listener detected for escalation-aware callback handling.",
-            }
     return {"available": False, "channel": "", "detail": ""}
 
 
@@ -671,7 +1052,6 @@ def _candidate_app_roots(root: Path, app_id: str) -> list[Path]:
     base = root.resolve().parent
     lookup = {
         "oratio-viva": [base / "OratioViva", base / "oratio-viva"],
-        "mind-tower": [base / "mind-tower", base / "MindTower"],
         "solantir-terminal": [base / "Solantir", base / "solantir"],
         "synology-fast-sync": [base / "Cowork"],
     }
@@ -744,48 +1124,6 @@ def _load_manifest_payloads(config_path: Path) -> list[dict]:
                 }
             ],
             "ui_hints": {"category": "speech", "requiresUserPresent": False},
-        },
-        {
-            "manifest_id": "manifest_mind_tower",
-            "schema_version": SCHEMA_VERSION,
-            "app_id": "mind-tower",
-            "name": "Mind Tower",
-            "description": "Monitoring, admin, and digest workflows exposed to Fluxio through a local bridge.",
-            "bridge": {
-                "transport": "http",
-                "endpoint": "http://127.0.0.1:47831/fluxio",
-                "healthcheck": "/health",
-                "event_stream": "/events",
-            },
-            "auth": {"mode": "local_token", "scopes": ["admin.read", "digest.run", "telegram.callback"]},
-            "permissions": ["task.run", "context.read", "approval.callback"],
-            "tasks": [
-                {
-                    "task_id": "run-monitor-digest",
-                    "label": "Run monitoring digest",
-                    "description": "Collect monitoring context and generate a digest-style task result.",
-                    "requires_approval": False,
-                }
-            ],
-            "context_surfaces": [
-                {
-                    "surface_id": "monitoring-dashboard",
-                    "label": "Monitoring Dashboard",
-                    "description": "Admin and monitoring context surfaced from Mind Tower.",
-                    "access": "read",
-                }
-            ],
-            "action_hooks": [
-                {
-                    "hook_id": "send-digest",
-                    "label": "Send Digest",
-                    "description": "Trigger a digest delivery or callback-aware review action.",
-                    "mutability": "write",
-                    "risk_level": "medium",
-                    "requires_approval": False,
-                }
-            ],
-            "ui_hints": {"category": "operations", "requiresUserPresent": False},
         },
         {
             "manifest_id": "manifest_solantir_terminal",

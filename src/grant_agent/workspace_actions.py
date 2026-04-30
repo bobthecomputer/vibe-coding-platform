@@ -15,6 +15,7 @@ from .mission_control import (
     _inspect_workspace_git,
     _profile_parameter_snapshot,
 )
+from .app_capability_standard import build_connected_apps_snapshot
 from .models import (
     ActionApprovalGate,
     ActionExecutionRecord,
@@ -57,7 +58,11 @@ def execute_control_room_workspace_action(
         action_id=action_id,
         workspace_id=workspace_id,
     )
-    history_key = SETUP_HISTORY_KEY if surface == "setup" else workspace.workspace_id
+    history_key = (
+        SETUP_HISTORY_KEY
+        if surface == "setup"
+        else ("__bridge__" if surface == "bridge" or workspace is None else workspace.workspace_id)
+    )
     if (
         surface == "setup"
         and spec.get("commandSurface") in {"setup.install", "setup.repair"}
@@ -187,6 +192,14 @@ def _resolve_action_spec(
             action["requiresApproval"] = _setup_action_requires_approval(profile_name)
         return action, workspace
 
+    if normalized_surface == "bridge":
+        workspace = _resolve_workspace_for_setup(store, workspace_id)
+        actions = _build_bridge_actions(root)
+        action = next((item for item in actions if item.get("actionId") == action_id), None)
+        if action is None:
+            raise ValueError(f"Unknown bridge action id: {action_id}")
+        return action, workspace
+
     if normalized_surface != "git":
         if normalized_surface != "validate":
             raise ValueError(f"Unknown workspace action surface: {surface}")
@@ -214,6 +227,117 @@ def _resolve_action_spec(
     if action is None:
         raise ValueError(f"Unknown git action id: {action_id}")
     return action, workspace
+
+
+def _build_bridge_actions(root: Path) -> list[dict]:
+    snapshot = build_connected_apps_snapshot(root)
+    actions: list[dict] = []
+    for session in snapshot.get("connectedSessions", []):
+        app_id = str(session.get("app_id", ""))
+        ui_hints = session.get("ui_hints", {}) if isinstance(session.get("ui_hints"), dict) else {}
+        bridge_role = str(ui_hints.get("bridgeRole") or "")
+        if app_id not in {"synology-fast-sync", "cloud-drive-sync"} and bridge_role not in {
+            "nas_storage",
+            "cloud_storage",
+        }:
+            continue
+        is_cloud = app_id == "cloud-drive-sync" or bridge_role == "cloud_storage"
+        latest_task = session.get("latest_task_result", {})
+        payload = latest_task.get("payload", {}) if isinstance(latest_task, dict) else {}
+        requires_approval_for_write = bool(
+            payload.get("requiresApprovalForWrite", True)
+        )
+        activation_command = str(payload.get("activationCommand") or "").strip()
+        if not is_cloud and activation_command:
+            actions.append(
+                {
+                    "actionId": "activate-nas-mapping",
+                    "label": "Activate NAS mapping",
+                    "description": "Run the Core/Cowork Synology mapper so the NAS project drive is available.",
+                    "commandSurface": "bridge.activate",
+                    "requiresApproval": True,
+                    "kind": "activate",
+                    "appId": app_id,
+                    "command": _quote_shell_path(activation_command),
+                    "platform": "local",
+                }
+            )
+        if not is_cloud:
+            host = str(payload.get("selectedHost") or ui_hints.get("selectedHost") or "").strip()
+            port = int(payload.get("controlPort") or ui_hints.get("controlPort") or 22)
+            user = str(payload.get("sshUser") or ui_hints.get("sshUser") or "").strip()
+            remote_root = str(
+                payload.get("remoteProjectRoot") or ui_hints.get("remoteProjectRoot") or ""
+            ).strip()
+            if host and user:
+                actions.append(
+                    {
+                        "actionId": "verify-nas-ssh",
+                        "label": "Verify NAS SSH",
+                        "description": "Probe the SSH/SFTP NAS route on the configured port without logging secrets.",
+                        "commandSurface": "bridge.verify",
+                        "requiresApproval": False,
+                        "kind": "verify",
+                        "appId": app_id,
+                        "command": (
+                            f"python scripts/nas_ssh_probe.py --host {_quote_shell_arg(host)} "
+                            f"--port {port} --user {_quote_shell_arg(user)} "
+                            f"--remote-root {_quote_shell_arg(remote_root)} --diagnose"
+                        ),
+                        "platform": "local",
+                    }
+                )
+                actions.append(
+                    {
+                        "actionId": "unlock-codex-network",
+                        "label": "Unlock local network rule",
+                        "description": (
+                            "Disable the local Codex outbound firewall block through an elevated "
+                            "PowerShell prompt, then retry the NAS SSH route."
+                        ),
+                        "commandSurface": "bridge.activate",
+                        "requiresApproval": True,
+                        "kind": "repair",
+                        "appId": app_id,
+                        "command": 'powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/unblock_codex_network.ps1"',
+                        "platform": "local",
+                    }
+                )
+        actions.append(
+            {
+                "actionId": "monitor-cloud-drive" if is_cloud else "monitor-fast-sync",
+                "label": "Monitor bridge",
+                "description": (
+                    "Read the latest cloud-drive bridge status from the connected app."
+                    if is_cloud
+                    else "Read the latest computer/NAS bridge status from the connected app."
+                ),
+                "commandSurface": "bridge.status",
+                "requiresApproval": False,
+                "kind": "status",
+                "appId": app_id,
+            }
+        )
+        actions.append(
+            {
+                "actionId": "queue-cloud-drive-transfer" if is_cloud else "start-sync-selection",
+                "label": "Queue transfer",
+                "description": (
+                    "Queue an upload or download through the cloud-drive bridge after preview."
+                    if is_cloud
+                    else (
+                        "Queue an upload or download through the NAS bridge after preview."
+                        if requires_approval_for_write
+                        else "Run an upload or download through the NAS bridge immediately."
+                    )
+                ),
+                "commandSurface": "bridge.sync",
+                "requiresApproval": requires_approval_for_write,
+                "kind": "sync",
+                "appId": app_id,
+            }
+        )
+    return actions
 
 
 def _resolve_workspace_for_setup(
@@ -324,6 +448,48 @@ def _run_action(
                 "followUpExitCode": None,
             },
             result_summary=str(setup.get("summary", "")),
+            target_path=proposal.target_path,
+        )
+        record.executed_at = utc_now_iso()
+        return record
+
+    if spec.get("commandSurface") in {"bridge.status", "bridge.sync"}:
+        snapshot = build_connected_apps_snapshot(root)
+        requested_app_id = str(spec.get("appId") or "synology-fast-sync")
+        storage_session = next(
+            (
+                item
+                for item in snapshot.get("connectedSessions", [])
+                if item.get("app_id") == requested_app_id
+            ),
+            {},
+        )
+        latest_task = storage_session.get("latest_task_result", {})
+        payload = latest_task.get("payload", {}) if isinstance(latest_task, dict) else {}
+        is_sync_request = spec.get("commandSurface") == "bridge.sync"
+        bridge_name = "Cloud-drive" if requested_app_id == "cloud-drive-sync" else "NAS"
+        record.result = ActionResultEnvelope(
+            ok=bool(storage_session),
+            exit_code=0 if storage_session else 1,
+            duration_ms=round((time.monotonic() - start) * 1000),
+            payload={
+                "workspaceActionId": spec.get("actionId", ""),
+                "surface": surface,
+                "commandSurface": spec.get("commandSurface", ""),
+                "bridgeSession": storage_session,
+                "sourceRoot": payload.get("sourceRoot", "") if isinstance(payload, dict) else "",
+                "targetRoot": payload.get("targetRoot", "") if isinstance(payload, dict) else "",
+                "queuedTransfer": bool(is_sync_request and storage_session),
+            },
+            result_summary=(
+                f"{bridge_name} bridge transfer request is recorded for the connected app."
+                if is_sync_request and storage_session
+                else (
+                    latest_task.get("resultSummary", "")
+                    if isinstance(latest_task, dict) and latest_task.get("resultSummary")
+                    else f"{bridge_name} bridge status was refreshed."
+                )
+            ),
             target_path=proposal.target_path,
         )
         record.executed_at = utc_now_iso()
@@ -691,17 +857,33 @@ def _build_proposal(
     command = str(spec.get("command", "")).strip()
     command_surface = str(spec.get("commandSurface", ""))
     command_kind = "setup_verify" if command_surface == "setup.verify" else (
-        "git_status"
-        if command_surface == "git.inspect"
+        "bridge_status"
+        if command_surface == "bridge.status"
         else (
-            "git_commit"
-            if command_surface == "git.commit"
-            else ("test_run" if command_surface == "validate.workspace" else "shell_command")
+            "bridge_verify"
+            if command_surface == "bridge.verify"
+            else (
+                "bridge_activate"
+                if command_surface == "bridge.activate"
+                else (
+                    "bridge_sync"
+                    if command_surface == "bridge.sync"
+                    else (
+                        "git_status"
+                        if command_surface == "git.inspect"
+                        else (
+                            "git_commit"
+                            if command_surface == "git.commit"
+                            else ("test_run" if command_surface == "validate.workspace" else "shell_command")
+                        )
+                    )
+                )
+            )
         )
     )
     mutability_class = (
         "read"
-        if command_surface in {"git.inspect", "setup.verify"}
+        if command_surface in {"git.inspect", "setup.verify", "bridge.status", "bridge.verify"}
         else ("execute" if command_surface == "validate.workspace" else "write")
     )
     action_uuid = uuid.uuid4().hex[:10]
@@ -986,7 +1168,19 @@ def _timeout_for_action(spec: dict) -> int:
         return 600
     if command_surface in {"git.pull", "git.push", "deploy.pages"}:
         return 180
+    if command_surface in {"bridge.activate", "bridge.verify"}:
+        return 120
+    if command_surface.startswith("bridge."):
+        return 15
     return 60
+
+
+def _quote_shell_path(path: str) -> str:
+    return f'"{path.replace(chr(34), chr(34) + chr(34))}"'
+
+
+def _quote_shell_arg(value: str) -> str:
+    return f'"{value.replace(chr(34), chr(34) + chr(34))}"'
 
 
 def _refresh_setup_result_payload(

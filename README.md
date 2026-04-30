@@ -1,6 +1,6 @@
-# Grant Agent Harness
+# Syntelos
 
-Grant Agent Harness is a docs-first, safety-aware orchestration layer for long-running coding sessions.
+Syntelos turns AI agents into second brains: a private, NAS-ready control layer for long-running coding sessions, local memory, live UI review, provider setup, and supervised runtime work.
 
 It is built around one core promise: the agent can keep moving when context gets full, but users stay in control through explicit plans, checks, and handoff artifacts.
 
@@ -80,14 +80,20 @@ npm install
 npm run tauri:dev
 ```
 
-Private NAS web console:
+Private Synology NAS web console:
 
 ```bash
-python scripts/nas_setup.py
+python scripts/nas_setup.py --account-user paul --display-name "Paul"
 python scripts/run_web_backend.py --host 0.0.0.0 --port 47880
 ```
 
-See `docs/SYNOLOGY_NAS_SETUP.md`. Admin credentials are generated locally under `.agent_control/` and are not committed.
+See `docs/SYNOLOGY_NAS_SETUP.md`. Account credentials are generated locally under `.agent_control/` and are not committed. The in-app setup check can also install the optional Image tools package (OpenCV) used for screenshot comparison and future visual features.
+
+Add one more local user later:
+
+```bash
+python scripts/nas_setup.py --skip-npm --add-user theo --display-name "Theo"
+```
 
 Implemented backend features:
 

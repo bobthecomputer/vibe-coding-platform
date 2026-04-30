@@ -83,7 +83,7 @@ const DEFAULT_MISSION_FORM = {
 };
 
 const PREFERRED_HARNESS_OPTIONS = [
-  { value: "fluxio_hybrid", label: "Fluxio Hybrid" },
+  { value: "fluxio_hybrid", label: "Syntelos Hybrid" },
   { value: "legacy_autonomous_engine", label: "Legacy Autonomous Engine" },
 ];
 
@@ -226,14 +226,16 @@ const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_ATTACHMENTS = 6;
 const WINDOWED_THRESHOLD = 60;
 const DEFAULT_REFERENCE_APPEARANCE = {
-  accent: "#6f5cff",
-  accentSoft: "#ece8ff",
-  accentAlt: "#f59e0b",
+  accent: "#d6a84f",
+  accentSoft: "#f3ead7",
+  accentAlt: "#9aa3a0",
   surface: "#ffffff",
   surfaceSoft: "#f6f8fc",
   line: "#d8deea",
   text: "#121826",
   density: "comfortable",
+  detailLevel: "balanced",
+  stylePreset: "graphite-gold",
   theme: "dark",
   sidebarBehavior: "auto",
 };
@@ -904,7 +906,7 @@ function buildStudioAssistantRuntimePrompt(item, prompt, selectedModel, selected
     overrides: asList(item.overrides),
   };
   return [
-    "You are refining a Fluxio studio definition for an in-app editor.",
+    "You are refining a Syntelos studio definition for an in-app editor.",
     `Target kind: ${item.kind === "rule" ? "rule set" : "skill"}.`,
     `Requested model label: ${selectedModel}. Requested effort label: ${selectedEffort}.`,
     "Return JSON only.",
@@ -1136,6 +1138,23 @@ async function callBackend(command, payload = undefined, options = {}) {
     }
     return null;
   }
+}
+
+function callBackendWithFallback(command, payload = undefined, fallback = null, timeoutMs = 4500) {
+  let timeoutId;
+  const timeout = new Promise(resolve => {
+    timeoutId = window.setTimeout(() => resolve(fallback), timeoutMs);
+  });
+  return Promise.race([
+    callBackend(command, payload)
+      .then(value => (value === null || value === undefined ? fallback : value))
+      .catch(() => fallback),
+    timeout,
+  ]).finally(() => {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
+  });
 }
 
 function useToastQueue() {
@@ -1374,14 +1393,14 @@ function TranscriptMessage({
   const roleLabel =
     item.roleLabel ||
     {
-      fluxio: "Fluxio",
+      fluxio: "Syntelos",
       operator: "Operator",
       runtime: "Runtime",
       bridge: "Bridge",
       queue: "Needs attention",
       system: "System",
     }[role] ||
-    "Fluxio";
+    "Syntelos";
   const roleIcon =
     item.roleIcon ||
     {
@@ -1446,7 +1465,7 @@ function TranscriptMessage({
 
 function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }) {
   const isUser = item.role === "operator";
-  const speakerLabel = isUser ? "You" : item.roleLabel || "Fluxio";
+  const speakerLabel = isUser ? "You" : item.roleLabel || "Syntelos";
   const speakerIcon = isUser ? "◉" : item.roleIcon || "◇";
   const secondaryText =
     !isUser && item.detail && item.detail !== item.title && item.detail !== item.meta
@@ -1914,7 +1933,7 @@ function controlRoomDeltaToLiveItem(payload, mission, delegatedSessions = []) {
           ? "Operator"
           : kind === "mission.approval"
             ? "Needs attention"
-            : "Fluxio",
+            : "Syntelos",
       roleIcon:
         isOperatorFollowUp
           ? "◉"
@@ -2076,6 +2095,9 @@ function inferSurfaceFromAction(action) {
   if (commandSurface.startsWith("validate.")) {
     return "validate";
   }
+  if (commandSurface.startsWith("bridge.")) {
+    return "bridge";
+  }
   return "setup";
 }
 
@@ -2116,8 +2138,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const requestedAgentScene = searchParams.get("agentScene") || "";
   const initialSurface = storedSurface === "general" ? "skills" : storedSurface;
 
+  const requestedUiMode = searchParams.get("mode");
   const [uiMode, setUiMode] = useState(
-    ["agent", "builder"].includes(storedUiMode) ? storedUiMode : "agent",
+    ["agent", "builder"].includes(requestedUiMode)
+      ? requestedUiMode
+      : ["agent", "builder"].includes(storedUiMode)
+        ? storedUiMode
+        : "agent",
   );
   const [surface, setSurface] = useState(
     ["home", "agent", "builder", "skills", "settings"].includes(initialSurface)
@@ -2134,8 +2161,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     ...DEFAULT_REFERENCE_APPEARANCE,
     ...(storedUiState.referenceAppearance || {}),
   });
+  const requestedSettingsTab = searchParams.get("settingsTab");
   const [referenceSettingsTab, setReferenceSettingsTab] = useState(
-    storedUiState.referenceSettingsTab || "general",
+    requestedSettingsTab || storedUiState.referenceSettingsTab || "general",
   );
   const [referenceStudio, setReferenceStudio] = useState(() => ({
     ...buildDefaultReferenceStudio(profileFormFromWorkspace(null, "builder").routeOverrides),
@@ -2163,6 +2191,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
   const [skillStudioFilter, setSkillStudioFilter] = useState("all");
   const [skillStudioQuery, setSkillStudioQuery] = useState("");
+  const [activeRoadmapItemId, setActiveRoadmapItemId] = useState("");
   const [telegramChatId, setTelegramChatId] = useState(storedChatId);
   const [telegramBotToken, setTelegramBotToken] = useState("");
   const [openClawGatewayUrl, setOpenClawGatewayUrl] = useState(DEFAULT_OPENCLAW_GATEWAY_URL);
@@ -2180,7 +2209,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [lastPushReason, setLastPushReason] = useState("");
   const [liveSyncSuspended, setLiveSyncSuspended] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeDrawer, setActiveDrawer] = useState(storedUiState.activeDrawer || null);
+  const requestedDrawer = searchParams.get("drawer");
+  const [activeDrawer, setActiveDrawer] = useState(requestedDrawer || storedUiState.activeDrawer || null);
   const [operatorDraft, setOperatorDraft] = useState("");
   const [operatorNotes, setOperatorNotes] = useState(storedUiState.operatorNotes || []);
   const [liveControlEvents, setLiveControlEvents] = useState(storedUiState.liveControlEvents || []);
@@ -2523,7 +2553,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               id: "fallback",
               name: "Local Fallback",
               description:
-                "Tauri backend is unavailable, so Fluxio is showing a local supervision fixture.",
+                "Tauri backend is unavailable, so Syntelos is showing a local supervision fixture.",
             },
             openClawStatus: null,
             openClawHasToken: false,
@@ -2533,30 +2563,31 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           return;
         }
 
+        const snapshot = await callBackend(
+          "get_control_room_snapshot_command",
+          { payload: { root: null } },
+          { throwOnError: true },
+        );
+
         const [
-          snapshot,
           pendingApprovals,
           pendingQuestions,
           telegramReady,
           openClawStatus,
           openClawHasToken,
           providerSecretPresencePrimary,
-        ] =
-          await Promise.all([
-            callBackend(
-              "get_control_room_snapshot_command",
-              { payload: { root: null } },
-              { throwOnError: true },
-            ),
-            callBackend("list_pending_approvals"),
-            callBackend("list_pending_questions"),
-            callBackend("has_telegram_bot_token_command"),
-            callBackend("get_openclaw_status"),
-            callBackend("has_openclaw_gateway_token"),
-            callBackend("get_provider_secret_presence_command", {
-              providerIds: PROVIDER_AUTH_PRESENCE_IDS,
-            }),
-          ]);
+        ] = await Promise.all([
+          callBackendWithFallback("list_pending_approvals", undefined, []),
+          callBackendWithFallback("list_pending_questions", undefined, []),
+          callBackendWithFallback("has_telegram_bot_token_command", undefined, false),
+          callBackendWithFallback("get_openclaw_status", undefined, null),
+          callBackendWithFallback("has_openclaw_gateway_token", undefined, false),
+          callBackendWithFallback(
+            "get_provider_secret_presence_command",
+            { providerIds: PROVIDER_AUTH_PRESENCE_IDS },
+            {},
+          ),
+        ]);
 
         if (!mountedRef.current) {
           return;
@@ -2567,9 +2598,6 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             ? snapshot.providerSecretPresence
             : null) ||
           providerSecretPresencePrimary ||
-          (await callBackend("get_provider_secret_presence_command", {
-            providerIds: PROVIDER_AUTH_PRESENCE_IDS,
-          })) ||
           {};
 
         try {
@@ -2613,7 +2641,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               id: "fallback",
               name: "Local Fallback",
               description:
-                "Fluxio web backend is unavailable, so the website is showing a local supervision fixture.",
+                "Syntelos web backend is unavailable, so the website is showing a local supervision fixture.",
             },
             openClawStatus: null,
             openClawHasToken: false,
@@ -3831,7 +3859,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         {
           payload: {
             chatId: telegramChatId.trim(),
-            text: "Fluxio supervision test ping: approvals and mission escalations are reachable.",
+            text: "Syntelos supervision test ping: approvals and mission escalations are reachable.",
           },
         },
         { throwOnError: true },
@@ -4852,12 +4880,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     () => [
       {
         id: "runtime",
-        eyebrow: "Runtime studio",
-        title: "Hermes and OpenClaw",
-        detail: "Update runtimes, inspect service drift, and repair failing bridges without leaving the shell.",
+        eyebrow: "Setup",
+        title: "Work engines and accounts",
+        detail: "Install or update Hermes, OpenClaw, image tools, and account connections without leaving Syntelos.",
         meta: `${viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount} need attention · ${viewModel.drawers.builder.serviceStudio.availableActionCount} actions`,
         tone:
           viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount > 0 ? "warn" : "good",
+      },
+      {
+        id: "storage",
+        eyebrow: "Storage bridge",
+        title: "Computer, NAS, and cloud file bridge",
+        detail: "Map local folders to NAS or Google Drive storage so long-running work can stay online while files remain editable locally.",
+        meta: `${bridgeSummary.connected}/${bridgeSummary.totalApps} bridge session${bridgeSummary.totalApps === 1 ? "" : "s"} connected · ${bridgeSummary.mobileReady} mobile-ready`,
+        tone: bridgeSummary.connected > 0 ? "good" : "warn",
       },
       {
         id: "skills",
@@ -4887,6 +4923,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     ],
     [
       effectiveRouteRows.length,
+      bridgeSummary.connected,
+      bridgeSummary.mobileReady,
+      bridgeSummary.totalApps,
       viewModel.drawers.builder.confidence.score,
       viewModel.drawers.builder.confidence.tone,
       viewModel.drawers.builder.profileStudio.profileRows.length,
@@ -5103,7 +5142,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         roleLabel:
           actionRuntimeLike
             ? runtimeLabel(mission?.runtime_id)
-            : "Fluxio",
+            : "Syntelos",
         roleIcon:
           actionRuntimeLike ? (mission?.runtime_id === "hermes" ? "⬢" : "◇") : "·",
         label: actionRuntimeLike ? "Process message" : titleizeToken(actionKind),
@@ -5161,7 +5200,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ? "Heartbeat is stale. Builder runtime view can inspect the lane in detail."
               : session.execution_target_detail ||
                 session.execution_root ||
-                "Delegated runtime lane is being supervised from Fluxio.",
+                "Delegated runtime lane is being supervised from Syntelos.",
           meta: timestampLabel(session.updated_at),
           timestampRaw: session.updated_at,
           tone:
@@ -5301,7 +5340,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               ? "Needs attention"
               : role === "runtime"
                 ? "Runtime"
-                : "Fluxio",
+                : "Syntelos",
         roleIcon:
           isOperatorFollowUp
             ? "◉"
@@ -5458,12 +5497,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [agentTraceTurns, pinnedNexusIds]);
   const agentHasTurns = agentConversationTurns.length > 0;
   const agentIdleState = !mission ? "no-mission" : agentHasTurns ? "active" : "no-turns";
-  const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Fluxio workspace";
+  const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Syntelos workspace";
   const agentComposerLabel = !mission ? "Mission prompt" : "Follow-up or note";
   const agentComposerPlaceholder = !mission
     ? workspaces.length > 0
-      ? "Describe the next mission you want Fluxio to run."
-      : "Add a workspace, then describe the next mission you want Fluxio to run."
+      ? "Describe the next mission you want Syntelos to run."
+      : "Add a workspace, then describe the next mission you want Syntelos to run."
     : openClawRuntimeActive
       ? "Send a direct follow-up to the runtime, or keep a local operator note."
       : viewModel.thread.composerPlaceholder;
@@ -5552,6 +5591,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       (minimaxOpenClawOAuthReady ? "MiniMax OpenClaw OAuth" : minimaxSecretReady ? "API key" : "not configured"),
   );
   const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
+  const providerOAuthActionsAvailable =
+    previewMode === "live" && hasCommandBackend() && hasTauriBackend();
+  const providerOAuthUnavailableReason = !hasTauriBackend()
+    ? "Model OAuth account setup requires the desktop credential service (Tauri)."
+    : "Switch to Live backend mode before starting model OAuth.";
   const localhostStatus =
     snapshot?.localhostStatus && typeof snapshot.localhostStatus === "object"
       ? snapshot.localhostStatus
@@ -5665,7 +5709,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       agentConversationTurns.slice(-8).map(item => ({
         id: item.id,
         role: item.role === "operator" ? "user" : "assistant",
-        label: item.label || item.roleLabel || (item.role === "operator" ? "You" : "Fluxio Agent"),
+        label: item.label || item.roleLabel || (item.role === "operator" ? "You" : "Syntelos Agent"),
         title: item.title || item.detail || "Update",
         detail:
           item.role === "operator"
@@ -5683,7 +5727,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     const seededMessages = referenceAgentMessages.slice(-3).map(item => ({
       id: `feedback-${item.id}`,
       role: item.role,
-      author: item.role === "user" ? "You" : "Fluxio Agent",
+      author: item.role === "user" ? "You" : "Syntelos Agent",
       body: item.title,
       meta: item.meta || "",
       tone: item.tone,
@@ -6236,6 +6280,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
 
+      if (normalizedAction === "settings:run-action") {
+        const action = payload?.action;
+        if (!action?.actionId) {
+          pushToast("No executable service action was attached.", "warn");
+          return;
+        }
+        await runWorkspaceActionSpec(action);
+        return;
+      }
+
       if (normalizedAction === "settings:delete-workspace") {
         const workspaceId =
           selectedWorkspaceId || workspace?.workspace_id || workspaces[0]?.workspace_id || "";
@@ -6292,6 +6346,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       refreshAll,
       referenceAgentMessages,
       referenceFeedbackItems,
+      runWorkspaceActionSpec,
       workspace?.default_runtime,
       workspace?.name,
       workspace?.workspace_id,
@@ -6724,8 +6779,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const handleReferenceQuickAuth = useCallback(
     async providerId => {
       if (providerId === "openai") {
-        if (previewMode !== "live" || !hasCommandBackend()) {
-          pushToast("Preview mode cannot start OpenAI Codex OAuth.", "warn");
+        if (!providerOAuthActionsAvailable) {
+          pushToast(providerOAuthUnavailableReason, "warn");
           return;
         }
         try {
@@ -6768,8 +6823,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
       if (providerId === "minimax") {
-        if (previewMode !== "live" || !hasCommandBackend()) {
-          pushToast("Preview mode cannot start MiniMax OpenClaw OAuth.", "warn");
+        if (!providerOAuthActionsAvailable) {
+          pushToast(providerOAuthUnavailableReason, "warn");
           return;
         }
         try {
@@ -6797,7 +6852,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     },
     [
       callBackend,
-      previewMode,
+      providerOAuthActionsAvailable,
+      providerOAuthUnavailableReason,
       pushToast,
       refreshAll,
       saveWorkspacePolicy,
@@ -6806,8 +6862,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
 
   const verifyMiniMaxOpenClawAuth = useCallback(async () => {
-    if (previewMode !== "live" || !hasCommandBackend()) {
-      pushToast("Preview mode cannot verify MiniMax OpenClaw OAuth.", "warn");
+    if (!providerOAuthActionsAvailable) {
+      pushToast(providerOAuthUnavailableReason, "warn");
       return;
     }
     try {
@@ -6831,7 +6887,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     } catch (error) {
       pushToast(`Could not verify MiniMax OpenClaw OAuth: ${error}`, "error");
     }
-  }, [callBackend, previewMode, pushToast, refreshAll, saveWorkspacePolicy, workspaceProfileForm]);
+  }, [
+    callBackend,
+    providerOAuthActionsAvailable,
+    providerOAuthUnavailableReason,
+    pushToast,
+    refreshAll,
+    saveWorkspacePolicy,
+    workspaceProfileForm,
+  ]);
 
   const handleReferenceWorkspaceProfileFieldChange = useCallback((field, value) => {
     setWorkspaceProfileForm(current => ({
@@ -6908,7 +6972,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       },
       {
         id: "runtime",
-        label: "Runtime",
+        label: "Setup",
         count: viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount,
         tone:
           viewModel.drawers.builder.serviceStudio.summary.needsAttentionCount > 0
@@ -7162,18 +7226,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       return (
         <section className="drawer-panel">
           <header>
-            <h2>Runtime and integrations</h2>
-            <p>Keep Hermes, OpenClaw, and bridge surfaces manageable from one focused review panel.</p>
+            <h2>Tools and accounts</h2>
+            <p>Keep Hermes, OpenClaw, image tools, and phone alerts healthy from one simple setup panel.</p>
           </header>
 
           <section className="drawer-block" id="provider-auth-panel">
-            <h3>Provider auth and model tools</h3>
+            <h3>AI accounts and model tools</h3>
             <div className="context-grid compact-metrics">
               <article className="context-item">
                 <span>OpenAI / Codex auth</span>
                 <strong>{`${openAICodexAuthPath} · ${openAICodexAuthReady ? "Ready" : "Missing"}`}</strong>
                 <p>
-                  Use OpenAI Codex OAuth for subscription-backed Codex/OpenClaw routes, or save an API key for direct API-key routes.
+                  Connect your OpenAI account for Codex/OpenClaw, or save an API key for direct model calls.
                 </p>
               </article>
               <article className="context-item">
@@ -7181,8 +7245,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <strong>{`${minimaxAuthPath} · ${minimaxAuthReady ? "Ready" : "Missing"}`}</strong>
                 <p>
                   {minimaxAuthPath.toLowerCase().includes("oauth")
-                    ? "MiniMax OAuth uses OpenClaw provider minimax-portal with method oauth or oauth-cn; Fluxio verifies the OpenClaw credential file before treating it as ready."
-                    : "Save a MiniMax API key when the route is configured for API-key auth."}
+                    ? "Syntelos checks the MiniMax login file before marking MiniMax ready."
+                    : "Save a MiniMax API key when you want MiniMax model runs."}
                 </p>
               </article>
               <article className="context-item">
@@ -7195,7 +7259,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <p>
                   {missionProviderTruth?.activeRoute?.role
                     ? `${titleizeToken(missionProviderTruth.activeRoute.role)} in ${titleizeToken(missionProviderTruth.currentPhase || agentCyclePhase)}`
-                    : "Route role will appear once the mission resolves planner/executor/verifier usage."}
+                    : "The active AI account appears here after the first model-backed step."}
                 </p>
               </article>
               <article className="context-item">
@@ -7220,7 +7284,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </strong>
                 <p>
                   {missionProviderTruth?.lastFailure?.summary ||
-                    "Failures are promoted into this surface when a provider route errors."}
+                    "Connection or model errors appear here when something needs attention."}
                 </p>
               </article>
             </div>
@@ -7255,7 +7319,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </p>
                     {item.id === "openai" ? (
                       <div className="drawer-actions">
-                        <ActionButton onClick={() => void handleReferenceQuickAuth("openai")}>
+                        <ActionButton
+                          disabled={!providerOAuthActionsAvailable}
+                          onClick={() => void handleReferenceQuickAuth("openai")}
+                          title={!providerOAuthActionsAvailable ? providerOAuthUnavailableReason : ""}
+                        >
                           Connect Codex OAuth
                         </ActionButton>
                         <ActionButton onClick={() => void openProviderAuthUrl(PROVIDER_AUTH_URLS.openaiApiKeys, "OpenAI API keys")}>
@@ -7265,7 +7333,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     ) : null}
                     {item.id === "minimax" ? (
                       <div className="drawer-actions">
-                        <ActionButton onClick={() => void handleReferenceQuickAuth("minimax")}>
+                        <ActionButton
+                          disabled={!providerOAuthActionsAvailable}
+                          onClick={() => void handleReferenceQuickAuth("minimax")}
+                          title={!providerOAuthActionsAvailable ? providerOAuthUnavailableReason : ""}
+                        >
                           MiniMax OpenClaw OAuth
                         </ActionButton>
                         <ActionButton onClick={() => void openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxApiKeys, "MiniMax API keys")}>
@@ -7362,20 +7434,20 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           </section>
 
           <section className="drawer-block">
-            <h3>OpenClaw gateway</h3>
+            <h3>OpenClaw live connection</h3>
             <div className="context-grid compact-metrics">
               <article className="context-item">
-                <span>Gateway</span>
+                <span>Connection</span>
                 <strong>{openClawStatus?.connected ? "Connected" : "Disconnected"}</strong>
                 <p>{openClawStatus?.gatewayUrl || openClawGatewayUrl || DEFAULT_OPENCLAW_GATEWAY_URL}</p>
               </article>
               <article className="context-item">
-                <span>Queued outbound</span>
+                <span>Messages waiting</span>
                 <strong>{openClawStatus?.queuedOutbound ?? 0}</strong>
                 <p>{openClawStatus?.reconnectAttempt ? `Reconnect ${openClawStatus.reconnectAttempt}` : "No reconnect pressure"}</p>
               </article>
               <article className="context-item">
-                <span>Gateway token</span>
+                <span>Connection token</span>
                 <strong>{data.openClawHasToken ? "Stored" : "Missing"}</strong>
                 <p>{openClawStatus?.lastError || "No gateway error reported."}</p>
               </article>
@@ -7385,7 +7457,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 <p>
                   {modelAuthReady
                     ? `${openAICodexAuthReady ? openAICodexAuthPath : minimaxAuthPath} is ready for model routing.`
-                    : "Connect Codex OAuth, MiniMax OpenClaw OAuth, or an API key before routing OpenClaw model runs."}
+                    : "Connect OpenAI, MiniMax, or an API key before starting model work."}
                 </p>
               </article>
             </div>
@@ -7413,14 +7485,23 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </div>
               </div>
               <p>
-                Gateway tokens move messages. Model identity comes from provider accounts: Codex
-                OAuth, MiniMax portal OAuth, or direct API keys.
+                The connection token moves messages. Your model account decides which AI service OpenClaw can use.
               </p>
               <div className="drawer-actions">
-                <ActionButton onClick={() => void handleReferenceQuickAuth("openai")} variant={openAICodexAuthReady ? "secondary" : "primary"}>
+                <ActionButton
+                  disabled={!providerOAuthActionsAvailable}
+                  onClick={() => void handleReferenceQuickAuth("openai")}
+                  title={!providerOAuthActionsAvailable ? providerOAuthUnavailableReason : ""}
+                  variant={openAICodexAuthReady ? "secondary" : "primary"}
+                >
                   {openAICodexAuthReady ? "Codex OAuth connected" : "Connect Codex OAuth"}
                 </ActionButton>
-                <ActionButton onClick={() => void handleReferenceQuickAuth("minimax")} variant={minimaxAuthReady ? "secondary" : "primary"}>
+                <ActionButton
+                  disabled={!providerOAuthActionsAvailable}
+                  onClick={() => void handleReferenceQuickAuth("minimax")}
+                  title={!providerOAuthActionsAvailable ? providerOAuthUnavailableReason : ""}
+                  variant={minimaxAuthReady ? "secondary" : "primary"}
+                >
                   {minimaxAuthReady ? "MiniMax OAuth connected" : "Start MiniMax OAuth"}
                 </ActionButton>
                 <ActionButton onClick={() => void verifyMiniMaxOpenClawAuth()}>
@@ -7435,18 +7516,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 </ActionButton>
               </div>
               <p className="drawer-footnote">
-                MiniMax uses OpenClaw provider <code>minimax-portal</code> with method <code>oauth</code> or <code>oauth-cn</code>; Fluxio checks OpenClaw's auth profile store before marking it ready.
+                Syntelos verifies the saved MiniMax login before it marks MiniMax ready.
               </p>
             </div>
 
-            <Field label="Gateway URL">
+            <Field label="Connection URL">
               <input
                 onChange={event => setOpenClawGatewayUrl(event.target.value)}
                 placeholder={DEFAULT_OPENCLAW_GATEWAY_URL}
                 value={openClawGatewayUrl}
               />
             </Field>
-            <Field label="Gateway token">
+            <Field label="Connection token">
               <input
                 onChange={event => setOpenClawGatewayToken(event.target.value)}
                 placeholder={data.openClawHasToken ? "Token stored in keyring" : "Paste a gateway token"}
@@ -7456,7 +7537,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             </Field>
             <div className="drawer-actions">
               <ActionButton onClick={() => void handleOpenClawConnect()} variant="primary">
-                Connect gateway
+                Connect
               </ActionButton>
               <ActionButton onClick={() => void handleOpenClawDisconnect()}>
                 Disconnect
@@ -7469,12 +7550,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               </ActionButton>
             </div>
             <p className="drawer-footnote">
-              Gateway messaging is live in this app. Builder now surfaces install, repair, and update actions for Hermes and OpenClaw when the backend detects version drift.
+              Syntelos can install, repair, update, and re-check Hermes and OpenClaw from here.
             </p>
           </section>
 
           <section className="drawer-block">
-            <h3>Core runtimes</h3>
+            <h3>Work engines</h3>
             <div className="drawer-list">
               {primaryRuntimeServices.length > 0 ? (
                 primaryRuntimeServices.map(service => (
@@ -7503,8 +7584,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 ))
               ) : (
                 <article className="drawer-card">
-                  <strong>Hermes and OpenClaw are not surfaced by the backend yet.</strong>
-                  <p>Once those services report through control-room service management, they will appear here.</p>
+                  <strong>Hermes and OpenClaw are not visible yet.</strong>
+                  <p>After setup checks run, Syntelos shows them here with install and repair buttons.</p>
                 </article>
               )}
             </div>
@@ -7512,7 +7593,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
           {mission ? (
             <section className="drawer-block">
-              <h3>Mission execution contract</h3>
+              <h3>Mission settings used for this run</h3>
               <div className="context-grid compact-metrics">
                 {missionRuntimeContract.map(item => (
                   <article className="context-item" key={`runtime-contract-${item.label}`}>
@@ -7548,7 +7629,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ) : null}
 
           <section className="drawer-block">
-            <h3>Delegated runtime lanes</h3>
+            <h3>Background work</h3>
             <div className="drawer-list">
               {delegatedSessions.length > 0 ? (
                 delegatedSessions.map(session => (
@@ -7558,7 +7639,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   >
                     <span>{runtimeLabel(session.runtime_id)}</span>
                     <strong>{titleizeToken(session.status || "unknown")}</strong>
-                    <p>{session.detail || session.last_event || "Delegated runtime lane is active."}</p>
+                    <p>{session.detail || session.last_event || "A background run is active."}</p>
                     <div className="pill-row">
                       <span className="mini-pill">{session.heartbeat_status ? `Heartbeat ${titleizeToken(session.heartbeat_status)}` : "No heartbeat"}</span>
                       {session.execution_target ? (
@@ -7584,8 +7665,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 ))
               ) : (
                 <article className="drawer-card">
-                  <strong>No delegated runtime lane is active.</strong>
-                  <p>When Hermes or OpenClaw is actively executing, heartbeat, last event, and execution target will show here.</p>
+                  <strong>No background run is active.</strong>
+                  <p>When Hermes or OpenClaw is working, Syntelos shows progress and the latest update here.</p>
                 </article>
               )}
             </div>
@@ -7727,7 +7808,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   )}
                 </select>
               </Field>
-              <Field label="Preferred runtime">
+              <Field label="Preferred work engine">
                 <select
                   onChange={event =>
                     setWorkspaceProfileForm(current => ({
@@ -8262,30 +8343,67 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             </ul>
           </section>
 
-          <section className="drawer-block">
-            <h3>Road to 100%</h3>
-            <p>
-              {viewModel.drawers.builder.qualityRoadmap.headline}
-              {` · Gap ${viewModel.drawers.builder.qualityRoadmap.gap}%`}
-            </p>
-            <div className="roadmap-grid">
-              {viewModel.drawers.builder.qualityRoadmap.tracks.map(item => (
-                <article className={`roadmap-item ${toneClass(item.tone)}`} key={item.id}>
-                  <span>{titleizeToken(item.state)}</span>
-                  <strong>{item.label}</strong>
-                  <p>{item.detail}</p>
-                  <p>{item.hint}</p>
-                  <div className="drawer-actions">
-                    <ActionButton
-                      onClick={() => void handleQualityRoadmapAction(item)}
-                      type="button"
-                    >
-                      {item.suggestedAction || "Open"}
-                    </ActionButton>
-                  </div>
-                </article>
-              ))}
+          <section className="drawer-block roadmap-event-block">
+            <div className="roadmap-event-head">
+              <div>
+                <h3>Road to 100%</h3>
+                <p>
+                  {viewModel.drawers.builder.qualityRoadmap.headline}
+                  {` · Gap ${viewModel.drawers.builder.qualityRoadmap.gap}%`}
+                </p>
+              </div>
+              <span>
+                {viewModel.drawers.builder.qualityRoadmap.doneCount} done ·{" "}
+                {viewModel.drawers.builder.qualityRoadmap.nextCount} next ·{" "}
+                {viewModel.drawers.builder.qualityRoadmap.blockedCount} blocked
+              </span>
             </div>
+            {(() => {
+              const tracks = viewModel.drawers.builder.qualityRoadmap.tracks;
+              const activeItem =
+                tracks.find(item => item.id === activeRoadmapItemId) ||
+                tracks.find(item => item.state !== "done") ||
+                tracks[0];
+              return (
+                <div className="roadmap-event-layout">
+                  <div className="roadmap-event-line" aria-label="Quality roadmap events">
+                    {tracks.map((item, index) => (
+                      <button
+                        className={cx(
+                          "roadmap-event",
+                          toneClass(item.tone),
+                          activeItem?.id === item.id && "active",
+                        )}
+                        key={item.id}
+                        onClick={() => setActiveRoadmapItemId(item.id)}
+                        style={{ "--roadmap-index": index }}
+                        type="button"
+                      >
+                        <span>{titleizeToken(item.state)}</span>
+                        <strong>{item.label}</strong>
+                        <em>{item.detail}</em>
+                      </button>
+                    ))}
+                  </div>
+                  {activeItem ? (
+                    <aside className={`roadmap-popover ${toneClass(activeItem.tone)}`} key={activeItem.id}>
+                      <span>{titleizeToken(activeItem.state)}</span>
+                      <strong>{activeItem.label}</strong>
+                      <p>{activeItem.detail}</p>
+                      <p>{activeItem.hint}</p>
+                      <div className="drawer-actions">
+                        <ActionButton
+                          onClick={() => void handleQualityRoadmapAction(activeItem)}
+                          type="button"
+                        >
+                          {activeItem.suggestedAction || "Open"}
+                        </ActionButton>
+                      </div>
+                    </aside>
+                  ) : null}
+                </div>
+              );
+            })()}
           </section>
 
           <section className="drawer-block">
@@ -8339,7 +8457,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   )}
                 </select>
               </Field>
-              <Field label="Preferred runtime">
+              <Field label="Preferred work engine">
                 <select
                   onChange={event =>
                     setWorkspaceProfileForm(current => ({
@@ -8907,6 +9025,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       ],
     },
     runtimes: asList(snapshot?.runtimes),
+    bridgeSessions,
+    storageBridge: snapshot?.storageBridge || {},
+    setupServices: [
+      ...asList(setupHealth?.serviceManagement),
+      ...asList(workspace?.serviceManagement),
+    ],
     providers: PROVIDER_SECRET_OPTIONS.map(item => ({
       ...item,
       quickAuth:
@@ -8914,13 +9038,19 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           ? {
               label: "Connect Codex OAuth",
               ready: openAICodexAuthReady,
-              detail: "Run the OpenAI Codex PKCE OAuth flow, or use API keys for direct model calls.",
+              detail: providerOAuthActionsAvailable
+                ? "Run the OpenAI Codex PKCE OAuth flow, or use API keys for direct model calls."
+                : providerOAuthUnavailableReason,
+              disabled: !providerOAuthActionsAvailable,
             }
           : item.id === "minimax"
             ? {
                 label: "MiniMax OpenClaw OAuth",
                 ready: minimaxAuthReady,
-                detail: "Launch OpenClaw's minimax-portal OAuth flow or save a MiniMax API key.",
+                detail: providerOAuthActionsAvailable
+                  ? "Launch OpenClaw's minimax-portal OAuth flow or save a MiniMax API key."
+                  : providerOAuthUnavailableReason,
+                disabled: !providerOAuthActionsAvailable,
               }
             : null,
       authLinks:
@@ -8962,7 +9092,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       onClear: () => void handleProviderSecretClear(item.id),
       savingState: providerSecretSaving[item.id] || "",
       onQuickAuth:
-        item.id === "openai" || item.id === "minimax"
+        (item.id === "openai" || item.id === "minimax") && providerOAuthActionsAvailable
           ? () => void handleReferenceQuickAuth(item.id)
           : null,
       status:
@@ -8974,7 +9104,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     })),
     members: [
       { name: "Orbit Pro", role: "Owner" },
-      { name: "Fluxio Agent", role: "System" },
+      { name: "Syntelos Agent", role: "System" },
       { name: titleizeToken(workspaceProfileForm.userProfile), role: "Active profile" },
     ],
     privacy: {
@@ -8994,7 +9124,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         <header className="fluxio-topbar">
           <div className="topbar-app">
             <div className="topbar-context">
-              <strong>Fluxio workspace</strong>
+              <strong>Syntelos workspace</strong>
               <span>Loading live control-room state</span>
             </div>
           </div>
@@ -9014,7 +9144,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
               <article className="builder-panel builder-panel-hero builder-feature-card">
                 <p>
-                  Fluxio is opening the live control-room snapshot. Workspace
+                  Syntelos is opening the live workspace snapshot. Workspace
                   discovery now continues in the background after the shell is ready.
                 </p>
                 <div className="thread-chip-row">
@@ -9123,7 +9253,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         }
         onClose={() => setShowWorkspaceDialog(false)}
         open={showWorkspaceDialog}
-        summary="Workspace ownership stays in Fluxio shell state. Legacy shell no longer controls this flow."
+        summary="Workspace ownership stays in Syntelos. Legacy shell no longer controls this flow."
         title="Add workspace"
       >
         <form className="dialog-form" onSubmit={handleWorkspaceSubmit}>
@@ -9132,7 +9262,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               onChange={event =>
                 setWorkspaceForm(current => ({ ...current, name: event.target.value }))
               }
-              placeholder="Fluxio Platform"
+              placeholder="Syntelos Workspace"
               value={workspaceForm.name}
             />
           </Field>
@@ -9320,7 +9450,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         title="Configure Telegram escalation"
       >
         <form className="dialog-form" onSubmit={handleSaveTelegram}>
-          <Field label="Telegram bot token">
+          <Field label="Telegram connection token">
             <input
               onChange={event => setTelegramBotToken(event.target.value)}
               placeholder="123456:ABCDEF..."
@@ -9352,7 +9482,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       <header className="fluxio-topbar">
         <div className="topbar-app">
           <div className="app-menu">
-            <button aria-label="Fluxio menu" className="app-menu-glyph" type="button">
+            <button aria-label="Syntelos menu" className="app-menu-glyph" type="button">
               +
             </button>
             <MenuButton label="File" onClick={() => setShowWorkspaceDialog(true)} />
@@ -9390,7 +9520,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           </div>
 
           <div className="topbar-context">
-            <strong>{mission?.title || mission?.objective || workspace?.name || "Fluxio workspace"}</strong>
+            <strong>{mission?.title || mission?.objective || workspace?.name || "Syntelos workspace"}</strong>
             <span>{workspace?.name || "Select a workspace"}</span>
             <div className="topbar-context-actions">
               {workspace?.workspace_id ? (
@@ -9413,7 +9543,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           </div>
         </div>
 
-        <div aria-label="Fluxio mode" className="fluxio-mode" role="tablist">
+        <div aria-label="Syntelos mode" className="fluxio-mode" role="tablist">
           {["agent", "builder"].map(mode => (
             <button
               aria-selected={uiMode === mode}
@@ -9679,8 +9809,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <ActionButton onClick={() => setActiveDrawer("runtime")}>Inspect</ActionButton>
                   </div>
                   <article className="builder-sidebar-bridge">
-                    <span>Hermes ↔ OpenClaw bridge</span>
-                    <strong>{bridgeSummary.connected} live app bridge{bridgeSummary.connected === 1 ? "" : "s"}</strong>
+                    <span>Runtime and NAS bridges</span>
+                    <strong>{bridgeSummary.connected} live bridge{bridgeSummary.connected === 1 ? "" : "s"}</strong>
                     <p>{bridgeSummary.recommendation}</p>
                     <div className="fluxio-nav-stats">
                       <span className="fluxio-nav-stat tone-good">
@@ -10699,7 +10829,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </div>
                     <div className="drawer-actions">
                       <ActionButton onClick={() => void applyPreferredHarness("fluxio_hybrid")} variant="primary">
-                        Use Fluxio Hybrid
+                        Use Syntelos Hybrid
                       </ActionButton>
                       <ActionButton onClick={() => void applyPreferredHarness("legacy_autonomous_engine")}>
                         Use Legacy Runtime
@@ -10722,7 +10852,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </div>
                     <div className="drawer-actions">
                       <ActionButton onClick={() => setActiveDrawer("runtime")}>Open runtime bridge</ActionButton>
-                      <ActionButton onClick={() => void handleReferenceQuickAuth(openAICodexAuthReady ? "minimax" : "openai")}>
+                      <ActionButton
+                        disabled={!providerOAuthActionsAvailable}
+                        onClick={() =>
+                          void handleReferenceQuickAuth(
+                            openAICodexAuthReady ? "minimax" : "openai",
+                          )
+                        }
+                        title={!providerOAuthActionsAvailable ? providerOAuthUnavailableReason : ""}
+                      >
                         Connect model account
                       </ActionButton>
                     </div>
@@ -10857,7 +10995,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p>
                       {mission
                         ? "The technical trace stays available below, but the primary surface is the exchange between you and the agent."
-                      : "Choose the route you want, write the objective, and Fluxio will switch into a real conversation once the mission is active."}
+                      : "Choose the route you want, write the objective, and Syntelos will switch into a real conversation once the mission is active."}
                     </p>
                   </section>
                 )}
@@ -10897,7 +11035,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       />
                     ) : (
                       <p className="fluxio-empty-copy">
-                        Trace is hidden. Fluxio is still recording runtime decisions in the background.
+                        Trace is hidden. Syntelos is still recording work decisions in the background.
                       </p>
                     )}
                   </section>
@@ -11122,7 +11260,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         }
         onClose={() => setShowWorkspaceDialog(false)}
         open={showWorkspaceDialog}
-        summary="Workspace ownership stays in Fluxio shell state. Legacy shell no longer controls this flow."
+        summary="Workspace ownership stays in Syntelos. Legacy shell no longer controls this flow."
         title="Add workspace"
       >
         <form className="dialog-form" onSubmit={handleWorkspaceSubmit}>
@@ -11131,7 +11269,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               onChange={event =>
                 setWorkspaceForm(current => ({ ...current, name: event.target.value }))
               }
-              placeholder="Fluxio Platform"
+              placeholder="Syntelos Workspace"
               value={workspaceForm.name}
             />
           </Field>
@@ -11314,7 +11452,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         title="Configure Telegram escalation"
       >
         <form className="dialog-form" onSubmit={handleSaveTelegram}>
-          <Field label="Telegram bot token">
+          <Field label="Telegram connection token">
             <input
               onChange={event => setTelegramBotToken(event.target.value)}
               placeholder="123456:ABCDEF..."

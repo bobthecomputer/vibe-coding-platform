@@ -188,44 +188,6 @@ class ReleaseAcceptanceTests(unittest.TestCase):
                         ],
                     },
                     {
-                        "manifest_id": "manifest_mind_tower",
-                        "schema_version": "fluxio.app-capability/v0-draft",
-                        "app_id": "mind-tower",
-                        "name": "Mind Tower",
-                        "description": "Monitoring bridge",
-                        "bridge": {
-                            "transport": "http",
-                            "endpoint": "http://127.0.0.1:47831/fluxio",
-                            "healthcheck": "/health",
-                            "event_stream": "/events",
-                        },
-                        "auth": {"mode": "local_token", "scopes": ["digest.run"]},
-                        "permissions": ["task.run", "context.read", "approval.callback"],
-                        "tasks": [
-                            {
-                                "task_id": "run-monitor-digest",
-                                "label": "Run monitoring digest",
-                                "description": "Digest",
-                            }
-                        ],
-                        "context_surfaces": [
-                            {
-                                "surface_id": "monitoring-dashboard",
-                                "label": "Monitoring Dashboard",
-                                "description": "Dashboard",
-                                "access": "read",
-                            }
-                        ],
-                        "action_hooks": [
-                            {
-                                "hook_id": "send-digest",
-                                "label": "Send Digest",
-                                "description": "Digest",
-                                "mutability": "write",
-                            }
-                        ],
-                    },
-                    {
                         "manifest_id": "manifest_solantir_terminal",
                         "schema_version": "fluxio.app-capability/v0-draft",
                         "app_id": "solantir-terminal",
@@ -278,16 +240,6 @@ class ReleaseAcceptanceTests(unittest.TestCase):
             json.dumps({"name": "oratio-viva-ui", "version": "0.1.0"}),
             encoding="utf-8",
         )
-
-        mind_root = root.parent / "mind-tower"
-        (mind_root / "apps" / "admin").mkdir(parents=True)
-        (mind_root / "apps" / "admin" / "package.json").write_text(
-            json.dumps({"name": "mind-tower-admin"}),
-            encoding="utf-8",
-        )
-        worker_dir = mind_root / "services" / "monitor-worker" / "src" / "mindtower_worker"
-        worker_dir.mkdir(parents=True)
-        (worker_dir / "telegram_listener.py").write_text("print('ok')\n", encoding="utf-8")
 
     def _marker(self, root: pathlib.Path, dependency_id: str) -> pathlib.Path:
         return root / f".fake_{dependency_id}_installed"
@@ -972,7 +924,7 @@ class ReleaseAcceptanceTests(unittest.TestCase):
                     item["app_id"]: item for item in restart_payload["bridgeLab"]["connectedSessions"]
                 }
                 self.assertEqual(restart_sessions["oratio-viva"]["status"], "connected")
-                self.assertEqual(restart_sessions["mind-tower"]["status"], "connected")
+                self.assertNotIn("mind-tower", restart_sessions)
                 self.assertEqual(restart_sessions["solantir-terminal"]["status"], "follow_on_manifest")
                 latest_restart_mission = restart_payload["missions"][-1]
                 self.assertEqual(

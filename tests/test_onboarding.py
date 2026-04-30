@@ -28,10 +28,21 @@ class OnboardingTests(unittest.TestCase):
                 "sourceUrl": "https://github.com/NousResearch/hermes-agent/blob/main/RELEASE_v0.4.0.md",
             },
         )
+        self.opencv_patcher = mock.patch(
+            "grant_agent.onboarding._python_module_version",
+            return_value={
+                "installed": True,
+                "command": "python",
+                "version": "4.10.0",
+                "details": "Installed and ready.",
+            },
+        )
         self.openclaw_latest_patcher.start()
         self.hermes_latest_patcher.start()
+        self.opencv_patcher.start()
 
     def tearDown(self) -> None:
+        self.opencv_patcher.stop()
         self.hermes_latest_patcher.stop()
         self.openclaw_latest_patcher.stop()
         super().tearDown()
@@ -289,6 +300,74 @@ class OnboardingTests(unittest.TestCase):
         self.assertIn("uv", batch_dependency_ids)
         self.assertIn("openclaw", batch_dependency_ids)
         self.assertIn("hermes", batch_dependency_ids)
+
+    @mock.patch("grant_agent.onboarding.detect_wsl_status")
+    @mock.patch("grant_agent.onboarding._command_version")
+    def test_image_tools_are_offered_when_opencv_is_missing(
+        self,
+        command_version: mock.Mock,
+        detect_wsl_status: mock.Mock,
+    ) -> None:
+        self.opencv_patcher.stop()
+        self.opencv_patcher = mock.patch(
+            "grant_agent.onboarding._python_module_version",
+            return_value={
+                "installed": False,
+                "command": "python",
+                "version": "",
+                "details": "Missing.",
+            },
+        )
+        self.opencv_patcher.start()
+        detect_wsl_status.return_value = {
+            "required": True,
+            "installed": True,
+            "default_version": 2,
+            "details": "WSL2 ready",
+        }
+        command_version.side_effect = [
+            {"installed": True, "command": "node", "version": "v22", "details": "ok"},
+            {"installed": True, "command": "python", "version": "3.13", "details": "ok"},
+            {"installed": True, "command": "uv", "version": "0.9", "details": "ok"},
+            {"installed": True, "command": "openclaw", "version": "2026.2.15", "details": "ok"},
+            {"installed": True, "command": "hermes", "version": "0.4.0", "details": "ok"},
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "profiles.json").write_text(
+                """
+                {
+                  "default_profile": "builder",
+                  "profiles": {
+                    "builder": {"description": "Builder", "ui": {"motion": "standard"}, "agent": {"execution_scope": "isolated", "approval_mode": "tiered", "explanation_depth": "medium", "delegation_aggressiveness": "balanced"}}
+                  }
+                }
+                """,
+                encoding="utf-8",
+            )
+            status = detect_onboarding_status(root)
+
+        opencv = next(
+            item
+            for item in status["setupHealth"]["dependencies"]
+            if item["dependencyId"] == "opencv"
+        )
+        self.assertEqual(opencv["label"], "Image tools")
+        self.assertEqual(opencv["stage"], "install_available")
+        self.assertEqual(opencv["repairActions"][0]["actionId"], "install_opencv")
+        runtime_stack = next(
+            item
+            for item in status["setupHealth"]["repairActions"]
+            if item["actionId"] == "install_runtime_stack"
+        )
+        self.assertIn(
+            "opencv",
+            [item.get("dependencyId", "") for item in runtime_stack["batchCommands"]],
+        )
 
     @mock.patch("grant_agent.onboarding.detect_wsl_status")
     @mock.patch("grant_agent.onboarding._command_version")

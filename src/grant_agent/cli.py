@@ -1055,7 +1055,7 @@ def build_parser() -> argparse.ArgumentParser:
     workspace_action_cmd.add_argument(
         "--surface",
         required=True,
-        choices=["setup", "git", "validate"],
+        choices=["setup", "git", "validate", "bridge"],
         help="Shared control-room action surface",
     )
     workspace_action_cmd.add_argument(

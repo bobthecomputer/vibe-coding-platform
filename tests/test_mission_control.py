@@ -185,6 +185,7 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("skillLibrary", snapshot)
             self.assertIn("harnessLab", snapshot)
             self.assertIn("bridgeLab", snapshot)
+            self.assertIn("storageBridge", snapshot)
             self.assertIn("guidance", snapshot)
             self.assertIn("onboarding", snapshot)
             self.assertIn("ui", snapshot)
@@ -751,6 +752,8 @@ class MissionControlTests(unittest.TestCase):
 
             self.assertIn("setup_repair", workflow_map)
             self.assertIn("agent_long_run", workflow_map)
+            self.assertIn("nas_bridge_run", workflow_map)
+            self.assertEqual(workflow_map["nas_bridge_run"]["reviewStatus"], "reviewed")
             self.assertEqual(workflow_map["setup_repair"]["status"], "blocked")
             self.assertEqual(workflow_map["setup_repair"]["reviewStatus"], "reviewed")
             self.assertGreaterEqual(len(workflow_map["setup_repair"]["serviceIds"]), 1)

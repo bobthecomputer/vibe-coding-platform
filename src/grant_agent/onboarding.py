@@ -49,6 +49,52 @@ def _shell_open_url_command(url: str, platform_name: str) -> str:
     return f'xdg-open "{url}"'
 
 
+def _python_module_version(module_name: str, version_attr: str = "__version__") -> dict:
+    python_command = shutil.which("python") or shutil.which("python3")
+    if not python_command:
+        return {
+            "installed": False,
+            "command": None,
+            "version": "",
+            "details": "Python is not ready yet. Install Python first, then Syntelos can add image tools automatically.",
+        }
+    script = (
+        "import importlib; "
+        f"module=importlib.import_module({module_name!r}); "
+        f"print(getattr(module, {version_attr!r}, 'installed'))"
+    )
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [python_command, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+            **hidden_windows_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "installed": False,
+            "command": python_command,
+            "version": "",
+            "details": f"Could not check {module_name}: {exc}",
+        }
+    version = completed.stdout.strip()
+    if completed.returncode == 0:
+        return {
+            "installed": True,
+            "command": python_command,
+            "version": version,
+            "details": "Installed and ready.",
+        }
+    return {
+        "installed": False,
+        "command": python_command,
+        "version": "",
+        "details": "Missing. Syntelos can install it for image review and visual automation.",
+    }
+
+
 def _primary_workspace_contract(root: Path) -> dict:
     workspaces = _load_control_list(root, "workspaces.json")
     if not workspaces:
@@ -333,6 +379,7 @@ def detect_onboarding_status(root: Path, *, force: bool = False) -> dict:
         "node": _command_version("node"),
         "python": _command_version("python"),
         "uv": _command_version("uv", ["--version"]),
+        "opencv": _python_module_version("cv2"),
         "openclaw": _command_version("openclaw"),
         "hermes": _command_version("hermes"),
     }
@@ -449,6 +496,7 @@ def _recommended_next_actions(
         "node": _command_version("node"),
         "python": _command_version("python"),
         "uv": _command_version("uv", ["--version"]),
+        "opencv": _python_module_version("cv2"),
         "openclaw": _command_version("openclaw"),
         "hermes": _command_version("hermes"),
     }
@@ -460,6 +508,8 @@ def _recommended_next_actions(
         status.append("Install Python 3.11+ for the Grant Agent core.")
     if not checks["uv"]["installed"]:
         status.append("Use Setup -> Install uv (one click), then run Verify setup health.")
+    if checks["python"]["installed"] and not checks.get("opencv", {}).get("installed"):
+        status.append("Use Setup -> Install Image tools so screenshots and visual checks work.")
     if not checks["openclaw"]["installed"]:
         status.append("Use Setup -> Install OpenClaw (one click install + onboarding).")
     if not checks["hermes"]["installed"]:
@@ -475,7 +525,7 @@ def _recommended_next_actions(
     if (root / "src-tauri").exists() and (not shutil.which("cargo") or not shutil.which("rustc")):
         status.append("Install Rust and Cargo before relying on the packaged Tauri desktop path.")
     if not _workspace_count(root):
-        status.append("Add your first workspace so Fluxio can recommend skills and approvals.")
+        status.append("Add your first workspace so Syntelos can recommend skills and approvals.")
     if not _launched_mission_count(root):
         status.append("Launch a first mission to unlock the planner timeline and proof surfaces.")
     if _phone_destination_count(root) == 0:
@@ -559,7 +609,7 @@ def _build_tutorial(
         TutorialStep(
             step_id="add_workspace",
             title="Add a workspace",
-            description="Register a project so Fluxio can recommend skills, runtimes, and verification.",
+            description="Register a project so Syntelos can recommend skills, work engines, and verification.",
             status="completed" if workspaces else "pending",
             cta_label="Add workspace",
             panel="Projects",
@@ -603,7 +653,7 @@ def _build_guidance_cards(
             GuidanceCard(
                 card_id="tutorial.current",
                 title="Continue guided setup",
-                body="Fluxio keeps the next setup step visible so non-technical users can recover context quickly.",
+                body="Syntelos keeps the next setup step visible so non-technical users can recover context quickly.",
                 kind="tutorial",
                 cta_label="Open tutorial",
                 panel="Guidance",
@@ -621,7 +671,7 @@ def _build_guidance_cards(
             GuidanceCard(
                 card_id="auth.model",
                 title="Authenticate Codex or MiniMax first",
-                body="Open the runtime drawer and pick one working model auth path before asking Fluxio to run a real mission.",
+                body="Open Settings and pick one working model account before asking Syntelos to run a real mission.",
                 kind="setup",
                 cta_label="Open auth",
                 panel="Auth",
@@ -918,6 +968,12 @@ def _uv_install_command(platform_name: str) -> str:
     return "curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 
+def _opencv_install_command(platform_name: str) -> str:
+    normalized = (platform_name or "").strip().lower()
+    python_command = "python" if normalized == "windows" else "python3"
+    return f"{python_command} -m pip install opencv-python"
+
+
 def _runtime_stack_repair_actions(
     *,
     checks: dict[str, dict],
@@ -945,6 +1001,17 @@ def _runtime_stack_repair_actions(
                 "label": "Install uv",
                 "dependencyId": "uv",
                 "command": _uv_install_command(platform_name),
+                "followUp": "",
+                "platform": platform_name,
+                "autoRunFollowUp": False,
+            }
+        )
+    if checks["python"]["installed"] and not checks.get("opencv", {}).get("installed"):
+        batch_commands.append(
+            {
+                "label": "Install Image tools",
+                "dependencyId": "opencv",
+                "command": _opencv_install_command(platform_name),
                 "followUp": "",
                 "platform": platform_name,
                 "autoRunFollowUp": False,
@@ -1000,9 +1067,9 @@ def _runtime_stack_repair_actions(
         {
             "actionId": "install_runtime_stack",
             "dependencyId": "runtime_stack",
-            "label": "Repair runtime stack",
-            "description": "One click installs missing runtimes and updates stale Hermes/OpenClaw versions, then verifies health.",
-            "detail": "Installs or updates the tracked runtime stack and re-checks setup blockers automatically.",
+            "label": "Fix work engine setup",
+            "description": "One click installs missing work engines, image tools, and available updates, then checks everything again.",
+            "detail": "Syntelos runs the needed setup steps and re-checks the app automatically.",
             "kind": "repair",
             "platform": platform_name,
             "batchCommands": batch_commands,
@@ -1195,6 +1262,32 @@ def _build_setup_health(
             ],
         },
         {
+            "dependencyId": "opencv",
+            "label": "Image tools",
+            "category": "tooling",
+            "required": False,
+            "installed": bool(checks.get("opencv", {}).get("installed")),
+            "version": checks.get("opencv", {}).get("version") or "",
+            "details": (
+                "Ready for screenshot comparison, visual checks, and future image features."
+                if checks.get("opencv", {}).get("installed")
+                else "Optional, but recommended for screenshot comparison, visual checks, and image features."
+            ),
+            "repairActions": []
+            if checks.get("opencv", {}).get("installed")
+            else [
+                {
+                    "actionId": "install_opencv",
+                    "label": "Install Image tools",
+                    "description": "Install OpenCV for screenshots, UI checks, and image features.",
+                    "command": _opencv_install_command(platform_name),
+                    "kind": "install",
+                    "platform": platform_name,
+                    "autoRunVerify": True,
+                }
+            ],
+        },
+        {
             "dependencyId": "openclaw",
             "label": "OpenClaw",
             "category": "agent_runtime",
@@ -1302,7 +1395,7 @@ def _build_setup_health(
                     "label": "MiniMax global OAuth",
                     "description": "Run OpenClaw's MiniMax portal OAuth flow for the global endpoint.",
                     "command": "openclaw models auth login --provider minimax-portal --method oauth",
-                    "followUp": "Fluxio launches this in an interactive terminal from MiniMax auth setup, then verifies ~/.minimax/oauth_creds.json.",
+                    "followUp": "Syntelos launches this in an interactive terminal from MiniMax account setup, then verifies ~/.minimax/oauth_creds.json.",
                     "kind": "auth",
                     "platform": platform_name,
                 },
@@ -1311,7 +1404,7 @@ def _build_setup_health(
                     "label": "MiniMax CN OAuth",
                     "description": "Run OpenClaw's MiniMax portal OAuth flow for the CN endpoint.",
                     "command": "openclaw models auth login --provider minimax-portal --method oauth-cn",
-                    "followUp": "Fluxio launches this in an interactive terminal from MiniMax auth setup, then verifies ~/.minimax/oauth_creds.json.",
+                    "followUp": "Syntelos launches this in an interactive terminal from MiniMax account setup, then verifies ~/.minimax/oauth_creds.json.",
                     "kind": "auth",
                     "platform": platform_name,
                 },
@@ -1386,7 +1479,7 @@ def _build_setup_health(
                 {
                     "actionId": "configure_telegram_destination",
                     "label": "One-click Telegram setup",
-                    "description": "Detect and save Telegram escalation destination for Fluxio missions.",
+                    "description": "Detect and save Telegram escalation destination for Syntelos missions.",
                     "detail": (
                         "Uses FLUXIO_TELEGRAM_DESTINATION, TELEGRAM_CHAT_ID, or an existing mission destination."
                     ),
@@ -1408,9 +1501,9 @@ def _build_setup_health(
             "installed": launched_mission_count > 0,
             "version": "",
             "details": (
-                "Fluxio has already launched a guided mission from the desktop path."
+                "Syntelos has already launched a guided mission from the desktop path."
                 if launched_mission_count > 0
-                else "Finish setup by launching one real guided mission from Fluxio."
+                else "Finish setup by launching one real guided mission from Syntelos."
             ),
             "repairActions": [],
         },

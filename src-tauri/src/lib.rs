@@ -4765,7 +4765,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("vibe-overlay-tray")
         .menu(&menu)
-        .tooltip("Fluxio")
+        .tooltip("Syntelos")
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id.as_ref() {
             TRAY_OPEN_ID => {
@@ -5580,7 +5580,7 @@ fn start_minimax_openclaw_auth_command(
         method: method.to_string(),
         command: command_line,
         status,
-        message: "MiniMax OpenClaw OAuth terminal launched. Finish the interactive login there, then verify auth in Fluxio.".to_string(),
+        message: "MiniMax OpenClaw OAuth terminal launched. Finish the interactive login there, then verify auth in Syntelos.".to_string(),
     })
 }
 
@@ -5858,9 +5858,9 @@ fn read_oauth_callback_from_stream(mut stream: StdTcpStream) -> Result<String, S
         .ok_or_else(|| "OAuth callback did not include a request path.".to_string())?
         .to_string();
     let body = if path.starts_with("/auth/callback") {
-        "Authentication successful. Return to Fluxio to continue."
+        "Authentication successful. Return to Syntelos to continue."
     } else {
-        "Fluxio received an unexpected OAuth callback path."
+        "Syntelos received an unexpected OAuth callback path."
     };
     let status = if path.starts_with("/auth/callback") {
         "200 OK"

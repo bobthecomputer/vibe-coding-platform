@@ -706,8 +706,10 @@ function deriveServiceStudio(workspace, setupHealth) {
             ? action.surface
             : action?.commandSurface?.startsWith("git.")
               ? "git"
-              : action?.commandSurface?.startsWith("validate.")
-                ? "validate"
+            : action?.commandSurface?.startsWith("validate.")
+              ? "validate"
+              : action?.commandSurface?.startsWith("bridge.")
+                ? "bridge"
                 : "setup";
           return {
             actionId: action.actionId,

@@ -48,76 +48,48 @@
     }
   },
   {
-    "manifest_id": "manifest_mind_tower",
-    "schema_version": "fluxio.app-capability/v0-draft",
-    "app_id": "mind-tower",
-    "name": "Mind Tower",
-    "description": "Monitoring, admin, and digest workflows exposed to Fluxio through a local bridge.",
-    "bridge": {
-      "transport": "http",
-      "endpoint": "http://127.0.0.1:47831/fluxio",
-      "healthcheck": "/health",
-      "event_stream": "/events"
-    },
-    "auth": {
-      "mode": "local_token",
-      "scopes": ["admin.read", "digest.run", "telegram.callback"]
-    },
-    "permissions": ["task.run", "context.read", "approval.callback"],
-    "tasks": [
-      {
-        "task_id": "run-monitor-digest",
-        "label": "Run monitoring digest",
-        "description": "Collect monitoring context and generate a digest-style task result.",
-        "requires_approval": false
-      }
-    ],
-    "context_surfaces": [
-      {
-        "surface_id": "monitoring-dashboard",
-        "label": "Monitoring Dashboard",
-        "description": "Admin and monitoring context surfaced from Mind Tower.",
-        "access": "read"
-      }
-    ],
-    "action_hooks": [
-      {
-        "hook_id": "send-digest",
-        "label": "Send Digest",
-        "description": "Trigger a digest delivery or callback-aware review action.",
-        "mutability": "write",
-        "risk_level": "medium",
-        "requires_approval": false
-      }
-    ],
-    "ui_hints": {
-      "category": "operations",
-      "requiresUserPresent": false
-    }
-  },
-  {
     "manifest_id": "manifest_synology_fast_sync",
     "schema_version": "fluxio.app-capability/v0-draft",
     "app_id": "synology-fast-sync",
     "name": "Synology Fast Sync",
-    "description": "Cowork fast-path project upload/download UI exposed as a local bridge for proof and mobile review.",
+    "description": "Computer-to-NAS project bridge for upload, download, continuous NAS runtime, and mobile review.",
     "bridge": {
       "transport": "http",
       "endpoint": "http://127.0.0.1:8765",
+      "public_endpoint": "https://100.125.54.118/fast-sync",
+      "preferred_transport": "https",
+      "internal_endpoint": "http://127.0.0.1:8765",
       "healthcheck": "/api/status",
       "event_stream": "/api/job",
-      "workspace_root": "C:/Users/paul/projects/Cowork"
+      "workspace_root": "C:/Users/paul/Projects/Cowork",
+      "source_root": "C:/Users/paul/Projects",
+      "target_root": "Y:/projects",
+      "nas_host": "100.125.54.118",
+      "control_protocol": "ssh",
+      "ssh_user": "Codex2",
+      "ssh_port": 22,
+      "requested_ssh_port": 22,
+      "ssh_port_status": "verified TCP reachability on SSH/SFTP port 22",
+      "remote_project_root": "/volume1/Saclay/projects",
+      "requires_approval_for_write": false,
+      "auto_sync": true,
+      "write_policy": "automatic_bidirectional",
+      "share_name": "Saclay",
+      "drive_letter": "Y",
+      "connection_mode": "tailscale",
+      "activation_project": "Core",
+      "activation_command": "C:/Users/paul/Projects/Cowork/map-synology-fast-path.cmd"
     },
     "auth": {
       "mode": "local_session",
-      "scopes": ["sync.status", "sync.job.read", "sync.selection.write"]
+      "scopes": ["sync.status", "sync.job.read", "sync.selection.write", "sync.bidirectional.plan"]
     },
-    "permissions": ["task.run", "context.read", "approval.callback"],
+    "permissions": ["task.run", "context.read", "approval.callback", "sync.plan"],
     "tasks": [
       {
         "task_id": "monitor-fast-sync",
         "label": "Monitor Fast Sync output",
-        "description": "Read current Synology Fast Sync mapping, job progress, and latest transfer output.",
+        "description": "Read current computer/NAS mapping, transfer direction, job progress, and latest transfer output.",
         "requires_approval": false
       }
     ],
@@ -136,13 +108,68 @@
         "description": "Queue a selected upload or download through the Fast Sync bridge.",
         "mutability": "write",
         "risk_level": "medium",
+        "requires_approval": false
+      }
+    ],
+    "ui_hints": {
+      "category": "storage",
+      "bridgeRole": "nas_storage",
+      "requiresUserPresent": true,
+      "mobileSurface": true
+    }
+  },
+  {
+    "manifest_id": "manifest_cloud_drive_sync",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "cloud-drive-sync",
+    "name": "Cloud Drive Bridge",
+    "description": "Google Drive and mounted cloud-folder bridge for moving files between workstation, NAS, and user cloud storage.",
+    "bridge": {
+      "transport": "local_mount_oauth",
+      "endpoint": "local://cloud-drive",
+      "healthcheck": "provider-presence",
+      "event_stream": "local-events",
+      "workspace_root": "C:/Users/paul/Projects",
+      "source_root": "C:/Users/paul/Projects"
+    },
+    "auth": {
+      "mode": "google_oauth_or_local_mount",
+      "scopes": ["drive.status", "drive.file.bridge", "drive.selection.write", "drive.provider.login"]
+    },
+    "permissions": ["task.run", "context.read", "approval.callback", "cloud.plan"],
+    "tasks": [
+      {
+        "task_id": "monitor-cloud-drive",
+        "label": "Monitor Cloud Drive bridge",
+        "description": "Read Google Drive OAuth readiness and mounted cloud-folder availability.",
+        "requires_approval": false
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "cloud-drive-status",
+        "label": "Cloud Drive Status",
+        "description": "Google login readiness, discovered mounted drives, source root, and transfer policy.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "queue-cloud-drive-transfer",
+        "label": "Queue Cloud Drive Transfer",
+        "description": "Queue a selected upload or download through the cloud-drive bridge after preview.",
+        "mutability": "write",
+        "risk_level": "medium",
         "requires_approval": true
       }
     ],
     "ui_hints": {
       "category": "storage",
+      "bridgeRole": "cloud_storage",
       "requiresUserPresent": true,
-      "mobileSurface": true
+      "mobileSurface": true,
+      "providers": ["google-drive", "onedrive", "dropbox", "local-mounted-drive"],
+      "primaryProvider": "google-drive"
     }
   },
   {

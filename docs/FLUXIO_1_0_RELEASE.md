@@ -146,7 +146,7 @@ Fluxio `1.0` does not attempt a general environment abstraction layer.
 
 - Bridge Lab manifest and grant scope remain unchanged for `1.0`.
 - `OratioViva` is a real reference integration.
-- `Mind Tower` is a real reference integration.
+- Storage and cloud bridges are the active external reference integrations.
 - `Solantir` remains deferred.
 
 ### Accessibility and iteration

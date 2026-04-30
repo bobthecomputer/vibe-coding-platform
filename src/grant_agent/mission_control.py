@@ -985,6 +985,9 @@ class ControlRoomStore:
             setup_health=setup_health,
             harness_lab=harness_lab_snapshot,
         )
+        storage_bridge = _build_storage_bridge_snapshot(
+            connected_apps_snapshot.get("connectedSessions", [])
+        )
 
         return {
             "workspaceRoot": str(self.root),
@@ -1027,6 +1030,7 @@ class ControlRoomStore:
             "providerSetupStatus": provider_setup_status,
             "efficiencyAutotune": efficiency_autotune,
             "bridgeLab": connected_apps_snapshot,
+            "storageBridge": storage_bridge,
             "releaseReadiness": release_readiness,
         }
 
@@ -2221,10 +2225,91 @@ def _build_workspace_service_management(
         app_id = session.get("app_id", "")
         if not app_id:
             continue
+        ui_hints = session.get("ui_hints", {}) if isinstance(session.get("ui_hints"), dict) else {}
+        bridge_role = str(ui_hints.get("bridgeRole") or "")
+        latest_task = session.get("latest_task_result", {})
+        latest_payload = latest_task.get("payload", {}) if isinstance(latest_task, dict) else {}
+        requires_approval_for_write = bool(
+            latest_payload.get("requiresApprovalForWrite", True)
+        )
+        service_actions = []
+        if bridge_role in {"nas_storage", "cloud_storage"}:
+            is_cloud = bridge_role == "cloud_storage"
+            service_actions = [
+                *(
+                    [
+                        {
+                            "actionId": "verify-nas-ssh",
+                            "label": "Verify NAS SSH",
+                            "description": "Probe the SSH/SFTP NAS route on the configured port without logging secrets.",
+                            "commandSurface": "bridge.verify",
+                            "requiresApproval": False,
+                            "kind": "verify",
+                        },
+                        {
+                            "actionId": "unlock-codex-network",
+                            "label": "Unlock local network rule",
+                            "description": "Disable the local Codex outbound firewall block through an elevated PowerShell prompt, then retry the NAS SSH route.",
+                            "commandSurface": "bridge.activate",
+                            "requiresApproval": True,
+                            "kind": "repair",
+                        }
+                    ]
+                    if (
+                        not is_cloud
+                        and latest_payload.get("selectedHost")
+                        and latest_payload.get("sshUser")
+                    )
+                    else []
+                ),
+                *(
+                    [
+                        {
+                            "actionId": "activate-nas-mapping",
+                            "label": "Activate NAS mapping",
+                            "description": "Run the Core/Cowork Synology mapper so the NAS project drive is available.",
+                            "commandSurface": "bridge.activate",
+                            "requiresApproval": True,
+                            "kind": "activate",
+                        }
+                    ]
+                    if (not is_cloud and latest_payload.get("activationCommand"))
+                    else []
+                ),
+                {
+                    "actionId": "monitor-cloud-drive" if is_cloud else "monitor-fast-sync",
+                    "label": "Monitor bridge",
+                    "description": (
+                        "Read the latest cloud-drive bridge status from the connected app."
+                        if is_cloud
+                        else "Read the latest computer/NAS bridge status from the connected app."
+                    ),
+                    "commandSurface": "bridge.status",
+                    "requiresApproval": False,
+                    "kind": "status",
+                },
+                {
+                    "actionId": "queue-cloud-drive-transfer" if is_cloud else "start-sync-selection",
+                    "label": "Queue transfer",
+                    "description": (
+                        "Queue an upload or download through the cloud-drive bridge after preview."
+                        if is_cloud
+                        else (
+                            "Queue an upload or download through the NAS bridge after preview."
+                            if requires_approval_for_write
+                            else "Run an upload or download through the NAS bridge immediately."
+                        )
+                    ),
+                    "commandSurface": "bridge.sync",
+                    "requiresApproval": requires_approval_for_write,
+                    "kind": "sync",
+                },
+            ]
         services[app_id] = {
             "serviceId": app_id,
             "label": session.get("app_name", app_id),
             "serviceCategory": "connected_app_bridge",
+            "serviceRole": bridge_role or "app_bridge",
             "installSource": session.get("bridge_transport", "") or "bridge_manifest",
             "currentHealthStatus": session.get("bridge_health", session.get("status", "unknown")),
             "lastVerificationResult": (
@@ -2233,12 +2318,180 @@ def _build_workspace_service_management(
             "lastRepairAction": {},
             "managementMode": "externally_managed",
             "version": "",
-            "details": session.get("latest_task_result", {}).get("resultSummary", ""),
-            "serviceActions": [],
+            "details": latest_task.get("resultSummary", "") if isinstance(latest_task, dict) else "",
+            "sourceRoot": latest_payload.get("sourceRoot", "") if isinstance(latest_payload, dict) else "",
+            "targetRoot": latest_payload.get("targetRoot", "") if isinstance(latest_payload, dict) else "",
+            "bridgeEndpoint": session.get("bridge_endpoint", ""),
+            "serviceActions": service_actions,
             "verifyAction": {},
         }
 
     return list(services.values())
+
+
+def _build_storage_bridge_snapshot(connected_apps: list[dict]) -> dict:
+    storage_sessions = [
+        item
+        for item in connected_apps
+        if (item.get("ui_hints") or {}).get("bridgeRole") in {"nas_storage", "cloud_storage"}
+        or item.get("app_id") in {"synology-fast-sync", "cloud-drive-sync"}
+    ]
+    nas_sessions = [
+        item
+        for item in storage_sessions
+        if (item.get("ui_hints") or {}).get("bridgeRole") == "nas_storage"
+        or item.get("app_id") == "synology-fast-sync"
+    ]
+    cloud_sessions = [
+        item
+        for item in storage_sessions
+        if (item.get("ui_hints") or {}).get("bridgeRole") == "cloud_storage"
+        or item.get("app_id") == "cloud-drive-sync"
+    ]
+    primary = nas_sessions[0] if nas_sessions else (storage_sessions[0] if storage_sessions else {})
+    latest_task = primary.get("latest_task_result", {}) if isinstance(primary, dict) else {}
+    payload = latest_task.get("payload", {}) if isinstance(latest_task, dict) else {}
+    bridge_plan = payload.get("bridgePlan", {}) if isinstance(payload, dict) else {}
+    ui_hints = primary.get("ui_hints", {}) if isinstance(primary, dict) else {}
+    ui_hints = ui_hints if isinstance(ui_hints, dict) else {}
+    cloud_primary = cloud_sessions[0] if cloud_sessions else {}
+    cloud_task = (
+        cloud_primary.get("latest_task_result", {})
+        if isinstance(cloud_primary, dict)
+        else {}
+    )
+    cloud_payload = cloud_task.get("payload", {}) if isinstance(cloud_task, dict) else {}
+    cloud_plan = cloud_payload.get("bridgePlan", {}) if isinstance(cloud_payload, dict) else {}
+    return {
+        "available": bool(storage_sessions),
+        "connected": bool(primary.get("status") == "connected"),
+        "sessionCount": len(storage_sessions),
+        "primaryAppId": primary.get("app_id", ""),
+        "primaryAppName": primary.get("app_name", ""),
+        "health": primary.get("bridge_health", "missing") if primary else "missing",
+        "endpoint": primary.get("bridge_endpoint", ""),
+        "publicEndpoint": (
+            payload.get("publicEndpoint") or ui_hints.get("publicEndpoint", "")
+            if isinstance(payload, dict)
+            else ui_hints.get("publicEndpoint", "")
+        ),
+        "preferredTransport": (
+            payload.get("preferredTransport") or ui_hints.get("preferredTransport", "")
+            if isinstance(payload, dict)
+            else ui_hints.get("preferredTransport", "")
+        ),
+        "httpsReady": bool(
+            (payload.get("httpsReady") if isinstance(payload, dict) else None)
+            or ui_hints.get("httpsReady", False)
+        ),
+        "sourceRoot": payload.get("sourceRoot", "") if isinstance(payload, dict) else "",
+        "targetRoot": payload.get("targetRoot", "") if isinstance(payload, dict) else "",
+        "selectedMode": payload.get("selectedMode", "") if isinstance(payload, dict) else "",
+        "selectedHost": payload.get("selectedHost", "") if isinstance(payload, dict) else "",
+        "controlProtocol": payload.get("controlProtocol", "") if isinstance(payload, dict) else "",
+        "controlPort": payload.get("controlPort", 0) if isinstance(payload, dict) else 0,
+        "requestedSshPort": payload.get("requestedSshPort", 0) if isinstance(payload, dict) else 0,
+        "observedSshPort": payload.get("observedSshPort", 0) if isinstance(payload, dict) else 0,
+        "sshPortStatus": payload.get("sshPortStatus", "") if isinstance(payload, dict) else "",
+        "sshUser": payload.get("sshUser", "") if isinstance(payload, dict) else "",
+        "remoteProjectRoot": payload.get("remoteProjectRoot", "") if isinstance(payload, dict) else "",
+        "activeDirection": payload.get("activeDirection", "") if isinstance(payload, dict) else "",
+        "safeDirections": payload.get("safeDirections", []) if isinstance(payload, dict) else [],
+        "requiresApprovalForWrite": bool(
+            payload.get("requiresApprovalForWrite", True) if isinstance(payload, dict) else True
+        ),
+        "activationRequired": bool(
+            payload.get("activationRequired", False) if isinstance(payload, dict) else False
+        ),
+        "activationProject": payload.get("activationProject", "") if isinstance(payload, dict) else "",
+        "activationHint": payload.get("activationHint", "") if isinstance(payload, dict) else "",
+        "activationCommand": payload.get("activationCommand", "") if isinstance(payload, dict) else "",
+        "writePolicy": bridge_plan.get("writePolicy", "preview_then_approve")
+        if isinstance(bridge_plan, dict)
+        else "preview_then_approve",
+        "conflictPolicy": bridge_plan.get("conflictPolicy", "keep_newer_and_log")
+        if isinstance(bridge_plan, dict)
+        else "keep_newer_and_log",
+        "summary": latest_task.get("resultSummary", "") if isinstance(latest_task, dict) else "",
+        "sessions": storage_sessions,
+        "nas": {
+            "available": bool(nas_sessions),
+            "connected": bool(primary.get("status") == "connected"),
+            "sessionCount": len(nas_sessions),
+            "appId": primary.get("app_id", "") if primary else "",
+            "appName": primary.get("app_name", "") if primary else "",
+            "health": primary.get("bridge_health", "missing") if primary else "missing",
+            "endpoint": primary.get("bridge_endpoint", "") if primary else "",
+            "publicEndpoint": (
+                payload.get("publicEndpoint") or ui_hints.get("publicEndpoint", "")
+                if isinstance(payload, dict)
+                else ui_hints.get("publicEndpoint", "")
+            ),
+            "preferredTransport": (
+                payload.get("preferredTransport") or ui_hints.get("preferredTransport", "")
+                if isinstance(payload, dict)
+                else ui_hints.get("preferredTransport", "")
+            ),
+            "httpsReady": bool(
+                (payload.get("httpsReady") if isinstance(payload, dict) else None)
+                or ui_hints.get("httpsReady", False)
+            ),
+            "sourceRoot": payload.get("sourceRoot", "") if isinstance(payload, dict) else "",
+            "targetRoot": payload.get("targetRoot", "") if isinstance(payload, dict) else "",
+            "selectedMode": payload.get("selectedMode", "") if isinstance(payload, dict) else "",
+            "selectedHost": payload.get("selectedHost", "") if isinstance(payload, dict) else "",
+            "controlProtocol": payload.get("controlProtocol", "") if isinstance(payload, dict) else "",
+            "controlPort": payload.get("controlPort", 0) if isinstance(payload, dict) else 0,
+            "requestedSshPort": payload.get("requestedSshPort", 0) if isinstance(payload, dict) else 0,
+            "observedSshPort": payload.get("observedSshPort", 0) if isinstance(payload, dict) else 0,
+            "sshPortStatus": payload.get("sshPortStatus", "") if isinstance(payload, dict) else "",
+            "sshUser": payload.get("sshUser", "") if isinstance(payload, dict) else "",
+            "remoteProjectRoot": payload.get("remoteProjectRoot", "") if isinstance(payload, dict) else "",
+            "safeDirections": payload.get("safeDirections", []) if isinstance(payload, dict) else [],
+            "activationRequired": bool(
+                payload.get("activationRequired", False) if isinstance(payload, dict) else False
+            ),
+            "activationProject": payload.get("activationProject", "") if isinstance(payload, dict) else "",
+            "activationHint": payload.get("activationHint", "") if isinstance(payload, dict) else "",
+            "activationCommand": payload.get("activationCommand", "") if isinstance(payload, dict) else "",
+            "summary": latest_task.get("resultSummary", "") if isinstance(latest_task, dict) else "",
+        },
+        "cloud": {
+            "available": bool(cloud_sessions),
+            "connected": bool(cloud_primary.get("status") == "connected"),
+            "sessionCount": len(cloud_sessions),
+            "appId": cloud_primary.get("app_id", "") if cloud_primary else "",
+            "appName": cloud_primary.get("app_name", "") if cloud_primary else "",
+            "health": cloud_primary.get("bridge_health", "missing") if cloud_primary else "missing",
+            "endpoint": cloud_primary.get("bridge_endpoint", "") if cloud_primary else "",
+            "sourceRoot": cloud_payload.get("sourceRoot", "") if isinstance(cloud_payload, dict) else "",
+            "targetRoot": cloud_payload.get("targetRoot", "") if isinstance(cloud_payload, dict) else "",
+            "selectedMode": cloud_payload.get("selectedMode", "") if isinstance(cloud_payload, dict) else "",
+            "selectedHost": cloud_payload.get("selectedHost", "") if isinstance(cloud_payload, dict) else "",
+            "safeDirections": cloud_payload.get("safeDirections", []) if isinstance(cloud_payload, dict) else [],
+            "mountedRoots": cloud_payload.get("mountedRoots", []) if isinstance(cloud_payload, dict) else [],
+            "googleLoginReady": bool(
+                cloud_payload.get("googleLoginReady") if isinstance(cloud_payload, dict) else False
+            ),
+            "providers": cloud_payload.get("cloudProviders", []) if isinstance(cloud_payload, dict) else [],
+            "loginUrl": cloud_plan.get("loginUrl", "https://drive.google.com/drive/my-drive")
+            if isinstance(cloud_plan, dict)
+            else "https://drive.google.com/drive/my-drive",
+            "desktopClientUrl": cloud_plan.get(
+                "desktopClientUrl",
+                "https://www.google.com/drive/download/",
+            )
+            if isinstance(cloud_plan, dict)
+            else "https://www.google.com/drive/download/",
+            "writePolicy": cloud_plan.get("writePolicy", "preview_then_approve")
+            if isinstance(cloud_plan, dict)
+            else "preview_then_approve",
+            "conflictPolicy": cloud_plan.get("conflictPolicy", "keep_newer_and_log")
+            if isinstance(cloud_plan, dict)
+            else "keep_newer_and_log",
+            "summary": cloud_task.get("resultSummary", "") if isinstance(cloud_task, dict) else "",
+        },
+    }
 
 
 def _service_management_summary(items: list[dict]) -> dict[str, int]:
@@ -2292,6 +2545,11 @@ def _build_workflow_studio(
         for item in selected_workspace.get("serviceManagement", [])
         if item.get("managementMode") == "fluxio_managed" and item.get("serviceId")
     ]
+    bridge_service_ids = [
+        item.get("serviceId")
+        for item in selected_workspace.get("serviceManagement", [])
+        if item.get("serviceCategory") == "connected_app_bridge" and item.get("serviceId")
+    ]
     setup_blockers = [
         item.get("serviceId")
         for item in setup_health.get("serviceManagement", [])
@@ -2326,6 +2584,19 @@ def _build_workflow_studio(
                 for item in selected_workspace.get("serviceManagement", [])
                 if item.get("serviceCategory") in {"mcp_tool_server", "runtime"}
             ][:4],
+            "verificationDefaults": verification_defaults,
+        },
+        {
+            "workflowId": "nas_bridge_run",
+            "label": "Computer/NAS Bridge Run",
+            "description": "Use a local editable folder with a NAS-backed runtime target, transfer preview, and approval-gated writes.",
+            "status": "ready" if bridge_service_ids else "available",
+            "audience": "builder",
+            "surface": "storage_bridge",
+            "reviewStatus": "reviewed",
+            "runtimeChoice": selected_workspace.get("default_runtime", "openclaw"),
+            "skillIds": recommended_skill_ids[:2],
+            "serviceIds": bridge_service_ids[:4],
             "verificationDefaults": verification_defaults,
         },
         {

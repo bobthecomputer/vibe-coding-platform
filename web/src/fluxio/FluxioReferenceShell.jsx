@@ -75,10 +75,10 @@ function dotToneClass(tone) {
 const HOME_CARDS = [
   {
     id: "agent",
-    title: "Agent Mode",
-    copy: "Chat with your agents using Fluxio and Hermes.",
+    title: "Agent",
+    copy: "Ask Syntelos to plan, build, check, and keep progress visible.",
     tone: "violet",
-    icon: Bot,
+    icon: Sparkles,
   },
   {
     id: "builder",
@@ -89,8 +89,8 @@ const HOME_CARDS = [
   },
   {
     id: "skills",
-    title: "Skill Hub",
-    copy: "Manage skills, environments, rules, and shared knowledge.",
+    title: "Skills",
+    copy: "Personalize skills, rules, and shared knowledge without touching code.",
     tone: "blue",
     icon: Grid2x2,
   },
@@ -104,7 +104,7 @@ function RailBrand() {
         <span />
         <span />
       </div>
-      <strong>Fluxio</strong>
+      <strong>Syntelos</strong>
     </div>
   );
 }
@@ -158,7 +158,7 @@ function SidebarProfile() {
 }
 
 function FlowSidebar({
-  currentModeLabel = "Agent Mode",
+  currentModeLabel = "Agent",
   favoriteFlows = [],
   flowProjects = [],
   onRequestAction,
@@ -305,8 +305,8 @@ function HomeSurface({ onOpenSurface, onRequestAction }) {
     <section className="reference-home-surface">
       <div className="reference-home-header">
         <div>
-          <h1>Agent Workspace</h1>
-          <p>Build. Orchestrate. Ship.</p>
+          <h1>Syntelos</h1>
+          <p>Turn AI agents into second brains.</p>
         </div>
         <IconButton icon={CircleHelp} label="Help" onClick={() => onRequestAction?.("home:help")} />
       </div>
@@ -546,8 +546,8 @@ function AgentIdleSurface(props) {
       <div className="reference-config-grid">
         <ConfigCard
           accent="neutral"
-          copy={runtimeStatus?.detected ? "Runtime detected and available for launch." : "Runtime readiness is checked by the backend."}
-          title="Runtime"
+          copy={runtimeStatus?.detected ? "Work engine ready for launch." : "Syntelos checks this automatically before the first run."}
+          title="Work engine"
           titleIcon={WandSparkles}
         >
           <label className="reference-select-shell">
@@ -570,7 +570,7 @@ function AgentIdleSurface(props) {
 
         <ConfigCard
           accent="neutral"
-          copy="Model selection only. Advanced sampling and provider limits stay managed by the runtime unless backend policy explicitly overrides them."
+          copy="Model selection lives in Settings. Syntelos keeps the advanced limits behind the scenes."
           title="Model"
           titleIcon={Bot}
         >
@@ -609,11 +609,11 @@ function AgentIdleSurface(props) {
         <article className="reference-support-panel">
           <div className="reference-builder-section-head">
             <div>
-              <strong>{runtimeStatus?.label || "Selected runtime"}</strong>
+              <strong>{runtimeStatus?.label || "Selected work engine"}</strong>
               <span>
                 {runtimeStatus?.doctor_summary ||
                   runtimeStatus?.doctorSummary ||
-                  "Runtime readiness appears here once the backend reports it."}
+                  "Readiness appears here after Syntelos checks setup."}
               </span>
             </div>
             <StatusBadge
@@ -634,7 +634,7 @@ function AgentIdleSurface(props) {
           <RefreshCw size={16} strokeWidth={1.9} />
           <span>Reset to defaults</span>
         </button>
-        <p>Fluxio can make mistakes. Please verify important information.</p>
+        <p>Syntelos can make mistakes. Please verify important information.</p>
       </div>
     </section>
   );
@@ -696,7 +696,7 @@ function AgentRunningSurface(props) {
             <strong>{missionLoop.continuityDetail || missionLoop.continuityState || "Steady"}</strong>
           </div>
           <div>
-            <span>Runtime lane</span>
+            <span>Work engine</span>
             <strong>{missionLoop.currentRuntimeLane || "Primary thread"}</strong>
           </div>
         </article>
@@ -815,7 +815,7 @@ function AgentRunningSurface(props) {
       >
         <div className="reference-docked-controls">
           <label className="reference-inline-select">
-            <span>Runtime</span>
+            <span>Work engine</span>
             <select onChange={event => onRuntimeChange(event.target.value)} value={selectedRuntime}>
               <option value={selectedRuntime}>{selectedRuntimeLabel}</option>
             </select>
@@ -889,7 +889,7 @@ function LivePreviewSurface(props) {
                 <span />
               </div>
               <div>
-                <strong>Fluxio Agent</strong>
+                <strong>Syntelos Agent</strong>
                 <span>Working</span>
               </div>
             </div>
@@ -927,7 +927,7 @@ function LivePreviewSurface(props) {
                 <span />
               </div>
               <div>
-                <strong>Fluxio Agent</strong>
+                <strong>Syntelos Agent</strong>
                 <span>Thinking</span>
               </div>
             </div>
@@ -943,7 +943,7 @@ function LivePreviewSurface(props) {
               <span />
             </div>
             <div>
-              <strong>Fluxio Agent</strong>
+              <strong>Syntelos Agent</strong>
               <span>Applying changes</span>
             </div>
           </div>
@@ -1425,7 +1425,7 @@ function BuilderSurface(props) {
                 <strong>{feedbackItems.length}</strong>
               </article>
               <article>
-                <span>Runtime lane</span>
+                <span>Work engine</span>
                 <strong>{activeProject?.title || projectLabel}</strong>
               </article>
             </div>
@@ -1682,7 +1682,7 @@ function BuilderSurface(props) {
               <p>
                 {builderRows.length
                   ? "Try a different project search term."
-                  : "Start a mission from Agent Mode or create a workspace run; Builder will populate from real mission activity."}
+                  : "Start a mission from Agent or create a workspace run; Builder will populate from real mission activity."}
               </p>
             </div>
           ) : null}
@@ -2168,6 +2168,9 @@ function SettingsSurface({ onRequestAction, settingsState }) {
     onWorkspaceProfileFieldChange,
     privacy = { conversationRetention: "90 days", fileRetention: "30 days" },
     providers = [],
+    bridgeSessions = [],
+    storageBridge = {},
+    setupServices = [],
     chatgptConnection = {},
     routeOptions = { harnesses: [], providers: [], efforts: [], models: [], routingStrategies: [], executionTargets: [] },
     runtimes = [],
@@ -2186,7 +2189,9 @@ function SettingsSurface({ onRequestAction, settingsState }) {
   } = settingsState;
   const tabDefs = [
     ["general", "General", Settings],
-    ["providers", "Models & Providers", Sparkles],
+    ["providers", "Models", Sparkles],
+    ["storage", "Storage", Database],
+    ["tools", "Tools & Ports", SquareTerminal],
     ["rules", "Rules & Routing", Shield],
     ["members", "Members", Users],
     ["privacy", "Data & Privacy", Database],
@@ -2197,13 +2202,227 @@ function SettingsSurface({ onRequestAction, settingsState }) {
     ["Surface", appearance.surface],
     ["Card surface", appearance.surfaceSoft],
   ];
+  const appearancePresets = [
+    {
+      id: "graphite-gold",
+      name: "Graphite Gold",
+      description: "Black, gray, and restrained gold. This is the Syntelos default.",
+      values: {
+        accent: "#d6a84f",
+        accentAlt: "#9aa3a0",
+        surface: "#ffffff",
+        surfaceSoft: "#f6f8fc",
+        line: "#d8deea",
+        text: "#121826",
+        stylePreset: "graphite-gold",
+      },
+    },
+    {
+      id: "operator-dark",
+      name: "Operator Dark",
+      description: "Dense dark control room with gold action focus.",
+      values: {
+        accent: "#d6a84f",
+        accentAlt: "#7ed996",
+        surface: "#121514",
+        surfaceSoft: "#1a1e1c",
+        line: "#343a37",
+        text: "#f7f1e8",
+        stylePreset: "operator-dark",
+      },
+    },
+    {
+      id: "school-calm",
+      name: "School Calm",
+      description: "Low-noise classroom preset for tutorials and guided users.",
+      values: {
+        accent: "#b98a35",
+        accentAlt: "#667085",
+        surface: "#f7f7f2",
+        surfaceSoft: "#ffffff",
+        line: "#d8dccf",
+        text: "#171b1a",
+        stylePreset: "school-calm",
+      },
+    },
+    {
+      id: "neo-brutalist",
+      name: "Neo Brutalist",
+      description: "Paper, hard ink, loud panels, and physical controls.",
+      values: {
+        accent: "#f4c430",
+        accentAlt: "#ff6b4a",
+        surface: "#fff8dc",
+        surfaceSoft: "#f2ead0",
+        line: "#111111",
+        text: "#101010",
+        stylePreset: "neo-brutalist",
+      },
+    },
+    {
+      id: "blueprint-lab",
+      name: "Blueprint Lab",
+      description: "Technical blueprints, cyan lines, and calm engineering surfaces.",
+      values: {
+        accent: "#58c7f3",
+        accentAlt: "#f4c430",
+        surface: "#071827",
+        surfaceSoft: "#0e2a3d",
+        line: "#5ec8ef",
+        text: "#e8fbff",
+        stylePreset: "blueprint-lab",
+      },
+    },
+    {
+      id: "signal-bloom",
+      name: "Signal Bloom",
+      description: "Warm paper, coral actions, mint status, and editorial energy.",
+      values: {
+        accent: "#ff6b4a",
+        accentAlt: "#48bf84",
+        surface: "#fff2e1",
+        surfaceSoft: "#ffe1d6",
+        line: "#2a211b",
+        text: "#1f1712",
+        stylePreset: "signal-bloom",
+      },
+    },
+    {
+      id: "console-candy",
+      name: "Console Candy",
+      description: "Bright terminal rhythm with saturated rails and readable dark panels.",
+      values: {
+        accent: "#8df15a",
+        accentAlt: "#ff5fa2",
+        surface: "#0e1014",
+        surfaceSoft: "#181c22",
+        line: "#2f3745",
+        text: "#f7fbff",
+        stylePreset: "console-candy",
+      },
+    },
+    {
+      id: "cel-rig",
+      name: "Cel Rig",
+      description: "Animation-cel flats, keyline shadows, timing marks, and clean color holds.",
+      values: {
+        accent: "#2f6bff",
+        accentAlt: "#ffcf3f",
+        surface: "#f8fbff",
+        surfaceSoft: "#dceaff",
+        line: "#101820",
+        text: "#101820",
+        stylePreset: "cel-rig",
+      },
+    },
+    {
+      id: "texture-board",
+      name: "Texture Board",
+      description: "Material swatches, paper grain, region labels, and tactile output checks.",
+      values: {
+        accent: "#7a5c34",
+        accentAlt: "#4f8f6b",
+        surface: "#f5ead7",
+        surfaceSoft: "#e8d4b3",
+        line: "#2b2118",
+        text: "#201812",
+        stylePreset: "texture-board",
+      },
+    },
+    {
+      id: "style-bible",
+      name: "Style Bible",
+      description: "Reference sheets for palette, line weight, texture, staging, and motion timing.",
+      values: {
+        accent: "#b84cff",
+        accentAlt: "#16b8a6",
+        surface: "#fbf7ff",
+        surfaceSoft: "#efe2ff",
+        line: "#24152d",
+        text: "#201426",
+        stylePreset: "style-bible",
+      },
+    },
+  ];
+  const applyAppearancePreset = preset => {
+    Object.entries(preset.values).forEach(([key, value]) => onSetAppearance(key, value));
+  };
+  const bridgePortRows = asList(bridgeSessions).map(session => {
+    const endpoint = String(session.bridge_endpoint || session.bridgeEndpoint || "");
+    let host = endpoint || "local";
+    let port = "";
+    try {
+      const parsed = new URL(endpoint);
+      host = parsed.hostname || endpoint;
+      port = parsed.port || (parsed.protocol === "https:" ? "443" : parsed.protocol === "http:" ? "80" : "");
+    } catch {
+      const match = endpoint.match(/:(\d+)(?:\/|$)/);
+      port = match?.[1] || "";
+    }
+    return {
+      id: session.app_id || session.session_id || endpoint,
+      label: session.app_name || session.app_id || "Bridge",
+      role: session.ui_hints?.bridgeRole || session.serviceRole || session.bridge_transport || "bridge",
+      host,
+      port: port || session.ui_hints?.controlPort || session.latest_task_result?.payload?.controlPort || "",
+      status: session.bridge_health || session.status || "unknown",
+      actions: asList(session.serviceActions),
+    };
+  });
+  const managedServiceRows = asList(setupServices).map(service => ({
+    id: service.serviceId || service.label,
+    label: service.label || service.serviceId,
+    role: service.serviceRole || service.serviceCategory || service.installSource || "service",
+    host: service.bridgeEndpoint || service.installSource || service.version || "local",
+    port: service.controlPort || service.port || "",
+    status: service.currentHealthStatus || service.lastVerificationResult || "unknown",
+    actions: asList(service.serviceActions),
+  }));
+  const managementRows = Array.from(
+    [...bridgePortRows, ...managedServiceRows].filter(item => item.id).reduce((rows, item) => {
+      const existing = rows.get(item.id);
+      if (!existing) {
+        rows.set(item.id, item);
+        return rows;
+      }
+      rows.set(item.id, {
+        ...existing,
+        ...item,
+        host: item.host || existing.host,
+        port: item.port || existing.port,
+        status: item.status || existing.status,
+        actions: [...asList(existing.actions), ...asList(item.actions)],
+      });
+      return rows;
+    }, new Map()).values(),
+  );
+  const collectBridgeActions = matcher => {
+    const seen = new Set();
+    return managementRows.flatMap(row =>
+      asList(row.actions).map(action => ({ ...action, serviceLabel: row.label, serviceRole: row.role })),
+    ).filter(action => {
+      const key = `${action.actionId || action.label}-${action.commandSurface || ""}-${action.serviceRole || ""}`;
+      if (seen.has(key) || !matcher(action)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  };
+  const nasActions = collectBridgeActions(action =>
+    /nas|sync|ssh|fast/i.test(`${action.serviceRole || ""} ${action.actionId || ""} ${action.label || ""}`),
+  );
+  const cloudActions = collectBridgeActions(action =>
+    /cloud|drive|google/i.test(`${action.serviceRole || ""} ${action.actionId || ""} ${action.label || ""}`),
+  );
+  const storageQuickActions = [...nasActions, ...cloudActions].slice(0, 6);
 
   return (
     <section className="reference-settings-surface">
       <div className="reference-settings-header">
         <div>
           <h1>Settings</h1>
-          <p>Manage your preferences, agents, models, and workspace settings.</p>
+          <p>Manage your workspace, models, setup, appearance, and privacy.</p>
         </div>
       </div>
 
@@ -2243,7 +2462,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                   <option value="experimental">Experimental</option>
                 </select>
               </SurfaceField>
-              <SurfaceField label="Preferred runtime">
+              <SurfaceField label="Preferred work engine">
                 <select
                   onChange={event => onWorkspaceProfileFieldChange("preferredHarness", event.target.value)}
                   value={workspaceProfileForm.preferredHarness}
@@ -2265,9 +2484,9 @@ function SettingsSurface({ onRequestAction, settingsState }) {
             <article className="reference-settings-card">
               <div className="reference-builder-section-head">
                 <div>
-                  <strong>Codex Import & Workspace Roots</strong>
+                  <strong>Codex projects and folders</strong>
                   <span>
-                    Bring over recent Codex folders, inspect recent threads, and add a workspace root with the system picker.
+                    Bring over recent Codex folders, inspect recent threads, and add a project folder.
                   </span>
                 </div>
                 <div className="reference-inline-actions">
@@ -2348,19 +2567,82 @@ function SettingsSurface({ onRequestAction, settingsState }) {
 
           <div className="reference-settings-stack-column">
             <article className="reference-settings-card">
+              <div className="reference-builder-section-head">
+                <div>
+                  <strong>Linux and setup</strong>
+                  <span>Syntelos checks these for you and shows install or update buttons when something is missing.</span>
+                </div>
+              </div>
+              <div className="reference-settings-summary-grid">
+                {asList(setupServices)
+                  .filter(item => ["wsl2", "uv", "opencv", "openclaw", "hermes"].includes(item.serviceId))
+                  .map(item => (
+                    <article key={`setup-service-${item.serviceId}`}>
+                      <span>{item.serviceId === "wsl2" ? "Linux helper" : item.label}</span>
+                      <strong>
+                        {item.currentHealthStatus === "healthy"
+                          ? "Ready"
+                          : item.updateAvailable
+                            ? "Update available"
+                            : "Needs setup"}
+                      </strong>
+                      <p>{item.details}</p>
+                    </article>
+                  ))}
+              </div>
+            </article>
+
+            <article className="reference-settings-card">
               <strong>Appearance</strong>
-              <div className="reference-settings-block">
+              <details className="reference-settings-fold" open>
+                <summary>Theme and collapse behavior</summary>
+                <div className="reference-settings-block">
                 <span>Theme</span>
                 <div className="reference-theme-toggle">
                   <button className={appearance.theme === "light" ? "active" : ""} onClick={() => onSetAppearance("theme", "light")} type="button"><SunMedium size={18} strokeWidth={1.9} /><span>Light</span></button>
                   <button className={appearance.theme === "dark" ? "active" : ""} onClick={() => onSetAppearance("theme", "dark")} type="button"><Moon size={18} strokeWidth={1.9} /><span>Dark</span></button>
                   <button className={appearance.theme === "system" ? "active" : ""} onClick={() => onSetAppearance("theme", "system")} type="button"><Monitor size={18} strokeWidth={1.9} /><span>System</span></button>
                 </div>
-              </div>
-              <div className="reference-settings-block">
+                </div>
+                <div className="reference-settings-block">
+                  <span>Sidebar behavior</span>
+                  <div className="reference-density-toggle">
+                    {sidebarBehaviorOptions.map(option => (
+                      <button
+                        className={appearance.sidebarBehavior === option.value ? "active" : ""}
+                        key={option.value}
+                        onClick={() => onSetAppearance("sidebarBehavior", option.value)}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </details>
+
+              <details className="reference-settings-fold" open>
+                <summary>Color presets</summary>
+                <div className="reference-preset-grid">
+                  {appearancePresets.map(preset => (
+                    <button
+                      className="reference-preset-card"
+                      key={preset.id}
+                      onClick={() => applyAppearancePreset(preset)}
+                      type="button"
+                    >
+                      <span>{preset.name}</span>
+                      <strong>{preset.description}</strong>
+                      <i style={{ background: preset.values.accent }} />
+                      <i style={{ background: preset.values.accentAlt }} />
+                      <i style={{ background: preset.values.surfaceSoft }} />
+                    </button>
+                  ))}
+                </div>
+                <div className="reference-settings-block">
                 <span>Accent Color</span>
                 <div className="reference-color-swatches">
-                  {["#6f5cff", "#d0d5dd", "#1fb68f", "#f59e0b", "#e14f63"].map(color => (
+                  {["#d6a84f", "#9aa3a0", "#1fb68f", "#f59e0b", "#e14f63"].map(color => (
                     <button
                       className={appearance.accent === color ? "active" : ""}
                       key={color}
@@ -2370,38 +2652,76 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                     />
                   ))}
                 </div>
-              </div>
-              <div className="reference-settings-block">
-                <span>Density</span>
-                <div className="reference-density-toggle">
-                  {["comfortable", "compact", "spacious"].map(option => (
-                    <button
-                      className={appearance.density === option ? "active" : ""}
-                      key={option}
-                      onClick={() => onSetAppearance("density", option)}
-                      type="button"
-                    >
-                      {option[0].toUpperCase() + option.slice(1)}
-                    </button>
-                  ))}
                 </div>
-              </div>
-              <div className="reference-settings-block">
-                <span>Flux bar behavior</span>
-                <div className="reference-density-toggle">
-                  {sidebarBehaviorOptions.map(option => (
-                    <button
-                      className={appearance.sidebarBehavior === option.value ? "active" : ""}
-                      key={option.value}
-                      onClick={() => onSetAppearance("sidebarBehavior", option.value)}
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
+              </details>
+
+              <details className="reference-settings-fold" open>
+                <summary>Style and texture system</summary>
+                <div className="reference-style-dna-grid" aria-label="Style production controls">
+                  <article>
+                    <span>Reference capture</span>
+                    <strong>Boards, shots, and UI crops</strong>
+                    <p>Collect example screens, animation stills, and product screenshots as named references.</p>
+                  </article>
+                  <article>
+                    <span>Region language</span>
+                    <strong>Palette, line, shape, texture</strong>
+                    <p>Describe each surface by material rules rather than one vague style label.</p>
+                  </article>
+                  <article>
+                    <span>Motion timing</span>
+                    <strong>Ease, hold, anticipation</strong>
+                    <p>Record animation-industry timing notes so generated output can match the intended feel.</p>
+                  </article>
+                  <article>
+                    <span>Output proof</span>
+                    <strong>Compare, annotate, export</strong>
+                    <p>Keep generated UI, image, or video frames tied to comments and verification screenshots.</p>
+                  </article>
                 </div>
-              </div>
-              <div className="reference-settings-color-grid">
+              </details>
+
+              <details className="reference-settings-fold" open>
+                <summary>Information density</summary>
+                <div className="reference-settings-block">
+                  <span>Density</span>
+                  <div className="reference-density-toggle">
+                    {["compact", "comfortable", "spacious"].map(option => (
+                      <button
+                        className={appearance.density === option ? "active" : ""}
+                        key={option}
+                        onClick={() => onSetAppearance("density", option)}
+                        type="button"
+                      >
+                        {option[0].toUpperCase() + option.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="reference-settings-block">
+                  <span>Info mode</span>
+                  <div className="reference-density-toggle">
+                    {[
+                      ["minimal", "Less info"],
+                      ["balanced", "Balanced"],
+                      ["expanded", "More info"],
+                    ].map(([value, label]) => (
+                      <button
+                        className={(appearance.detailLevel || "balanced") === value ? "active" : ""}
+                        key={value}
+                        onClick={() => onSetAppearance("detailLevel", value)}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </details>
+
+              <details className="reference-settings-fold">
+                <summary>Advanced color tokens</summary>
+                <div className="reference-settings-color-grid">
                 {[
                   ["accent", "Primary Accent"],
                   ["accentAlt", "Secondary Accent"],
@@ -2418,7 +2738,8 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                     />
                   </SurfaceField>
                 ))}
-              </div>
+                </div>
+              </details>
             </article>
 
             <article className="reference-settings-card reference-settings-preview-card">
@@ -2438,7 +2759,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                 }}
               >
                 <div className="reference-settings-live-preview-topbar">
-                  <span>Fluxio Shell</span>
+                  <span>Syntelos Shell</span>
                   <div className="reference-settings-preview-pill-row">
                     <span style={{ background: appearance.accent, color: "#fff" }}>Primary</span>
                     <span style={{ background: appearance.accentAlt, color: appearance.text }}>Secondary</span>
@@ -2468,10 +2789,323 @@ function SettingsSurface({ onRequestAction, settingsState }) {
         </div>
       ) : null}
 
+      {activeTab === "storage" ? (
+        <div className="reference-settings-stack">
+          <article className="reference-settings-card">
+            <div className="reference-builder-section-head">
+              <div>
+                <strong>Computer and NAS bridge</strong>
+                <span>
+                  Keep local folders editable while a NAS-hosted runtime can stay online and use the same project tree.
+                </span>
+              </div>
+              <StatusBadge
+                label={storageBridge.connected ? "Connected" : storageBridge.available ? "Available" : "Not found"}
+                tone={storageBridge.connected ? "completed" : storageBridge.available ? "running" : "paused"}
+              />
+            </div>
+            <div className="reference-bridge-console">
+              <article className="reference-bridge-node source">
+                <span>Computer workspace</span>
+                <strong>{storageBridge.sourceRoot || storageBridge.cloud?.sourceRoot || "Choose a local folder"}</strong>
+                <p>Editable files stay on this machine while the runtime can keep running elsewhere.</p>
+              </article>
+              <article className="reference-bridge-route">
+                <span>{storageBridge.selectedMode || storageBridge.cloud?.selectedMode || "configure"}</span>
+                <strong>{storageBridge.safeDirections?.length ? storageBridge.safeDirections.join(" + ") : "preview required"}</strong>
+                <p>{storageBridge.writePolicy || "preview_then_approve"} / {storageBridge.conflictPolicy || "keep_newer_and_log"}</p>
+              </article>
+              <article className="reference-bridge-node target">
+                <span>Always-on targets</span>
+                <strong>{storageBridge.targetRoot || storageBridge.cloud?.targetRoot || "NAS or Drive not mapped"}</strong>
+                <p>
+                  {storageBridge.selectedHost || storageBridge.cloud?.selectedHost || "Connect Synology, Google Drive, or another mounted folder."}
+                </p>
+              </article>
+            </div>
+            <div className="reference-bridge-action-bar">
+              <div>
+                <strong>Bridge commands</strong>
+                <span>Runs through the same approval-aware workspace action contract as every other tool.</span>
+              </div>
+              <div className="reference-inline-actions compact">
+                {storageQuickActions.length ? (
+                  storageQuickActions.map(action => (
+                    <button
+                      className={action.requiresApproval ? "reference-outline-button" : "reference-link-button"}
+                      key={`storage-action-${action.actionId}-${action.serviceRole || action.label}`}
+                      onClick={() => onRequestAction?.("settings:run-action", { action })}
+                      type="button"
+                    >
+                      {action.label || action.actionId}
+                    </button>
+                  ))
+                ) : (
+                  <StatusBadge label="No direct actions yet" tone="paused" />
+                )}
+              </div>
+            </div>
+            <div className="reference-settings-summary-grid">
+              <article><span>Computer folder</span><strong>{storageBridge.sourceRoot || "Not mapped"}</strong></article>
+              <article><span>NAS folder</span><strong>{storageBridge.targetRoot || "Not mapped"}</strong></article>
+              <article><span>Route</span><strong>{storageBridge.selectedMode || "Offline"}</strong></article>
+              <article>
+                <span>Host</span>
+                <strong>
+                  {storageBridge.selectedHost || storageBridge.endpoint || "Not selected"}
+                  {storageBridge.controlPort ? `:${storageBridge.controlPort}` : ""}
+                </strong>
+              </article>
+              <article><span>Control</span><strong>{storageBridge.controlProtocol || storageBridge.nas?.controlProtocol || "ssh"} {storageBridge.controlPort || storageBridge.nas?.controlPort || 22}</strong></article>
+              <article><span>Web route</span><strong>{storageBridge.nas?.publicEndpoint || storageBridge.publicEndpoint || storageBridge.nas?.endpoint || "HTTPS via DSM proxy"}</strong></article>
+              <article><span>Port status</span><strong>{storageBridge.sshPortStatus || storageBridge.nas?.sshPortStatus || "Operator configured"}</strong></article>
+              <article><span>Remote user</span><strong>{storageBridge.sshUser || storageBridge.nas?.sshUser || "Not configured"}</strong></article>
+              <article><span>Remote root</span><strong>{storageBridge.remoteProjectRoot || storageBridge.nas?.remoteProjectRoot || "Not configured"}</strong></article>
+            </div>
+            {storageBridge.activationRequired || storageBridge.nas?.activationRequired ? (
+              <article className="reference-provider-card">
+                <div className="reference-builder-section-head">
+                  <div>
+                    <strong>{storageBridge.activationProject || storageBridge.nas?.activationProject || "Core"} activation needed</strong>
+                    <span>{storageBridge.activationHint || storageBridge.nas?.activationHint || "Activate the storage project before using the NAS mapping."}</span>
+                  </div>
+                  <StatusBadge label="Mapping inactive" tone="paused" />
+                </div>
+                <p className="reference-surface-footnote">
+                  {storageBridge.activationCommand || storageBridge.nas?.activationCommand || "C:/Users/paul/Projects/Cowork/map-synology-fast-path.cmd"}
+                </p>
+              </article>
+            ) : null}
+            <div className="reference-provider-grid">
+              <article className="reference-provider-card">
+                <strong>Transfer policy</strong>
+                <p>
+                  {storageBridge.writePolicy || "preview_then_approve"} · conflicts use {storageBridge.conflictPolicy || "keep_newer_and_log"}.
+                </p>
+                <div className="reference-inline-actions compact">
+                  {asList(storageBridge.safeDirections).length ? (
+                    storageBridge.safeDirections.map(direction => (
+                      <StatusBadge key={direction} label={direction} tone="completed" />
+                    ))
+                  ) : (
+                    <StatusBadge label="No write direction ready" tone="paused" />
+                  )}
+                  {storageBridge.requiresApprovalForWrite ? (
+                    <StatusBadge label="Writes require approval" tone="running" />
+                  ) : null}
+                </div>
+              </article>
+              <article className="reference-provider-card">
+                <strong>Current transfer</strong>
+                <p>{storageBridge.summary || "No active upload or download is being reported."}</p>
+                <div className="reference-inline-actions compact">
+                  <StatusBadge label={storageBridge.health || "unknown"} tone={storageBridge.connected ? "completed" : "paused"} />
+                  <StatusBadge label={storageBridge.activeDirection || "idle"} tone={storageBridge.activeDirection ? "running" : "paused"} />
+                </div>
+              </article>
+            </div>
+          </article>
+
+          <article className="reference-settings-card">
+            <div className="reference-builder-section-head">
+              <div>
+                <strong>Cloud drive bridge</strong>
+                <span>Use Google Drive or another mounted cloud folder as a second storage route for project files.</span>
+              </div>
+              <StatusBadge
+                label={storageBridge.cloud?.connected ? "Connected" : storageBridge.cloud?.available ? "Configure" : "Not registered"}
+                tone={storageBridge.cloud?.connected ? "completed" : storageBridge.cloud?.available ? "running" : "paused"}
+              />
+            </div>
+            <div className="reference-settings-summary-grid">
+              <article><span>Computer folder</span><strong>{storageBridge.cloud?.sourceRoot || storageBridge.sourceRoot || "Not mapped"}</strong></article>
+              <article><span>Cloud folder</span><strong>{storageBridge.cloud?.targetRoot || "Not mounted"}</strong></article>
+              <article><span>Provider</span><strong>{storageBridge.cloud?.selectedHost || "Google Drive"}</strong></article>
+              <article><span>Login</span><strong>{storageBridge.cloud?.googleLoginReady ? "Google ready" : "Needs Google login"}</strong></article>
+            </div>
+            <div className="reference-provider-grid">
+              <article className="reference-provider-card">
+                <strong>Mounted folders</strong>
+                <div className="reference-note-stack">
+                  {asList(storageBridge.cloud?.mountedRoots).length ? (
+                    asList(storageBridge.cloud?.mountedRoots).slice(0, 4).map(item => (
+                      <p className="reference-surface-footnote" key={`${item.provider}-${item.root}`}>
+                        {item.provider}: {item.root}
+                      </p>
+                    ))
+                  ) : (
+                    <p>Google Drive for desktop, OneDrive, Dropbox, or a custom mounted path has not been detected.</p>
+                  )}
+                </div>
+              </article>
+              <article className="reference-provider-card">
+                <strong>Cloud transfer policy</strong>
+                <p>{storageBridge.cloud?.summary || "Cloud storage is waiting for a mounted folder or Google OAuth token."}</p>
+                <div className="reference-inline-actions compact">
+                  {asList(storageBridge.cloud?.safeDirections).length ? (
+                    storageBridge.cloud.safeDirections.map(direction => (
+                      <StatusBadge key={direction} label={direction} tone="completed" />
+                    ))
+                  ) : (
+                    <StatusBadge label="No cloud write direction ready" tone="paused" />
+                  )}
+                  <StatusBadge label={storageBridge.cloud?.writePolicy || "preview_then_approve"} tone="running" />
+                </div>
+                <div className="reference-inline-actions compact">
+                  <button
+                    className="reference-outline-button"
+                    onClick={() => window.open(storageBridge.cloud?.loginUrl || "https://drive.google.com/drive/my-drive", "_blank", "noopener,noreferrer")}
+                    type="button"
+                  >
+                    <Database size={16} strokeWidth={1.9} />
+                    <span>Open Google Drive</span>
+                  </button>
+                  <button
+                    className="reference-link-button"
+                    onClick={() => window.open(storageBridge.cloud?.desktopClientUrl || "https://www.google.com/drive/download/", "_blank", "noopener,noreferrer")}
+                    type="button"
+                  >
+                    Drive desktop
+                  </button>
+                </div>
+              </article>
+            </div>
+          </article>
+
+          <article className="reference-settings-card">
+            <div className="reference-builder-section-head">
+              <div>
+                <strong>Connected bridge sessions</strong>
+                <span>Storage is managed through the same app capability contract as voice, monitoring, and future tools.</span>
+              </div>
+            </div>
+            <div className="reference-provider-grid">
+              {asList(bridgeSessions).length ? (
+                asList(bridgeSessions).map(session => (
+                  <article className={cx("reference-provider-card", session.status === "connected" && "connected")} key={session.session_id || session.app_id}>
+                    <div className="reference-builder-section-head">
+                      <div>
+                        <strong>{session.app_name || session.app_id}</strong>
+                        <span>{session.bridge_endpoint || session.bridge_transport || "Bridge manifest"}</span>
+                      </div>
+                      <StatusBadge label={session.bridge_health || session.status} tone={session.status === "connected" ? "completed" : "paused"} />
+                    </div>
+                    <p>{session.latest_task_result?.resultSummary || asList(session.notes)[0] || "No bridge task has reported yet."}</p>
+                    {asList(session.context_preview).length ? (
+                      <div className="reference-note-stack">
+                        {asList(session.context_preview[0]?.items).slice(0, 5).map(item => (
+                          <p className="reference-surface-footnote" key={`${session.app_id}-${item}`}>{item}</p>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))
+              ) : (
+                <article className="reference-provider-card">
+                  <strong>No bridge sessions</strong>
+                  <p>Register a connected app manifest before using NAS or tool bridge surfaces.</p>
+                </article>
+              )}
+            </div>
+          </article>
+        </div>
+      ) : null}
+
+      {activeTab === "tools" ? (
+        <div className="reference-settings-stack">
+          <article className="reference-settings-card">
+            <div className="reference-builder-section-head">
+              <div>
+                <strong>Tool and port management</strong>
+                <span>
+                  Runtime tools, connected-app bridges, NAS control, browser use, image tooling, and repair actions are listed here with their real endpoint state.
+                </span>
+              </div>
+              <StatusBadge
+                label={`${managementRows.length} managed`}
+                tone={managementRows.some(item => item.status !== "healthy" && item.status !== "connected") ? "running" : "completed"}
+              />
+            </div>
+            <div className="reference-port-grid">
+              {managementRows.length ? (
+                managementRows.map(item => (
+                  <article className="reference-port-card" key={`tool-port-${item.id}`}>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <span>{item.role}</span>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>Endpoint</dt>
+                        <dd>{item.host || "local"}</dd>
+                      </div>
+                      <div>
+                        <dt>Port</dt>
+                        <dd>{item.port || "n/a"}</dd>
+                      </div>
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{item.status}</dd>
+                      </div>
+                    </dl>
+                    {asList(item.actions).length ? (
+                      <div className="reference-inline-actions compact">
+                        {asList(item.actions).slice(0, 3).map(action => (
+                          <button
+                            className={action.requiresApproval ? "reference-outline-button" : "reference-link-button"}
+                            key={`${item.id}-${action.actionId}`}
+                            onClick={() => onRequestAction?.("settings:run-action", { action })}
+                            type="button"
+                          >
+                            {action.label || action.actionId}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p>No direct action is exposed yet.</p>
+                    )}
+                  </article>
+                ))
+              ) : (
+                <article className="reference-port-card">
+                  <div>
+                    <strong>No managed services found</strong>
+                    <span>setup</span>
+                  </div>
+                  <p>Run setup verification so Syntelos can inventory runtimes, image tools, bridges, and browser/computer-use ports.</p>
+                </article>
+              )}
+            </div>
+          </article>
+
+          <article className="reference-settings-card">
+            <div className="reference-builder-section-head">
+              <div>
+                <strong>Planned control ports</strong>
+                <span>These are the app areas that should become first-class managed tools as features land.</span>
+              </div>
+            </div>
+            <div className="reference-provider-grid">
+              {[
+                ["Image management", "Image generation, visual QA, asset folders, and selected-output promotion."],
+                ["Browser use", "Local browser sessions, screenshots, page actions, and proof capture."],
+                ["Computer use", "Desktop action lanes with approval boundaries and visible replay."],
+                ["NAS runtime", "SSH/SFTP control on the detected SSH port plus optional SMB drive-letter sync."],
+              ].map(([label, copy]) => (
+                <article className="reference-provider-card" key={label}>
+                  <strong>{label}</strong>
+                  <p>{copy}</p>
+                </article>
+              ))}
+            </div>
+          </article>
+        </div>
+      ) : null}
+
       {activeTab === "providers" ? (
         <div className="reference-settings-stack">
           <article className="reference-settings-card">
-            <strong>Provider Connections</strong>
+            <strong>Model accounts</strong>
             <div className="reference-provider-grid">
               {providers.map(provider => (
                 <article className={cx("reference-provider-card", provider.status && "connected")} key={provider.id}>
@@ -2488,7 +3122,13 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                   <p>{provider.note}</p>
                   {provider.quickAuth ? (
                     <div className="reference-provider-quickauth">
-                      <button className="reference-outline-button" onClick={provider.onQuickAuth} type="button">
+                      <button
+                        className="reference-outline-button"
+                        disabled={Boolean(provider.quickAuth.disabled)}
+                        onClick={provider.onQuickAuth}
+                        title={provider.quickAuth.disabled ? provider.quickAuth.detail : ""}
+                        type="button"
+                      >
                         <Sparkles size={16} strokeWidth={1.9} />
                         <span>{provider.quickAuth.label}</span>
                       </button>
@@ -2537,13 +3177,13 @@ function SettingsSurface({ onRequestAction, settingsState }) {
           </article>
 
           <article className="reference-settings-card">
-            <strong>ChatGPT App Connection</strong>
+            <strong>ChatGPT connection</strong>
             <p>
               A real ChatGPT connection is an app/connector backed by an MCP server. Opening
-              ChatGPT in a browser does not authenticate Fluxio or connect this desktop app.
+              ChatGPT in a browser does not authenticate Syntelos or connect this desktop app.
             </p>
             <div className="reference-two-column-grid">
-              <SurfaceField label="Current Fluxio local API">
+              <SurfaceField label="Current Syntelos local API">
                 <input readOnly value={chatgptConnection.localApiUrl || "Local API not running"} />
               </SurfaceField>
               <SurfaceField label="ChatGPT-compatible MCP endpoint">
@@ -2552,7 +3192,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
             </div>
             <p className="reference-surface-footnote">
               To connect from ChatGPT, create a ChatGPT app/connector for a remote MCP server.
-              Fluxio currently exposes a secured local REST API; the MCP bridge still needs to be
+              Syntelos currently exposes a secured local REST API; the MCP bridge still needs to be
               exposed before ChatGPT can connect directly.
             </p>
             <div className="reference-settings-actions split">
@@ -2565,7 +3205,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
           </article>
 
           <article className="reference-settings-card">
-            <strong>Workspace Auth Paths</strong>
+            <strong>Account preferences</strong>
             <div className="reference-two-column-grid">
               <SurfaceField label="OpenAI / Codex auth path">
                 <select
@@ -2600,7 +3240,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
           </article>
 
           <article className="reference-settings-card">
-            <strong>Runtime Availability</strong>
+            <strong>Work engine availability</strong>
             <div className="reference-provider-grid">
               {runtimes.map(runtime => (
                 <article className={cx("reference-provider-card", runtime.detected && "connected")} key={runtime.runtime_id}>
@@ -2611,7 +3251,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                     </div>
                     <StatusBadge label={runtime.detected ? "Detected" : "Missing"} tone={runtime.detected ? "completed" : "paused"} />
                   </div>
-                  <p>{runtime.doctor_summary || runtime.doctorSummary || "Runtime status is unavailable."}</p>
+                  <p>{runtime.doctor_summary || runtime.doctorSummary || "Work engine status is unavailable."}</p>
                   <RuntimeCapabilityPills capabilities={asList(runtime.capabilities)} />
                 </article>
               ))}
@@ -2635,7 +3275,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
             <div className="reference-settings-summary-grid">
               <article><span>Name</span><strong>{activeRuleSet?.name || "—"}</strong></article>
               <article><span>Approval mode</span><strong>{activeRuleSet?.approvalMode || "—"}</strong></article>
-              <article><span>Runtime</span><strong>{workspaceProfileForm.preferredHarness}</strong></article>
+              <article><span>Work engine</span><strong>{workspaceProfileForm.preferredHarness}</strong></article>
               <article><span>Execution target</span><strong>{workspaceProfileForm.executionTargetPreference}</strong></article>
             </div>
           </article>
@@ -2735,6 +3375,27 @@ function SettingsSurface({ onRequestAction, settingsState }) {
               ))}
             </div>
           </article>
+
+          <article className="reference-settings-card">
+            <div className="reference-builder-section-head">
+              <div>
+                <strong>Account and workspace permissions</strong>
+                <span>Owner accounts can change setup, models, bridges, permissions, and destructive actions. Member accounts can work inside approved projects and ask for escalation.</span>
+              </div>
+            </div>
+            <div className="reference-permission-grid">
+              {[
+                ["Owner console", "Models, provider keys, NAS bridge, tools, member roles, retention, and reset actions.", "owner"],
+                ["Member console", "Agent chat, assigned workspaces, tutorials, school/work modes, and non-destructive file review.", "user"],
+                ["Approval boundary", "Writes, desktop control, cloud transfer, NAS transfer, and permission changes require an approval gate.", "approval"],
+              ].map(([title, copy, tone]) => (
+                <article className={`reference-permission-card tone-${tone}`} key={title}>
+                  <span>{title}</span>
+                  <p>{copy}</p>
+                </article>
+              ))}
+            </div>
+          </article>
         </div>
       ) : null}
 
@@ -2758,7 +3419,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
           </article>
           <article className="reference-settings-card">
             <strong>Workspace Notes</strong>
-            <p>Flux bar auto-collapse, color tokens, provider auth, and routing policies are persisted inside the reference shell state.</p>
+            <p>Sidebar behavior, color choices, account preferences, and routing policies are saved inside Syntelos.</p>
             <p>Published rule sets immediately update the workspace routing overrides used for agent follow-ups.</p>
           </article>
         </div>
@@ -2910,6 +3571,9 @@ export function FluxioReferenceShell(props) {
     <div
       className={cx("reference-shell", `surface-${surface}`)}
       data-detail-mode={showFlowSidebar || builderDetailOpen ? "true" : "false"}
+      data-density={appearance?.density || "comfortable"}
+      data-info-mode={appearance?.detailLevel || "balanced"}
+      data-look={appearance?.stylePreset || "graphite-gold"}
       data-sidebar-behavior={sidebarBehavior}
       style={appearanceStyle}
     >
@@ -2929,7 +3593,7 @@ export function FluxioReferenceShell(props) {
               <RailItem
                 active={surface === "agent"}
                 icon={Bot}
-                label="Agent Mode"
+                label="Agent"
                 onClick={() => onSetSurface("agent")}
               />
               <RailItem
@@ -2962,7 +3626,7 @@ export function FluxioReferenceShell(props) {
         {showFlowSidebar ? (
           <>
             <FlowSidebar
-              currentModeLabel="Agent Mode"
+              currentModeLabel="Agent"
               favoriteFlows={favoriteFlows}
               flowProjects={flowProjects}
               onRequestAction={onRequestAction}
@@ -2975,7 +3639,7 @@ export function FluxioReferenceShell(props) {
               {showAgentTopbar ? (
                 <div className="reference-topbar">
                   <div className="reference-topbar-title">
-                    <strong>Agent Mode</strong>
+                    <strong>Agent</strong>
                     <ChevronDown size={16} strokeWidth={2} />
                     {agentScene === "live" ? (
                       <div className="reference-project-pill">

@@ -138,8 +138,20 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Accounts used by OpenClaw", shell)
         self.assertIn("Connect model accounts", shell)
         self.assertIn("Connect model account", shell)
-        self.assertIn("ChatGPT App Connection", reference_shell)
+        self.assertIn("ChatGPT connection", reference_shell)
         self.assertIn("ChatGPT-compatible MCP endpoint", reference_shell)
+
+    def test_provider_oauth_actions_require_desktop_credential_service(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+
+        self.assertIn("providerOAuthActionsAvailable", shell)
+        self.assertIn(
+            "Model OAuth account setup requires the desktop credential service (Tauri).",
+            shell,
+        )
+        self.assertIn("quickAuth.disabled", reference_shell)
+        self.assertIn("disabled={Boolean(provider.quickAuth.disabled)}", reference_shell)
 
     def test_builder_agent_modes_and_runtimes_remain_distinct(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
@@ -149,10 +161,10 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn('setUiMode("builder")', shell)
         self.assertIn('label="Agent"', shell)
         self.assertIn('label="Builder"', shell)
-        self.assertIn('label="Runtime"', shell)
-        self.assertIn("OpenClaw gateway", shell)
-        self.assertIn("Core runtimes", shell)
-        self.assertIn("Hermes and OpenClaw", shell)
+        self.assertIn('label: "Setup"', shell)
+        self.assertIn("OpenClaw live connection", shell)
+        self.assertIn("Work engines", shell)
+        self.assertIn("Work engines and accounts", shell)
         self.assertIn("primaryRuntimeServices", shell)
 
 

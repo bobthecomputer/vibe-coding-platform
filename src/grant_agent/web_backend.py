@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import shutil
+import ssl
 import subprocess
 import sys
 import webbrowser
@@ -22,9 +23,11 @@ from .subprocess_utils import hidden_windows_subprocess_kwargs
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47880
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
+PRODUCT_NAME = "Syntelos"
 ADMIN_CONFIG_RELATIVE_PATH = ".agent_control/grand_agent_web_admin.json"
 ADMIN_PASSWORD_RELATIVE_PATH = ".agent_control/grand_agent_admin_password.txt"
 SESSION_COOKIE_NAME = "grand_agent_session"
+ACCOUNT_ROLES = {"account", "operator", "admin"}
 PASSWORD_ITERATIONS = 240_000
 PROVIDER_ENV = {
     "openai": ("OPENAI_API_KEY",),
@@ -37,11 +40,7 @@ PROVIDER_ENV = {
 }
 
 
-def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object) -> None:
-    body = json.dumps(payload, indent=2).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
+def _send_cors_headers(handler: BaseHTTPRequestHandler) -> None:
     origin = handler.headers.get("Origin")
     if origin:
         handler.send_header("Access-Control-Allow-Origin", origin)
@@ -49,6 +48,26 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object
     handler.send_header("Access-Control-Allow-Credentials", "true")
     handler.send_header("Access-Control-Allow-Headers", "content-type, authorization")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+
+def _apply_security_headers(
+    handler: BaseHTTPRequestHandler,
+    *,
+    cache_control: str = "no-store",
+) -> None:
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("Referrer-Policy", "no-referrer")
+    handler.send_header("Cache-Control", cache_control)
+
+
+def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object) -> None:
+    body = json.dumps(payload, indent=2).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    _apply_security_headers(handler)
+    _send_cors_headers(handler)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -118,20 +137,163 @@ def _write_private_json(path: Path, payload: object) -> None:
         pass
 
 
-def ensure_admin_config(root: Path, *, reset_password: bool = False) -> tuple[dict[str, object], str | None]:
+def _clean_username(username: str | None) -> str:
+    cleaned = str(username or "").strip()
+    if not cleaned:
+        raise ValueError("Username is required.")
+    if any(char.isspace() for char in cleaned):
+        raise ValueError("Username cannot contain spaces.")
+    return cleaned
+
+
+def _default_display_name(username: str) -> str:
+    return "Account" if username == "admin" else username
+
+
+def _normalise_role(value: object) -> str:
+    role = str(value or "").strip().lower()
+    if role in {"owner", "member", "operator"}:
+        return role
+    return "account"
+
+
+def _user_record(
+    username: str,
+    *,
+    display_name: str | None = None,
+    password: str,
+    source: str,
+    created_at: str | None = None,
+) -> dict[str, object]:
+    return {
+        "username": username,
+        "displayName": display_name or _default_display_name(username),
+        "role": "account",
+        "password": _hash_record(password),
+        "source": source,
+        "createdAt": created_at or _utc_now(),
+    }
+
+
+def _normalise_admin_payload(payload: dict[str, object]) -> dict[str, object]:
+    users = payload.get("users")
+    if isinstance(users, list) and users:
+        clean_users = []
+        for user in users:
+            if not isinstance(user, dict) or not user.get("password"):
+                continue
+            next_user = dict(user)
+            next_user["role"] = _normalise_role(next_user.get("role"))
+            clean_users.append(next_user)
+        if clean_users:
+            primary = clean_users[0]
+            next_payload = dict(payload)
+            next_payload["users"] = clean_users
+            next_payload["username"] = primary.get("username") or payload.get("username") or "admin"
+            primary_username = str(primary.get("username") or payload.get("username") or "admin")
+            next_payload["displayName"] = (
+                primary.get("displayName") or payload.get("displayName") or _default_display_name(primary_username)
+            )
+            next_payload["role"] = _normalise_role(primary.get("role") or payload.get("role"))
+            next_payload["password"] = primary.get("password")
+            return next_payload
+    if payload.get("password"):
+        username = str(payload.get("username") or "admin")
+        user = {
+            "username": username,
+            "displayName": payload.get("displayName") or _default_display_name(username),
+            "role": _normalise_role(payload.get("role")),
+            "password": payload.get("password"),
+            "source": payload.get("source") or "local_config",
+            "createdAt": payload.get("createdAt") or _utc_now(),
+        }
+        next_payload = dict(payload)
+        next_payload["users"] = [user]
+        next_payload["username"] = username
+        next_payload["displayName"] = user["displayName"]
+        next_payload["role"] = user["role"]
+        return next_payload
+    return payload
+
+
+def _public_url(host: str, port: int, *, public_url: str | None = None, https: bool = False) -> str:
+    configured = str(public_url or "").strip().rstrip("/")
+    if configured:
+        return configured
+    scheme = "https" if https else "http"
+    return f"{scheme}://127.0.0.1:{port}" if host in {"0.0.0.0", "::"} else f"{scheme}://{host}:{port}"
+
+
+def _write_password_note(
+    path: Path,
+    entries: list[tuple[str, str]],
+    *,
+    title: str,
+    url: str | None = None,
+) -> None:
+    lines = [
+        title,
+        f"URL: {url or _public_url(DEFAULT_HOST, DEFAULT_PORT)}",
+        "",
+    ]
+    for username, password in entries:
+        lines.extend(
+            [
+                f"Username: {username}",
+                f"Password: {password}",
+                "",
+            ]
+        )
+    lines.append("This file is ignored by git. Delete it after storing the password.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def ensure_admin_config(
+    root: Path,
+    *,
+    reset_password: bool = False,
+    username: str | None = None,
+    display_name: str | None = None,
+    public_url: str | None = None,
+) -> tuple[dict[str, object], str | None]:
     control_dir = root / ".agent_control"
     config_path = root / ADMIN_CONFIG_RELATIVE_PATH
     password_path = root / ADMIN_PASSWORD_RELATIVE_PATH
-    env_password = os.environ.get("GRAND_AGENT_ADMIN_PASSWORD")
-    env_user = os.environ.get("GRAND_AGENT_ADMIN_USER", "admin").strip() or "admin"
+    env_password = os.environ.get("SYNTELOS_ACCOUNT_PASSWORD") or os.environ.get("GRAND_AGENT_ADMIN_PASSWORD")
+    env_user = _clean_username(
+        username
+        or os.environ.get("SYNTELOS_ACCOUNT_USER")
+        or os.environ.get("GRAND_AGENT_ADMIN_USER", "admin")
+    )
     if env_password:
+        user = _user_record(
+            env_user,
+            display_name=(
+                display_name
+                or os.environ.get("SYNTELOS_ACCOUNT_DISPLAY_NAME")
+                or os.environ.get("GRAND_AGENT_ADMIN_DISPLAY_NAME")
+                or _default_display_name(env_user)
+            ),
+            password=env_password,
+            source="environment",
+        )
         return (
             {
-                "username": env_user,
-                "displayName": "Admin",
-                "role": "admin",
-                "password": _hash_record(env_password),
-                "sessionSecret": os.environ.get("GRAND_AGENT_SESSION_SECRET") or secrets.token_urlsafe(48),
+                "username": user["username"],
+                "displayName": user["displayName"],
+                "role": user["role"],
+                "password": user["password"],
+                "users": [user],
+                "sessionSecret": (
+                    os.environ.get("SYNTELOS_SESSION_SECRET")
+                    or os.environ.get("GRAND_AGENT_SESSION_SECRET")
+                    or secrets.token_urlsafe(48)
+                ),
                 "source": "environment",
                 "createdAt": _utc_now(),
             },
@@ -140,39 +302,75 @@ def ensure_admin_config(root: Path, *, reset_password: bool = False) -> tuple[di
 
     if config_path.exists() and not reset_password:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict) and payload.get("password"):
-            return payload, None
+        if isinstance(payload, dict) and (payload.get("password") or payload.get("users")):
+            normalised = _normalise_admin_payload(payload)
+            if normalised != payload:
+                _write_private_json(config_path, normalised)
+            return normalised, None
 
     password = secrets.token_urlsafe(18)
-    payload = {
-        "username": env_user,
-        "displayName": "Paul Admin" if env_user == "admin" else env_user,
-        "role": "admin",
-        "password": _hash_record(password),
+    user = _user_record(
+        env_user,
+        display_name=display_name or os.environ.get("GRAND_AGENT_ADMIN_DISPLAY_NAME"),
+        password=password,
+        source="local_config",
+    )
+    payload: dict[str, object] = {
+        "username": user["username"],
+        "displayName": user["displayName"],
+        "role": user["role"],
+        "password": user["password"],
+        "users": [user],
         "sessionSecret": secrets.token_urlsafe(48),
         "source": "local_config",
         "createdAt": _utc_now(),
     }
     _write_private_json(config_path, payload)
     control_dir.mkdir(parents=True, exist_ok=True)
-    password_path.write_text(
-        "\n".join(
-            [
-                "Grand Agent local admin login",
-                f"URL: http://127.0.0.1:{DEFAULT_PORT}",
-                f"Username: {payload['username']}",
-                f"Password: {password}",
-                "",
-                "This file is ignored by git. Delete it after storing the password.",
-            ]
-        ),
-        encoding="utf-8",
+    _write_password_note(
+        password_path,
+        [(str(user["username"]), password)],
+        title=f"{PRODUCT_NAME} local account login",
+        url=public_url,
     )
-    try:
-        os.chmod(password_path, 0o600)
-    except OSError:
-        pass
     return payload, password
+
+
+def add_or_reset_admin_user(
+    root: Path,
+    *,
+    username: str,
+    display_name: str | None = None,
+    public_url: str | None = None,
+) -> tuple[dict[str, object], str, Path]:
+    if os.environ.get("SYNTELOS_ACCOUNT_PASSWORD") or os.environ.get("GRAND_AGENT_ADMIN_PASSWORD"):
+        raise RuntimeError("Cannot add local accounts while environment-controlled auth is active.")
+    clean_username = _clean_username(username)
+    config_path = root / ADMIN_CONFIG_RELATIVE_PATH
+    payload, _ = ensure_admin_config(root)
+    payload = _normalise_admin_payload(payload)
+    users = [dict(user) for user in payload.get("users", []) if isinstance(user, dict)]
+    password = secrets.token_urlsafe(18)
+    next_user = _user_record(
+        clean_username,
+        display_name=display_name,
+        password=password,
+        source="local_config",
+    )
+    users = [user for user in users if user.get("username") != clean_username]
+    users.append(next_user)
+    payload["users"] = users
+    payload = _normalise_admin_payload(payload)
+    _write_private_json(config_path, payload)
+    safe_username = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in clean_username)
+    password_path = root / ".agent_control" / f"syntelos_{safe_username}_password.txt"
+    _write_password_note(
+        password_path,
+        [(clean_username, password)],
+        title=f"{PRODUCT_NAME} local account login",
+        url=public_url,
+    )
+    return payload, password, password_path
 
 
 def _run_cli(
@@ -184,6 +382,14 @@ def _run_cli(
 ) -> dict[str, Any]:
     cmd = [sys.executable, "-m", "grant_agent.cli", command, "--root", str(root), *args]
     env = os.environ.copy()
+    src_path = root / "src"
+    if src_path.exists():
+        existing_pythonpath = str(env.get("PYTHONPATH", "")).strip()
+        env["PYTHONPATH"] = (
+            f"{src_path}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else str(src_path)
+        )
     env.update(extra_env or {})
     completed = subprocess.run(  # noqa: S603
         cmd,
@@ -265,67 +471,96 @@ def _codex_import_snapshot() -> dict[str, Any]:
 
 
 class FluxioWebBackend:
-    def __init__(self, root: Path, static_root: Path, *, reset_admin_password: bool = False) -> None:
+    def __init__(
+        self,
+        root: Path,
+        static_root: Path,
+        *,
+        reset_admin_password: bool = False,
+        public_url: str | None = None,
+    ) -> None:
         self.root = root.resolve()
         self.static_root = static_root.resolve()
         self.provider_secrets: dict[str, str] = {}
         self.admin_config, self.generated_admin_password = ensure_admin_config(
             self.root,
             reset_password=reset_admin_password,
+            public_url=public_url,
         )
+        self.public_url = public_url or ""
+        self.secure_cookies = self.public_url.startswith("https://")
         self.sessions: dict[str, dict[str, str]] = {}
 
     @property
     def username(self) -> str:
-        return str(self.admin_config.get("username") or "admin")
+        user = self.admin_users[0] if self.admin_users else {}
+        return str(user.get("username") or self.admin_config.get("username") or "admin")
+
+    @property
+    def admin_users(self) -> list[dict[str, object]]:
+        normalised = _normalise_admin_payload(self.admin_config)
+        users = normalised.get("users")
+        if isinstance(users, list):
+            return [user for user in users if isinstance(user, dict) and user.get("password")]
+        return []
 
     @property
     def role(self) -> str:
-        return str(self.admin_config.get("role") or "admin")
+        return _normalise_role(self.admin_config.get("role"))
 
     def session_status(self, handler: BaseHTTPRequestHandler) -> dict[str, object]:
-        authenticated = self.is_authenticated(handler)
+        session = self.authenticated_session(handler)
+        authenticated = bool(session)
         return {
             "authenticated": authenticated,
             "user": (
                 {
-                    "username": self.username,
-                    "displayName": self.admin_config.get("displayName") or "Admin",
-                    "role": self.role,
+                    "username": session.get("username") or self.username,
+                    "displayName": session.get("displayName") or self.admin_config.get("displayName") or "Account",
+                    "role": session.get("role") or self.role,
                 }
                 if authenticated
                 else None
             ),
             "loginRequired": True,
-            "productName": "Grand Agent",
+            "productName": PRODUCT_NAME,
         }
 
-    def is_authenticated(self, handler: BaseHTTPRequestHandler) -> bool:
+    def authenticated_session(self, handler: BaseHTTPRequestHandler) -> dict[str, str] | None:
         header = handler.headers.get("Cookie") or ""
         parsed = cookies.SimpleCookie()
         try:
             parsed.load(header)
         except cookies.CookieError:
-            return False
+            return None
         morsel = parsed.get(SESSION_COOKIE_NAME)
         if not morsel:
-            return False
+            return None
         token = morsel.value
         session = self.sessions.get(token)
-        return bool(session and session.get("role") == "admin")
+        return session if session and session.get("role") in ACCOUNT_ROLES else None
+
+    def is_authenticated(self, handler: BaseHTTPRequestHandler) -> bool:
+        return bool(self.authenticated_session(handler))
 
     def login(self, payload: dict[str, Any]) -> str | None:
         username = str(payload.get("username") or "").strip()
         password = str(payload.get("password") or "")
-        if username != self.username:
-            return None
-        record = self.admin_config.get("password")
-        if not isinstance(record, dict) or not _verify_password(password, record):
+        matched_user: dict[str, object] | None = None
+        for user in self.admin_users:
+            if username != str(user.get("username") or ""):
+                continue
+            record = user.get("password")
+            if isinstance(record, dict) and _verify_password(password, record):
+                matched_user = user
+                break
+        if not matched_user:
             return None
         token = secrets.token_urlsafe(32)
         self.sessions[token] = {
-            "username": self.username,
-            "role": self.role,
+            "username": str(matched_user.get("username") or username),
+            "displayName": str(matched_user.get("displayName") or username),
+            "role": _normalise_role(matched_user.get("role")),
             "createdAt": _utc_now(),
         }
         return token
@@ -348,7 +583,7 @@ class FluxioWebBackend:
         cookie[SESSION_COOKIE_NAME]["path"] = "/"
         cookie[SESSION_COOKIE_NAME]["httponly"] = True
         cookie[SESSION_COOKIE_NAME]["samesite"] = "Lax"
-        if os.environ.get("GRAND_AGENT_COOKIE_SECURE") == "1":
+        if self.secure_cookies or os.environ.get("GRAND_AGENT_COOKIE_SECURE") == "1":
             cookie[SESSION_COOKIE_NAME]["secure"] = True
         for value in cookie.values():
             handler.send_header("Set-Cookie", value.OutputString())
@@ -356,7 +591,8 @@ class FluxioWebBackend:
     def _clear_session_cookie(self, handler: BaseHTTPRequestHandler) -> None:
         handler.send_header(
             "Set-Cookie",
-            f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+            f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+            f"{'; Secure' if self.secure_cookies or os.environ.get('GRAND_AGENT_COOKIE_SECURE') == '1' else ''}",
         )
 
     def _provider_env(self) -> dict[str, str]:
@@ -561,6 +797,7 @@ class FluxioWebBackend:
         handler.send_response(200)
         handler.send_header("Content-Type", content_type)
         handler.send_header("Content-Length", str(len(body)))
+        _apply_security_headers(handler, cache_control="public, max-age=300")
         handler.end_headers()
         handler.wfile.write(body)
         return True
@@ -579,7 +816,7 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                     200,
                     {
                         "ok": True,
-                        "backend": "grand-agent-web",
+                        "backend": "syntelos-web",
                         "loginRequired": True,
                     },
                 )
@@ -601,10 +838,11 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                             401,
                             {
                                 "ok": False,
-                                "error": "Invalid Grand Agent admin username or password.",
+                                "error": f"Invalid {PRODUCT_NAME} account username or password.",
                             },
                         )
                         return
+                    session = backend.sessions.get(token, {})
                     self.send_response(200)
                     backend._set_session_cookie(self, token)
                     response_payload = {
@@ -612,22 +850,19 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                         "data": {
                             "authenticated": True,
                             "user": {
-                                "username": backend.username,
-                                "displayName": backend.admin_config.get("displayName") or "Admin",
-                                "role": backend.role,
+                                "username": session.get("username") or backend.username,
+                                "displayName": session.get("displayName") or backend.admin_config.get("displayName") or "Account",
+                                "role": session.get("role") or backend.role,
                             },
                             "loginRequired": True,
-                            "productName": "Grand Agent",
+                            "productName": PRODUCT_NAME,
                         },
                     }
                     body = json.dumps(response_payload, indent=2).encode("utf-8")
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
-                    origin = self.headers.get("Origin")
-                    if origin:
-                        self.send_header("Access-Control-Allow-Origin", origin)
-                        self.send_header("Vary", "Origin")
-                    self.send_header("Access-Control-Allow-Credentials", "true")
+                    _apply_security_headers(self)
+                    _send_cors_headers(self)
                     self.end_headers()
                     self.wfile.write(body)
                 except Exception as exc:
@@ -639,11 +874,8 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                 body = json.dumps({"ok": True, "data": {"authenticated": False}}).encode("utf-8")
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
-                origin = self.headers.get("Origin")
-                if origin:
-                    self.send_header("Access-Control-Allow-Origin", origin)
-                    self.send_header("Vary", "Origin")
-                self.send_header("Access-Control-Allow-Credentials", "true")
+                _apply_security_headers(self)
+                _send_cors_headers(self)
                 self.end_headers()
                 self.wfile.write(body)
                 return
@@ -656,7 +888,7 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                     401,
                     {
                         "ok": False,
-                        "error": "Grand Agent login is required.",
+                        "error": f"{PRODUCT_NAME} login is required.",
                         "loginRequired": True,
                     },
                 )
@@ -676,15 +908,32 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the Fluxio web backend.")
+    parser = argparse.ArgumentParser(description=f"Run the {PRODUCT_NAME} web backend.")
     parser.add_argument("--host", default=os.environ.get("FLUXIO_WEB_HOST", DEFAULT_HOST))
     parser.add_argument("--port", type=int, default=int(os.environ.get("FLUXIO_WEB_PORT", DEFAULT_PORT)))
     parser.add_argument("--root", default=os.environ.get("FLUXIO_WORKSPACE_ROOT", str(DEFAULT_ROOT)))
     parser.add_argument("--static-root", default=os.environ.get("FLUXIO_STATIC_ROOT", str(DEFAULT_ROOT / "web" / "dist")))
     parser.add_argument(
+        "--public-url",
+        default=os.environ.get("FLUXIO_PUBLIC_URL", ""),
+        help="Browser-facing URL to write into local account notes, usually the DSM HTTPS reverse-proxy URL.",
+    )
+    parser.add_argument(
+        "--tls-cert-file",
+        default=os.environ.get("FLUXIO_TLS_CERT_FILE", ""),
+        help="Optional TLS certificate file for direct HTTPS serving.",
+    )
+    parser.add_argument(
+        "--tls-key-file",
+        default=os.environ.get("FLUXIO_TLS_KEY_FILE", ""),
+        help="Optional TLS private key file for direct HTTPS serving.",
+    )
+    parser.add_argument(
         "--reset-admin-password",
+        "--reset-account-password",
         action="store_true",
-        help="Generate a fresh local admin password file under .agent_control.",
+        dest="reset_admin_password",
+        help="Generate a fresh local account password file under .agent_control.",
     )
     args = parser.parse_args(argv)
 
@@ -692,15 +941,29 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.root),
         Path(args.static_root),
         reset_admin_password=args.reset_admin_password,
+        public_url=args.public_url or None,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(backend))
+    tls_enabled = bool(args.tls_cert_file or args.tls_key_file)
+    if tls_enabled:
+        if not args.tls_cert_file or not args.tls_key_file:
+            raise SystemExit("--tls-cert-file and --tls-key-file must be provided together.")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=args.tls_cert_file, keyfile=args.tls_key_file)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
     password_path = backend.root / ADMIN_PASSWORD_RELATIVE_PATH
     if backend.generated_admin_password:
         print(
-            f"Grand Agent admin password generated at {password_path}",
+            f"{PRODUCT_NAME} account password generated at {password_path}",
             flush=True,
         )
-    print(f"Grand Agent web backend listening on http://{args.host}:{args.port}", flush=True)
+    scheme = "https" if tls_enabled else "http"
+    print(
+        f"{PRODUCT_NAME} web backend listening on {scheme}://{args.host}:{args.port}",
+        flush=True,
+    )
+    if args.public_url:
+        print(f"{PRODUCT_NAME} public URL: {args.public_url.rstrip('/')}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

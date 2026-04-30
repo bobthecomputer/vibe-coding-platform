@@ -560,6 +560,7 @@ class ConnectedAppSession:
     task_history: list[dict[str, Any]] = field(default_factory=list)
     latest_task_result: dict[str, Any] = field(default_factory=dict)
     approval_callback: dict[str, Any] = field(default_factory=dict)
+    ui_hints: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

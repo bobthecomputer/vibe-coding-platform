@@ -25,3 +25,4 @@ web/dist/
 web/.tmp_frontend_build/
 src-tauri/target/
 .tmp_*/
+tmp/

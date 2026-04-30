@@ -18,7 +18,7 @@ This removes split ownership between the frontend entrypoint and `desktop-ui` fo
   - `npm run frontend:dev` starts Vite for `web`
   - `npm run frontend:build` builds `web/dist`
   - `npm run web:serve` builds `web/dist` and serves the website plus the local HTTP backend on `http://127.0.0.1:47880`
-  - `npm run nas:setup` prepares a NAS install and generates an ignored local admin password
+  - `npm run nas:setup` prepares a NAS install and generates an ignored local account password
 - `src-tauri/tauri.conf.json`
   - `beforeDevCommand` runs the Vite dev server
   - `devUrl` points Tauri at the live frontend
@@ -29,7 +29,7 @@ This removes split ownership between the frontend entrypoint and `desktop-ui` fo
 
 ## Website Backend
 
-The React shell keeps the Tauri command path for the desktop app and falls back to `POST /api/backend` when it runs as a website. The web backend is `python -m grant_agent.web_backend`; it exposes the control-room snapshot, workspace/mission actions, provider presence, Codex import inspection, and connected-app bridge status through the same command names used by the Tauri shell. Browser access requires the Grand Agent admin login before command APIs are available.
+The React shell keeps the Tauri command path for the desktop app and falls back to `POST /api/backend` when it runs as a website. The web backend is `python -m grant_agent.web_backend`; it exposes the control-room snapshot, workspace/mission actions, provider presence, Codex import inspection, and connected-app bridge status through the same command names used by the Tauri shell. Browser access requires the local Syntelos account login before command APIs are available.
 
 Hosted static deployments on GitHub Pages or Vercel can render the Fluxio web shell and fixture fallback. Machine-local control, provider secrets, OpenClaw/Hermes runtime detection, and Synology Fast Sync bridge state require the local backend because they read this workstation and its environment. For a browser-hosted shell pointed at a separately hosted backend, set `VITE_FLUXIO_BACKEND_URL` at build time or `window.__FLUXIO_BACKEND_URL__` before boot.
 
