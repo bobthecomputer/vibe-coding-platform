@@ -95,6 +95,13 @@ Add one more local user later:
 python scripts/nas_setup.py --skip-npm --add-user theo --display-name "Theo"
 ```
 
+Add multiple users in one setup run:
+
+```bash
+python scripts/nas_setup.py --skip-npm --add-user theo --add-user sam
+python scripts/nas_setup.py --skip-npm --add-users theo,sam,alex
+```
+
 Implemented backend features:
 
 - Hold-to-open overlay (`Ctrl+Space`, fallback `Ctrl+Shift+Space`), tray controls, persisted settings.

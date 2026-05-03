@@ -259,6 +259,170 @@ class CliPreferenceTests(unittest.TestCase):
             )
             self.assertFalse(mocked_invoke.call_args.kwargs["pause_on_handoff"])
 
+    def test_mission_start_accepts_relative_stop_minutes_timer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+            save_code, save_payload = self._run_json_command(
+                cmd_workspace_save,
+                root=str(root),
+                name="Fluxio Workspace",
+                path=str(root),
+                default_runtime="hermes",
+                user_profile="experimental",
+                preferred_harness="fluxio_hybrid",
+                routing_strategy="profile_default",
+                route_overrides_json="[]",
+                auto_optimize_routing="false",
+                minimax_auth_mode="none",
+                commit_message_style="scoped",
+                execution_target_preference="profile_default",
+                workspace_id=None,
+            )
+            self.assertEqual(save_code, 0)
+            workspace_id = save_payload["workspace"]["workspace_id"]
+
+            runtime_status = RuntimeInstallStatus(
+                runtime_id="hermes",
+                label="Hermes",
+                detected=True,
+                doctor_summary="Hermes is ready.",
+            )
+            adapter = mock.Mock()
+            adapter.doctor.return_value = runtime_status
+            fixed_now = datetime(2026, 4, 16, 22, 0, tzinfo=timezone.utc)
+
+            with (
+                mock.patch("grant_agent.cli.runtime_adapter_map", return_value={"hermes": adapter}),
+                mock.patch(
+                    "grant_agent.cli.detect_default_verification_commands",
+                    return_value=["python -m pytest tests -q"],
+                ),
+                mock.patch("grant_agent.cli.load_telegram_destination", return_value=""),
+                mock.patch("grant_agent.cli._now_local", return_value=fixed_now),
+                mock.patch(
+                    "grant_agent.cli.mission_time_budget_window",
+                    return_value={"remainingSeconds": 2100},
+                ),
+                mock.patch(
+                    "grant_agent.cli._invoke_engine",
+                    return_value=self._engine_result(root, "session_relative_timer"),
+                ) as mocked_invoke,
+            ):
+                exit_code, payload = self._run_json_command(
+                    cmd_mission_start,
+                    root=str(root),
+                    workspace_id=workspace_id,
+                    runtime="hermes",
+                    objective="Refine the launch copy and keep scope tight.",
+                    success_check=["Mission pauses after the relative timer window"],
+                    mode="Autopilot",
+                    budget_hours=4,
+                    relative_stop_minutes=35,
+                    run_until="pause_on_failure",
+                    profile="experimental",
+                    escalation_destination="",
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                payload["mission"]["run_budget"]["run_until_behavior"],
+                "continue_until_blocked",
+            )
+            self.assertEqual(
+                payload["mission"]["run_budget"]["max_runtime_seconds"],
+                2100,
+            )
+            self.assertTrue(payload["mission"]["run_budget"]["deadline_at"])
+            self.assertEqual(
+                mocked_invoke.call_args.kwargs["max_runtime_override"],
+                2100,
+            )
+            self.assertFalse(mocked_invoke.call_args.kwargs["pause_on_handoff"])
+
+    def test_mission_start_accepts_per_run_model_route_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+            save_code, save_payload = self._run_json_command(
+                cmd_workspace_save,
+                root=str(root),
+                name="Fluxio Workspace",
+                path=str(root),
+                default_runtime="hermes",
+                user_profile="advanced",
+                preferred_harness="fluxio_hybrid",
+                routing_strategy="profile_default",
+                route_overrides_json="[]",
+                auto_optimize_routing="false",
+                minimax_auth_mode="none",
+                commit_message_style="scoped",
+                execution_target_preference="profile_default",
+                workspace_id=None,
+            )
+            self.assertEqual(save_code, 0)
+            workspace_id = save_payload["workspace"]["workspace_id"]
+
+            runtime_status = RuntimeInstallStatus(
+                runtime_id="hermes",
+                label="Hermes",
+                detected=True,
+                doctor_summary="Hermes is ready.",
+            )
+            adapter = mock.Mock()
+            adapter.doctor.return_value = runtime_status
+            route_overrides = [
+                {
+                    "role": role,
+                    "provider": "openai",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                }
+                for role in ("planner", "executor", "verifier")
+            ]
+
+            with (
+                mock.patch("grant_agent.cli.runtime_adapter_map", return_value={"hermes": adapter}),
+                mock.patch(
+                    "grant_agent.cli.detect_default_verification_commands",
+                    return_value=["python -m pytest tests -q"],
+                ),
+                mock.patch("grant_agent.cli.load_telegram_destination", return_value=""),
+                mock.patch(
+                    "grant_agent.cli.mission_time_budget_window",
+                    return_value={"remainingSeconds": 7200},
+                ),
+                mock.patch(
+                    "grant_agent.cli._invoke_engine",
+                    return_value=self._engine_result(root, "session_route_override"),
+                ) as mocked_invoke,
+            ):
+                exit_code, payload = self._run_json_command(
+                    cmd_mission_start,
+                    root=str(root),
+                    workspace_id=workspace_id,
+                    runtime="hermes",
+                    objective="Use the selected run model for this mission.",
+                    success_check=["The mission uses the selected model route"],
+                    mode="Autopilot",
+                    budget_hours=2,
+                    run_until="pause_on_failure",
+                    profile="advanced",
+                    route_overrides_json=json.dumps(route_overrides),
+                    escalation_destination="",
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["mission"]["route_configs"], route_overrides)
+            self.assertEqual(
+                mocked_invoke.call_args.kwargs["route_overrides_override"],
+                route_overrides,
+            )
+
     def test_mission_resume_uses_latest_checkpoint_for_continuity(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

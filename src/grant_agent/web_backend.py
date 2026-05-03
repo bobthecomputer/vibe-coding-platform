@@ -508,6 +508,18 @@ class FluxioWebBackend:
     def role(self) -> str:
         return _normalise_role(self.admin_config.get("role"))
 
+    def _account_hints(self) -> list[dict[str, str]]:
+        hints: list[dict[str, str]] = []
+        for user in self.admin_users:
+            username = str(user.get("username") or "").strip()
+            if not username:
+                continue
+            display_name = str(
+                user.get("displayName") or _default_display_name(username)
+            ).strip() or username
+            hints.append({"username": username, "displayName": display_name})
+        return hints
+
     def session_status(self, handler: BaseHTTPRequestHandler) -> dict[str, object]:
         session = self.authenticated_session(handler)
         authenticated = bool(session)
@@ -522,6 +534,7 @@ class FluxioWebBackend:
                 if authenticated
                 else None
             ),
+            "accountHints": self._account_hints(),
             "loginRequired": True,
             "productName": PRODUCT_NAME,
         }
@@ -692,6 +705,20 @@ class FluxioWebBackend:
                 "--budget-hours",
                 str(payload.get("budgetHours") or payload.get("budget_hours") or 12),
             ]
+            relative_stop_value = (
+                payload.get("relativeStopMinutes")
+                or payload.get("relative_stop_minutes")
+                or 0
+            )
+            try:
+                relative_stop_minutes = int(relative_stop_value)
+            except (TypeError, ValueError):
+                relative_stop_minutes = 0
+            if relative_stop_minutes > 0:
+                args.extend(["--relative-stop-minutes", str(relative_stop_minutes)])
+            route_overrides = payload.get("routeOverrides") or payload.get("route_overrides") or []
+            if route_overrides:
+                args.extend(["--route-overrides-json", json.dumps(route_overrides)])
             for check in payload.get("successChecks") or payload.get("success_checks") or []:
                 args.extend(["--success-check", str(check)])
             for key, flag in (

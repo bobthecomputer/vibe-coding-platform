@@ -59,7 +59,7 @@ Current live NAS web state on this machine:
 - Syntelos is not currently listening on `100.125.54.118:47880`; deploy or start `scripts/run_web_backend.py` on the NAS before treating that URL as live.
 - The intended operating model is web-first: open the NAS URL, authenticate in the browser, then operate from the web UI. SSH/SMB are deployment and file-sync paths, not the main operator surface.
 
-## Add One More User
+## Add One or More Users
 
 To add or reset one additional local account without rebuilding the frontend:
 
@@ -67,7 +67,14 @@ To add or reset one additional local account without rebuilding the frontend:
 python scripts/nas_setup.py --skip-npm --add-user theo --display-name "Theo"
 ```
 
-The command writes that user's temporary password to an ignored file under `.agent_control/`, for example `.agent_control/syntelos_theo_password.txt`. Each user can personalize workspaces, provider setup, and runtime preferences after login while secrets stay local to the NAS process.
+To add several users at once:
+
+```bash
+python scripts/nas_setup.py --skip-npm --add-user theo --add-user sam
+python scripts/nas_setup.py --skip-npm --add-users theo,sam,alex
+```
+
+The command writes each user's temporary password to an ignored file under `.agent_control/`, for example `.agent_control/syntelos_theo_password.txt`. Each user can personalize workspaces, provider setup, and runtime preferences after login while secrets stay local to the NAS process.
 
 ## Synology Task Scheduler
 

@@ -538,6 +538,7 @@ class ControlRoomStore:
         code_execution_memory: str = "4g",
         code_execution_container_id: str = "",
         code_execution_required: bool = False,
+        route_overrides: list[dict] | None = None,
     ) -> Mission:
         missions = self.load_missions()
         self._rebalance_workspace_queue_in_place(missions, workspace_id)
@@ -617,6 +618,7 @@ class ControlRoomStore:
                 container_id=str(code_execution_container_id or "").strip(),
                 required=bool(code_execution_required),
             ),
+            route_configs=normalize_route_overrides(route_overrides or []),
             state=MissionStateSnapshot(
                 status="queued",
                 queue_position=queue_position,

@@ -108,6 +108,10 @@ OBJECTIVE_DEADLINE_PATTERN = re.compile(
     r"\buntil\s+(?:(today|tomorrow)\s+)?(\d{1,2})(?:(?::|h)(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\b",
     flags=re.IGNORECASE,
 )
+OBJECTIVE_RELATIVE_TIMER_PATTERN = re.compile(
+    r"\b(?:for|in|timer|timebox)\s+(\d{1,4})\s*(h(?:ours?)?|m(?:in(?:ute)?s?)?)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def bootstrap_project(root: Path) -> None:
@@ -978,6 +982,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--budget-hours", type=int, default=12, help="Time budget in hours"
     )
     mission_start_cmd.add_argument(
+        "--relative-stop-minutes",
+        type=int,
+        default=0,
+        help="Optional relative runtime timer in minutes. The mission finishes the active step, then pauses.",
+    )
+    mission_start_cmd.add_argument(
         "--run-until",
         default="pause_on_failure",
         choices=["pause_on_failure", "continue_until_blocked"],
@@ -987,6 +997,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=None,
         help="Guided profile name for routing, approvals, and debugging defaults",
+    )
+    mission_start_cmd.add_argument(
+        "--route-overrides-json",
+        default="[]",
+        help="Optional per-mission role/provider/model/effort overrides as JSON.",
     )
     mission_start_cmd.add_argument(
         "--escalation-destination",
@@ -2430,15 +2445,45 @@ def _parse_objective_deadline(
     return candidate
 
 
+def _parse_objective_relative_runtime_seconds(objective: str) -> int | None:
+    match = OBJECTIVE_RELATIVE_TIMER_PATTERN.search(str(objective or ""))
+    if match is None:
+        return None
+
+    amount = int(match.group(1))
+    if amount <= 0:
+        return None
+
+    unit = str(match.group(2) or "").strip().lower()
+    if unit.startswith("h"):
+        return amount * 3600
+    return amount * 60
+
+
 def _mission_budget_settings(
     objective: str,
     budget_hours: int,
     run_until_behavior: str,
     *,
+    relative_stop_minutes: int | None = None,
     now: datetime | None = None,
 ) -> dict:
     current_time = now or _now_local()
     requested_runtime_seconds = max(3600, int(budget_hours) * 3600)
+    explicit_relative_seconds = max(0, int(relative_stop_minutes or 0)) * 60
+    relative_runtime_seconds = explicit_relative_seconds or (
+        _parse_objective_relative_runtime_seconds(objective) or 0
+    )
+    if relative_runtime_seconds:
+        max_runtime_seconds = max(60, int(relative_runtime_seconds))
+        deadline = current_time.astimezone(timezone.utc) + timedelta(
+            seconds=max_runtime_seconds
+        )
+        return {
+            "max_runtime_seconds": max_runtime_seconds,
+            "deadline_at": deadline.isoformat(),
+            "run_until_behavior": "continue_until_blocked",
+        }
     deadline = _parse_objective_deadline(objective, now=current_time)
     if deadline is None:
         return {
@@ -2562,7 +2607,10 @@ def _run_mission_engine_cycles(
             mission_id=mission.mission_id,
             harness_preference=mission.harness_id or workspace.preferred_harness,
             routing_strategy_override=workspace.routing_strategy,
-            route_overrides_override=workspace.route_overrides,
+            route_overrides_override=(
+                normalize_route_overrides(mission.route_configs)
+                or workspace.route_overrides
+            ),
             auto_optimize_routing=workspace.auto_optimize_routing,
             execution_target_preference=workspace.execution_target_preference,
             pause_on_handoff=mission.run_budget.run_until_behavior != "continue_until_blocked",
@@ -2691,7 +2739,8 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
             ),
             artifacts=list(code_execution_payload.get("artifacts", []) or []),
         )
-    mission.route_configs = result.get("route_configs", [])
+    if "route_configs" in result:
+        mission.route_configs = result.get("route_configs") or mission.route_configs
     mission.routing_decisions = result.get("routing_decisions", [])
     mission.effective_route_contract = (
         result.get("effective_route_contract")
@@ -3192,6 +3241,7 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         args.objective,
         args.budget_hours,
         args.run_until,
+        relative_stop_minutes=getattr(args, "relative_stop_minutes", 0),
     )
     code_execution_enabled = bool(
         getattr(args, "code_execution", False)
@@ -3205,6 +3255,9 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
     )
     code_execution_required = bool(
         getattr(args, "code_execution_required", False)
+    )
+    route_overrides = _parse_route_overrides_json(
+        getattr(args, "route_overrides_json", "[]")
     )
     mission = store.create_mission(
         workspace_id=workspace.workspace_id,
@@ -3223,6 +3276,7 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         code_execution_memory=code_execution_memory,
         code_execution_container_id=code_execution_container_id,
         code_execution_required=code_execution_required,
+        route_overrides=route_overrides,
     )
     if mission.run_budget.deadline_at:
         store.append_event(

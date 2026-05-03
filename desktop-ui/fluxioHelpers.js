@@ -173,13 +173,13 @@ export function describeProfileFit(profileId) {
 export function missionObjectivePlaceholder(profileId) {
   switch (profileId) {
     case "beginner":
-      return "Describe the outcome in plain language, what good looks like, and what Fluxio should avoid.";
+      return "Describe the outcome in plain language, what good looks like, and what Fluxio should avoid. Optional timer: 'for 45m'.";
     case "advanced":
-      return "State the target change, proof bar, and any constraints Fluxio must keep.";
+      return "State the target change, proof bar, and constraints Fluxio must keep. Optional timer: 'for 45m'.";
     case "experimental":
-      return "State the target, proof bar, and what exploration or broader search is acceptable.";
+      return "State the target, proof bar, and allowed exploration. Optional timer: 'for 45m'.";
     default:
-      return "Describe the outcome, proof expectations, and what success looks like.";
+      return "Describe the outcome, proof expectations, and success criteria. Optional timer: 'for 45m'.";
   }
 }
 

@@ -100,6 +100,30 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIsInstance(token, str)
             self.assertEqual(backend.sessions[str(token)]["displayName"], "Paul")
 
+    def test_auth_status_exposes_local_account_hints_without_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            add_or_reset_admin_user(root, username="theo", display_name="Theo")
+            backend = FluxioWebBackend(root, root)
+
+            class DummyHeaders:
+                def get(self, _key: str) -> str:
+                    return ""
+
+            class DummyHandler:
+                def __init__(self) -> None:
+                    self.headers = DummyHeaders()
+
+            status = backend.session_status(DummyHandler())
+            self.assertFalse(status["authenticated"])
+            self.assertIsNone(status["user"])
+            hints = status.get("accountHints")
+            self.assertIsInstance(hints, list)
+            usernames = [item.get("username") for item in hints if isinstance(item, dict)]
+            self.assertIn("admin", usernames)
+            self.assertIn("theo", usernames)
+
     def test_environment_account_aliases_can_login_without_writing_password_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

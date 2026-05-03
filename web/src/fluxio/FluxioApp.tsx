@@ -24,7 +24,6 @@ import {
   TerminalWindow,
 } from "@phosphor-icons/react";
 
-import topologyImage from "./assets/grand-agent-topology.png";
 import { FluxioShellApp } from "./FluxioShell.jsx";
 
 const PRODUCT_NAME = "Syntelos";
@@ -262,6 +261,7 @@ type AuthState = {
   backendAvailable: boolean;
   productName: string;
   user: { username?: string; displayName?: string; role?: string } | null;
+  accountHints: { username?: string; displayName?: string }[];
   error: string;
 };
 
@@ -853,6 +853,27 @@ function GrandAgentLogin({
   const [password, setPassword] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState(auth.error || "");
+  const accountHints = React.useMemo(
+    () =>
+      (Array.isArray(auth.accountHints) ? auth.accountHints : [])
+        .map(item => ({
+          username: String(item?.username || "").trim(),
+          displayName: String(item?.displayName || "").trim(),
+        }))
+        .filter(item => item.username),
+    [auth.accountHints],
+  );
+
+  React.useEffect(() => {
+    if (username.trim() || accountHints.length === 0) {
+      return;
+    }
+    setUsername(accountHints[0].username);
+  }, [accountHints, username]);
+  const selectAccountHint = React.useCallback((nextUsername: string) => {
+    setUsername(String(nextUsername || "").trim());
+    setError("");
+  }, []);
 
   const submit = React.useCallback(
     async (event: React.FormEvent) => {
@@ -876,6 +897,7 @@ function GrandAgentLogin({
           backendAvailable: true,
           productName: payload?.data?.productName || PRODUCT_NAME,
           user: payload?.data?.user || { username, role: "account" },
+          accountHints,
           error: "",
         });
       } catch (caught) {
@@ -884,7 +906,7 @@ function GrandAgentLogin({
         setSubmitting(false);
       }
     },
-    [onAuthenticated, password, username],
+    [accountHints, onAuthenticated, password, username],
   );
 
   return (
@@ -897,9 +919,14 @@ function GrandAgentLogin({
           </p>
           <h1>{PRODUCT_NAME}</h1>
           <p>
-            {PRODUCT_TAGLINE} Your private control layer keeps local agents, NAS bridge jobs,
-            runtime setup, provider readiness, and live UI review close to the host.
+            {PRODUCT_TAGLINE} Connect locally, route work across your workstation and NAS, and keep
+            model actions, files, and approvals on the same private network path.
           </p>
+          <div className="grand-login-sticker-row" aria-hidden="true">
+            <span className="sticker-a">Local only</span>
+            <span className="sticker-b">Model switch ready</span>
+            <span className="sticker-c">NAS plus workstation</span>
+          </div>
           <div className="grand-login-status-grid" aria-label="Security posture">
             <div>
               <HardDrives aria-hidden="true" size={18} weight="duotone" />
@@ -917,6 +944,23 @@ function GrandAgentLogin({
               <strong>No secrets</strong>
             </div>
           </div>
+          <div className="grand-login-connection-grid" aria-label="Connection route">
+            <article>
+              <HouseLine aria-hidden="true" size={16} weight="duotone" />
+              <span>Local backend</span>
+              <strong>127.0.0.1 or NAS host</strong>
+            </article>
+            <article>
+              <Network aria-hidden="true" size={16} weight="duotone" />
+              <span>Control endpoint</span>
+              <strong>/control over LAN</strong>
+            </article>
+            <article>
+              <TerminalWindow aria-hidden="true" size={16} weight="duotone" />
+              <span>Bridge channel</span>
+              <strong>SSH/SFTP port 22</strong>
+            </article>
+          </div>
         </aside>
         <form className="grand-login-panel" onSubmit={submit}>
           <div className="grand-login-panel-head">
@@ -925,25 +969,57 @@ function GrandAgentLogin({
             </span>
             <div>
               <span className="grand-login-eyebrow">Local account</span>
-              <h2>Sign in to the control room</h2>
-              <p>Use the account password generated during setup.</p>
+              <h2>Sign in to Local.Data control room</h2>
+              <p>Sign in with your local account password.</p>
             </div>
           </div>
-          <div className="grand-login-topology" aria-label="Local agent topology preview">
-            <img alt="" src={topologyImage} />
-            <div>
-              <Network aria-hidden="true" size={17} />
-              <span>Local second-brain topology</span>
+          {accountHints.length > 0 ? (
+            <div className="grand-login-account-rail">
+              <p className="grand-login-account-hint">
+                Local accounts:{" "}
+                {accountHints
+                  .map(item =>
+                    item.displayName && item.displayName !== item.username
+                      ? `${item.displayName} (${item.username})`
+                      : item.username,
+                  )
+                  .join(" · ")}
+              </p>
+              <div className="grand-login-account-grid">
+                {accountHints.map(item => (
+                  <button
+                    className={username.trim() === item.username ? "active" : ""}
+                    key={item.username}
+                    onClick={() => selectAccountHint(item.username)}
+                    type="button"
+                  >
+                    <strong>{item.displayName || item.username}</strong>
+                    <span>{item.username}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : null}
           <label>
             <span>Username</span>
             <input
               autoComplete="username"
+              list={accountHints.length > 0 ? "syntelos-account-hints" : undefined}
               onChange={event => setUsername(event.target.value)}
               value={username}
             />
           </label>
+          {accountHints.length > 0 ? (
+            <>
+              <datalist id="syntelos-account-hints">
+                {accountHints.map(item => (
+                  <option key={item.username} value={item.username}>
+                    {item.displayName ? `${item.displayName} (${item.username})` : item.username}
+                  </option>
+                ))}
+              </datalist>
+            </>
+          ) : null}
           <label>
             <span>Password</span>
             <input
@@ -955,10 +1031,11 @@ function GrandAgentLogin({
           </label>
           {error ? <p className="grand-login-error">{error}</p> : null}
           <button disabled={submitting || !username.trim() || !password} type="submit">
-            {submitting ? "Checking..." : `Enter ${PRODUCT_NAME}`}
+            {submitting ? "Signing in..." : "Sign in"}
           </button>
           <p className="grand-login-note">
-            The account file lives under `.agent_control` and stays out of Git.
+            The account file lives under `.agent_control`, stays out of Git, and no public internet
+            account is required for login.
           </p>
         </form>
       </section>
@@ -976,6 +1053,7 @@ export function FluxioApp() {
     backendAvailable: hasTauriBackend() || devControlPreview,
     productName: PRODUCT_NAME,
     user: devControlPreview ? { username: "preview", displayName: "Preview", role: "account" } : null,
+    accountHints: devControlPreview ? [{ username: "preview", displayName: "Preview" }] : [],
     error: "",
   });
   const lastActionRef = React.useRef("boot:initialize");
@@ -1023,6 +1101,7 @@ export function FluxioApp() {
           backendAvailable: response.ok,
           productName: payload?.data?.productName || PRODUCT_NAME,
           user: payload?.data?.user || null,
+          accountHints: Array.isArray(payload?.data?.accountHints) ? payload.data.accountHints : [],
           error: "",
         });
       } catch {
@@ -1035,6 +1114,7 @@ export function FluxioApp() {
           backendAvailable: false,
           productName: PRODUCT_NAME,
           user: null,
+          accountHints: [],
           error: "Local backend is offline. Start `npm run web:backend` on the NAS or workstation.",
         });
       }

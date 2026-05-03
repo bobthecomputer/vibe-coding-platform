@@ -4564,150 +4564,269 @@ button.builder-review-target:hover {
 }
 
 .grand-login-screen {
+  --neo-ink: #161616;
+  --neo-paper: #fff6e0;
+  --neo-blue: #47b8ff;
+  --neo-pink: #ff5fa8;
+  --neo-yellow: #ffe34f;
+  --neo-green: #78ff9f;
+  --neo-orange: #ff9d48;
   min-height: 100dvh;
   width: 100%;
   position: relative;
   isolation: isolate;
   display: grid;
   place-items: center;
-  padding: clamp(18px, 4vw, 44px);
+  padding: clamp(16px, 4vw, 40px);
   overflow-x: hidden;
   background:
-    linear-gradient(90deg, rgba(13, 15, 14, 0.88) 0%, rgba(13, 15, 14, 0.58) 43%, rgba(13, 15, 14, 0.72) 100%),
-    linear-gradient(180deg, rgba(13, 15, 14, 0.1) 0%, #0d0f0e 100%),
-    url("./assets/grand-agent-nas-hero.png") center / cover no-repeat,
-    #0d0f0e;
-  color: var(--text);
+    linear-gradient(0deg, rgba(22, 22, 22, 0.08), rgba(22, 22, 22, 0.08)),
+    repeating-linear-gradient(90deg, rgba(22, 22, 22, 0.08) 0, rgba(22, 22, 22, 0.08) 1px, transparent 1px, transparent 84px),
+    #ffd76a;
+  font-family: "Geist", "Trebuchet MS", "Segoe UI", sans-serif;
+  color: var(--neo-ink);
 }
 
 .grand-login-screen::before {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 14% 19%, var(--neo-blue) 0 170px, transparent 172px),
+    radial-gradient(circle at 88% 16%, var(--neo-pink) 0 130px, transparent 132px),
+    radial-gradient(circle at 80% 86%, var(--neo-green) 0 180px, transparent 182px),
+    radial-gradient(circle at 20% 82%, var(--neo-orange) 0 140px, transparent 142px);
+  opacity: 0.95;
+}
+
+.grand-login-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   background:
-    linear-gradient(90deg, rgba(214, 168, 79, 0.14), transparent 22%, transparent 78%, rgba(74, 112, 93, 0.1)),
-    repeating-linear-gradient(90deg, rgba(244, 240, 232, 0.035) 0, rgba(244, 240, 232, 0.035) 1px, transparent 1px, transparent 92px);
-  mask-image: linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%);
+    linear-gradient(110deg, transparent 0 52%, rgba(255, 255, 255, 0.34) 52% 58%, transparent 58% 100%),
+    linear-gradient(290deg, transparent 0 20%, rgba(255, 255, 255, 0.24) 20% 23%, transparent 23% 100%);
 }
 
 .grand-login-shell {
-  width: min(1180px, 100%);
+  width: min(1220px, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
-  gap: clamp(22px, 5vw, 64px);
+  grid-template-columns: minmax(0, 1fr) minmax(390px, 470px);
+  gap: clamp(18px, 4vw, 44px);
   align-items: center;
   min-width: 0;
 }
 
 .grand-login-hero {
-  min-height: min(680px, calc(100dvh - 88px));
+  min-height: min(650px, calc(100dvh - 82px));
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: 20px;
-  padding: clamp(26px, 5vw, 64px) 0;
+  gap: 14px;
+  padding: clamp(22px, 4vw, 46px) 0;
   min-width: 0;
 }
 
 .grand-login-kicker {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   width: fit-content;
   margin: 0;
-  color: rgba(244, 240, 232, 0.82);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.16em;
+  border: 3px solid var(--neo-ink);
+  border-radius: 999px;
+  padding: 7px 13px;
+  background: var(--neo-yellow);
+  color: var(--neo-ink);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
+  box-shadow: 4px 4px 0 var(--neo-ink);
 }
 
 .grand-login-kicker span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #80d89e;
-  box-shadow: 0 0 0 5px rgba(128, 216, 158, 0.12);
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--neo-pink);
+  border: 2px solid var(--neo-ink);
 }
 
 .grand-login-hero h1 {
-  margin: 0;
+  margin: 2px 0 0;
   max-width: 10ch;
-  color: #f7f1e8;
-  font-size: clamp(58px, 9vw, 112px);
-  line-height: 0.88;
-  letter-spacing: 0;
+  width: fit-content;
+  border: 4px solid var(--neo-ink);
+  border-radius: 14px;
+  background: var(--neo-paper);
+  box-shadow: 10px 10px 0 var(--neo-ink);
+  color: var(--neo-ink);
+  padding: 8px 14px 10px;
+  font-size: clamp(48px, 8.6vw, 92px);
+  line-height: 0.9;
+  letter-spacing: -0.03em;
   text-wrap: balance;
-  text-shadow: 0 18px 46px rgba(0, 0, 0, 0.56);
 }
 
 .grand-login-hero p {
   margin: 0;
-  max-width: 50ch;
-  color: rgba(244, 240, 232, 0.78);
-  font-size: clamp(15px, 2vw, 17px);
+  max-width: 52ch;
+  width: fit-content;
+  border: 3px solid var(--neo-ink);
+  border-radius: 12px;
+  background: #fffdf6;
+  color: var(--neo-ink);
+  box-shadow: 7px 7px 0 var(--neo-ink);
+  padding: 11px 13px;
+  font-size: clamp(14px, 1.8vw, 17px);
+  line-height: 1.4;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
+.grand-login-sticker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.grand-login-sticker-row span {
+  border: 3px solid var(--neo-ink);
+  border-radius: 999px;
+  padding: 6px 11px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--neo-ink);
+  box-shadow: 4px 4px 0 var(--neo-ink);
+}
+
+.grand-login-sticker-row .sticker-a {
+  background: var(--neo-blue);
+}
+
+.grand-login-sticker-row .sticker-b {
+  background: var(--neo-pink);
+}
+
+.grand-login-sticker-row .sticker-c {
+  background: var(--neo-green);
+}
+
 .grand-login-status-grid {
-  width: min(560px, 100%);
+  width: min(640px, 100%);
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid rgba(244, 240, 232, 0.13);
-  border-radius: 8px;
-  background: rgba(244, 240, 232, 0.1);
-  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.32);
+  gap: 12px;
 }
 
 .grand-login-status-grid > div {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
-  padding: 14px;
-  background: rgba(15, 18, 17, 0.72);
-  backdrop-filter: blur(18px);
+  border: 3px solid var(--neo-ink);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 6px 6px 0 var(--neo-ink);
+  color: var(--neo-ink);
+}
+
+.grand-login-status-grid > div:nth-child(3n + 1) {
+  background: #fff7de;
+}
+
+.grand-login-status-grid > div:nth-child(3n + 2) {
+  background: #e9f7ff;
+}
+
+.grand-login-status-grid > div:nth-child(3n + 3) {
+  background: #ffe7f3;
 }
 
 .grand-login-status-grid svg {
-  color: var(--accent);
+  color: var(--neo-ink);
 }
 
 .grand-login-status-grid span,
 .grand-login-eyebrow {
-  color: rgba(244, 240, 232, 0.58);
+  color: rgba(22, 22, 22, 0.78);
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
+  font-weight: 900;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
 .grand-login-status-grid strong {
-  color: #f7f1e8;
+  color: var(--neo-ink);
   font-size: 14px;
-  line-height: 1.12;
+  line-height: 1.18;
+}
+
+.grand-login-connection-grid {
+  width: min(640px, 100%);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.grand-login-connection-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 11px;
+  border: 3px solid var(--neo-ink);
+  border-radius: 12px;
+  box-shadow: 6px 6px 0 var(--neo-ink);
+}
+
+.grand-login-connection-grid article:nth-child(3n + 1) {
+  background: #e8f6ff;
+}
+
+.grand-login-connection-grid article:nth-child(3n + 2) {
+  background: #ffd9ee;
+}
+
+.grand-login-connection-grid article:nth-child(3n + 3) {
+  background: #e4ffe4;
+}
+
+.grand-login-connection-grid svg {
+  color: var(--neo-ink);
+}
+
+.grand-login-connection-grid span {
+  color: rgba(22, 22, 22, 0.76);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.grand-login-connection-grid strong {
+  color: var(--neo-ink);
+  font-size: 13px;
+  line-height: 1.24;
 }
 
 .grand-login-panel,
 .grand-login-loading {
-  border: 1px solid rgba(244, 240, 232, 0.18);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
-    rgba(20, 23, 22, 0.78);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 34px 90px rgba(0, 0, 0, 0.46);
-  backdrop-filter: blur(26px);
+  border: 4px solid var(--neo-ink);
+  border-radius: 16px;
+  background: var(--neo-paper);
+  box-shadow: 12px 12px 0 var(--neo-ink);
 }
 
 .grand-login-panel {
   display: grid;
-  gap: 18px;
-  padding: clamp(18px, 4vw, 30px);
+  gap: 16px;
+  padding: clamp(16px, 3.5vw, 24px);
   width: 100%;
   min-width: 0;
 }
@@ -4724,32 +4843,34 @@ button.builder-review-target:hover {
   width: 46px;
   height: 46px;
   place-items: center;
-  border: 1px solid rgba(214, 168, 79, 0.34);
-  border-radius: 50%;
-  background: rgba(214, 168, 79, 0.1);
-  color: var(--accent);
+  border: 3px solid var(--neo-ink);
+  border-radius: 12px;
+  background: var(--neo-yellow);
+  color: var(--neo-ink);
+  box-shadow: 4px 4px 0 var(--neo-ink);
 }
 
 .grand-login-panel h2 {
-  margin: 4px 0 6px;
-  color: #fff7e9;
-  font-size: clamp(24px, 3vw, 30px);
+  margin: 2px 0 6px;
+  color: var(--neo-ink);
+  font-size: clamp(24px, 3vw, 31px);
   line-height: 1.02;
-  letter-spacing: 0;
+  letter-spacing: -0.02em;
 }
 
 .grand-login-panel p {
   margin: 0;
-  color: var(--muted);
+  color: rgba(22, 22, 22, 0.86);
 }
 
 .grand-login-topology {
   position: relative;
   min-height: 150px;
   overflow: hidden;
-  border: 1px solid rgba(244, 240, 232, 0.12);
-  border-radius: 8px;
-  background: #121514;
+  border: 3px solid var(--neo-ink);
+  border-radius: 12px;
+  background: #f9fbff;
+  box-shadow: 5px 5px 0 var(--neo-ink);
 }
 
 .grand-login-topology img {
@@ -4757,7 +4878,7 @@ button.builder-review-target:hover {
   width: 100%;
   height: 168px;
   object-fit: cover;
-  opacity: 0.82;
+  filter: saturate(1.22) contrast(1.06);
 }
 
 .grand-login-topology::after {
@@ -4765,8 +4886,8 @@ button.builder-review-target:hover {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, transparent 24%, rgba(13, 15, 14, 0.8) 100%),
-    linear-gradient(90deg, rgba(13, 15, 14, 0.36), transparent);
+    linear-gradient(180deg, transparent 34%, rgba(22, 22, 22, 0.68) 100%),
+    repeating-linear-gradient(90deg, rgba(22, 22, 22, 0.08) 0, rgba(22, 22, 22, 0.08) 2px, transparent 2px, transparent 26px);
 }
 
 .grand-login-topology > div {
@@ -4777,102 +4898,204 @@ button.builder-review-target:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: rgba(244, 240, 232, 0.86);
-  font-weight: 800;
+  color: #fff7eb;
+  font-weight: 900;
+  letter-spacing: 0.01em;
 }
 
 .grand-login-topology svg {
-  color: #80d89e;
+  color: var(--neo-yellow);
 }
 
 .grand-login-panel label {
   display: grid;
   gap: 8px;
-  color: rgba(244, 240, 232, 0.82);
-  font-weight: 700;
+  color: var(--neo-ink);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 11px;
 }
 
 .grand-login-panel input {
   width: 100%;
-  border: 1px solid rgba(244, 240, 232, 0.15);
-  border-radius: 8px;
-  background: rgba(8, 11, 10, 0.74);
-  color: var(--text);
+  border: 3px solid var(--neo-ink);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--neo-ink);
   padding: 13px 14px;
   outline: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 3px 3px 0 var(--neo-ink);
 }
 
 .grand-login-panel input:focus {
-  border-color: rgba(214, 168, 79, 0.6);
+  background: #ffffff;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 0 0 3px rgba(214, 168, 79, 0.12);
+    0 0 0 2px rgba(255, 227, 79, 0.78),
+    3px 3px 0 var(--neo-ink);
 }
 
-.grand-login-panel button {
-  border: 0;
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.15), transparent),
-    var(--accent);
-  color: #19140b;
+.grand-login-panel > button {
+  border: 3px solid var(--neo-ink);
+  border-radius: 12px;
+  background: var(--neo-blue);
+  color: var(--neo-ink);
   cursor: pointer;
   font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   padding: 14px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 14px 34px rgba(0, 0, 0, 0.24);
+  box-shadow: 6px 6px 0 var(--neo-ink);
   transition:
-    opacity 0.18s ease,
-    transform 0.18s ease;
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background-color 0.18s ease;
 }
 
-.grand-login-panel button:disabled {
+.grand-login-panel > button:hover:not(:disabled) {
+  background: #5cc7ff;
+}
+
+.grand-login-panel > button:disabled {
   cursor: not-allowed;
-  opacity: 0.52;
+  opacity: 0.72;
+  box-shadow: 3px 3px 0 var(--neo-ink);
 }
 
-.grand-login-panel button:not(:disabled):active {
-  transform: translateY(1px) scale(0.99);
+.grand-login-panel > button:not(:disabled):active {
+  transform: translate(2px, 2px);
+  box-shadow: 3px 3px 0 var(--neo-ink);
+}
+
+.grand-login-account-rail {
+  display: grid;
+  gap: 7px;
+}
+
+.grand-login-account-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.grand-login-account-grid button {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  text-align: left;
+  border: 3px solid var(--neo-ink);
+  border-radius: 10px;
+  background: #fffdf5;
+  color: var(--neo-ink);
+  cursor: pointer;
+  padding: 10px 11px;
+  font-weight: 800;
+  box-shadow: 4px 4px 0 var(--neo-ink);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.grand-login-account-grid button:nth-child(4n + 1) {
+  background: #eaf7ff;
+}
+
+.grand-login-account-grid button:nth-child(4n + 2) {
+  background: #ffe5f4;
+}
+
+.grand-login-account-grid button:nth-child(4n + 3) {
+  background: #e5ffeb;
+}
+
+.grand-login-account-grid button:nth-child(4n + 4) {
+  background: #fff0cf;
+}
+
+.grand-login-account-grid button:hover {
+  transform: translate(-1px, -1px);
+}
+
+.grand-login-account-grid button:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--neo-ink);
+}
+
+.grand-login-account-grid button.active {
+  background: var(--neo-yellow);
+}
+
+.grand-login-account-grid button strong {
+  color: var(--neo-ink);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.grand-login-account-grid button span {
+  color: rgba(22, 22, 22, 0.76);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.grand-login-account-grid button.active span {
+  color: rgba(22, 22, 22, 0.88);
 }
 
 .grand-login-error {
-  border: 1px solid rgba(239, 68, 68, 0.32);
-  border-radius: 8px;
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca !important;
-  padding: 10px 12px;
+  border: 3px solid #7d001f;
+  border-radius: 10px;
+  background: #ffc9de;
+  color: #570015 !important;
+  font-weight: 800;
+  padding: 9px 11px;
+  box-shadow: 4px 4px 0 var(--neo-ink);
+}
+
+.grand-login-account-hint {
+  margin: -1px 0 2px;
+  color: rgba(22, 22, 22, 0.74);
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 700;
 }
 
 .grand-login-note {
-  border: 1px solid rgba(244, 240, 232, 0.12);
-  border-radius: 8px;
-  color: rgba(244, 240, 232, 0.7);
+  border: 3px solid var(--neo-ink);
+  border-radius: 10px;
+  color: rgba(22, 22, 22, 0.84);
   font-size: 12px;
+  line-height: 1.36;
+  font-weight: 700;
   overflow-wrap: anywhere;
-  padding: 10px 11px;
-  background: rgba(244, 240, 232, 0.035);
+  padding: 9px 10px;
+  background: #ffebbf;
+  box-shadow: 4px 4px 0 var(--neo-ink);
 }
 
 .grand-login-loading {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 18px;
+  padding: 13px 14px;
 }
 
 .grand-login-loading span {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
-  background: var(--accent);
+  border-radius: 3px;
+  border: 2px solid var(--neo-ink);
+  background: var(--neo-pink);
   animation: grand-login-pulse 1.2s ease-in-out infinite;
 }
 
 .grand-login-loading p {
   margin: 0;
-  color: var(--muted);
+  color: var(--neo-ink);
+  font-weight: 700;
 }
 
 @keyframes grand-login-pulse {
@@ -7022,38 +7245,46 @@ button.builder-review-target:hover {
   .grand-login-screen {
     align-items: stretch;
     place-items: stretch;
-    padding: 12px;
-    background-position: 26% center;
+    padding: 10px;
   }
 
   .grand-login-shell {
     grid-template-columns: 1fr;
-    gap: 12px;
-    width: min(100%, 420px);
-    max-width: 420px;
+    gap: 10px;
+    width: min(100%, 460px);
+    max-width: 460px;
     overflow-x: hidden;
   }
 
   .grand-login-hero {
     min-height: auto;
-    gap: 8px;
+    gap: 9px;
     padding: 8px 0 0;
     width: 100%;
   }
 
   .grand-login-hero h1 {
-    max-width: 8ch;
+    max-width: 9ch;
     font-size: clamp(38px, 13vw, 52px);
   }
 
   .grand-login-hero p {
-    max-width: 34ch;
+    max-width: 100%;
     font-size: 14px;
     line-height: 1.36;
   }
 
+  .grand-login-sticker-row {
+    gap: 7px;
+  }
+
   .grand-login-status-grid {
-    display: none;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .grand-login-connection-grid {
+    grid-template-columns: 1fr;
   }
 
   .grand-login-panel {
@@ -7082,7 +7313,7 @@ button.builder-review-target:hover {
   }
 
   .grand-login-topology {
-    display: none;
+    min-height: 132px;
   }
 
   .grand-login-note {
@@ -7090,10 +7321,14 @@ button.builder-review-target:hover {
     padding: 8px 9px;
   }
 
+  .grand-login-account-grid {
+    grid-template-columns: 1fr;
+  }
+
   @media (max-width: 520px) {
     .grand-login-shell {
-      width: min(100%, 360px);
-      max-width: 360px;
+      width: 100%;
+      max-width: 100%;
     }
 
     .grand-login-panel-head {

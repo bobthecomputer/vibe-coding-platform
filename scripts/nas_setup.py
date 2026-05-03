@@ -41,6 +41,24 @@ def command_version(command: str) -> str:
     return output[0] if output else "installed"
 
 
+def collect_add_users(add_user_values: list[str] | None, add_users_value: str) -> list[str]:
+    candidates: list[str] = []
+    candidates.extend(add_user_values or [])
+    if add_users_value:
+        candidates.extend(str(add_users_value).split(","))
+
+    users: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        for fragment in str(candidate).split(","):
+            username = fragment.strip()
+            if not username or username in seen:
+                continue
+            users.append(username)
+            seen.add(username)
+    return users
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare Syntelos for NAS hosting.")
     parser.add_argument("--skip-npm", action="store_true", help="Do not install/build frontend assets.")
@@ -49,8 +67,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--display-name", default="", help="Display name for the created or reset local user.")
     parser.add_argument(
         "--add-user",
+        action="append",
+        default=[],
+        help="Add or reset one additional local account without replacing existing users. Repeat this flag for multiple users.",
+    )
+    parser.add_argument(
+        "--add-users",
         default="",
-        help="Add or reset one additional local account without replacing existing users.",
+        help="Add or reset multiple users from a comma-separated list, for example theo,sam,alex.",
     )
     parser.add_argument(
         "--reset-admin-password",
@@ -72,14 +96,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Node: {command_version('node')}")
     print(f"npm: {command_version('npm')}")
 
-    if args.add_user:
-        _, _, user_password_path = add_or_reset_admin_user(
-            ROOT,
-            username=args.add_user,
-            display_name=args.display_name or None,
-            public_url=args.public_url or None,
-        )
-        print(f"User '{args.add_user}' is ready. Password file: {user_password_path}")
+    add_users = collect_add_users(args.add_user, args.add_users)
+    if add_users:
+        if args.display_name and len(add_users) > 1:
+            print(
+                "Note: --display-name only applies to a single user. Multi-user add uses per-user default display names."
+            )
+        for username in add_users:
+            display_name = args.display_name if len(add_users) == 1 else None
+            _, _, user_password_path = add_or_reset_admin_user(
+                ROOT,
+                username=username,
+                display_name=display_name or None,
+                public_url=args.public_url or None,
+            )
+            print(f"User '{username}' is ready. Password file: {user_password_path}")
+        print(f"Added {len(add_users)} local account(s).")
         open_url = (args.public_url.rstrip("/") if args.public_url else f"http://<NAS-IP>:{DEFAULT_PORT}") + "/control"
         print(f"Open after backend start: {open_url}")
         return 0
@@ -117,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
     print("")
     print("Add another local account later:")
     print("  python scripts/nas_setup.py --skip-npm --add-user paul --display-name \"Paul\"")
+    print("  python scripts/nas_setup.py --skip-npm --add-user theo --add-user sam")
+    print("  python scripts/nas_setup.py --skip-npm --add-users theo,sam,alex")
     return 0
 
 

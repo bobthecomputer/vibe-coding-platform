@@ -77,7 +77,11 @@ const DEFAULT_MISSION_FORM = {
   mode: "Autopilot",
   profile: "builder",
   budgetHours: 12,
+  relativeStopMinutes: "",
   runUntil: "pause_on_failure",
+  modelProvider: "openai",
+  model: "",
+  modelEffort: "medium",
   objective: "",
   successChecks: "",
 };
@@ -3753,6 +3757,19 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
 
       try {
+        const relativeStopMinutes = Math.max(
+          0,
+          Number.parseInt(String(missionForm.relativeStopMinutes || "").trim(), 10) || 0,
+        );
+        const selectedRouteModel = String(missionForm.model || "").trim();
+        const missionRouteOverrides = selectedRouteModel
+          ? ROUTE_ROLE_OPTIONS.map(role => ({
+              role,
+              provider: missionForm.modelProvider || "openai",
+              model: selectedRouteModel,
+              effort: missionForm.modelEffort || "medium",
+            }))
+          : [];
         await callBackend(
           "start_control_room_mission_command",
           {
@@ -3767,7 +3784,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 .filter(Boolean),
               mode: missionForm.mode,
               budgetHours: Number(missionForm.budgetHours || 12),
+              relativeStopMinutes: relativeStopMinutes > 0 ? relativeStopMinutes : undefined,
               runUntil: missionForm.runUntil,
+              routeOverrides: missionRouteOverrides,
               profile: missionForm.profile,
               escalationDestination: telegramChatId.trim() || null,
               codeExecution: codeExecutionEnabled,
@@ -9364,8 +9383,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 value={missionForm.mode}
               >
                 <option value="Autopilot">Autopilot</option>
+                <option value="Focus">Focus</option>
                 <option value="Deep Run">Deep Run</option>
-                <option value="Proof First">Proof First</option>
+                <option value="Research">Research</option>
               </select>
             </Field>
             <Field label="Profile">
@@ -9382,6 +9402,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </option>
                   ),
                 )}
+              </select>
+            </Field>
+          </div>
+
+          <div className="field-row">
+            <Field label="Provider">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, modelProvider: event.target.value }))
+                }
+                value={missionForm.modelProvider}
+              >
+                {MODEL_PROVIDER_OPTIONS.map(option => (
+                  <option key={`mission-provider-${option.value}`} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Model">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, model: event.target.value }))
+                }
+                value={missionForm.model}
+              >
+                <option value="">Profile default</option>
+                {ROUTE_MODEL_OPTIONS.map(option => (
+                  <option key={`mission-model-${option}`} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Effort">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, modelEffort: event.target.value }))
+                }
+                value={missionForm.modelEffort}
+              >
+                {MODEL_EFFORT_OPTIONS.map(option => (
+                  <option key={`mission-effort-${option.value}`} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </Field>
           </div>
@@ -9412,6 +9478,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               </select>
             </Field>
           </div>
+
+          <Field label="Stop after (minutes, optional)">
+            <input
+              min="0"
+              onChange={event =>
+                setMissionForm(current => ({
+                  ...current,
+                  relativeStopMinutes: event.target.value.replace(/[^\d]/g, ""),
+                }))
+              }
+              placeholder="Leave empty to use Budget hours only"
+              type="number"
+              value={missionForm.relativeStopMinutes}
+            />
+          </Field>
 
           <Field label="Mission objective">
             <textarea
@@ -11366,8 +11447,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 value={missionForm.mode}
               >
                 <option value="Autopilot">Autopilot</option>
+                <option value="Focus">Focus</option>
                 <option value="Deep Run">Deep Run</option>
-                <option value="Proof First">Proof First</option>
+                <option value="Research">Research</option>
               </select>
             </Field>
             <Field label="Profile">
@@ -11384,6 +11466,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     </option>
                   ),
                 )}
+              </select>
+            </Field>
+          </div>
+
+          <div className="field-row">
+            <Field label="Provider">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, modelProvider: event.target.value }))
+                }
+                value={missionForm.modelProvider}
+              >
+                {MODEL_PROVIDER_OPTIONS.map(option => (
+                  <option key={`mission-reference-provider-${option.value}`} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Model">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, model: event.target.value }))
+                }
+                value={missionForm.model}
+              >
+                <option value="">Profile default</option>
+                {ROUTE_MODEL_OPTIONS.map(option => (
+                  <option key={`mission-reference-model-${option}`} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Effort">
+              <select
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, modelEffort: event.target.value }))
+                }
+                value={missionForm.modelEffort}
+              >
+                {MODEL_EFFORT_OPTIONS.map(option => (
+                  <option key={`mission-reference-effort-${option.value}`} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </Field>
           </div>
@@ -11414,6 +11542,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               </select>
             </Field>
           </div>
+
+          <Field label="Stop after (minutes, optional)">
+            <input
+              min="0"
+              onChange={event =>
+                setMissionForm(current => ({
+                  ...current,
+                  relativeStopMinutes: event.target.value.replace(/[^\d]/g, ""),
+                }))
+              }
+              placeholder="Leave empty to use Budget hours only"
+              type="number"
+              value={missionForm.relativeStopMinutes}
+            />
+          </Field>
 
           <Field label="Mission objective">
             <textarea
