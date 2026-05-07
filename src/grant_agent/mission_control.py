@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import time
 import uuid
+from errno import EBUSY, ETXTBSY
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +86,27 @@ RELEASE_READINESS_WEIGHTS = {
     "required": 80,
     "quality": 20,
 }
+SYNC_EXCLUDED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".agent_control",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    "dist",
+    "build",
+}
+SYNC_EXCLUDED_FILES = {".DS_Store", "Thumbs.db"}
+SYNC_DIRECTIONS = {"bidirectional", "local_to_nas", "nas_to_local"}
+SYNC_COPY_RETRY_ATTEMPTS = 3
+SYNC_COPY_RETRY_BASE_DELAY_SECONDS = 0.08
+SYNC_LOCKED_FILE_SAMPLE_LIMIT = 8
+RELEASE_PATH_PATTERN = re.compile(
+    r"^(?P<prefix>.+[\\/]releases[\\/])(?P<release>[^\\/]+)(?P<suffix>(?:[\\/].*)?)$"
+)
 PROVIDER_ENV_HINTS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -155,6 +179,19 @@ def normalize_openai_codex_auth_mode(value: object) -> str:
     if normalized in {"codex-oauth", "openai-codex-oauth", "chatgpt_oauth"}:
         return "oauth"
     return normalized if normalized in OPENAI_CODEX_AUTH_MODES else "none"
+
+
+def normalize_sync_direction(value: object) -> str:
+    normalized = str(value or "bidirectional").strip().lower().replace("-", "_")
+    aliases = {
+        "both": "bidirectional",
+        "two_way": "bidirectional",
+        "auto": "bidirectional",
+        "local2nas": "local_to_nas",
+        "nas2local": "nas_to_local",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in SYNC_DIRECTIONS else "bidirectional"
 
 
 def openai_codex_auth_label(mode: str) -> str:
@@ -324,9 +361,19 @@ class ControlRoomStore:
 
     def load_workspaces(self) -> list[WorkspaceProfile]:
         payload = self._load_json(self.workspaces_path, [])
-        workspaces = [WorkspaceProfile(**item) for item in payload]
+        workspaces: list[WorkspaceProfile] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            try:
+                workspaces.append(WorkspaceProfile(**item))
+            except TypeError:
+                continue
         if not workspaces:
             workspaces = [self._default_workspace_profile()]
+            self.save_workspaces(workspaces)
+            return workspaces
+        if self._reanchor_release_workspaces(workspaces):
             self.save_workspaces(workspaces)
         return workspaces
 
@@ -419,10 +466,49 @@ class ControlRoomStore:
         minimax_auth_mode: str | None = None,
         commit_message_style: str = "scoped",
         execution_target_preference: str = "profile_default",
+        local_project_path: str = "",
+        nas_project_path: str = "",
+        sync_mode: str = "manual",
+        sync_direction: str = "bidirectional",
+        sync_conflict_policy: str = "keep_newer_and_log",
+        auto_sync_to_nas: bool | None = None,
         workspace_id: str | None = None,
     ) -> WorkspaceProfile:
         workspaces = self.load_workspaces()
-        workspace_root = Path(root_path).resolve()
+        clean_local_project_path = str(local_project_path or "").strip()
+        clean_nas_project_path = str(nas_project_path or "").strip()
+        clean_sync_mode = str(sync_mode or "manual").strip().lower()
+        clean_sync_direction = normalize_sync_direction(sync_direction)
+        clean_sync_conflict_policy = str(sync_conflict_policy or "keep_newer_and_log").strip().lower()
+        sync_enabled = bool(auto_sync_to_nas)
+        effective_root_path = clean_nas_project_path if sync_enabled and clean_nas_project_path else root_path
+        workspace_root = Path(effective_root_path).resolve()
+        sync_status: dict[str, object] = {}
+        if sync_enabled and clean_nas_project_path:
+            local_root = (
+                Path(clean_local_project_path).expanduser().resolve()
+                if clean_local_project_path
+                else None
+            )
+            sync_status = _sync_local_and_nas_projects(
+                local_root=local_root,
+                nas_root=workspace_root,
+                sync_direction=clean_sync_direction,
+                conflict_policy=clean_sync_conflict_policy,
+            )
+            # If no local root is provided, keep the existing one-way behavior from
+            # the selected root path to NAS for backwards compatibility.
+            if (
+                not sync_status
+                and clean_local_project_path == ""
+                and root_path
+                and Path(root_path).expanduser().resolve() != workspace_root
+            ):
+                sync_status = _sync_project_tree(
+                    Path(root_path).expanduser().resolve(),
+                    workspace_root,
+                    conflict_policy=clean_sync_conflict_policy,
+                )
         now = utc_now_iso()
         normalized_route_overrides = normalize_route_overrides(route_overrides or [])
         normalized_openai_codex_auth_mode = normalize_openai_codex_auth_mode(
@@ -456,6 +542,22 @@ class ControlRoomStore:
                 item.execution_target_preference = (
                     execution_target_preference or item.execution_target_preference
                 )
+                item.local_project_path = clean_local_project_path or item.local_project_path
+                item.nas_project_path = clean_nas_project_path or item.nas_project_path
+                item.sync_mode = clean_sync_mode or item.sync_mode
+                item.sync_direction = clean_sync_direction or item.sync_direction
+                item.sync_conflict_policy = (
+                    clean_sync_conflict_policy or item.sync_conflict_policy
+                )
+                if auto_sync_to_nas is not None:
+                    item.auto_sync_to_nas = sync_enabled
+                item.goals = [
+                    entry
+                    for entry in item.goals
+                    if not str(entry).startswith("sync_status:")
+                ]
+                if sync_status:
+                    item.goals.append(f"sync_status:{json.dumps(sync_status, sort_keys=True)}")
                 item.workspace_type = detect_workspace_type(workspace_root)
                 item.updated_at = now
                 self.save_workspaces(workspaces)
@@ -476,6 +578,13 @@ class ControlRoomStore:
             minimax_auth_mode=normalized_minimax_auth_mode,
             commit_message_style=commit_message_style or "scoped",
             execution_target_preference=execution_target_preference or "profile_default",
+            local_project_path=clean_local_project_path,
+            nas_project_path=clean_nas_project_path,
+            sync_mode=clean_sync_mode,
+            sync_direction=clean_sync_direction,
+            sync_conflict_policy=clean_sync_conflict_policy,
+            auto_sync_to_nas=sync_enabled,
+            goals=[f"sync_status:{json.dumps(sync_status, sort_keys=True)}"] if sync_status else [],
             updated_at=now,
         )
         workspaces.append(workspace)
@@ -1053,6 +1162,12 @@ class ControlRoomStore:
             minimax_auth_mode="none",
             commit_message_style="scoped",
             execution_target_preference="profile_default",
+            local_project_path="",
+            nas_project_path="",
+            sync_mode="manual",
+            sync_direction="bidirectional",
+            sync_conflict_policy="keep_newer_and_log",
+            auto_sync_to_nas=False,
             updated_at=now,
         )
 
@@ -1060,7 +1175,48 @@ class ControlRoomStore:
     def _load_json(path: Path, default: list | dict) -> list | dict:
         if not path.exists():
             return default
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return default
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return default
+
+    @staticmethod
+    def _split_release_path(raw_path: str) -> tuple[str, str, str] | None:
+        normalized = str(raw_path or "")
+        match = RELEASE_PATH_PATTERN.match(normalized)
+        if not match:
+            return None
+        prefix = match.group("prefix")
+        release = match.group("release")
+        suffix = match.group("suffix") or ""
+        return prefix, release, suffix
+
+    def _reanchor_release_workspaces(self, workspaces: list[WorkspaceProfile]) -> bool:
+        current = self._split_release_path(str(self.root))
+        if not current:
+            return False
+        current_prefix, current_release, _ = current
+        changed = False
+        for workspace in workspaces:
+            parsed = self._split_release_path(workspace.root_path)
+            if not parsed:
+                continue
+            prefix, release, suffix = parsed
+            if prefix != current_prefix or release == current_release:
+                continue
+            next_root = f"{current_prefix}{current_release}{suffix}"
+            if workspace.root_path != next_root:
+                workspace.root_path = next_root
+                workspace.workspace_type = detect_workspace_type(Path(next_root))
+                workspace.updated_at = utc_now_iso()
+                changed = True
+        return changed
 
     def _active_workspace_mission(
         self,
@@ -1365,6 +1521,266 @@ def _route_rows_for_mission(mission: Mission) -> list[dict]:
             }
         )
     return normalized
+
+
+def _path_has_syncable_files(root: Path) -> bool:
+    if not root.exists() or not root.is_dir():
+        return False
+    for current_root, dir_names, file_names in os.walk(root):
+        dir_names[:] = [name for name in dir_names if name not in SYNC_EXCLUDED_DIRS]
+        if any(file_name not in SYNC_EXCLUDED_FILES for file_name in file_names):
+            return True
+    return False
+
+
+def _sync_local_and_nas_projects(
+    *,
+    local_root: Path | None,
+    nas_root: Path,
+    sync_direction: str,
+    conflict_policy: str,
+) -> dict[str, object]:
+    if local_root is None:
+        return {}
+
+    requested_direction = normalize_sync_direction(sync_direction)
+    effective_direction = requested_direction
+    local_exists_initial = local_root.exists() and local_root.is_dir()
+    nas_exists_initial = nas_root.exists() and nas_root.is_dir()
+    local_has_files_initial = _path_has_syncable_files(local_root)
+    nas_has_files_initial = _path_has_syncable_files(nas_root)
+    direction_auto_promoted = False
+    if (
+        local_has_files_initial
+        and nas_has_files_initial
+        and effective_direction in {"local_to_nas", "nas_to_local"}
+    ):
+        effective_direction = "bidirectional"
+        direction_auto_promoted = True
+    if not nas_exists_initial:
+        nas_root.mkdir(parents=True, exist_ok=True)
+
+    passes: list[dict[str, object]] = []
+    if effective_direction in {"local_to_nas", "bidirectional"} and local_exists_initial:
+        status = _sync_project_tree(
+            local_root,
+            nas_root,
+            conflict_policy=_sync_conflict_policy_for_direction(
+                conflict_policy,
+                direction="local_to_nas",
+            ),
+        )
+        passes.append({"direction": "local_to_nas", **status})
+
+    if effective_direction in {"nas_to_local", "bidirectional"}:
+        if not local_root.exists():
+            local_root.mkdir(parents=True, exist_ok=True)
+        if local_root.is_dir() and nas_root.exists() and nas_root.is_dir():
+            status = _sync_project_tree(
+                nas_root,
+                local_root,
+                conflict_policy=_sync_conflict_policy_for_direction(
+                    conflict_policy,
+                    direction="nas_to_local",
+                ),
+            )
+            passes.append({"direction": "nas_to_local", **status})
+
+    files_copied = 0
+    files_skipped = 0
+    locked_skipped = 0
+    missing_skipped = 0
+    locked_samples: list[str] = []
+    for item in passes:
+        files_copied += int(item.get("filesCopied", 0) or 0)
+        files_skipped += int(item.get("filesSkipped", 0) or 0)
+        locked_skipped += int(item.get("lockedFilesSkipped", 0) or 0)
+        missing_skipped += int(item.get("missingFilesSkipped", 0) or 0)
+        for sample in item.get("lockedFileSamples", []):
+            sample_text = str(sample or "").strip()
+            if not sample_text or sample_text in locked_samples:
+                continue
+            locked_samples.append(sample_text)
+            if len(locked_samples) >= SYNC_LOCKED_FILE_SAMPLE_LIMIT:
+                break
+
+    reason = "sync_not_needed"
+    if passes:
+        if local_has_files_initial and nas_has_files_initial:
+            reason = "detected_existing_both_synced"
+        elif local_has_files_initial and not nas_has_files_initial:
+            reason = "detected_local_primary_synced"
+        elif nas_has_files_initial and not local_has_files_initial:
+            reason = "detected_nas_primary_synced"
+        else:
+            reason = "synced"
+
+    payload: dict[str, object] = {
+        "synced": bool(passes),
+        "reason": reason,
+        "source": str(local_root),
+        "target": str(nas_root),
+        "localPath": str(local_root),
+        "nasPath": str(nas_root),
+        "localExists": local_exists_initial,
+        "nasExists": nas_exists_initial,
+        "localHasFiles": local_has_files_initial,
+        "nasHasFiles": nas_has_files_initial,
+        "detectedBothWithFiles": bool(local_has_files_initial and nas_has_files_initial),
+        "requestedDirection": requested_direction,
+        "effectiveDirection": effective_direction,
+        "filesCopied": files_copied,
+        "filesSkipped": files_skipped,
+        "passes": passes,
+    }
+    if direction_auto_promoted:
+        payload["directionAutoPromoted"] = True
+    if locked_skipped:
+        payload["lockedFilesSkipped"] = locked_skipped
+        payload["lockedFileSamples"] = locked_samples
+    if missing_skipped:
+        payload["missingFilesSkipped"] = missing_skipped
+    return payload
+
+
+def _sync_conflict_policy_for_direction(conflict_policy: str, *, direction: str) -> str:
+    normalized = str(conflict_policy or "keep_newer_and_log").strip().lower()
+    if direction == "nas_to_local":
+        if normalized == "local_wins":
+            return "nas_wins"
+        if normalized == "nas_wins":
+            return "local_wins"
+    return normalized
+
+
+def _sync_project_tree(source: Path, target: Path, *, conflict_policy: str) -> dict[str, object]:
+    if not source.exists() or not source.is_dir():
+        return {
+            "synced": False,
+            "reason": "source_missing",
+            "source": str(source),
+            "target": str(target),
+            "filesCopied": 0,
+            "filesSkipped": 0,
+        }
+    if source.resolve() == target.resolve():
+        return {
+            "synced": True,
+            "reason": "same_path",
+            "source": str(source),
+            "target": str(target),
+            "filesCopied": 0,
+            "filesSkipped": 0,
+        }
+    target.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    skipped = 0
+    locked_skipped = 0
+    missing_skipped = 0
+    locked_samples: list[str] = []
+    for current_root, dir_names, file_names in os.walk(source):
+        dir_names[:] = [name for name in dir_names if name not in SYNC_EXCLUDED_DIRS]
+        relative_root = Path(current_root).relative_to(source)
+        target_root = target / relative_root
+        target_root.mkdir(parents=True, exist_ok=True)
+        for file_name in file_names:
+            if file_name in SYNC_EXCLUDED_FILES:
+                skipped += 1
+                continue
+            source_file = Path(current_root) / file_name
+            target_file = target_root / file_name
+            if target_file.exists():
+                if conflict_policy == "local_wins":
+                    pass
+                elif conflict_policy == "nas_wins":
+                    skipped += 1
+                    continue
+                elif conflict_policy == "manual_review":
+                    skipped += 1
+                    continue
+                try:
+                    target_mtime = target_file.stat().st_mtime
+                    source_mtime = source_file.stat().st_mtime
+                except FileNotFoundError:
+                    skipped += 1
+                    missing_skipped += 1
+                    continue
+                except OSError as exc:
+                    if _is_locked_copy_error(exc):
+                        skipped += 1
+                        locked_skipped += 1
+                        if len(locked_samples) < SYNC_LOCKED_FILE_SAMPLE_LIMIT:
+                            locked_samples.append(str(source_file))
+                        continue
+                    raise
+                if target_mtime >= source_mtime:
+                    skipped += 1
+                    continue
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            copy_result = _copy_project_file_with_retry(source_file, target_file)
+            if copy_result == "copied":
+                copied += 1
+                continue
+            skipped += 1
+            if copy_result == "locked":
+                locked_skipped += 1
+                if len(locked_samples) < SYNC_LOCKED_FILE_SAMPLE_LIMIT:
+                    locked_samples.append(str(source_file))
+                continue
+            if copy_result == "missing":
+                missing_skipped += 1
+                continue
+    payload = {
+        "synced": True,
+        "reason": "copied",
+        "source": str(source),
+        "target": str(target),
+        "filesCopied": copied,
+        "filesSkipped": skipped,
+    }
+    if locked_skipped:
+        payload["reason"] = "copied_with_locked_files"
+        payload["lockedFilesSkipped"] = locked_skipped
+        payload["lockedFileSamples"] = locked_samples
+    if missing_skipped:
+        payload["missingFilesSkipped"] = missing_skipped
+    return payload
+
+
+def _copy_project_file_with_retry(source_file: Path, target_file: Path) -> str:
+    for attempt in range(SYNC_COPY_RETRY_ATTEMPTS):
+        try:
+            shutil.copy2(source_file, target_file)
+            return "copied"
+        except FileNotFoundError:
+            return "missing"
+        except OSError as exc:
+            if not _is_locked_copy_error(exc):
+                raise
+            if attempt >= SYNC_COPY_RETRY_ATTEMPTS - 1:
+                return "locked"
+            time.sleep(SYNC_COPY_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
+    return "locked"
+
+
+def _is_locked_copy_error(error: OSError) -> bool:
+    winerror = getattr(error, "winerror", None)
+    if winerror in {32, 33}:
+        return True
+    if error.errno in {EBUSY, ETXTBSY}:
+        return True
+    message = str(error).strip().lower()
+    return any(
+        token in message
+        for token in (
+            "used by another process",
+            "being used by another process",
+            "resource busy",
+            "text file busy",
+            "utilise par un autre processus",
+            "utilisé par un autre processus",
+        )
+    )
 
 
 def _route_row_for_phase(

@@ -607,15 +607,32 @@ class HybridExecutionAdapter(ExecutionAdapter):
             )
 
         command = proposal.command.strip()
-        completed = subprocess.run(  # noqa: S603
-            command,
-            shell=True,
-            cwd=str(execution_root),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(  # noqa: S603
+                command,
+                shell=True,
+                cwd=str(execution_root),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else str(exc.stdout or "")
+            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else str(exc.stderr or "")
+            timeout_message = f"Command timed out after {timeout_seconds} seconds."
+            return _completed_record(
+                record,
+                start,
+                ok=False,
+                exit_code=124,
+                stdout=stdout.strip(),
+                stderr=(f"{stderr.strip()}\n{timeout_message}".strip()),
+                error=timeout_message,
+                changed_files=_git_changed_files(execution_root),
+                target_path=proposal.target_path,
+                result_summary=f"{proposal.kind} timed out after {timeout_seconds} seconds.",
+            )
         return _completed_record(
             record,
             start,

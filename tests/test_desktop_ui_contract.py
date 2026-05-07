@@ -76,6 +76,7 @@ class DesktopUiContractTests(unittest.TestCase):
 
         self.assertNotIn("onClick={() => {}}", shell)
         self.assertIn('onRequestAction?.("flow:search")', shell)
+        self.assertIn('onRequestAction?.("flow:new-conversation")', shell)
         self.assertIn('onRequestAction?.("flow:add-project")', shell)
         self.assertIn('onRequestAction?.("builder:new-project")', shell)
         self.assertIn('onRequestAction?.("builder:project-actions"', shell)
@@ -133,6 +134,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("start_openai_codex_oauth_command", shell)
         self.assertIn("complete_openai_codex_oauth_command", shell)
         self.assertIn("start_minimax_openclaw_auth_command", shell)
+        self.assertIn("complete_minimax_openclaw_auth_command", shell)
         self.assertIn("get_minimax_openclaw_auth_status_command", shell)
         self.assertIn("MiniMax OpenClaw OAuth", shell)
         self.assertIn("Accounts used by OpenClaw", shell)
@@ -141,15 +143,26 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("ChatGPT connection", reference_shell)
         self.assertIn("ChatGPT-compatible MCP endpoint", reference_shell)
 
-    def test_provider_oauth_actions_require_desktop_credential_service(self) -> None:
+    def test_provider_oauth_actions_offer_web_nas_fallback(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
 
         self.assertIn("providerOAuthActionsAvailable", shell)
         self.assertIn(
-            "Model OAuth account setup requires the desktop credential service (Tauri).",
+            'protocol === "https:"',
             shell,
         )
+        self.assertIn("Complete OpenAI Codex OAuth", shell)
+        self.assertIn("callbackPort || 1455", shell)
+        self.assertIn("OpenAI redirects Codex OAuth to localhost", shell)
+        self.assertIn("Copy relay helper", shell)
+        self.assertIn("Connect Codex OAuth", shell)
+        self.assertIn("Complete MiniMax OpenClaw OAuth", shell)
+        self.assertIn("Verify MiniMax", shell)
+        self.assertIn("MiniMax uses a portal user-code grant", shell)
+        self.assertNotIn("codex/device", shell)
+        self.assertNotIn("device-code", shell)
+        self.assertIn("MiniMax OpenClaw auth command copied", shell)
         self.assertIn("quickAuth.disabled", reference_shell)
         self.assertIn("disabled={Boolean(provider.quickAuth.disabled)}", reference_shell)
 

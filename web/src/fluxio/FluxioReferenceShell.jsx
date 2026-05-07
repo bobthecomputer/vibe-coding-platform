@@ -59,6 +59,12 @@ function uniq(values) {
   return Array.from(new Set(asList(values).filter(Boolean)));
 }
 
+function titleizeToken(value) {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
 function dotToneClass(tone) {
   if (tone === "good" || tone === "completed") {
     return "good";
@@ -174,15 +180,24 @@ function FlowSidebar({
         <ChevronDown size={16} strokeWidth={1.9} />
       </div>
 
-      <button
-        className="reference-search-shell"
-        onClick={() => onRequestAction?.("flow:search")}
-        type="button"
-      >
-        <Search size={16} strokeWidth={1.9} />
-        <span>Search conversations...</span>
-        <Edit3 size={15} strokeWidth={1.9} />
-      </button>
+      <div className="reference-search-shell">
+        <button
+          className="reference-search-shell-action"
+          onClick={() => onRequestAction?.("flow:search")}
+          type="button"
+        >
+          <Search size={16} strokeWidth={1.9} />
+          <span>Search conversations...</span>
+        </button>
+        <button
+          aria-label="New conversation"
+          className="reference-search-shell-new"
+          onClick={() => onRequestAction?.("flow:new-conversation")}
+          type="button"
+        >
+          <Edit3 size={15} strokeWidth={1.9} />
+        </button>
+      </div>
 
       <section className="reference-flow-section">
         <span>Favorites</span>
@@ -514,8 +529,19 @@ function AgentIdleSurface(props) {
     onRequestAction,
     onPaste,
     onRuntimeChange,
+    routeControls = {},
   } = props;
   const showSlashCommands = String(draft || "").trim().startsWith("/");
+  const selectedRoute = routeControls.selectedRoute || {};
+  const routeOptions = routeControls.routeOptions || {};
+  const actionModes = routeControls.actionModes || [];
+  const routeRows = asList(routeOptions.roles).map(role => ({
+    role,
+    route:
+      routeControls.routeByRole?.[role] ||
+      (role === routeControls.role ? selectedRoute : null) ||
+      {},
+  }));
 
   return (
     <section className="reference-agent-idle">
@@ -533,6 +559,20 @@ function AgentIdleSurface(props) {
         onSubmit={onIdleSubmit}
         placeholder="Ask your agent anything..."
       >
+        {actionModes.length > 0 ? (
+          <div className="reference-mode-strip" aria-label="Run mode">
+            {actionModes.map(option => (
+              <button
+                className={routeControls.actionMode === option.value ? "active" : ""}
+                key={`composer-mode-${option.value}`}
+                onClick={() => routeControls.onActionModeChange?.(option.value)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {showSlashCommands ? (
           <SlashCommandPanel
             className="in-composer"
@@ -543,7 +583,7 @@ function AgentIdleSurface(props) {
         ) : null}
       </ComposerDock>
 
-      <div className="reference-config-grid">
+      <div className="reference-config-grid compact">
         <ConfigCard
           accent="neutral"
           copy={runtimeStatus?.detected ? "Work engine ready for launch." : "Syntelos checks this automatically before the first run."}
@@ -570,25 +610,85 @@ function AgentIdleSurface(props) {
 
         <ConfigCard
           accent="neutral"
-          copy="Model selection lives in Settings. Syntelos keeps the advanced limits behind the scenes."
-          title="Model"
+          copy="Planner, executor, and verifier roles route automatically by phase. You only tune provider/model per role."
+          title="Model Routes"
           titleIcon={Bot}
         >
-          <div className="reference-pill-select">{selectedModelLabel}</div>
+          <div className="reference-route-matrix compact">
+            {routeRows.map(({ role, route }) => (
+              <article className={routeControls.role === role ? "active" : ""} key={`route-row-${role}`}>
+                <button onClick={() => routeControls.onRoleChange?.(role)} type="button">
+                  {titleizeToken(role)}
+                </button>
+                <select
+                  aria-label={`${role} provider`}
+                  onChange={event => routeControls.onRoleFieldChange?.(role, "provider", event.target.value)}
+                  value={route.provider || "openai"}
+                >
+                  {asList(routeOptions.providers).map(option => (
+                    <option key={`${role}-provider-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label={`${role} model`}
+                  onChange={event => routeControls.onRoleFieldChange?.(role, "model", event.target.value)}
+                  value={route.model || ""}
+                >
+                  <option value="">Provider default</option>
+                  {asList(routeOptions.models).map(option => (
+                    <option key={`${role}-model-${option}`} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label={`${role} effort`}
+                  onChange={event => routeControls.onRoleFieldChange?.(role, "effort", event.target.value)}
+                  value={route.effort || "default"}
+                >
+                  {asList(routeOptions.efforts).map(option => (
+                    <option key={`${role}-effort-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </article>
+            ))}
+          </div>
         </ConfigCard>
+
+        {actionModes.length > 0 ? (
+          <ConfigCard
+            accent="neutral"
+            copy="The arrow follows this mode. Auto keeps short greetings/questions as chat and opens a mission for larger work."
+            title="Run Mode"
+            titleIcon={Sparkles}
+          >
+            <div className="reference-card-control-stack">
+              <div className="reference-mode-strip vertical" aria-label="Run mode">
+                {actionModes.map(option => (
+                  <button
+                    className={routeControls.actionMode === option.value ? "active" : ""}
+                    key={`card-mode-${option.value}`}
+                    onClick={() => routeControls.onActionModeChange?.(option.value)}
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <button className="reference-link-button strong" onClick={() => routeControls.onSave?.()} type="button">
+                Save routes
+              </button>
+            </div>
+          </ConfigCard>
+        ) : null}
 
         <ConfigCard
           accent="neutral"
-          copy="Balances speed and depth. Good for most tasks."
-          title="Effort"
-          titleIcon={Sparkles}
-        >
-          <div className="reference-pill-select">{selectedEffortLabel}</div>
-        </ConfigCard>
-
-        <ConfigCard
-          accent="neutral"
-          copy="2 active rules"
+          copy={`${selectedEffortLabel} · ${selectedModelLabel}`}
           title="Rules"
           titleIcon={BookOpen}
           footer={(
@@ -601,7 +701,12 @@ function AgentIdleSurface(props) {
             </button>
           )}
         >
-          <div className="reference-pill-select">Project Rules</div>
+          <div className="reference-card-control-stack">
+            <div className="reference-pill-select">Project Rules</div>
+            <button className="reference-link-button" onClick={() => routeControls.onToggleCodeExecution?.()} type="button">
+              Code execution {routeControls.codeExecutionEnabled ? `on (${routeControls.codeExecutionMemory})` : "off"}
+            </button>
+          </div>
         </ConfigCard>
       </div>
 
@@ -655,6 +760,8 @@ function StepState({ label, done = false, pending = false }) {
 
 function AgentRunningSurface(props) {
   const {
+    activeCommentTarget = null,
+    conversationMode = "chat",
     draft,
     feedbackItems = [],
     missionLoop,
@@ -672,16 +779,26 @@ function AgentRunningSurface(props) {
     onPaste,
     onRequestAction,
     onRuntimeChange,
+    runtimeOptions = [],
+    routeControls = {},
     onSend,
   } = props;
   const [detailTab, setDetailTab] = useState("feedback");
+  const [showTraceDetail, setShowTraceDetail] = useState(false);
   const processMoments = timelineMoments.slice(-4);
   const renderedMessages = messages.length > 0 ? messages : [];
+  const showMissionPanels = conversationMode === "mission" || Boolean(missionLoop);
   const showSlashCommands = String(draft || "").trim().startsWith("/");
+  const selectedRoute = routeControls.selectedRoute || {};
+  const routeOptions = routeControls.routeOptions || {};
+  const actionModes = routeControls.actionModes || [];
+  const runtimeSelectOptions = runtimeOptions.length > 0
+    ? runtimeOptions
+    : [{ value: selectedRuntime, label: selectedRuntimeLabel }];
 
   return (
-    <section className="reference-agent-run">
-      {missionLoop ? (
+    <section className={cx("reference-agent-run", `mode-${conversationMode}`)}>
+      {showMissionPanels && missionLoop ? (
         <article className="reference-run-summary">
           <div>
             <span>Cycle phase</span>
@@ -703,6 +820,17 @@ function AgentRunningSurface(props) {
       ) : null}
 
       <div className="reference-chat-column">
+        {renderedMessages.length === 0 ? (
+          <article className="reference-conversation-blank">
+            <strong>{showMissionPanels ? "Mission conversation is ready" : "New conversation"}</strong>
+            <p>
+              {showMissionPanels
+                ? "Send a message or wait for the runtime to publish its next readable update."
+                : "Ask a question or switch the mode to Mission when you want file changes and a tracked work loop."}
+            </p>
+          </article>
+        ) : null}
+
         {renderedMessages.map(item =>
           item.role === "user" ? (
             <div className="reference-user-bubble" key={item.id}>
@@ -710,7 +838,7 @@ function AgentRunningSurface(props) {
               <span>{item.meta || "Now"}</span>
             </div>
           ) : (
-            <div className="reference-agent-thread" key={item.id}>
+            <div className={cx("reference-agent-thread", item.pending ? "is-pending" : "")} key={item.id}>
               <div className="reference-agent-avatar">
                 <div className="reference-brand-mark tiny">
                   <span />
@@ -719,10 +847,19 @@ function AgentRunningSurface(props) {
                 </div>
               </div>
               <div className="reference-agent-thread-body">
-                <p className="reference-thread-lead">{item.title}</p>
-                {item.detail ? (
-                  <article className="reference-report-panel compact">
-                    <p>{item.detail}</p>
+                <p className="reference-thread-lead">
+                  {item.pending ? <CircleDashed className="pending" size={16} strokeWidth={2.1} /> : null}
+                  <span>{item.title}</span>
+                </p>
+                {item.detail || item.technicalDetail || item.chips?.length ? (
+                  <article className={cx("reference-report-panel compact", item.technicalDetail && !item.detail ? "trace-only" : "")}>
+                    {item.detail ? <p>{item.detail}</p> : null}
+                    {item.technicalDetail ? (
+                      <details className="reference-inline-trace">
+                        <summary>Route detail</summary>
+                        <p>{item.technicalDetail}</p>
+                      </details>
+                    ) : null}
                     {item.chips?.length ? (
                       <div className="reference-chip-row">
                         {item.chips.map(chip => (
@@ -747,22 +884,39 @@ function AgentRunningSurface(props) {
           ),
         )}
 
-        {processMoments.length > 0 ? (
+        {showMissionPanels && processMoments.length > 0 ? (
           <article className="reference-status-panel">
-            <h3>Live mission activity</h3>
+            <div className="reference-status-panel-head">
+              <h3>Live mission activity</h3>
+              <button onClick={() => setShowTraceDetail(current => !current)} type="button">
+                {showTraceDetail ? "Hide trace" : "Show trace"}
+              </button>
+            </div>
             <div className="reference-status-list">
               {processMoments.map((moment, index) => (
-                <StepState
-                  done={index < processMoments.length - 1}
-                  key={moment.id}
-                  label={moment.title}
-                  pending={index === processMoments.length - 1}
-                />
+                <div className="reference-status-row" key={moment.id}>
+                  <StepState
+                    done={index < processMoments.length - 1}
+                    label={moment.title}
+                    pending={index === processMoments.length - 1}
+                  />
+                  {showTraceDetail && (moment.detail || moment.preview) ? (
+                    <p>{moment.preview || moment.detail}</p>
+                  ) : null}
+                  <button
+                    className="reference-row-comment"
+                    onClick={() => onRequestAction?.("run:moment-comment", { momentId: moment.id })}
+                    type="button"
+                  >
+                    Comment
+                  </button>
+                </div>
               ))}
             </div>
           </article>
         ) : null}
 
+        {showMissionPanels && feedbackItems.length > 0 ? (
         <article className="reference-feedback-panel">
           <div className="reference-feedback-tabs">
             <button
@@ -801,6 +955,7 @@ function AgentRunningSurface(props) {
               ))}
           </div>
         </article>
+        ) : null}
       </div>
 
       <ComposerDock
@@ -811,33 +966,74 @@ function AgentRunningSurface(props) {
         onDictation={onDictation}
         onPaste={onPaste}
         onSubmit={onSend}
-        placeholder="Ask anything..."
+        placeholder={
+          activeCommentTarget
+            ? "Add a live comment..."
+            : showMissionPanels
+              ? "Comment live or steer the mission..."
+              : "Reply in this conversation..."
+        }
       >
+        {activeCommentTarget ? (
+          <div className="reference-comment-target">
+            <span>Commenting on {activeCommentTarget.kind || "item"}</span>
+            <strong>{activeCommentTarget.title}</strong>
+            <button onClick={() => onRequestAction?.("run:clear-comment-target")} type="button">Clear</button>
+          </div>
+        ) : null}
+        {actionModes.length > 0 ? (
+          <div className="reference-mode-strip compact" aria-label="Run mode">
+            {actionModes.map(option => (
+              <button
+                className={routeControls.actionMode === option.value ? "active" : ""}
+                key={`run-mode-${option.value}`}
+                onClick={() => routeControls.onActionModeChange?.(option.value)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="reference-docked-controls">
           <label className="reference-inline-select">
             <span>Work engine</span>
             <select onChange={event => onRuntimeChange(event.target.value)} value={selectedRuntime}>
-              <option value={selectedRuntime}>{selectedRuntimeLabel}</option>
+              {runtimeSelectOptions.map(option => (
+                <option key={`run-runtime-${option.value}`} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
           <label className="reference-inline-select">
+            <span>Route role</span>
+            <input readOnly value={`${titleizeToken(routeControls.role || "executor")} (auto)`} />
+          </label>
+          <label className="reference-inline-select">
             <span>Model</span>
-            <select disabled value={selectedModelLabel}>
-              <option>{selectedModelLabel}</option>
+            <select onChange={event => routeControls.onFieldChange?.("model", event.target.value)} value={selectedRoute.model || ""}>
+              <option value="">{selectedModelLabel}</option>
+              {asList(routeOptions.models).map(option => (
+                <option key={`run-route-model-${option}`} value={option}>
+                  {option}
+                </option>
+              ))}
             </select>
           </label>
           <label className="reference-inline-select">
             <span>Effort</span>
-            <select disabled value={selectedEffortLabel}>
-              <option>{selectedEffortLabel}</option>
+            <select onChange={event => routeControls.onFieldChange?.("effort", event.target.value)} value={selectedRoute.effort || "default"}>
+              {asList(routeOptions.efforts).map(option => (
+                <option key={`run-route-effort-${option.value}`} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
-          <label className="reference-inline-select">
-            <span>Rules</span>
-            <select disabled value="Project Rules">
-              <option>Project Rules</option>
-            </select>
-          </label>
+          <button className="reference-tool-button" onClick={() => routeControls.onSave?.()} type="button">
+            Save route
+          </button>
         </div>
 
         {showSlashCommands ? (
@@ -2474,6 +2670,44 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                   ))}
                 </select>
               </SurfaceField>
+              <SurfaceField label="NAS sync mode">
+                <select
+                  onChange={event => {
+                    const enabled = event.target.value !== "manual";
+                    onWorkspaceProfileFieldChange("syncMode", event.target.value);
+                    onWorkspaceProfileFieldChange("autoSyncToNas", enabled);
+                  }}
+                  value={workspaceProfileForm.syncMode || "manual"}
+                >
+                  <option value="manual">Manual</option>
+                  <option value="auto_nas_mirror">Auto NAS mirror</option>
+                  <option value="synology_drive">Synology Drive</option>
+                </select>
+              </SurfaceField>
+              <SurfaceField label="Computer folder">
+                <input
+                  onChange={event => onWorkspaceProfileFieldChange("localProjectPath", event.target.value)}
+                  placeholder="C:/Users/paul/Projects/my-project"
+                  value={workspaceProfileForm.localProjectPath || ""}
+                />
+              </SurfaceField>
+              <SurfaceField label="NAS mirror folder">
+                <input
+                  onChange={event => onWorkspaceProfileFieldChange("nasProjectPath", event.target.value)}
+                  placeholder="/volume1/Saclay/projects/my-project"
+                  value={workspaceProfileForm.nasProjectPath || ""}
+                />
+              </SurfaceField>
+              <SurfaceField label="Sync direction">
+                <select
+                  onChange={event => onWorkspaceProfileFieldChange("syncDirection", event.target.value)}
+                  value={workspaceProfileForm.syncDirection || "bidirectional"}
+                >
+                  <option value="bidirectional">Bidirectional</option>
+                  <option value="local_to_nas">Local to NAS</option>
+                  <option value="nas_to_local">NAS to local</option>
+                </select>
+              </SurfaceField>
               <div className="reference-settings-actions">
                 <button className="reference-black-button" onClick={onSaveWorkspacePolicy} type="button">
                   Save changes
@@ -3431,6 +3665,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
 export function FluxioReferenceShell(props) {
   const {
     agentScene,
+    activeCommentTarget,
     appearance,
     appearanceStyle,
     builderDetailOpen,
@@ -3442,6 +3677,7 @@ export function FluxioReferenceShell(props) {
     feedbackItems,
     flowProjects,
     messages,
+    conversationMode = "chat",
     onAttach,
     onBackFromBuilder,
     onChangeDraft,
@@ -3464,6 +3700,7 @@ export function FluxioReferenceShell(props) {
     onSetSurface,
     runtimeOptions,
     runtimeStatus,
+    routeControls,
     settingsState,
     selectedEffortLabel,
     selectedModelLabel,
@@ -3502,6 +3739,7 @@ export function FluxioReferenceShell(props) {
         onUseSlashCommand={onInsertSlashCommand}
         runtimeOptions={runtimeOptions}
         runtimeStatus={runtimeStatus}
+        routeControls={routeControls}
         selectedEffortLabel={selectedEffortLabel}
         selectedHarnessMeta={selectedHarnessMeta}
         selectedModelLabel={selectedModelLabel}
@@ -3511,6 +3749,8 @@ export function FluxioReferenceShell(props) {
     ) : surface === "agent" && agentScene === "run" ? (
       <AgentRunningSurface
         draft={draft}
+        activeCommentTarget={activeCommentTarget}
+        conversationMode={conversationMode}
         feedbackItems={feedbackItems}
         missionLoop={missionLoop}
         messages={messages}
@@ -3522,6 +3762,8 @@ export function FluxioReferenceShell(props) {
         onRuntimeChange={onRuntimeChange}
         onSend={onSend}
         onUseSlashCommand={onInsertSlashCommand}
+        routeControls={routeControls}
+        runtimeOptions={runtimeOptions}
         selectedEffortLabel={selectedEffortLabel}
         selectedModelLabel={selectedModelLabel}
         selectedRuntime={selectedRuntime}

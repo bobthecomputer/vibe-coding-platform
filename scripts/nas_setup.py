@@ -147,6 +147,17 @@ def main(argv: list[str] | None = None) -> int:
         print("DSM reverse proxy target:")
         print(f"  http://127.0.0.1:{DEFAULT_PORT}")
     print("")
+    print("Direct NAS HTTPS certificate setup:")
+    print(
+        "  python scripts/setup_nas_https.py --host <NAS-DNS-or-IP> "
+        "--alt-host <NAS-IP> --install-windows-current-user-root "
+        "--enable-firefox-enterprise-roots"
+    )
+    print("")
+    print("Packaged NAS runtime setup:")
+    print("  python scripts/install_nas_runtime_stack.py --install-openclaw")
+    print("  python scripts/nas_runtime_doctor.py")
+    print("")
     print("Add another local account later:")
     print("  python scripts/nas_setup.py --skip-npm --add-user paul --display-name \"Paul\"")
     print("  python scripts/nas_setup.py --skip-npm --add-user theo --add-user sam")

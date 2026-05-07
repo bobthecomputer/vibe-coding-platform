@@ -787,6 +787,12 @@ class WorkspaceProfile:
     minimax_auth_mode: str = "none"
     commit_message_style: str = "scoped"
     execution_target_preference: str = "profile_default"
+    local_project_path: str = ""
+    nas_project_path: str = ""
+    sync_mode: str = "manual"
+    sync_direction: str = "bidirectional"
+    sync_conflict_policy: str = "keep_newer_and_log"
+    auto_sync_to_nas: bool = False
     goals: list[str] = field(default_factory=list)
     enabled: bool = True
     created_at: str = field(default_factory=utc_now_iso)

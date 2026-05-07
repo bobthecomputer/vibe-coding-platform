@@ -14,6 +14,7 @@ authors = [{ name = "Paul" }]
 [project.scripts]
 grant-agent = "grant_agent.cli:main"
 grand-agent-web = "grant_agent.web_backend:main"
+syntelos-codex-oauth-helper = "grant_agent.codex_local_oauth_helper:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

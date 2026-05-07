@@ -21,6 +21,7 @@ from grant_agent.mission_control import (
     _build_git_actions,
     _build_validation_actions,
     _mission_title,
+    _sync_project_tree,
     build_harness_lab_snapshot,
     build_release_readiness_snapshot,
     build_escalation_preview,
@@ -32,6 +33,72 @@ from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
 class MissionControlTests(unittest.TestCase):
+    def test_empty_workspace_store_falls_back_to_default_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            (control_dir / "workspaces.json").write_text("", encoding="utf-8")
+
+            workspaces = ControlRoomStore(root).load_workspaces()
+
+            self.assertEqual(len(workspaces), 1)
+            saved = json.loads((control_dir / "workspaces.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved[0]["workspace_id"], workspaces[0].workspace_id)
+
+    def test_invalid_workspace_store_falls_back_to_default_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            (control_dir / "workspaces.json").write_text("{", encoding="utf-8")
+
+            workspaces = ControlRoomStore(root).load_workspaces()
+
+            self.assertEqual(len(workspaces), 1)
+            saved = json.loads((control_dir / "workspaces.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved[0]["workspace_id"], workspaces[0].workspace_id)
+
+    def test_workspace_store_reanchors_old_release_root_to_current_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            releases_root = pathlib.Path(temp_dir) / "syntelos" / "releases"
+            old_release = releases_root / "20260430-165341"
+            new_release = releases_root / "20260505-212517"
+            old_release.mkdir(parents=True, exist_ok=True)
+            new_release.mkdir(parents=True, exist_ok=True)
+            (old_release / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            (new_release / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+
+            store = ControlRoomStore(new_release)
+            control_dir = new_release / ".agent_control"
+            workspace = asdict(store._default_workspace_profile())  # noqa: SLF001 - test fixture
+            workspace["root_path"] = str(old_release)
+            (control_dir / "workspaces.json").write_text(json.dumps([workspace], indent=2), encoding="utf-8")
+
+            loaded = store.load_workspaces()
+
+            self.assertEqual(loaded[0].root_path, str(new_release))
+            saved = json.loads((control_dir / "workspaces.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved[0]["root_path"], str(new_release))
+
+    def test_workspace_store_keeps_non_release_roots_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir) / "syntelos"
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+            external_root = pathlib.Path(temp_dir) / "other_project"
+            external_root.mkdir(parents=True, exist_ok=True)
+
+            store = ControlRoomStore(root)
+            control_dir = root / ".agent_control"
+            workspace = asdict(store._default_workspace_profile())  # noqa: SLF001 - test fixture
+            workspace["root_path"] = str(external_root)
+            (control_dir / "workspaces.json").write_text(json.dumps([workspace], indent=2), encoding="utf-8")
+
+            loaded = store.load_workspaces()
+
+            self.assertEqual(loaded[0].root_path, str(external_root))
+
     def test_delete_workspace_removes_scoped_missions_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -93,6 +160,180 @@ class MissionControlTests(unittest.TestCase):
                 argparse.Namespace(root=str(root), workspace_id=workspace.workspace_id)
             )
             self.assertEqual(exit_code, 1)
+
+    def test_sync_project_tree_skips_locked_files_instead_of_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
+            (source / "ready.txt").write_text("ready\n", encoding="utf-8")
+            (source / "locked.txt").write_text("locked\n", encoding="utf-8")
+            real_copy2 = shutil.copy2
+
+            class LockedByProcessError(PermissionError):
+                def __init__(self) -> None:
+                    super().__init__(13, "used by another process")
+                    self.winerror = 32
+
+            def fake_copy2(src: str | pathlib.Path, dst: str | pathlib.Path) -> str:
+                if pathlib.Path(src).name == "locked.txt":
+                    raise LockedByProcessError()
+                return real_copy2(src, dst)
+
+            with (
+                mock.patch("grant_agent.mission_control.shutil.copy2", side_effect=fake_copy2),
+                mock.patch("grant_agent.mission_control.time.sleep", return_value=None),
+            ):
+                status = _sync_project_tree(
+                    source,
+                    target,
+                    conflict_policy="keep_newer_and_log",
+                )
+
+            self.assertTrue(status["synced"])
+            self.assertEqual(status["reason"], "copied_with_locked_files")
+            self.assertEqual(status["filesCopied"], 1)
+            self.assertEqual(status["filesSkipped"], 1)
+            self.assertEqual(status["lockedFilesSkipped"], 1)
+            self.assertIn(str(source / "locked.txt"), status["lockedFileSamples"])
+            self.assertEqual((target / "ready.txt").read_text(encoding="utf-8"), "ready\n")
+            self.assertFalse((target / "locked.txt").exists())
+
+    def test_sync_project_tree_raises_non_lock_permission_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
+            (source / "blocked.txt").write_text("blocked\n", encoding="utf-8")
+
+            class AccessDeniedError(PermissionError):
+                def __init__(self) -> None:
+                    super().__init__(13, "permission denied")
+                    self.winerror = 5
+
+            with mock.patch(
+                "grant_agent.mission_control.shutil.copy2",
+                side_effect=AccessDeniedError(),
+            ):
+                with self.assertRaises(PermissionError):
+                    _sync_project_tree(
+                        source,
+                        target,
+                        conflict_policy="local_wins",
+                    )
+
+    def test_workspace_save_reconciles_local_and_nas_when_both_already_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            local_root = root / "local-project"
+            nas_root = root / "nas-project"
+            local_root.mkdir(parents=True, exist_ok=True)
+            nas_root.mkdir(parents=True, exist_ok=True)
+            (local_root / "local_only.txt").write_text("local\n", encoding="utf-8")
+            (nas_root / "nas_only.txt").write_text("nas\n", encoding="utf-8")
+            local_shared = local_root / "shared.txt"
+            nas_shared = nas_root / "shared.txt"
+            local_shared.write_text("local-old\n", encoding="utf-8")
+            nas_shared.write_text("nas-new\n", encoding="utf-8")
+            os.utime(local_shared, (1_700_000_000, 1_700_000_000))
+            os.utime(nas_shared, (1_700_000_100, 1_700_000_100))
+
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="NAS Sync Workspace",
+                root_path=str(local_root),
+                default_runtime="openclaw",
+                user_profile="builder",
+                local_project_path=str(local_root),
+                nas_project_path=str(nas_root),
+                sync_mode="auto_nas_mirror",
+                sync_direction="bidirectional",
+                sync_conflict_policy="keep_newer_and_log",
+                auto_sync_to_nas=True,
+            )
+
+            self.assertEqual(workspace.root_path, str(nas_root.resolve()))
+            self.assertEqual((nas_root / "local_only.txt").read_text(encoding="utf-8"), "local\n")
+            self.assertEqual((local_root / "nas_only.txt").read_text(encoding="utf-8"), "nas\n")
+            self.assertEqual(local_shared.read_text(encoding="utf-8"), "nas-new\n")
+            self.assertEqual(nas_shared.read_text(encoding="utf-8"), "nas-new\n")
+
+            sync_goal = next(
+                item for item in workspace.goals if str(item).startswith("sync_status:")
+            )
+            sync_status = json.loads(str(sync_goal).split(":", 1)[1])
+            self.assertEqual(sync_status["effectiveDirection"], "bidirectional")
+            self.assertTrue(sync_status["detectedBothWithFiles"])
+            self.assertGreaterEqual(sync_status["filesCopied"], 3)
+            self.assertGreaterEqual(len(sync_status["passes"]), 2)
+
+    def test_workspace_save_bidirectional_nas_wins_updates_local_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            local_root = root / "local-project"
+            nas_root = root / "nas-project"
+            local_root.mkdir(parents=True, exist_ok=True)
+            nas_root.mkdir(parents=True, exist_ok=True)
+            shared_local = local_root / "shared.txt"
+            shared_nas = nas_root / "shared.txt"
+            shared_local.write_text("local-version\n", encoding="utf-8")
+            shared_nas.write_text("nas-version\n", encoding="utf-8")
+
+            store = ControlRoomStore(root)
+            store.upsert_workspace(
+                name="NAS Wins Workspace",
+                root_path=str(local_root),
+                default_runtime="openclaw",
+                user_profile="builder",
+                local_project_path=str(local_root),
+                nas_project_path=str(nas_root),
+                sync_mode="auto_nas_mirror",
+                sync_direction="bidirectional",
+                sync_conflict_policy="nas_wins",
+                auto_sync_to_nas=True,
+            )
+
+            self.assertEqual(shared_nas.read_text(encoding="utf-8"), "nas-version\n")
+            self.assertEqual(shared_local.read_text(encoding="utf-8"), "nas-version\n")
+
+    def test_workspace_save_auto_promotes_to_bidirectional_when_both_roots_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            local_root = root / "local-project"
+            nas_root = root / "nas-project"
+            local_root.mkdir(parents=True, exist_ok=True)
+            nas_root.mkdir(parents=True, exist_ok=True)
+            (local_root / "local_only.txt").write_text("local\n", encoding="utf-8")
+            (nas_root / "nas_only.txt").write_text("nas\n", encoding="utf-8")
+
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="Auto Promote Sync Workspace",
+                root_path=str(local_root),
+                default_runtime="openclaw",
+                user_profile="builder",
+                local_project_path=str(local_root),
+                nas_project_path=str(nas_root),
+                sync_mode="auto_nas_mirror",
+                sync_direction="local_to_nas",
+                sync_conflict_policy="keep_newer_and_log",
+                auto_sync_to_nas=True,
+            )
+
+            self.assertEqual((nas_root / "local_only.txt").read_text(encoding="utf-8"), "local\n")
+            self.assertEqual((local_root / "nas_only.txt").read_text(encoding="utf-8"), "nas\n")
+
+            sync_goal = next(
+                item for item in workspace.goals if str(item).startswith("sync_status:")
+            )
+            sync_status = json.loads(str(sync_goal).split(":", 1)[1])
+            self.assertEqual(sync_status["requestedDirection"], "local_to_nas")
+            self.assertEqual(sync_status["effectiveDirection"], "bidirectional")
+            self.assertTrue(sync_status["directionAutoPromoted"])
 
     def test_cli_mission_follow_up_records_thread_and_runtime_lane(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

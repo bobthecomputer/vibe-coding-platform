@@ -32,15 +32,34 @@ class VerificationRunner:
                 continue
 
             start = time.monotonic()
-            completed = subprocess.run(  # noqa: S603
-                command,
-                shell=True,
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=self.default_timeout_seconds,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    command,
+                    shell=True,
+                    cwd=str(workdir),
+                    capture_output=True,
+                    text=True,
+                    timeout=self.default_timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                duration_ms = int((time.monotonic() - start) * 1000)
+                stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else str(exc.stdout or "")
+                stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else str(exc.stderr or "")
+                timeout_note = f"Command timed out after {self.default_timeout_seconds} seconds."
+                results.append(
+                    VerificationResult(
+                        command=command,
+                        return_code=124,
+                        stdout=stdout.strip(),
+                        stderr=(f"{stderr.strip()}\n{timeout_note}".strip()),
+                        duration_ms=duration_ms,
+                        status="timeout",
+                        risk_level=risk_level,
+                    )
+                )
+                continue
+
             duration_ms = int((time.monotonic() - start) * 1000)
             results.append(
                 VerificationResult(

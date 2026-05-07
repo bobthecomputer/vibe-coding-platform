@@ -15,7 +15,10 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.cli import (
+    _mission_budget_settings,
     _invoke_engine,
+    _mission_poll_interval_seconds,
+    _mission_should_continue_after_result,
     bootstrap_project,
     cmd_mission_action,
     cmd_mission_start,
@@ -484,6 +487,188 @@ class CliPreferenceTests(unittest.TestCase):
                 str(checkpoint_path),
             )
             self.assertFalse(mocked_invoke.call_args.kwargs["pause_on_handoff"])
+
+    def test_mission_budget_settings_parses_days_timer_from_objective(self) -> None:
+        fixed_now = datetime(2026, 5, 7, 12, 0, tzinfo=timezone.utc)
+        settings = _mission_budget_settings(
+            objective="Run this Golf 40 mission for 2 days and keep going.",
+            budget_hours=12,
+            run_until_behavior="pause_on_failure",
+            now=fixed_now,
+        )
+        self.assertEqual(settings["max_runtime_seconds"], 2 * 24 * 3600)
+        self.assertEqual(settings["run_until_behavior"], "continue_until_blocked")
+        self.assertTrue(settings["deadline_at"])
+
+    def test_mission_loop_continues_while_delegated_runtime_is_running(self) -> None:
+        mission = argparse.Namespace(
+            run_budget=argparse.Namespace(
+                run_until_behavior="continue_until_blocked",
+                deadline_at=None,
+            )
+        )
+        should_continue = _mission_should_continue_after_result(
+            mission,
+            {
+                "status": "ok",
+                "autopilot_status": "paused",
+                "autopilot_pause_reason": "delegated_runtime_running",
+                "remaining_steps": ["wait"],
+            },
+        )
+        self.assertTrue(should_continue)
+        self.assertGreaterEqual(_mission_poll_interval_seconds(mission), 1)
+
+    def test_mission_loop_stops_when_delegated_runtime_running_but_pause_mode(self) -> None:
+        mission = argparse.Namespace(
+            run_budget=argparse.Namespace(
+                run_until_behavior="pause_on_failure",
+                deadline_at=None,
+            )
+        )
+        should_continue = _mission_should_continue_after_result(
+            mission,
+            {
+                "status": "ok",
+                "autopilot_status": "paused",
+                "autopilot_pause_reason": "delegated_runtime_running",
+                "remaining_steps": ["wait"],
+            },
+        )
+        self.assertFalse(should_continue)
+        self.assertEqual(_mission_poll_interval_seconds(mission), 0)
+
+    def test_mission_start_launch_async_dispatches_background_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+            save_code, save_payload = self._run_json_command(
+                cmd_workspace_save,
+                root=str(root),
+                name="Fluxio Workspace",
+                path=str(root),
+                default_runtime="hermes",
+                user_profile="builder",
+                preferred_harness="fluxio_hybrid",
+                routing_strategy="profile_default",
+                route_overrides_json="[]",
+                auto_optimize_routing="false",
+                minimax_auth_mode="none",
+                commit_message_style="scoped",
+                execution_target_preference="profile_default",
+                workspace_id=None,
+            )
+            self.assertEqual(save_code, 0)
+            workspace_id = save_payload["workspace"]["workspace_id"]
+
+            runtime_status = RuntimeInstallStatus(
+                runtime_id="hermes",
+                label="Hermes",
+                detected=True,
+                doctor_summary="Hermes is ready.",
+            )
+            adapter = mock.Mock()
+            adapter.doctor.return_value = runtime_status
+
+            with (
+                mock.patch("grant_agent.cli.runtime_adapter_map", return_value={"hermes": adapter}),
+                mock.patch(
+                    "grant_agent.cli.detect_default_verification_commands",
+                    return_value=["python -m pytest tests -q"],
+                ),
+                mock.patch("grant_agent.cli.load_telegram_destination", return_value=""),
+                mock.patch(
+                    "grant_agent.cli._launch_async_mission_resume",
+                    return_value={
+                        "pid": 4242,
+                        "logPath": str(root / ".agent_control" / "mission_async" / "mission.log"),
+                        "command": ["python", "-m", "grant_agent.cli", "mission-action"],
+                    },
+                ),
+                mock.patch("grant_agent.cli._run_mission_engine_cycles") as mocked_cycles,
+            ):
+                exit_code, payload = self._run_json_command(
+                    cmd_mission_start,
+                    root=str(root),
+                    workspace_id=workspace_id,
+                    runtime="hermes",
+                    objective="Long mission should dispatch asynchronously.",
+                    success_check=[],
+                    mode="Autopilot",
+                    budget_hours=48,
+                    run_until="continue_until_blocked",
+                    profile="builder",
+                    escalation_destination="",
+                    route_overrides_json="[]",
+                    relative_stop_minutes=0,
+                    code_execution=False,
+                    code_execution_memory="4g",
+                    code_execution_container_id="",
+                    code_execution_required=False,
+                    launch_async=True,
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(payload["launchedAsync"])
+            self.assertEqual(payload["dispatch"]["pid"], 4242)
+            self.assertEqual(payload["mission"]["state"]["status"], "running")
+            mocked_cycles.assert_not_called()
+
+    def test_mission_action_resume_launch_async_dispatches_background_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Dispatch resume in background",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m pytest tests -q"],
+                max_runtime_seconds=7200,
+            )
+            store.update_mission(mission)
+
+            runtime_status = RuntimeInstallStatus(
+                runtime_id="hermes",
+                label="Hermes",
+                detected=True,
+                doctor_summary="Hermes is ready.",
+            )
+            adapter = mock.Mock()
+            adapter.doctor.return_value = runtime_status
+
+            with (
+                mock.patch("grant_agent.cli.runtime_adapter_map", return_value={"hermes": adapter}),
+                mock.patch(
+                    "grant_agent.cli._launch_async_mission_resume",
+                    return_value={
+                        "pid": 5252,
+                        "logPath": str(root / ".agent_control" / "mission_async" / "mission.log"),
+                        "command": ["python", "-m", "grant_agent.cli", "mission-action"],
+                    },
+                ),
+                mock.patch("grant_agent.cli._run_mission_engine_cycles") as mocked_cycles,
+            ):
+                exit_code, payload = self._run_json_command(
+                    cmd_mission_action,
+                    root=str(root),
+                    mission_id=mission.mission_id,
+                    action="resume",
+                    launch_async=True,
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(payload["launchedAsync"])
+            self.assertEqual(payload["dispatch"]["pid"], 5252)
+            self.assertEqual(payload["mission"]["state"]["status"], "running")
+            mocked_cycles.assert_not_called()
 
 
 if __name__ == "__main__":

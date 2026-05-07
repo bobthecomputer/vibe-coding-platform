@@ -24,6 +24,8 @@ function uniq(items) {
   return [...new Set((Array.isArray(items) ? items : []).filter(Boolean))];
 }
 
+const noopReportUiAction = () => {};
+
 const STORAGE_KEYS = {
   uiMode: "fluxio.ui.mode",
   telegramChatId: "fluxio.telegram.chatId",
@@ -38,6 +40,7 @@ const STORAGE_KEYS = {
   splitViewEnabled: "fluxio.agent.split.enabled",
   splitMissionId: "fluxio.agent.split.mission_id",
   localTasks: "fluxio.tasks.local",
+  deletedLocalTaskIds: "fluxio.tasks.deleted",
   memoryPolicy: "fluxio.memory.policy",
   memoryStore: "fluxio.memory.store",
   debugEvents: "fluxio.debug.events",
@@ -45,9 +48,14 @@ const STORAGE_KEYS = {
   surface: "fluxio.ui.surface",
   codexImportSnapshot: "fluxio.codex.import.snapshot",
   controlRoomSnapshot: "fluxio.control_room.snapshot",
+  openAICodexOAuthFlow: "fluxio.openai_codex.oauth_flow",
+  chatSessions: "fluxio.chat.sessions",
+  activeChatSessionId: "fluxio.chat.active_session_id",
 };
 
 const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...listFixtureOptions()];
+const EMPTY_ARRAY = Object.freeze([]);
+const EMPTY_OBJECT = Object.freeze({});
 const LIVE_SYNC_OPTIONS = [
   { value: "off", label: "Manual" },
   { value: "1", label: "1s" },
@@ -69,6 +77,22 @@ const DEFAULT_WORKSPACE_FORM = {
   path: "",
   defaultRuntime: "openclaw",
   userProfile: "builder",
+  localProjectPath: "",
+  nasProjectPath: "",
+  syncMode: "manual",
+  syncDirection: "bidirectional",
+  syncConflictPolicy: "keep_newer_and_log",
+  autoSyncToNas: false,
+};
+
+const DEFAULT_WORKSPACE_BROWSER_STATE = {
+  open: false,
+  loading: false,
+  currentPath: "",
+  parentPath: "",
+  roots: [],
+  entries: [],
+  error: "",
 };
 
 const DEFAULT_MISSION_FORM = {
@@ -132,6 +156,7 @@ const MODEL_EFFORT_OPTIONS = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
+  { value: "xhigh", label: "X High" },
 ];
 const CODE_EXECUTION_MEMORY_OPTIONS = [
   { value: "1g", label: "1 GB" },
@@ -175,6 +200,8 @@ const ROUTE_MODEL_OPTIONS = [
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
   "codex",
   "claude-sonnet-4.5",
   "claude-opus-4.1",
@@ -186,7 +213,7 @@ const MODEL_QUICK_PRESETS = [
     id: "coding_fast",
     label: "Coding Fast",
     provider: "openai",
-    model: "gpt-5.4-mini",
+    model: "gpt-5.3-codex",
     effort: "medium",
   },
   {
@@ -211,10 +238,39 @@ const MODEL_QUICK_PRESETS = [
     effort: "low",
   },
 ];
+const MAX_CHAT_SESSION_COUNT = 120;
 const DEFAULT_MEMORY_POLICY = {
   missionScoped: true,
   projectScoped: true,
   includeInFollowUps: true,
+};
+const DEFAULT_OPENAI_CODEX_OAUTH_FLOW = {
+  open: false,
+  sessionId: "",
+  method: "",
+  authUrl: "",
+  callbackPort: 0,
+  relayUrl: "",
+  relayToken: "",
+  helperCommand: "",
+  verificationUrl: "",
+  userCode: "",
+  callback: "",
+  status: "idle",
+  message: "",
+  output: "",
+};
+const DEFAULT_MINIMAX_OAUTH_FLOW = {
+  open: false,
+  sessionId: "",
+  method: "",
+  region: "global",
+  verificationUrl: "",
+  userCode: "",
+  command: "",
+  status: "idle",
+  message: "",
+  output: "",
 };
 const DEFAULT_TASK_FORM = {
   name: "",
@@ -338,8 +394,10 @@ function buildDefaultRoutePlan(routeOverrides) {
           model:
             match.model ||
             (role === "planner" ? "gpt-5.5" : role === "executor" ? "gpt-5.4-mini" : "gpt-5.5"),
-          effort:
+          effort: normalizeRouteEffort(
             match.effort || (role === "planner" ? "high" : role === "executor" ? "medium" : "medium"),
+            "medium",
+          ),
         },
       ];
     }),
@@ -756,6 +814,9 @@ function detectRouteModel(prompt) {
 
 function detectRouteEffort(prompt, fallback = "medium") {
   const normalized = String(prompt || "").toLowerCase();
+  if (normalized.includes("x high") || normalized.includes("xhigh") || normalized.includes("extra high")) {
+    return "xhigh";
+  }
   if (normalized.includes("high reasoning") || normalized.includes("high effort")) {
     return "high";
   }
@@ -998,6 +1059,10 @@ function canAttemptWebBackend() {
   if (webBackendBaseUrl()) {
     return true;
   }
+  const protocol = String(globalThis.window?.location?.protocol || "").toLowerCase();
+  if (protocol === "http:" || protocol === "https:") {
+    return true;
+  }
   const host = String(globalThis.window?.location?.hostname || "").toLowerCase();
   return ["localhost", "127.0.0.1", "::1"].includes(host);
 }
@@ -1028,6 +1093,10 @@ function loadStoredJson(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function normalizeStoredIdList(items) {
+  return Array.isArray(items) ? [...new Set(items.map(item => String(item || "").trim()).filter(Boolean))] : [];
 }
 
 function copyTextValue(text) {
@@ -1159,6 +1228,51 @@ function callBackendWithFallback(command, payload = undefined, fallback = null, 
       window.clearTimeout(timeoutId);
     }
   });
+}
+
+function waitMs(delayMs) {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, Math.max(0, Number(delayMs) || 0));
+  });
+}
+
+function isRetryableBackendError(error) {
+  const message = String(error || "").toLowerCase();
+  if (!message) {
+    return false;
+  }
+  return (
+    message.includes("networkerror") ||
+    message.includes("failed to fetch") ||
+    message.includes("attempting to fetch resource") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("http 5")
+  );
+}
+
+async function callBackendWithRetry(
+  command,
+  payload = undefined,
+  { attempts = 3, baseDelayMs = 280, maxDelayMs = 1800 } = {},
+) {
+  let lastError = null;
+  for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
+    try {
+      return await callBackend(command, payload, { throwOnError: true });
+    } catch (error) {
+      lastError = error;
+      const canRetry = attempt < attempts - 1 && isRetryableBackendError(error);
+      if (!canRetry) {
+        throw error;
+      }
+      const wait = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+      await waitMs(wait);
+    }
+  }
+  throw lastError || new Error(`${command} failed after retries.`);
 }
 
 function useToastQueue() {
@@ -1752,12 +1866,15 @@ function moveOrderedId(orderIds, draggedId, targetId) {
 function saveableRouteOverrides(routeOverrides) {
   return asList(routeOverrides)
     .filter(item => item?.model?.trim())
-    .map(item => ({
-      role: item.role,
-      provider: item.provider,
-      model: item.model.trim(),
-      ...(item.effort && item.effort !== "default" ? { effort: item.effort } : {}),
-    }));
+    .map(item => {
+      const effort = normalizeRouteEffort(item.effort, "default");
+      return {
+        role: item.role,
+        provider: item.provider,
+        model: item.model.trim(),
+        ...(effort !== "default" ? { effort } : {}),
+      };
+    });
 }
 
 function updateRouteOverride(routeOverrides, role, patch) {
@@ -1766,9 +1883,74 @@ function updateRouteOverride(routeOverrides, role, patch) {
       ? {
           ...item,
           ...patch,
+          ...(Object.prototype.hasOwnProperty.call(patch, "effort")
+            ? { effort: normalizeRouteEffort(patch.effort, "default") }
+            : {}),
         }
       : item,
   );
+}
+
+function normalizeRouteEffort(value, fallback = "default") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[_\s-]+/g, "");
+  if (!normalized) {
+    return fallback;
+  }
+  if (["default", "balanced", "normal", "standard"].includes(normalized)) {
+    return "default";
+  }
+  if (["low", "minimal", "min"].includes(normalized)) {
+    return "low";
+  }
+  if (["medium", "med", "mid"].includes(normalized)) {
+    return "medium";
+  }
+  if (["high"].includes(normalized)) {
+    return "high";
+  }
+  if (["xhigh", "extrahigh", "veryhigh", "max", "highest"].includes(normalized)) {
+    return "xhigh";
+  }
+  return fallback;
+}
+
+function routeEffortLabel(value, fallback = "default") {
+  const normalized = normalizeRouteEffort(value, fallback);
+  const option = MODEL_EFFORT_OPTIONS.find(item => item.value === normalized);
+  return option?.label || titleizeToken(normalized);
+}
+
+function authModesForRouteProfile(profile, providerPresence = {}) {
+  const nextProfile = {
+    ...profile,
+    openaiCodexAuthMode: normalizeOpenAICodexAuthMode(profile?.openaiCodexAuthMode),
+    minimaxAuthMode: normalizeMiniMaxAuthMode(profile?.minimaxAuthMode),
+  };
+  const routes = saveableRouteOverrides(nextProfile.routeOverrides);
+  const providers = new Set(routes.map(item => String(item.provider || "").toLowerCase()));
+  const usesOpenAI = providers.has("openai") || providers.has("openai-codex");
+  const usesMiniMax =
+    providers.has("minimax") ||
+    providers.has("minimax-cn") ||
+    providers.has("minimax-portal");
+
+  if (usesOpenAI && nextProfile.openaiCodexAuthMode === "none") {
+    if (providerPresence.openai) {
+      nextProfile.openaiCodexAuthMode = "api";
+    } else if (providerPresence["openai-codex"]) {
+      nextProfile.openaiCodexAuthMode = "oauth";
+    }
+  }
+
+  if (usesMiniMax && nextProfile.minimaxAuthMode === "none") {
+    if (providerPresence["minimax-portal"]) {
+      nextProfile.minimaxAuthMode = "minimax-portal-oauth";
+    } else if (providerPresence.minimax || providerPresence["minimax-cn"]) {
+      nextProfile.minimaxAuthMode = "minimax-api";
+    }
+  }
+
+  return nextProfile;
 }
 
 function normalizeOpenAICodexAuthMode(value) {
@@ -1793,6 +1975,14 @@ function normalizeMiniMaxAuthMode(value) {
   return MINIMAX_AUTH_OPTIONS.some(option => option.value === normalized) ? normalized : "none";
 }
 
+function defaultNasProjectPath(value) {
+  const leaf = pathLeaf(value);
+  if (!leaf) {
+    return "/volume1/Saclay/projects/";
+  }
+  return `/volume1/Saclay/projects/${leaf.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+}
+
 function profileFormFromWorkspace(workspace, fallbackProfile) {
   const overrides = Array.isArray(workspace?.route_overrides) ? workspace.route_overrides : [];
   const existingByRole = new Map(overrides.map(item => [String(item.role || "").toLowerCase(), item]));
@@ -1805,6 +1995,12 @@ function profileFormFromWorkspace(workspace, fallbackProfile) {
     minimaxAuthMode: normalizeMiniMaxAuthMode(workspace?.minimax_auth_mode),
     commitMessageStyle: workspace?.commit_message_style || "scoped",
     executionTargetPreference: workspace?.execution_target_preference || "profile_default",
+    localProjectPath: workspace?.local_project_path || "",
+    nasProjectPath: workspace?.nas_project_path || "",
+    syncMode: workspace?.sync_mode || "manual",
+    syncDirection: workspace?.sync_direction || "bidirectional",
+    syncConflictPolicy: workspace?.sync_conflict_policy || "keep_newer_and_log",
+    autoSyncToNas: Boolean(workspace?.auto_sync_to_nas),
     routeOverrides: ROUTE_ROLE_OPTIONS.map(role => {
       const item = existingByRole.get(role) || {};
       return {
@@ -1823,6 +2019,92 @@ function createSessionEntry(entry) {
     createdAt: new Date().toISOString(),
     ...entry,
   };
+}
+
+function summarizeChatSessionTitle(seedText) {
+  const cleaned = String(seedText || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "New conversation";
+  }
+  if (isRouteMetadataText(cleaned) || /^\/[\w-]+/.test(cleaned)) {
+    return "New conversation";
+  }
+  const singleToken = cleaned.split(" ").length === 1;
+  if (singleToken && /^(codex|openclaw|hermes|tomorrow|new|chat|conversation)$/i.test(cleaned)) {
+    return "New conversation";
+  }
+  return cleaned.length > 56 ? `${cleaned.slice(0, 53).trimEnd()}...` : cleaned;
+}
+
+function isRouteMetadataText(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return false;
+  }
+  return (
+    /^(Codex|OpenClaw|Hermes|Syntelos)\s*[·•]\s*[^·•]+[·•]\s*(default|low|medium|high)$/i.test(text) ||
+    /^(Codex|OpenClaw|Hermes|Syntelos)\s+chat$/i.test(text) ||
+    /^chat:(openclaw|codex|hermes):/i.test(text)
+  );
+}
+
+function normalizeChatSessions(payload) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+  const seen = new Set();
+  const rows = [];
+  for (const item of payload) {
+    const id = String(item?.id || "").trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    rows.push({
+      id,
+      workspaceId: String(item?.workspaceId || "").trim(),
+      title: summarizeChatSessionTitle(String(item?.title || "").trim()),
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+      updatedAt: String(item?.updatedAt || item?.createdAt || new Date().toISOString()),
+      lastPreview: String(item?.lastPreview || "").trim()
+        ? summarizeChatSessionTitle(String(item?.lastPreview || "").trim())
+        : "",
+    });
+  }
+  return rows
+    .sort((left, right) => timeValue(right.updatedAt) - timeValue(left.updatedAt))
+    .slice(0, MAX_CHAT_SESSION_COUNT);
+}
+
+function buildChatSession(workspaceId, seedText = "") {
+  const now = new Date().toISOString();
+  return {
+    id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    workspaceId: String(workspaceId || "").trim(),
+    title: summarizeChatSessionTitle(seedText),
+    createdAt: now,
+    updatedAt: now,
+    lastPreview: summarizeChatSessionTitle(seedText),
+  };
+}
+
+function parseWorkspaceSyncStatus(workspacePayload) {
+  const goalEntries = asList(workspacePayload?.goals);
+  for (const entry of goalEntries) {
+    const raw = String(entry || "").trim();
+    if (!raw.startsWith("sync_status:")) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(raw.slice("sync_status:".length));
+      return payload && typeof payload === "object" ? payload : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function deltaDetail(row) {
@@ -2105,11 +2387,21 @@ function inferSurfaceFromAction(action) {
   return "setup";
 }
 
-export function FluxioShellApp({ reportUiAction = () => {} }) {
+export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const storedUiMode = searchParams.get("mode") || localStorage.getItem(STORAGE_KEYS.uiMode) || "agent";
   const storedChatId = localStorage.getItem(STORAGE_KEYS.telegramChatId) || "";
   const storedPreviewMode = resolveInitialPreviewMode(searchParams);
+  const allowFixturePreviewModes =
+    hasTauriBackend() ||
+    Boolean(import.meta.env?.DEV && searchParams.get("preview-control") === "1");
+  const previewModeOptions = useMemo(
+    () =>
+      allowFixturePreviewModes
+        ? FIXTURE_OPTIONS
+        : FIXTURE_OPTIONS.filter(option => option.id === "live"),
+    [allowFixturePreviewModes],
+  );
   const storedLiveSyncSeconds = localStorage.getItem(STORAGE_KEYS.liveSyncSeconds) || "off";
   const storedCodeExecutionEnabled =
     localStorage.getItem(STORAGE_KEYS.codeExecutionEnabled) === "true";
@@ -2122,6 +2414,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const storedSplitViewEnabled = localStorage.getItem(STORAGE_KEYS.splitViewEnabled) === "true";
   const storedSplitMissionId = localStorage.getItem(STORAGE_KEYS.splitMissionId) || "";
   const storedLocalTasks = loadStoredJson(STORAGE_KEYS.localTasks, []);
+  const storedDeletedLocalTaskIds = normalizeStoredIdList(
+    loadStoredJson(STORAGE_KEYS.deletedLocalTaskIds, []),
+  );
+  const deletedLocalTaskIdSet = new Set(storedDeletedLocalTaskIds);
   const storedMemoryPolicy = loadStoredJson(STORAGE_KEYS.memoryPolicy, DEFAULT_MEMORY_POLICY);
   const storedMemoryStore = loadStoredJson(STORAGE_KEYS.memoryStore, {
     workspace: {},
@@ -2129,6 +2425,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   });
   const storedDebugEvents = loadStoredJson(STORAGE_KEYS.debugEvents, []);
   const storedControlRoomSnapshot = loadStoredJson(STORAGE_KEYS.controlRoomSnapshot, null);
+  const storedChatSessions = normalizeChatSessions(
+    loadStoredJson(STORAGE_KEYS.chatSessions, []),
+  );
+  const storedActiveChatSessionId =
+    localStorage.getItem(STORAGE_KEYS.activeChatSessionId) || "";
+  const storedOpenAICodexOAuthFlow = {
+    ...DEFAULT_OPENAI_CODEX_OAUTH_FLOW,
+    ...loadStoredJson(STORAGE_KEYS.openAICodexOAuthFlow, {}),
+  };
+  if (storedOpenAICodexOAuthFlow.sessionId && storedOpenAICodexOAuthFlow.status !== "connected") {
+    storedOpenAICodexOAuthFlow.open = true;
+  }
   const storedCodexImportSnapshot = normalizeCodexImportSnapshot(
     loadStoredJson(STORAGE_KEYS.codexImportSnapshot, DEFAULT_CODEX_IMPORT_SNAPSHOT),
   );
@@ -2176,7 +2484,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [codexImportSnapshot, setCodexImportSnapshot] = useState(storedCodexImportSnapshot);
   const [codexImportRefreshing, setCodexImportRefreshing] = useState(false);
   const [previewMode, setPreviewMode] = useState(
-    FIXTURE_OPTIONS.some(option => option.id === storedPreviewMode) ? storedPreviewMode : "live",
+    previewModeOptions.some(option => option.id === storedPreviewMode) ? storedPreviewMode : "live",
   );
   const [liveSyncSeconds, setLiveSyncSeconds] = useState(
     LIVE_SYNC_OPTIONS.some(option => option.value === storedLiveSyncSeconds)
@@ -2185,9 +2493,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
   const [selectedMissionId, setSelectedMissionId] = useState(null);
+  const [chatSessions, setChatSessions] = useState(storedChatSessions);
+  const [activeChatSessionId, setActiveChatSessionId] = useState(
+    storedActiveChatSessionId || storedChatSessions[0]?.id || "",
+  );
   const [showWorkspaceDialog, setShowWorkspaceDialog] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
   const [showEscalationDialog, setShowEscalationDialog] = useState(false);
+  const [workspaceBrowser, setWorkspaceBrowser] = useState(DEFAULT_WORKSPACE_BROWSER_STATE);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_FORM);
   const [missionForm, setMissionForm] = useState(DEFAULT_MISSION_FORM);
   const [workspaceProfileForm, setWorkspaceProfileForm] = useState(
@@ -2204,6 +2517,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     Object.fromEntries(PROVIDER_SECRET_OPTIONS.map(item => [item.id, ""])),
   );
   const [providerSecretSaving, setProviderSecretSaving] = useState({});
+  const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
+  const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
   const [codeExecutionMemory, setCodeExecutionMemory] = useState(
     CODE_EXECUTION_MEMORY_OPTIONS.some(option => option.value === storedCodeExecutionMemory)
@@ -2219,6 +2534,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [operatorNotes, setOperatorNotes] = useState(storedUiState.operatorNotes || []);
   const [liveControlEvents, setLiveControlEvents] = useState(storedUiState.liveControlEvents || []);
   const [operatorAttachments, setOperatorAttachments] = useState([]);
+  const [activeCommentTarget, setActiveCommentTarget] = useState(null);
   const [agentRouteRole, setAgentRouteRole] = useState("executor");
   const [agentRuntimeFocus, setAgentRuntimeFocus] = useState("all");
   const [showThinkingTrace, setShowThinkingTrace] = useState(true);
@@ -2239,8 +2555,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const [splitMissionId, setSplitMissionId] = useState(storedSplitMissionId);
   const [dragState, setDragState] = useState({ kind: "", id: "" });
   const [localTasks, setLocalTasks] = useState(
-    Array.isArray(storedLocalTasks) ? storedLocalTasks : [],
+    Array.isArray(storedLocalTasks)
+      ? storedLocalTasks.filter(item => item?.id && !deletedLocalTaskIdSet.has(String(item.id)))
+      : [],
   );
+  const [deletedLocalTaskIds, setDeletedLocalTaskIds] = useState(storedDeletedLocalTaskIds);
   const [taskForm, setTaskForm] = useState(DEFAULT_TASK_FORM);
   const [taskTriggerToken, setTaskTriggerToken] = useState("");
   const [proofWrapEnabled, setProofWrapEnabled] = useState(true);
@@ -2281,6 +2600,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const queuedRefreshReasonRef = useRef("");
   const codexImportPromiseRef = useRef(null);
   const authPromptedRef = useRef(false);
+  const oauthSessionCheckedRef = useRef(false);
   const studioAssistantPendingRef = useRef(null);
   const { items: toasts, push: pushToast } = useToastQueue();
 
@@ -2292,6 +2612,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -2318,8 +2639,66 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [surface, uiMode]);
 
   useEffect(() => {
+    if (!previewModeOptions.some(option => option.id === previewMode)) {
+      setPreviewMode("live");
+    }
+  }, [previewMode, previewModeOptions]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.previewMode, previewMode);
   }, [previewMode]);
+
+  useEffect(() => {
+    if (oauthSessionCheckedRef.current || previewMode !== "live" || !hasCommandBackend()) {
+      return;
+    }
+    oauthSessionCheckedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await callBackend(
+          "get_openai_codex_oauth_session_command",
+          undefined,
+          { throwOnError: true },
+        );
+        if (cancelled) {
+          return;
+        }
+        if (status?.active && status?.sessionId) {
+          setOpenAICodexOAuthFlow(current => ({
+            ...DEFAULT_OPENAI_CODEX_OAUTH_FLOW,
+            ...current,
+            open: true,
+            sessionId: current.sessionId || status.sessionId,
+            method: current.method || status.method || "",
+            authUrl: current.authUrl || status.authUrl || status.verificationUrl || "",
+            callbackPort: current.callbackPort || status.callbackPort || 0,
+            relayUrl: current.relayUrl || status.relayUrl || "",
+            relayToken: current.relayToken || status.relayToken || "",
+            helperCommand: current.helperCommand || status.helperCommand || "",
+            verificationUrl: current.verificationUrl || status.verificationUrl || status.authUrl || "",
+            userCode: current.userCode || status.userCode || "",
+            status: current.status === "idle" ? "waiting" : current.status,
+            message:
+              current.message ||
+              "Recovered the active OpenAI Codex auth session from the NAS.",
+          }));
+        } else if (openAICodexOAuthFlow.sessionId) {
+          setOpenAICodexOAuthFlow({
+            ...DEFAULT_OPENAI_CODEX_OAUTH_FLOW,
+            open: true,
+            status: "error",
+            message: "The previous OpenAI Codex OAuth session expired. Start Codex OAuth again.",
+          });
+        }
+      } catch {
+        return;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [openAICodexOAuthFlow.sessionId, previewMode]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.liveSyncSeconds, liveSyncSeconds);
@@ -2365,8 +2744,39 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [missionOrder]);
 
   useEffect(() => {
+    localStorage.setItem(
+      STORAGE_KEYS.chatSessions,
+      JSON.stringify(normalizeChatSessions(chatSessions)),
+    );
+  }, [chatSessions]);
+
+  useEffect(() => {
+    if (!activeChatSessionId) {
+      localStorage.removeItem(STORAGE_KEYS.activeChatSessionId);
+      return;
+    }
+    localStorage.setItem(STORAGE_KEYS.activeChatSessionId, activeChatSessionId);
+  }, [activeChatSessionId]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.localTasks, JSON.stringify(localTasks));
   }, [localTasks]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.deletedLocalTaskIds, JSON.stringify(deletedLocalTaskIds));
+  }, [deletedLocalTaskIds]);
+
+  useEffect(() => {
+    if (
+      openAICodexOAuthFlow.status === "connected" ||
+      openAICodexOAuthFlow.status === "idle" ||
+      !openAICodexOAuthFlow.sessionId
+    ) {
+      localStorage.removeItem(STORAGE_KEYS.openAICodexOAuthFlow);
+      return;
+    }
+    localStorage.setItem(STORAGE_KEYS.openAICodexOAuthFlow, JSON.stringify(openAICodexOAuthFlow));
+  }, [openAICodexOAuthFlow]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.memoryPolicy, JSON.stringify(memoryPolicy));
@@ -2522,6 +2932,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       setIsRefreshing(true);
       try {
         if (previewMode !== "live") {
+          if (!allowFixturePreviewModes) {
+            setPreviewMode("live");
+            return;
+          }
           const fixturePayload = buildFixtureSnapshot(previewMode);
           if (!fixturePayload) {
             setPreviewMode("live");
@@ -2545,23 +2959,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         }
 
         if (!hasCommandBackend()) {
-          const fallbackPayload = buildFixtureSnapshot("live_review");
           setData(current => ({
             ...current,
-            snapshot: fallbackPayload.snapshot,
-            onboarding: fallbackPayload.onboarding,
-            pendingApprovals: fallbackPayload.pendingApprovals,
-            pendingQuestions: fallbackPayload.pendingQuestions,
-            telegramReady: fallbackPayload.telegramReady,
-            previewMeta: {
-              id: "fallback",
-              name: "Local Fallback",
-              description:
-                "Tauri backend is unavailable, so Syntelos is showing a local supervision fixture.",
-            },
+            snapshot: null,
+            onboarding: current.onboarding || null,
+            pendingApprovals: [],
+            pendingQuestions: [],
+            telegramReady: false,
+            previewMeta: null,
             openClawStatus: null,
             openClawHasToken: false,
             openClawMessages: [],
+            providerSecretPresence: {},
           }));
           setCodexImportSnapshot(DEFAULT_CODEX_IMPORT_SNAPSHOT);
           return;
@@ -2632,28 +3041,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           setLastPushReason(reason);
         }
       } catch (error) {
-        if (!hasTauriBackend()) {
-          const fallbackPayload = buildFixtureSnapshot("live_review");
-          setData(current => ({
-            ...current,
-            snapshot: fallbackPayload.snapshot,
-            onboarding: fallbackPayload.onboarding,
-            pendingApprovals: fallbackPayload.pendingApprovals,
-            pendingQuestions: fallbackPayload.pendingQuestions,
-            telegramReady: fallbackPayload.telegramReady,
-            previewMeta: {
-              id: "fallback",
-              name: "Local Fallback",
-              description:
-                "Syntelos web backend is unavailable, so the website is showing a local supervision fixture.",
-            },
-            openClawStatus: null,
-            openClawHasToken: false,
-            openClawMessages: [],
-            providerSecretPresence: {},
-          }));
-          setCodexImportSnapshot(DEFAULT_CODEX_IMPORT_SNAPSHOT);
-        }
+        setData(current => ({
+          ...current,
+          previewMeta: null,
+          openClawStatus: null,
+          openClawHasToken: false,
+          openClawMessages: [],
+          providerSecretPresence: {},
+        }));
         pushToast(`Refresh failed: ${error}`, "error");
       } finally {
         if (mountedRef.current) {
@@ -2661,7 +3056,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         }
       }
     },
-    [markAction, previewMode, pushToast, refreshCodexImportSnapshot],
+    [allowFixturePreviewModes, markAction, previewMode, pushToast, refreshCodexImportSnapshot],
   );
 
   const refreshAll = useCallback(
@@ -2706,12 +3101,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   useEffect(() => {
     const missions = data.snapshot?.missions || [];
-    setSelectedMissionId(current =>
-      missions.some(item => item.mission_id === current)
+    setSelectedMissionId(current => {
+      if (activeChatSessionId) {
+        return null;
+      }
+      return missions.some(item => item.mission_id === current)
         ? current
-        : missions[missions.length - 1]?.mission_id || null,
-    );
-  }, [data.snapshot]);
+        : missions[missions.length - 1]?.mission_id || null;
+    });
+  }, [activeChatSessionId, data.snapshot]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -2860,12 +3258,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     };
   }, [previewMode, refreshAll]);
 
-  const snapshot = data.snapshot || {};
-  const onboarding = data.onboarding || snapshot.onboarding || {};
-  const setupHealth = snapshot.setupHealth || onboarding.setupHealth || {};
-  const workspaces = snapshot.workspaces || [];
-  const missions = snapshot.missions || [];
-  const inboxItems = snapshot.inbox || [];
+  const snapshot = data.snapshot || EMPTY_OBJECT;
+  const onboarding = data.onboarding || snapshot.onboarding || EMPTY_OBJECT;
+  const setupHealth = snapshot.setupHealth || onboarding.setupHealth || EMPTY_OBJECT;
+  const workspaces = Array.isArray(snapshot.workspaces) ? snapshot.workspaces : EMPTY_ARRAY;
+  const missions = Array.isArray(snapshot.missions) ? snapshot.missions : EMPTY_ARRAY;
+  const inboxItems = Array.isArray(snapshot.inbox) ? snapshot.inbox : EMPTY_ARRAY;
   const initialLiveSnapshotPending =
     previewMode === "live" && data.snapshot === null && data.previewMeta === null;
 
@@ -2946,7 +3344,57 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
   }, [selectedWorkspaceId, workspaces]);
 
+  const activeChatSession = useMemo(
+    () =>
+      chatSessions.find(item => item.id === activeChatSessionId) || null,
+    [activeChatSessionId, chatSessions],
+  );
+
   useEffect(() => {
+    const workspaceIds = new Set(workspaces.map(item => item.workspace_id));
+    setChatSessions(current => {
+      const next = normalizeChatSessions(
+        current.filter(item => !item.workspaceId || workspaceIds.has(item.workspaceId)),
+      );
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [workspaces]);
+
+  useEffect(() => {
+    if (!activeChatSessionId) {
+      return;
+    }
+    if (!chatSessions.some(item => item.id === activeChatSessionId)) {
+      setActiveChatSessionId("");
+    }
+  }, [activeChatSessionId, chatSessions]);
+
+  useEffect(() => {
+    if (!activeChatSession?.workspaceId) {
+      return;
+    }
+    if (selectedWorkspaceId !== activeChatSession.workspaceId) {
+      setSelectedWorkspaceId(activeChatSession.workspaceId);
+    }
+  }, [activeChatSession?.workspaceId, selectedWorkspaceId]);
+
+  useEffect(() => {
+    if (!selectedMissionId || !activeChatSessionId) {
+      return;
+    }
+    setActiveChatSessionId("");
+  }, [activeChatSessionId, selectedMissionId]);
+
+  useEffect(() => {
+    const hasActiveChat =
+      Boolean(activeChatSessionId) &&
+      chatSessions.some(item => item.id === activeChatSessionId);
+    if (hasActiveChat) {
+      if (selectedMissionId !== null) {
+        setSelectedMissionId(null);
+      }
+      return;
+    }
     if (missionOptions.length === 0) {
       if (selectedMissionId !== null) {
         setSelectedMissionId(null);
@@ -2956,7 +3404,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     if (!selectedMissionId || !missionOptions.some(item => item.mission_id === selectedMissionId)) {
       setSelectedMissionId(missionOptions[0].mission_id);
     }
-  }, [missionOptions, selectedMissionId]);
+  }, [activeChatSessionId, chatSessions, missionOptions, selectedMissionId]);
 
   useEffect(() => {
     const liveIds = workspaces.map(item => item.workspace_id);
@@ -3195,15 +3643,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [pushToast, runWorkspaceAction],
   );
 
-  const saveWorkspacePolicy = useCallback(async formOverride => {
+  const saveWorkspacePolicy = useCallback(async (formOverride, options = {}) => {
+    const { suppressSuccessToast = false, retryAttempts = 3 } = options || {};
     markAction("submit:workspace-policy");
     if (!workspace) {
       pushToast("Select a workspace first.", "warn");
-      return;
+      return false;
     }
     if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot save workspace policy.", "warn");
-      return;
+      return false;
     }
 
     try {
@@ -3213,7 +3662,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         openaiCodexAuthMode: normalizeOpenAICodexAuthMode(nextProfile.openaiCodexAuthMode),
         minimaxAuthMode: normalizeMiniMaxAuthMode(nextProfile.minimaxAuthMode),
       };
-      await callBackend(
+      await callBackendWithRetry(
         "save_workspace_profile_command",
         {
           payload: {
@@ -3231,15 +3680,25 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             minimaxAuthMode: normalizedProfile.minimaxAuthMode,
             commitMessageStyle: normalizedProfile.commitMessageStyle,
             executionTargetPreference: normalizedProfile.executionTargetPreference,
+            localProjectPath: normalizedProfile.localProjectPath,
+            nasProjectPath: normalizedProfile.nasProjectPath,
+            syncMode: normalizedProfile.syncMode,
+            syncDirection: normalizedProfile.syncDirection,
+            syncConflictPolicy: normalizedProfile.syncConflictPolicy,
+            autoSyncToNas: Boolean(normalizedProfile.autoSyncToNas),
           },
         },
-        { throwOnError: true },
+        { attempts: Math.max(1, Number(retryAttempts) || 1) },
       );
       setWorkspaceProfileForm(normalizedProfile);
-      pushToast("Workspace policy saved.", "info");
+      if (!suppressSuccessToast) {
+        pushToast("Workspace policy saved.", "info");
+      }
       await refreshAll("workspace-policy-save");
+      return true;
     } catch (error) {
       pushToast(`Workspace policy save failed: ${error}`, "error");
+      return false;
     }
   }, [markAction, previewMode, pushToast, refreshAll, workspace, workspaceProfileForm]);
 
@@ -3260,7 +3719,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
 
       try {
-        await callBackend(
+        const response = await callBackend(
           "save_workspace_profile_command",
           {
             payload: {
@@ -3278,6 +3737,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               minimaxAuthMode: normalizeMiniMaxAuthMode(workspaceProfileForm.minimaxAuthMode),
               commitMessageStyle: workspaceProfileForm.commitMessageStyle,
               executionTargetPreference: workspaceProfileForm.executionTargetPreference,
+              localProjectPath: workspaceProfileForm.localProjectPath,
+              nasProjectPath: workspaceProfileForm.nasProjectPath,
+              syncMode: workspaceProfileForm.syncMode,
+              syncDirection: workspaceProfileForm.syncDirection,
+              syncConflictPolicy: workspaceProfileForm.syncConflictPolicy,
+              autoSyncToNas: Boolean(workspaceProfileForm.autoSyncToNas),
             },
           },
           { throwOnError: true },
@@ -3310,8 +3775,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Route controls are staged in preview mode.", "info");
       return;
     }
-    await saveWorkspacePolicy();
-  }, [agentRouteRole, markAction, previewMode, pushToast, saveWorkspacePolicy, workspace]);
+    const nextProfile = authModesForRouteProfile(
+      workspaceProfileForm,
+      data.providerSecretPresence || {},
+    );
+    await saveWorkspacePolicy(nextProfile);
+  }, [agentRouteRole, data.providerSecretPresence, markAction, previewMode, pushToast, saveWorkspacePolicy, workspace, workspaceProfileForm]);
 
   const copyContextValue = useCallback(
     async value => {
@@ -3594,13 +4063,15 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       event.preventDefault();
       markAction("submit:workspace");
       if (!workspaceForm.name.trim() || !workspaceForm.path.trim()) {
-        pushToast("Workspace name and path are required.", "warn");
+        pushToast("Project name and folder path are required.", "warn");
         return;
       }
 
       if (previewMode !== "live" || !hasCommandBackend()) {
-        pushToast("Preview mode cannot save workspaces.", "warn");
-        setShowWorkspaceDialog(false);
+        pushToast(
+          "Switch to Live Backend before saving this project. Preview mode is read-only.",
+          "warn",
+        );
         return;
       }
 
@@ -3615,20 +4086,150 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               path: workspaceForm.path.trim(),
               defaultRuntime: workspaceForm.defaultRuntime,
               userProfile: workspaceForm.userProfile,
+              localProjectPath: (workspaceForm.localProjectPath || workspaceForm.path).trim(),
+              nasProjectPath: workspaceForm.nasProjectPath.trim(),
+              syncMode: workspaceForm.syncMode,
+              syncDirection: workspaceForm.syncDirection,
+              syncConflictPolicy: workspaceForm.syncConflictPolicy,
+              autoSyncToNas: Boolean(workspaceForm.autoSyncToNas),
             },
           },
           { throwOnError: true },
         );
-        pushToast("Workspace saved.", "info");
+        const syncStatus = parseWorkspaceSyncStatus(response?.workspace);
+        let savedMessage = "Project saved.";
+        if (syncStatus?.detectedBothWithFiles && syncStatus?.effectiveDirection === "bidirectional") {
+          savedMessage =
+            "Project saved. Existing NAS and computer copies were auto-reconciled bidirectionally.";
+        } else if (syncStatus?.reason === "detected_nas_primary_synced") {
+          savedMessage = "Project saved. NAS copy was detected first and synced back to your computer.";
+        } else if (syncStatus?.reason === "detected_local_primary_synced") {
+          savedMessage = "Project saved. Computer copy was synced to NAS.";
+        }
+        pushToast(savedMessage, "info");
         setShowWorkspaceDialog(false);
         setWorkspaceForm(DEFAULT_WORKSPACE_FORM);
         await refreshAll("workspace-save");
       } catch (error) {
-        pushToast(`Workspace save failed: ${error}`, "error");
+        pushToast(`Project save failed: ${error}`, "error");
       }
     },
     [markAction, previewMode, pushToast, refreshAll, workspaceForm],
   );
+
+  const applyWorkspaceFolderSelection = useCallback(selectedPath => {
+    const normalizedPath = String(selectedPath || "").trim();
+    if (!normalizedPath) {
+      return null;
+    }
+    setWorkspaceForm(current => ({
+      ...current,
+      path: normalizedPath,
+      name: current.name || pathLeaf(normalizedPath),
+      localProjectPath: current.localProjectPath || normalizedPath,
+      nasProjectPath: current.nasProjectPath || defaultNasProjectPath(normalizedPath),
+    }));
+    setShowWorkspaceDialog(true);
+    return normalizedPath;
+  }, []);
+
+  const loadWorkspaceBrowserDirectory = useCallback(async requestedPath => {
+    setWorkspaceBrowser(current => ({
+      ...current,
+      loading: true,
+      error: "",
+    }));
+    try {
+      const response = await callBackend(
+        "list_workspace_directory_command",
+        requestedPath ? { path: requestedPath } : undefined,
+        { throwOnError: true },
+      );
+      const entries = Array.isArray(response?.entries)
+        ? response.entries
+            .map(item => ({
+              name: String(item?.name || ""),
+              path: String(item?.path || ""),
+              isDirectory: Boolean(item?.isDirectory),
+            }))
+            .filter(item => item.name && item.path)
+        : [];
+      const roots = Array.isArray(response?.roots)
+        ? response.roots
+            .map(item => String(item || "").trim())
+            .filter(Boolean)
+        : [];
+      setWorkspaceBrowser(current => ({
+        ...current,
+        loading: false,
+        error: "",
+        currentPath: String(response?.currentPath || requestedPath || ""),
+        parentPath: String(response?.parentPath || ""),
+        roots,
+        entries,
+      }));
+      return response;
+    } catch (error) {
+      setWorkspaceBrowser(current => ({
+        ...current,
+        loading: false,
+        error: String(error || "Could not list folders."),
+      }));
+      throw error;
+    }
+  }, []);
+
+  const closeWorkspaceBrowser = useCallback(() => {
+    setWorkspaceBrowser(current => ({
+      ...current,
+      open: false,
+      loading: false,
+      error: "",
+    }));
+  }, []);
+
+  const openWorkspaceBrowser = useCallback(
+    async requestedPath => {
+      if (previewMode !== "live" || !hasCommandBackend()) {
+        pushToast("Preview mode cannot open folder browsing.", "warn");
+        return;
+      }
+      setWorkspaceBrowser(current => ({
+        ...current,
+        open: true,
+        error: "",
+      }));
+      try {
+        await loadWorkspaceBrowserDirectory(requestedPath);
+      } catch (error) {
+        pushToast(`Folder browsing failed: ${error}`, "error");
+      }
+    },
+    [loadWorkspaceBrowserDirectory, previewMode, pushToast],
+  );
+
+  const handleWorkspaceBrowserNavigate = useCallback(
+    async targetPath => {
+      const normalizedPath = String(targetPath || "").trim();
+      if (!normalizedPath || workspaceBrowser.loading) {
+        return;
+      }
+      try {
+        await loadWorkspaceBrowserDirectory(normalizedPath);
+      } catch {
+        return;
+      }
+    },
+    [loadWorkspaceBrowserDirectory, workspaceBrowser.loading],
+  );
+
+  const handleWorkspaceBrowserUseCurrent = useCallback(() => {
+    if (!workspaceBrowser.currentPath) {
+      return;
+    }
+    applyWorkspaceFolderSelection(workspaceBrowser.currentPath);
+    closeWorkspaceBrowser();
+  }, [applyWorkspaceFolderSelection, closeWorkspaceBrowser, workspaceBrowser.currentPath]);
 
   const handleReferencePickWorkspaceFolder = useCallback(async () => {
     markAction("reference:workspace-folder");
@@ -3636,32 +4237,33 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("Preview mode cannot open the folder picker.", "warn");
       return null;
     }
+    if (!hasTauriBackend()) {
+      await openWorkspaceBrowser(workspaceForm.path);
+      return null;
+    }
     try {
       const pickedPath = await callBackend("pick_folder_command", undefined, {
         throwOnError: true,
       });
-      const normalizedPath = String(pickedPath || "").trim();
-      if (!normalizedPath) {
-        return null;
-      }
-      setWorkspaceForm(current => ({
-        ...current,
-        path: normalizedPath,
-        name: current.name || pathLeaf(normalizedPath),
-      }));
-      setShowWorkspaceDialog(true);
-      return normalizedPath;
+      return applyWorkspaceFolderSelection(pickedPath);
     } catch (error) {
       pushToast(`Folder picker failed: ${error}`, "error");
       return null;
     }
-  }, [markAction, previewMode, pushToast]);
+  }, [
+    applyWorkspaceFolderSelection,
+    markAction,
+    openWorkspaceBrowser,
+    previewMode,
+    pushToast,
+    workspaceForm.path,
+  ]);
 
   const importWorkspaceFromPath = useCallback(
     async ({ path, name, defaultRuntime }) => {
       const safePath = String(path || "").trim();
       if (!safePath) {
-        pushToast("Workspace path is required.", "warn");
+        pushToast("Project folder path is required.", "warn");
         return false;
       }
       if (previewMode !== "live" || !hasCommandBackend()) {
@@ -3679,6 +4281,12 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               path: safePath,
               defaultRuntime: defaultRuntime || workspace?.default_runtime || missionForm.runtime || "openclaw",
               userProfile: workspaceProfileForm.userProfile,
+              localProjectPath: safePath,
+              nasProjectPath: defaultNasProjectPath(safePath),
+              syncMode: "auto_nas_mirror",
+              syncDirection: "bidirectional",
+              syncConflictPolicy: "keep_newer_and_log",
+              autoSyncToNas: false,
             },
           },
           { throwOnError: true },
@@ -3761,16 +4369,39 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           0,
           Number.parseInt(String(missionForm.relativeStopMinutes || "").trim(), 10) || 0,
         );
+        const missionTargetsSelectedWorkspace =
+          Boolean(workspace?.workspace_id) &&
+          workspace.workspace_id === missionForm.workspaceId;
+        const nextProfile = authModesForRouteProfile(
+          workspaceProfileForm,
+          data.providerSecretPresence || {},
+        );
+        const baselineRouteOverrides = missionTargetsSelectedWorkspace
+          ? saveableRouteOverrides(nextProfile.routeOverrides)
+          : [];
         const selectedRouteModel = String(missionForm.model || "").trim();
         const missionRouteOverrides = selectedRouteModel
           ? ROUTE_ROLE_OPTIONS.map(role => ({
               role,
               provider: missionForm.modelProvider || "openai",
               model: selectedRouteModel,
-              effort: missionForm.modelEffort || "medium",
+              effort: normalizeRouteEffort(missionForm.modelEffort, "medium"),
             }))
-          : [];
-        await callBackend(
+          : baselineRouteOverrides;
+        let workspacePolicySaved = true;
+        if (workspace && missionTargetsSelectedWorkspace) {
+          workspacePolicySaved = await saveWorkspacePolicy(nextProfile, {
+            suppressSuccessToast: true,
+            retryAttempts: 3,
+          });
+          if (!workspacePolicySaved) {
+            pushToast(
+              "Workspace policy save failed; mission launch will continue using the in-memory route overrides.",
+              "warn",
+            );
+          }
+        }
+        await callBackendWithRetry(
           "start_control_room_mission_command",
           {
             payload: {
@@ -3794,9 +4425,14 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               codeExecutionRequired: false,
             },
           },
-          { throwOnError: true },
+          { attempts: 3 },
         );
-        pushToast("Mission launched.", "info");
+        pushToast(
+          workspacePolicySaved
+            ? "Mission launched."
+            : "Mission launched with route overrides while workspace-policy save is pending.",
+          "info",
+        );
         setShowMissionDialog(false);
         setMissionForm(DEFAULT_MISSION_FORM);
         await refreshAll("mission-start");
@@ -3807,12 +4443,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     [
       codeExecutionEnabled,
       codeExecutionMemory,
+      data.providerSecretPresence,
       markAction,
       missionForm,
       previewMode,
       pushToast,
       refreshAll,
+      saveWorkspacePolicy,
       telegramChatId,
+      workspace,
+      workspaceProfileForm,
     ],
   );
 
@@ -3907,12 +4547,126 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     setActiveDrawer("proof");
   }, [markAction, openMissionDialog, runMissionAction, viewModel.topBar.primaryAction]);
 
-  const appendOperatorEntry = useCallback(
-    entry => {
-      setOperatorNotes(current => [createSessionEntry(entry), ...current]);
+  const createChatSessionForWorkspace = useCallback(
+    ({ workspaceId = "", seedText = "", focus = true } = {}) => {
+      const resolvedWorkspaceId =
+        String(workspaceId || "").trim() ||
+        selectedWorkspaceId ||
+        workspace?.workspace_id ||
+        workspaces[0]?.workspace_id ||
+        "";
+      const created = buildChatSession(resolvedWorkspaceId, seedText);
+      setChatSessions(current => normalizeChatSessions([created, ...current]));
+      if (focus) {
+        setActiveChatSessionId(created.id);
+        setSelectedMissionId(null);
+      }
+      return created;
+    },
+    [selectedWorkspaceId, workspace?.workspace_id, workspaces],
+  );
+
+  const ensureActiveChatSession = useCallback(
+    ({ seedText = "", workspaceId = "" } = {}) => {
+      const resolvedWorkspaceId =
+        String(workspaceId || "").trim() ||
+        selectedWorkspaceId ||
+        workspace?.workspace_id ||
+        workspaces[0]?.workspace_id ||
+        "";
+      const current =
+        activeChatSessionId &&
+        chatSessions.find(item => item.id === activeChatSessionId);
+      if (
+        current &&
+        (!resolvedWorkspaceId ||
+          !current.workspaceId ||
+          current.workspaceId === resolvedWorkspaceId)
+      ) {
+        return current;
+      }
+      const existing = chatSessions.find(
+        item =>
+          !resolvedWorkspaceId ||
+          item.workspaceId === resolvedWorkspaceId,
+      );
+      if (existing) {
+        setActiveChatSessionId(existing.id);
+        return existing;
+      }
+      return createChatSessionForWorkspace({
+        workspaceId: resolvedWorkspaceId,
+        seedText,
+        focus: true,
+      });
+    },
+    [
+      activeChatSessionId,
+      chatSessions,
+      createChatSessionForWorkspace,
+      selectedWorkspaceId,
+      workspace?.workspace_id,
+      workspaces,
+    ],
+  );
+
+  const touchChatSession = useCallback(
+    (sessionId, text = "") => {
+      if (!sessionId) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const preview = summarizeChatSessionTitle(text);
+      setChatSessions(current =>
+        normalizeChatSessions(
+          current.map(item =>
+            item.id === sessionId
+              ? {
+                  ...item,
+                  title:
+                    item.title === "New conversation" && text
+                      ? summarizeChatSessionTitle(text)
+                      : item.title,
+                  updatedAt: now,
+                  lastPreview: preview || item.lastPreview || "",
+                }
+              : item,
+          ),
+        ),
+      );
     },
     [],
   );
+
+  const appendOperatorEntry = useCallback(
+    entry => {
+      const nextEntry = { ...entry };
+      if (nextEntry.channel === "chat" && !nextEntry.sessionId) {
+        const session = ensureActiveChatSession({ seedText: nextEntry.title || nextEntry.detail || "" });
+        if (session?.id) {
+          nextEntry.sessionId = session.id;
+        }
+      }
+      const created = createSessionEntry(nextEntry);
+      setOperatorNotes(current => [created, ...current]);
+      return created;
+    },
+    [ensureActiveChatSession],
+  );
+
+  const updateOperatorEntry = useCallback((entryId, updater) => {
+    if (!entryId) {
+      return;
+    }
+    setOperatorNotes(current =>
+      current.map(item => {
+        if (item.id !== entryId) {
+          return item;
+        }
+        return typeof updater === "function" ? updater(item) : { ...item, ...updater };
+      }),
+    );
+  }, []);
 
   const clearOperatorAttachments = useCallback(() => {
     setOperatorAttachments([]);
@@ -4005,10 +4759,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return false;
       }
       try {
-        await callBackend(
+        await callBackendWithRetry(
           "send_control_room_mission_follow_up_command",
           { payload: { missionId: mission.mission_id, message: prompt, root: null } },
-          { throwOnError: true },
+          { attempts: 3 },
         );
         appendOperatorEntry({
           title: `Task executed (${source})`,
@@ -4098,6 +4852,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, []);
 
   const removeTask = useCallback(taskId => {
+    const deletedId = String(taskId || "").trim();
+    if (deletedId) {
+      setDeletedLocalTaskIds(current => [...new Set([...current, deletedId])].slice(-MAX_TASK_LOG));
+    }
     setLocalTasks(current => current.filter(item => item.id !== taskId));
   }, []);
 
@@ -4265,6 +5023,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     }
 
     markAction("composer:send-follow-up");
+    let commentEntry = null;
     try {
       const steeringLines = [];
       if (mission && agentRuntimeFocus !== "all") {
@@ -4304,7 +5063,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         const activeRuleRoute = activeRuleSet.routePlan?.[agentRouteRole];
         if (activeRuleRoute?.model) {
           steeringLines.push(
-            `Rule-set route for ${titleizeToken(agentRouteRole)}: ${titleizeToken(activeRuleRoute.provider || "openai")} / ${activeRuleRoute.model}${activeRuleRoute.effort ? ` / ${activeRuleRoute.effort}` : ""}.`,
+            `Rule-set route for ${titleizeToken(agentRouteRole)}: ${titleizeToken(activeRuleRoute.provider || "openai")} / ${activeRuleRoute.model}${activeRuleRoute.effort ? ` / ${routeEffortLabel(activeRuleRoute.effort, "medium")}` : ""}.`,
           );
         }
         if (asList(activeRuleSet.requiresApproval).length > 0) {
@@ -4355,7 +5114,24 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       if (attachmentLines.length > 0) {
         composedFollowUpParts.push(`Attachments:\n${attachmentLines.join("\n")}`);
       }
+      if (activeCommentTarget?.title) {
+        composedFollowUpParts.unshift(
+          `Live UI comment target: ${activeCommentTarget.kind || "message"} "${activeCommentTarget.title}".`,
+        );
+      }
       const composedFollowUp = composedFollowUpParts.filter(Boolean).join("\n\n");
+      commentEntry = appendOperatorEntry({
+        title: followUp,
+        detail: activeCommentTarget?.title
+          ? `Target: ${activeCommentTarget.title}`
+          : "Live mission comment",
+        meta: "Sending to mission",
+        tone: "neutral",
+        channel: "comment",
+        role: "operator",
+        pending: true,
+        target: activeCommentTarget || null,
+      });
       const hasActiveDelegatedRuntime = asList(mission?.delegated_runtime_sessions).some(session =>
         ["waiting_for_approval", "running", "launching"].includes(
           String(session?.status || "").trim().toLowerCase(),
@@ -4378,10 +5154,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           pushToast(`OpenClaw live send failed, keeping the follow-up in mission thread: ${error}`, "warn");
         }
       }
-      await callBackend(
+      await callBackendWithRetry(
         "send_control_room_mission_follow_up_command",
         { payload: { missionId: mission.mission_id, message: composedFollowUp, root: null } },
-        { throwOnError: true },
+        { attempts: 3 },
       );
       setMemoryStore(current => ({
         ...current,
@@ -4397,13 +5173,31 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           : current.workspace,
       }));
       setOperatorDraft("");
+      setActiveCommentTarget(null);
       clearOperatorAttachments();
+      updateOperatorEntry(commentEntry.id, current => ({
+        ...current,
+        meta: sentLive ? "Sent live and recorded" : "Recorded in mission thread",
+        tone: "good",
+        pending: false,
+      }));
       pushToast(sentLive ? "Follow-up sent live and recorded in the mission thread." : "Follow-up recorded in the mission thread.", "info");
       void refreshAll("mission-follow-up");
     } catch (error) {
+      if (commentEntry?.id) {
+        updateOperatorEntry(commentEntry.id, current => ({
+          ...current,
+          meta: "Send failed",
+          tone: "bad",
+          pending: false,
+          detail: `${current.detail || ""}\n\n${String(error)}`.trim(),
+        }));
+      }
       pushToast(`Mission follow-up failed: ${error}`, "error");
     }
   }, [
+    activeCommentTarget,
+    appendOperatorEntry,
     codeExecutionEnabled,
     codeExecutionMemory,
     agentRouteRole,
@@ -4426,6 +5220,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     workspaceProfileForm.routeOverrides,
     mission?.effectiveRouteContract?.roles,
     clearOperatorAttachments,
+    updateOperatorEntry,
   ]);
 
   const handleOpenClawConnect = useCallback(async () => {
@@ -4874,10 +5669,29 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         role: agentRouteRole,
         provider: explicit.provider || effective.provider || "openai",
         model: explicit.model || effective.model || "",
-        effort: explicit.effort || effective.effort || "default",
+        effort: normalizeRouteEffort(explicit.effort || effective.effort, "default"),
       };
     },
     [agentRouteRole, effectiveRouteRows, workspaceProfileForm.routeOverrides],
+  );
+  const referenceRouteByRole = useMemo(
+    () =>
+      Object.fromEntries(
+        ROUTE_ROLE_OPTIONS.map(role => {
+          const explicit = workspaceProfileForm.routeOverrides.find(item => item.role === role) || {};
+          const effective = effectiveRouteRows.find(item => item.role === role) || {};
+          return [
+            role,
+            {
+              role,
+              provider: explicit.provider || effective.provider || "openai",
+              model: explicit.model || effective.model || "",
+              effort: normalizeRouteEffort(explicit.effort || effective.effort, "default"),
+            },
+          ];
+        }),
+      ),
+    [effectiveRouteRows, workspaceProfileForm.routeOverrides],
   );
   const activeEffectiveRoute = useMemo(
     () =>
@@ -4885,7 +5699,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         role: agentRouteRole,
         provider: selectedAgentRoute.provider,
         model: selectedAgentRoute.model,
-        effort: selectedAgentRoute.effort,
+        effort: normalizeRouteEffort(selectedAgentRoute.effort, "default"),
       },
     [
       agentRouteRole,
@@ -5095,18 +5909,23 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     };
 
     for (const note of operatorNotes) {
+      const noteTitle = note.title || note.detail || "";
+      const noteDetail =
+        note.detail && note.detail !== note.title && !isRouteMetadataText(note.detail)
+          ? note.detail
+          : "";
       pushTurn({
         id: `operator-${note.id}`,
         dedupeKey: `operator:${note.id}`,
         role: "operator",
         roleIcon: "◉",
         label: note.channel === "followup" ? "Follow-up sent" : "Operator note",
-        title: note.detail,
-        detail: note.meta,
+        title: noteTitle,
+        detail: noteDetail,
         meta: timestampLabel(note.createdAt),
         timestampRaw: note.createdAt,
         tone: note.tone || "neutral",
-        chatPreferred: note.channel === "followup",
+        chatPreferred: note.channel === "followup" || note.channel === "chat",
       });
     }
 
@@ -5297,8 +6116,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               : "",
           technicalSummary: processMessage ? "Thinking trace" : "",
           processMessage,
-          chatPreferred: processMessage && !isRuntimeRouteMetaKind(event.kind),
-          traceOnly: !processMessage || isRuntimeRouteMetaKind(event.kind),
+          chatPreferred: false,
+          traceOnly: true,
           emphasis:
             processMessage ||
             phaseEntered ||
@@ -5403,7 +6222,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         tone: message.tone || "neutral",
         processMessage: true,
         emphasis: true,
-        chatPreferred: true,
+        traceOnly: true,
+        chatPreferred: false,
       });
     }
 
@@ -5477,6 +6297,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         if (item.traceOnly) {
           return false;
         }
+        if (item.processMessage && item.role !== "operator") {
+          return false;
+        }
         if (item.chatPreferred) {
           return true;
         }
@@ -5516,12 +6339,19 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   }, [agentTraceTurns, pinnedNexusIds]);
   const agentHasTurns = agentConversationTurns.length > 0;
   const agentIdleState = !mission ? "no-mission" : agentHasTurns ? "active" : "no-turns";
+  const chatConversationActive = Boolean(activeChatSessionId);
   const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Syntelos workspace";
-  const agentComposerLabel = !mission ? "Mission prompt" : "Follow-up or note";
+  const agentComposerLabel = !mission
+    ? chatConversationActive
+      ? "Chat message"
+      : "Mission prompt"
+    : "Follow-up or note";
   const agentComposerPlaceholder = !mission
-    ? workspaces.length > 0
-      ? "Describe the next mission you want Syntelos to run."
-      : "Add a workspace, then describe the next mission you want Syntelos to run."
+    ? chatConversationActive
+      ? "Send a message in this conversation. Switch run mode to Mission for tracked execution."
+      : workspaces.length > 0
+        ? "Describe the next mission you want Syntelos to run."
+        : "Add a workspace, then describe the next mission you want Syntelos to run."
     : openClawRuntimeActive
       ? "Send a direct follow-up to the runtime, or keep a local operator note."
       : viewModel.thread.composerPlaceholder;
@@ -5533,6 +6363,203 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     openMissionDialog();
   }, [openMissionDialog, workspaces.length]);
   const agentRuntimeSelectValue = mission ? agentRuntimeFocus : missionForm.runtime;
+  const handleAgentIdleChat = useCallback(async () => {
+    const text = operatorDraft.trim();
+    if (!text) {
+      pushToast("Write a message first.", "warn");
+      return;
+    }
+    markAction("composer:local-chat");
+    const chatRole = mission ? agentRouteRole : "executor";
+    const explicitRoute =
+      workspaceProfileForm.routeOverrides.find(item => item.role === chatRole) || {};
+    const effectiveRoute =
+      effectiveRouteRows.find(item => item.role === chatRole) || {};
+    const route = {
+      role: chatRole,
+      provider:
+        explicitRoute.provider ||
+        effectiveRoute.provider ||
+        selectedAgentRoute.provider ||
+        activeEffectiveRoute.provider ||
+        "openai",
+      model:
+        explicitRoute.model ||
+        effectiveRoute.model ||
+        selectedAgentRoute.model ||
+        activeEffectiveRoute.model ||
+        "",
+      effort: normalizeRouteEffort(
+        explicitRoute.effort ||
+          effectiveRoute.effort ||
+          selectedAgentRoute.effort ||
+          activeEffectiveRoute.effort,
+        "medium",
+      ),
+    };
+    const activeSession = ensureActiveChatSession({
+      seedText: text,
+      workspaceId: workspace?.workspace_id || selectedWorkspaceId || "",
+    });
+    const activeSessionId = activeSession?.id || "";
+    const runtime = agentRuntimeSelectValue === "all" ? workspace?.default_runtime || missionForm.runtime || "openclaw" : agentRuntimeSelectValue;
+    const workspaceId = workspace?.workspace_id || selectedWorkspaceId || workspaces[0]?.workspace_id || "";
+    const workspacePath = workspace?.root_path || workspaces[0]?.root_path || "";
+    const chatHistory = operatorNotes
+      .filter(
+        item =>
+          item.channel === "chat" &&
+          !item.pending &&
+          (activeSessionId ? item.sessionId === activeSessionId : true),
+      )
+      .slice(0, 8)
+      .reverse()
+      .map(item => ({
+        role: item.role === "assistant" ? "assistant" : "user",
+        text: item.title || item.detail || "",
+      }))
+      .filter(item => item.text);
+    const activeRuleSet =
+      findStudioItem(referenceStudio, "rule", referenceStudio.activeRuleSetId) ||
+      findStudioItem(referenceStudio, "rule", referenceStudio.selectedRuleId);
+    const activeSkills = asList(referenceStudio.activeSkillIds)
+      .map(skillId => findStudioItem(referenceStudio, "skill", skillId))
+      .filter(Boolean)
+      .slice(0, 2);
+    const systemContextLines = [
+      workspace?.name ? `Workspace: ${workspace.name}.` : "",
+      workspacePath ? `Workspace path: ${workspacePath}.` : "",
+      activeRuleSet?.name ? `Active rule set: ${activeRuleSet.name}.` : "",
+      activeRuleSet?.description ? `Rule set intent: ${activeRuleSet.description}` : "",
+      asList(activeRuleSet?.requiresApproval).length
+        ? `Approval-sensitive actions: ${asList(activeRuleSet.requiresApproval).slice(0, 4).join(", ")}.`
+        : "",
+      activeSkills.length ? `Active skills: ${activeSkills.map(item => item.name).join(", ")}.` : "",
+      "Use normal chat behavior: answer directly, do not expose routing metadata unless the user asks.",
+    ].filter(Boolean);
+    appendOperatorEntry({
+      title: text,
+      detail: "",
+      meta: `${titleizeToken(runtime)} chat`,
+      tone: "neutral",
+      channel: "chat",
+      sessionId: activeSessionId || undefined,
+    });
+    touchChatSession(activeSessionId, text);
+    const pendingReply = appendOperatorEntry({
+      title: "Thinking...",
+      detail: `Routing to ${titleizeToken(runtime)} with ${route.model || titleizeToken(route.provider)} for a real model reply.`,
+      meta: "Syntelos",
+      tone: "neutral",
+      channel: "chat",
+      role: "assistant",
+      pending: true,
+      sessionId: activeSessionId || undefined,
+      technicalDetail: `chat:${runtime}:${route.provider}/${route.model || "default"}:${route.effort || "medium"}`,
+    });
+    setOperatorDraft("");
+    clearOperatorAttachments();
+    setAgentScene("run");
+    if (previewMode !== "live" || !hasCommandBackend()) {
+      updateOperatorEntry(pendingReply.id, current => ({
+        ...current,
+        title: "Live backend is required for real chat.",
+        detail: "Switch to the NAS/live backend before sending model-backed chat turns.",
+        meta: "Not sent",
+        tone: "warn",
+        pending: false,
+      }));
+      return;
+    }
+    try {
+      const result = await callBackendWithRetry(
+        "send_agent_chat_command",
+        {
+          payload: {
+            message: text,
+            runtime,
+            route,
+            workspaceId,
+            workspacePath,
+            history: chatHistory,
+            sessionId: activeSessionId || `syntelos-chat-${workspaceId || "workspace"}`,
+            systemContext: systemContextLines.join("\n"),
+          },
+        },
+        { attempts: 2 },
+      );
+      const reply = String(result?.reply || "").trim();
+      touchChatSession(activeSessionId, reply || text);
+      updateOperatorEntry(pendingReply.id, current => ({
+        ...current,
+        title: reply || "The runtime finished without a readable reply.",
+        detail: result?.route
+          ? `${titleizeToken(result.runtime || runtime)} · ${result.route.model_id || result.route.model || "default"} · ${routeEffortLabel(result.route.effort, "medium")}`
+          : "",
+        meta: timestampLabel(new Date().toISOString()),
+        tone: reply ? "neutral" : "warn",
+        pending: false,
+      }));
+    } catch (error) {
+      updateOperatorEntry(pendingReply.id, current => ({
+        ...current,
+        title: "The runtime could not answer this chat turn.",
+        detail: String(error),
+        meta: "Runtime error",
+        tone: "bad",
+        pending: false,
+      }));
+      pushToast(`Chat runtime failed: ${error}`, "error");
+    }
+  }, [
+    activeEffectiveRoute.effort,
+    activeEffectiveRoute.model,
+    activeEffectiveRoute.provider,
+    agentRouteRole,
+    agentRuntimeSelectValue,
+    appendOperatorEntry,
+    clearOperatorAttachments,
+    ensureActiveChatSession,
+    markAction,
+    missionForm.runtime,
+    operatorDraft,
+    operatorNotes,
+    previewMode,
+    pushToast,
+    referenceStudio,
+    selectedAgentRoute.effort,
+    selectedAgentRoute.model,
+    selectedAgentRoute.provider,
+    selectedAgentRoute.role,
+    selectedWorkspaceId,
+    touchChatSession,
+    updateOperatorEntry,
+    effectiveRouteRows,
+    workspace?.default_runtime,
+    workspace?.root_path,
+    workspace?.workspace_id,
+    workspaceProfileForm.routeOverrides,
+    workspaces,
+  ]);
+  const handleAgentIdleSubmit = useCallback(() => {
+    if (workspaces.length === 0) {
+      setShowWorkspaceDialog(true);
+      return;
+    }
+    const text = operatorDraft.trim();
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    const looksLikeChat =
+      !text ||
+      wordCount <= 10 ||
+      /^[?!.]*hello[?!.]*$/i.test(text) ||
+      /^(hi|hey|hello|thanks|thank you|ok|okay)\b/i.test(text) ||
+      /\?$/.test(text);
+    if (looksLikeChat) {
+      handleAgentIdleChat();
+      return;
+    }
+    handleAgentIdlePrimaryAction();
+  }, [handleAgentIdleChat, handleAgentIdlePrimaryAction, operatorDraft, workspaces.length]);
   const agentRuntimeHint = !mission
     ? "Choose the runtime for the next mission launch."
     : agentRuntimeFocus === "all"
@@ -5541,8 +6568,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const agentCyclePhase =
     mission?.missionLoop?.currentCyclePhase || mission?.state?.current_cycle_phase || "plan";
   const agentCycleRole = phaseRouteRole(agentCyclePhase);
+  useEffect(() => {
+    if (!mission?.mission_id) {
+      return;
+    }
+    if (agentRouteRole !== agentCycleRole) {
+      setAgentRouteRole(agentCycleRole);
+    }
+  }, [agentCycleRole, agentRouteRole, mission?.mission_id]);
   const agentRouteStatus = `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "Profile default"} · ${
-    activeEffectiveRoute.effort || selectedAgentRoute.effort || "default"
+    routeEffortLabel(activeEffectiveRoute.effort || selectedAgentRoute.effort, "default")
   }`;
   const activeDelegatedRuntimeLane = useMemo(
     () =>
@@ -5611,9 +6646,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   );
   const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
   const providerOAuthActionsAvailable =
-    previewMode === "live" && hasCommandBackend() && hasTauriBackend();
+    previewMode === "live" && hasCommandBackend();
   const providerOAuthUnavailableReason = !hasTauriBackend()
-    ? "Model OAuth account setup requires the desktop credential service (Tauri)."
+    ? "Use Live backend mode on the web/NAS app before starting model OAuth."
     : "Switch to Live backend mode before starting model OAuth.";
   const localhostStatus =
     snapshot?.localhostStatus && typeof snapshot.localhostStatus === "object"
@@ -5629,8 +6664,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     activeEffectiveRoute.model || selectedAgentRoute.model
       ? `${activeEffectiveRoute.model || selectedAgentRoute.model}`
       : `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} default`;
-  const selectedEffortLabel = titleizeToken(
-    activeEffectiveRoute.effort || selectedAgentRoute.effort || "medium",
+  const selectedEffortLabel = routeEffortLabel(
+    activeEffectiveRoute.effort || selectedAgentRoute.effort,
+    "medium",
   );
   const currentProjectLabel = mission?.title || workspace?.name || "SaaS Landing Page";
   const referenceRuntimeStatus =
@@ -5645,6 +6681,45 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       { label: "Capabilities", value: capabilities > 0 ? String(capabilities) : "Pending" },
     ];
   }, [referenceRuntimeStatus]);
+  const referenceRouteControls = useMemo(
+    () => ({
+      role: agentRouteRole,
+      selectedRoute: selectedAgentRoute,
+      routeByRole: referenceRouteByRole,
+      routeOptions: {
+        roles: ROUTE_ROLE_OPTIONS,
+        providers: MODEL_PROVIDER_OPTIONS,
+        models: ROUTE_MODEL_OPTIONS,
+        efforts: MODEL_EFFORT_OPTIONS,
+      },
+      actionMode: "auto",
+      actionModes: [],
+      onRoleChange: setAgentRouteRole,
+      onFieldChange: handleAgentRouteFieldChange,
+      onRoleFieldChange: (role, field, value) => {
+        setAgentRouteRole(role);
+        setWorkspaceProfileForm(current => ({
+          ...current,
+          routeOverrides: updateRouteOverride(current.routeOverrides, role, {
+            [field]: value,
+          }),
+        }));
+      },
+      onSave: handleAgentRouteSave,
+      codeExecutionEnabled,
+      codeExecutionMemory,
+      onToggleCodeExecution: () => setCodeExecutionEnabled(current => !current),
+    }),
+    [
+      agentRouteRole,
+      codeExecutionEnabled,
+      codeExecutionMemory,
+      handleAgentRouteFieldChange,
+      handleAgentRouteSave,
+      referenceRouteByRole,
+      selectedAgentRoute,
+    ],
+  );
   const referenceMissionLoop = mission?.missionLoop || null;
   const referenceSlashCommands = useMemo(() => {
     const runtimeScoped = agentRuntimeSelectValue === "hermes" ? HERMES_SLASH_COMMANDS : OPENCLAW_SLASH_COMMANDS;
@@ -5680,11 +6755,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
   const referenceSidebarProjectId =
     selectedWorkspaceId || workspace?.workspace_id || workspaces[0]?.workspace_id || "";
   const referenceFavoriteFlows = useMemo(
-    () =>
-      missionOptions
+    () => {
+      const missionFavorites = missionOptions
         .slice()
         .sort((left, right) => timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left)))
-        .slice(0, 2)
         .map(item => ({
           id: item.mission_id,
           title: item.title || item.objective || "Mission",
@@ -5694,13 +6768,40 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               : item.state?.status === "needs_approval"
                 ? "warn"
                 : "violet",
-        })),
-    [missionOptions],
+          updatedAt: deriveMissionLatestTimestamp(item),
+        }));
+      const chatFavorites = chatSessions
+        .slice()
+        .sort((left, right) => timeValue(right.updatedAt) - timeValue(left.updatedAt))
+        .map(item => ({
+          id: `chat:${item.id}`,
+          title: item.title || "Chat conversation",
+          tone: "neutral",
+          updatedAt: item.updatedAt,
+        }));
+      return [...chatFavorites, ...missionFavorites]
+        .sort((left, right) => timeValue(right.updatedAt) - timeValue(left.updatedAt))
+        .slice(0, 2);
+    },
+    [chatSessions, missionOptions],
   );
   const referenceProjectGroups = useMemo(
     () =>
       workspaces.map(item => {
-        const flows = missionOptions
+        const chatFlows = chatSessions
+          .filter(chatRow => chatRow.workspaceId === item.workspace_id)
+          .slice()
+          .sort((left, right) => timeValue(right.updatedAt) - timeValue(left.updatedAt))
+          .map((chatRow, index) => ({
+            id: `chat:${chatRow.id}`,
+            title: chatRow.title || "Conversation",
+            status: "Chat",
+            statusTone: "good",
+            updated: timestampLabel(chatRow.updatedAt) || (index === 0 ? "Just now" : ""),
+            selected: chatRow.id === activeChatSessionId,
+            kind: "chat",
+          }));
+        const missionFlows = missionOptions
           .filter(missionRow => missionRow.workspace_id === item.workspace_id)
           .slice()
           .sort((left, right) => timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left)))
@@ -5711,7 +6812,9 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             statusTone: missionStatusTone(missionRow.state?.status),
             updated: timestampLabel(deriveMissionLatestTimestamp(missionRow)) || (index === 0 ? "Just now" : ""),
             selected: missionRow.mission_id === selectedMissionId,
+            kind: "mission",
           }));
+        const flows = [...chatFlows, ...missionFlows];
         return {
           id: item.workspace_id,
           title: item.name,
@@ -5721,17 +6824,67 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           hasMore: flows.length > 5,
         };
       }),
-    [missionOptions, referenceSidebarProjectId, selectedMissionId, workspaces],
+    [
+      activeChatSessionId,
+      chatSessions,
+      missionOptions,
+      referenceSidebarProjectId,
+      selectedMissionId,
+      workspaces,
+    ],
   );
   const referenceAgentMessages = useMemo(
-    () =>
-      agentConversationTurns.slice(-8).map(item => ({
+    () => {
+      const scopedChatSessionId = activeChatSession?.id || "";
+      const localChatMessages = operatorNotes
+        .filter(
+          item =>
+            item.channel === "chat" &&
+            (!scopedChatSessionId || item.sessionId === scopedChatSessionId),
+        )
+        .slice(0, 8)
+        .reverse()
+        .map(item => {
+          const rawDetail = item.detail && item.detail !== item.title ? item.detail : "";
+          const routeDetail = isRouteMetadataText(rawDetail) || isRouteMetadataText(item.meta);
+          return {
+            id: item.id,
+            role: item.role === "assistant" ? "assistant" : "user",
+            label: item.role === "assistant" ? "Syntelos Agent" : "You",
+            title: item.title || rawDetail || "Message",
+            detail: routeDetail ? "" : rawDetail,
+            meta: routeDetail ? timestampLabel(item.createdAt) : item.meta || timestampLabel(item.createdAt),
+            tone: item.tone || "neutral",
+            pending: Boolean(item.pending),
+            technicalDetail: item.technicalDetail || "",
+            chips:
+              item.role === "assistant" && routeDetail && item.meta
+                ? [String(item.meta).replace(/\s+/g, " ").trim()]
+                : [],
+          };
+        });
+      const liveCommentMessages = operatorNotes
+        .filter(item => item.channel === "comment")
+        .slice(0, 5)
+        .reverse()
+        .map(item => ({
+          id: item.id,
+          role: "user",
+          label: "You",
+          title: item.title || item.detail || "Comment",
+          detail: item.detail && item.detail !== item.title ? item.detail : "",
+          meta: item.meta || timestampLabel(item.createdAt),
+          tone: item.tone || "neutral",
+          pending: Boolean(item.pending),
+          chips: item.target?.title ? [`Comment: ${item.target.title}`] : ["Live comment"],
+        }));
+      const missionMessages = agentConversationTurns.slice(-8).map(item => ({
         id: item.id,
         role: item.role === "operator" ? "user" : "assistant",
         label: item.label || item.roleLabel || (item.role === "operator" ? "You" : "Syntelos Agent"),
         title: item.title || item.detail || "Update",
         detail:
-          item.role === "operator"
+          item.role === "operator" || isRouteMetadataText(item.detail)
             ? ""
             : item.detail && item.detail !== item.title
               ? item.detail
@@ -5739,8 +6892,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         meta: item.meta || timestampLabel(item.timestampRaw),
         tone: item.tone || "neutral",
         chips: asList(item.chips).slice(0, 3),
-      })),
-    [agentConversationTurns],
+      }));
+      return [...localChatMessages, ...missionMessages, ...liveCommentMessages].slice(-12);
+    },
+    [activeChatSession?.id, agentConversationTurns, operatorNotes],
   );
   const referenceFeedbackItems = useMemo(() => {
     const seededMessages = referenceAgentMessages.slice(-3).map(item => ({
@@ -5751,15 +6906,18 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       meta: item.meta || "",
       tone: item.tone,
     }));
-    const noteItems = operatorNotes.slice(0, 3).map(item => ({
+    const noteItems = operatorNotes
+      .filter(item => item.channel === "note" || item.channel === "comment")
+      .slice(0, 5)
+      .map(item => ({
       id: `note-${item.id}`,
-      role: item.channel === "note" ? "note" : "user",
-      author: item.channel === "note" ? "Note" : "You",
-      body: item.detail,
+      role: item.channel === "note" ? "note" : "comment",
+      author: item.channel === "note" ? "Note" : item.pending ? "Sending comment" : "Live comment",
+      body: item.channel === "comment" ? item.title : item.detail,
       meta: item.meta || timestampLabel(item.createdAt),
       tone: item.tone || "neutral",
     }));
-    return [...seededMessages, ...noteItems].slice(0, 4);
+    return [...noteItems, ...seededMessages].slice(0, 6);
   }, [operatorNotes, referenceAgentMessages]);
   const referenceTimelineMoments = useMemo(
     () =>
@@ -5913,6 +7071,25 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleReferenceHistory = useCallback(() => {
     markAction("reference:history");
+    if (referenceAgentMessages.length > 0) {
+      setSurface("agent");
+      setAgentScene("run");
+      pushToast("Showing the latest chat and mission history.", "info");
+      return;
+    }
+    const latestChat = chatSessions
+      .slice()
+      .sort((left, right) => timeValue(right.updatedAt) - timeValue(left.updatedAt))[0];
+    if (latestChat?.id) {
+      setSurface("agent");
+      setAgentScene("run");
+      setActiveChatSessionId(latestChat.id);
+      setSelectedMissionId(null);
+      if (latestChat.workspaceId) {
+        setSelectedWorkspaceId(latestChat.workspaceId);
+      }
+      return;
+    }
     const latestMission = missionOptions[0];
     if (latestMission?.mission_id) {
       setSurface("agent");
@@ -5921,7 +7098,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       return;
     }
     pushToast("No mission history is available yet.", "info");
-  }, [markAction, missionOptions, pushToast]);
+  }, [chatSessions, markAction, missionOptions, pushToast, referenceAgentMessages.length]);
 
   const handleReferenceMore = useCallback(() => {
     markAction("reference:more");
@@ -5944,8 +7121,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       }
       markAction(`reference:workspace:${workspaceId}`);
       setSelectedWorkspaceId(workspaceId);
+      if (activeChatSession?.workspaceId && activeChatSession.workspaceId !== workspaceId) {
+        setActiveChatSessionId("");
+      }
     },
-    [markAction],
+    [activeChatSession?.workspaceId, markAction],
   );
 
   const handleReferenceMissionSelect = useCallback(
@@ -5954,6 +7134,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
       markAction(`reference:mission:${missionId}`);
+      setActiveChatSessionId("");
       setSelectedMissionId(missionId);
       if (nextSurface) {
         setSurface(nextSurface);
@@ -5964,6 +7145,46 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       setBuilderDetailOpen(openBuilderDetail);
     },
     [markAction, surface],
+  );
+
+  const handleReferenceFlowSelect = useCallback(
+    flowId => {
+      const normalized = String(flowId || "").trim();
+      if (!normalized) {
+        return;
+      }
+      if (normalized.startsWith("chat:")) {
+        const sessionId = normalized.slice("chat:".length).trim();
+        const session = chatSessions.find(item => item.id === sessionId);
+        if (!session) {
+          pushToast("This conversation is no longer available.", "warn");
+          return;
+        }
+        markAction(`reference:chat:${sessionId}`);
+        setActiveChatSessionId(sessionId);
+        setSelectedMissionId(null);
+        if (session.workspaceId) {
+          setSelectedWorkspaceId(session.workspaceId);
+        }
+        setSurface("agent");
+        setAgentScene("run");
+        return;
+      }
+      handleReferenceMissionSelect({
+        missionId: normalized,
+        nextSurface: "agent",
+        nextAgentScene: mission ? agentScene : "run",
+        openBuilderDetail: false,
+      });
+    },
+    [
+      agentScene,
+      chatSessions,
+      handleReferenceMissionSelect,
+      markAction,
+      mission,
+      pushToast,
+    ],
   );
 
   const handleReferenceAction = useCallback(
@@ -5982,25 +7203,52 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         return;
       }
 
-      if (normalizedAction === "flow:add-project" || normalizedAction === "builder:new-project") {
-        setSurface("builder");
+      if (normalizedAction === "flow:new-conversation") {
+        const created = createChatSessionForWorkspace({
+          workspaceId: selectedWorkspaceId || workspace?.workspace_id || "",
+          seedText: operatorDraft || "",
+          focus: true,
+        });
+        setSurface("agent");
+        setAgentScene("run");
         setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        setOperatorDraft("");
+        clearOperatorAttachments();
+        pushToast(
+          created?.title
+            ? `Conversation started: ${created.title}`
+            : "New conversation started.",
+          "info",
+        );
+        return;
+      }
+
+      if (normalizedAction === "flow:add-project" || normalizedAction === "builder:new-project") {
+        const openInBuilder = normalizedAction === "builder:new-project";
+        if (openInBuilder) {
+          setSurface("builder");
+          setBuilderDetailOpen(false);
+        } else {
+          if (surface !== "builder") {
+            setSurface("agent");
+          }
+          setBuilderDetailOpen(false);
+          setActiveDrawer(null);
+        }
         setWorkspaceForm({
           ...DEFAULT_WORKSPACE_FORM,
           defaultRuntime: workspace?.default_runtime || DEFAULT_WORKSPACE_FORM.defaultRuntime,
           userProfile: workspace?.user_profile || profileId || DEFAULT_WORKSPACE_FORM.userProfile,
         });
         setShowWorkspaceDialog(true);
-        if (previewMode !== "live") {
-          pushToast("Preview mode is read-only. Switch back to Live Backend before saving.", "warn");
-        }
         return;
       }
 
       if (normalizedAction === "flow:search") {
         setSurface("agent");
         setAgentScene(mission ? "run" : "idle");
-        pushToast("Use the project and flow lists to jump across current mission threads.", "info");
+        pushToast("Use the left project list to jump across mission threads and chat conversations.", "info");
         return;
       }
 
@@ -6081,11 +7329,39 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         const messageId = String(payload?.messageId || "");
         const message = referenceAgentMessages.find(item => item.id === messageId);
         if (message?.title) {
-          setOperatorDraft(`Comment on: ${message.title}\n`);
-          pushToast("Added a comment seed to the composer.", "info");
+          setActiveCommentTarget({
+            id: message.id,
+            kind: message.role === "user" ? "user message" : "agent message",
+            title: message.title,
+          });
+          setOperatorDraft("");
+          pushToast("Comment target pinned to the mission composer.", "info");
           return;
         }
         pushToast("No message is selected for comment.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "run:moment-comment") {
+        const momentId = String(payload?.momentId || "");
+        const moment = referenceTimelineMoments.find(item => item.id === momentId);
+        if (moment?.title) {
+          setActiveCommentTarget({
+            id: moment.id,
+            kind: "mission activity",
+            title: moment.title,
+          });
+          setOperatorDraft("");
+          pushToast("Progress item pinned to the mission composer.", "info");
+          return;
+        }
+        pushToast("No progress item is selected for comment.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "run:clear-comment-target") {
+        setActiveCommentTarget(null);
+        pushToast("Comment target cleared.", "info");
         return;
       }
 
@@ -6355,16 +7631,21 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       pushToast("This action is not available yet in the current shell.", "info");
     },
     [
+      clearOperatorAttachments,
+      createChatSessionForWorkspace,
       handleAgentFollowUp,
       handleAgentIdlePrimaryAction,
       handleReferenceMissionSelect,
       markAction,
+      mission,
+      operatorDraft,
       previewMode,
       profileId,
       pushToast,
       refreshAll,
       referenceAgentMessages,
       referenceFeedbackItems,
+      referenceTimelineMoments,
       runWorkspaceActionSpec,
       workspace?.default_runtime,
       workspace?.name,
@@ -6373,6 +7654,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       workspaceProfileForm.routeOverrides,
       workspaces,
       selectedWorkspaceId,
+      surface,
     ],
   );
 
@@ -6402,10 +7684,35 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
   const handleReferenceInsertSlashCommand = useCallback(
     command => {
-      markAction(`reference:slash:${command}`);
-      setOperatorDraft(`${String(command || "").trim()} `);
+      const normalized = String(command || "").trim();
+      markAction(`reference:slash:${normalized}`);
+      if (normalized === "/new") {
+        const created = createChatSessionForWorkspace({
+          workspaceId: selectedWorkspaceId || workspace?.workspace_id || "",
+          focus: true,
+        });
+        setSurface("agent");
+        setAgentScene("run");
+        setOperatorDraft("");
+        clearOperatorAttachments();
+        pushToast(
+          created?.title
+            ? `Conversation started: ${created.title}`
+            : "New conversation started.",
+          "info",
+        );
+        return;
+      }
+      setOperatorDraft(`${normalized} `);
     },
-    [markAction],
+    [
+      clearOperatorAttachments,
+      createChatSessionForWorkspace,
+      markAction,
+      pushToast,
+      selectedWorkspaceId,
+      workspace?.workspace_id,
+    ],
   );
 
   const referenceStudioKind = referenceStudio.collectionTab === "rule" ? "rule" : "skill";
@@ -6802,6 +8109,11 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           pushToast(providerOAuthUnavailableReason, "warn");
           return;
         }
+        if (openAICodexOAuthFlow.sessionId && ["waiting", "error"].includes(openAICodexOAuthFlow.status)) {
+          setOpenAICodexOAuthFlow(current => ({ ...current, open: true }));
+          pushToast("Finish the pending OpenAI Codex OAuth session in the Syntelos panel.", "info");
+          return;
+        }
         try {
           const result = await callBackend(
             "start_openai_codex_oauth_command",
@@ -6810,19 +8122,26 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           );
           let finalResult = result;
           if (result?.status === "manual_required") {
-            const pastedCallback = window.prompt(
-              `${result.message || "Paste the final OpenAI redirect URL to finish sign-in."}\n\nAuth URL:\n${result.authUrl || ""}`,
-              "",
-            );
-            if (!pastedCallback) {
-              pushToast("OpenAI Codex OAuth is waiting for manual completion.", "warn");
-              return;
-            }
-            finalResult = await callBackend(
-              "complete_openai_codex_oauth_command",
-              { payload: { callback: pastedCallback } },
-              { throwOnError: true },
-            );
+            setOpenAICodexOAuthFlow({
+              open: true,
+              sessionId: result.sessionId || "",
+              method: result.method || "",
+              authUrl: result.authUrl || "",
+              callbackPort: result.callbackPort || 0,
+              relayUrl: result.relayUrl || "",
+              relayToken: result.relayToken || "",
+              helperCommand: result.helperCommand || "",
+              verificationUrl: result.verificationUrl || result.authUrl || "",
+              userCode: result.userCode || "",
+              callback: "",
+              status: "waiting",
+              message:
+                result.message ||
+                "Run the local relay helper on this browser device. It will open OpenAI sign-in and connect the NAS automatically.",
+              output: result.output || "",
+            });
+            pushToast("OpenAI Codex sign-in relay is ready.", "info");
+            return;
           }
           if (finalResult?.authenticated) {
             const nextProfile = {
@@ -6860,6 +8179,30 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
           await saveWorkspacePolicy(nextProfile);
           if (result?.status?.authenticated) {
             pushToast("MiniMax OpenClaw OAuth is already verified.", "info");
+          } else if (result?.sessionId && result?.verificationUrl) {
+            setMiniMaxOAuthFlow({
+              open: true,
+              sessionId: result.sessionId || "",
+              method: result.method || "oauth",
+              region: result.region || "global",
+              verificationUrl: result.verificationUrl || "",
+              userCode: result.userCode || "",
+              command: result.command || "",
+              status: "waiting",
+              message:
+                result.message ||
+                "Open MiniMax verification, approve access, then verify the NAS session.",
+              output: result.output || "",
+            });
+            pushToast("MiniMax OAuth verification is ready.", "info");
+          } else if (result?.manualRequired || result?.command) {
+            const copied = await copyTextValue(result.command || "");
+            pushToast(
+              copied
+                ? "MiniMax OpenClaw auth command copied. Run it on the NAS or runtime host, then verify auth."
+                : result?.message || "Run the MiniMax OpenClaw auth command on the runtime host, then verify auth.",
+              "info",
+            );
           } else {
             pushToast("MiniMax OpenClaw OAuth terminal opened. Finish the login there, then verify auth.", "info");
           }
@@ -6871,6 +8214,8 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
     },
     [
       callBackend,
+      openAICodexOAuthFlow.sessionId,
+      openAICodexOAuthFlow.status,
       providerOAuthActionsAvailable,
       providerOAuthUnavailableReason,
       pushToast,
@@ -6879,6 +8224,127 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       workspaceProfileForm,
     ],
   );
+
+  const completeOpenAICodexOAuth = useCallback(async () => {
+    const callback = String(openAICodexOAuthFlow.callback || "").trim();
+    if (!openAICodexOAuthFlow.sessionId) {
+      pushToast("Start OpenAI Codex OAuth again; the NAS session is missing.", "warn");
+      return;
+    }
+    if (!callback) {
+      pushToast("Paste the localhost callback URL from the OpenAI tab first.", "warn");
+      return;
+    }
+    setOpenAICodexOAuthFlow(current => ({
+      ...current,
+      status: "completing",
+      message: "Completing OpenAI Codex OAuth on the NAS runtime...",
+    }));
+    try {
+      const finalResult = await callBackend(
+        "complete_openai_codex_oauth_command",
+        { sessionId: openAICodexOAuthFlow.sessionId, callback },
+        { throwOnError: true },
+      );
+      if (finalResult?.authenticated) {
+        const nextProfile = {
+          ...workspaceProfileForm,
+          openaiCodexAuthMode: "oauth",
+        };
+        setWorkspaceProfileForm(nextProfile);
+        await saveWorkspacePolicy(nextProfile);
+        setOpenAICodexOAuthFlow({
+          open: false,
+          sessionId: "",
+          authUrl: "",
+          callback: "",
+          status: "idle",
+          message: "",
+          output: "",
+        });
+        pushToast("OpenAI Codex OAuth connected.", "info");
+        await refreshAll("openai-codex-oauth");
+        return;
+      }
+      setOpenAICodexOAuthFlow(current => ({
+        ...current,
+        status: "error",
+        message: finalResult?.message || "OpenAI Codex OAuth did not complete.",
+        output: finalResult?.output || current.output,
+      }));
+      pushToast(finalResult?.message || "OpenAI Codex OAuth did not complete.", "warn");
+    } catch (error) {
+      setOpenAICodexOAuthFlow(current => ({
+        ...current,
+        status: "error",
+        message: `OpenAI Codex OAuth failed: ${error}`,
+      }));
+      pushToast(`OpenAI Codex OAuth failed: ${error}`, "error");
+    }
+  }, [
+    callBackend,
+    openAICodexOAuthFlow.callback,
+    openAICodexOAuthFlow.sessionId,
+    pushToast,
+    refreshAll,
+    saveWorkspacePolicy,
+    workspaceProfileForm,
+  ]);
+
+  const completeMiniMaxOAuth = useCallback(async () => {
+    if (!miniMaxOAuthFlow.sessionId) {
+      pushToast("Start MiniMax OAuth again; the NAS session is missing.", "warn");
+      return;
+    }
+    setMiniMaxOAuthFlow(current => ({
+      ...current,
+      status: "checking",
+      message: "Checking MiniMax OAuth approval on the NAS runtime...",
+    }));
+    try {
+      const finalResult = await callBackend(
+        "complete_minimax_openclaw_auth_command",
+        { sessionId: miniMaxOAuthFlow.sessionId },
+        { throwOnError: true },
+      );
+      if (finalResult?.authenticated) {
+        const nextProfile = {
+          ...workspaceProfileForm,
+          minimaxAuthMode: "minimax-portal-oauth",
+        };
+        setWorkspaceProfileForm(nextProfile);
+        await saveWorkspacePolicy(nextProfile);
+        setMiniMaxOAuthFlow(DEFAULT_MINIMAX_OAUTH_FLOW);
+        pushToast("MiniMax OpenClaw OAuth connected.", "info");
+        await refreshAll("minimax-openclaw-oauth");
+        return;
+      }
+      setMiniMaxOAuthFlow(current => ({
+        ...current,
+        status: finalResult?.pending ? "waiting" : "error",
+        message: finalResult?.message || "MiniMax OAuth is not verified yet.",
+        output: finalResult?.output || current.output,
+      }));
+      pushToast(
+        finalResult?.message || "MiniMax OAuth is not verified yet.",
+        finalResult?.pending ? "warn" : "error",
+      );
+    } catch (error) {
+      setMiniMaxOAuthFlow(current => ({
+        ...current,
+        status: "error",
+        message: `MiniMax OAuth failed: ${error}`,
+      }));
+      pushToast(`MiniMax OAuth failed: ${error}`, "error");
+    }
+  }, [
+    callBackend,
+    miniMaxOAuthFlow.sessionId,
+    pushToast,
+    refreshAll,
+    saveWorkspacePolicy,
+    workspaceProfileForm,
+  ]);
 
   const verifyMiniMaxOpenClawAuth = useCallback(async () => {
     if (!providerOAuthActionsAvailable) {
@@ -7631,7 +9097,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </strong>
                       <p>
                         {titleizeToken(item.source || "profile_default")}
-                        {item.effort ? ` · ${titleizeToken(item.effort)} effort` : ""}
+                        {item.effort ? ` · ${routeEffortLabel(item.effort, "medium")} effort` : ""}
                         {item.budgetClass ? ` · ${titleizeToken(item.budgetClass)}` : ""}
                       </p>
                       {item.reason ? <p>{item.reason}</p> : null}
@@ -8031,13 +9497,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <h3>App view</h3>
             <Field label="Preview">
               <select onChange={event => setPreviewMode(event.target.value)} value={previewMode}>
-                {FIXTURE_OPTIONS.map(option => (
+                {previewModeOptions.map(option => (
                   <option key={option.id} value={option.id}>
                     {option.name}
                   </option>
                 ))}
               </select>
             </Field>
+            {!allowFixturePreviewModes ? (
+              <p className="drawer-footnote">Web control mode is live-backend only.</p>
+            ) : null}
             <Field label="Live sync">
               <select onChange={event => setLiveSyncSeconds(event.target.value)} value={liveSyncSeconds}>
                 {LIVE_SYNC_OPTIONS.map(option => (
@@ -8429,13 +9898,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             <h3>Live surface</h3>
             <Field label="Preview">
               <select onChange={event => setPreviewMode(event.target.value)} value={previewMode}>
-                {FIXTURE_OPTIONS.map(option => (
+                {previewModeOptions.map(option => (
                   <option key={option.id} value={option.id}>
                     {option.name}
                   </option>
                 ))}
               </select>
             </Field>
+            {!allowFixturePreviewModes ? (
+              <p className="drawer-footnote">Web control mode is live-backend only.</p>
+            ) : null}
             <Field label="Live sync">
               <select
                 onChange={event => setLiveSyncSeconds(event.target.value)}
@@ -9197,8 +10669,10 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         builderDetailOpen={builderDetailOpen}
         builderRows={referenceBuilderRows}
         changedItems={referenceChangedItems}
+        conversationMode={mission ? "mission" : "chat"}
         currentProjectLabel={currentProjectLabel}
         draft={operatorDraft}
+        activeCommentTarget={activeCommentTarget}
         favoriteFlows={referenceFavoriteFlows}
         feedbackItems={referenceFeedbackItems}
         flowProjects={referenceProjectGroups}
@@ -9208,7 +10682,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         onChangeDraft={setOperatorDraft}
         onDictation={() => void handleReferenceDictation()}
         onHistory={handleReferenceHistory}
-        onIdleSubmit={handleAgentIdlePrimaryAction}
+        onIdleSubmit={handleAgentIdleSubmit}
         onInsertSlashCommand={handleReferenceInsertSlashCommand}
         onMore={handleReferenceMore}
         onOpenBuilderDetail={missionId =>
@@ -9222,14 +10696,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
         onOpenSkillStudio={handleReferenceSkillStudio}
         onPaste={handleComposerPaste}
         onRequestAction={(actionId, payload) => void handleReferenceAction(actionId, payload)}
-        onSelectFlow={missionId =>
-          handleReferenceMissionSelect({
-            missionId,
-            nextSurface: "agent",
-            nextAgentScene: mission ? agentScene : "run",
-            openBuilderDetail: false,
-          })
-        }
+        onSelectFlow={handleReferenceFlowSelect}
         onSelectProject={handleReferenceProjectSelect}
         onSetAppearance={handleReferenceAppearanceChange}
         onRuntimeChange={value => {
@@ -9244,12 +10711,13 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
             void handleAgentFollowUp();
             return;
           }
-          handleAgentIdlePrimaryAction();
+          handleAgentIdleSubmit();
         }}
         onSetAgentScene={setAgentScene}
         onSetSurface={handleReferenceSurfaceChange}
         runtimeOptions={runtimeOptions}
         runtimeStatus={referenceRuntimeStatus}
+        routeControls={referenceRouteControls}
         selectedEffortLabel={selectedEffortLabel}
         selectedHarnessMeta={selectedHarnessMeta}
         selectedModelLabel={selectedModelLabel}
@@ -9266,17 +10734,158 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
 
       <Modal
         actions={
+          <>
+            <ActionButton
+              disabled={!openAICodexOAuthFlow.helperCommand}
+              onClick={async () => {
+                const copied = await copyTextValue(openAICodexOAuthFlow.helperCommand || "");
+                pushToast(
+                  copied
+                    ? "Relay helper command copied. Run it on the same device as this browser."
+                    : "Could not copy the relay helper command.",
+                  copied ? "info" : "warn",
+                );
+              }}
+            >
+              Copy relay helper
+            </ActionButton>
+            <ActionButton
+              disabled={!(openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl)}
+              onClick={() =>
+                window.open(
+                  openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl,
+                  "_blank",
+                  "noopener,noreferrer",
+                )
+              }
+            >
+              Open without helper
+            </ActionButton>
+            <ActionButton
+              disabled={["checking", "completing"].includes(openAICodexOAuthFlow.status)}
+              onClick={() => void completeOpenAICodexOAuth()}
+              variant="primary"
+            >
+              {["checking", "completing"].includes(openAICodexOAuthFlow.status)
+                ? "Connecting..."
+                : "Connect Codex OAuth"}
+            </ActionButton>
+          </>
+        }
+        onClose={() => setOpenAICodexOAuthFlow(current => ({ ...current, open: false }))}
+        open={openAICodexOAuthFlow.open}
+        summary="OpenAI redirects Codex OAuth to localhost. On NAS installs, a local relay helper must catch that browser callback and send it back to Syntelos."
+        title="Complete OpenAI Codex OAuth"
+      >
+        <div className="dialog-form">
+          <p>
+            Run the relay helper on the same device as this browser. It listens on
+            <strong> localhost:{openAICodexOAuthFlow.callbackPort || 1455}</strong>, opens
+            OpenAI sign-in, and forwards the callback to the NAS.
+          </p>
+          {openAICodexOAuthFlow.helperCommand ? (
+            <pre className="runtime-output">{openAICodexOAuthFlow.helperCommand}</pre>
+          ) : null}
+          <Field label="Final localhost callback URL or authorization code">
+            <textarea
+              onChange={event =>
+                setOpenAICodexOAuthFlow(current => ({
+                  ...current,
+                  callback: event.target.value,
+                }))
+              }
+              placeholder="http://localhost:1455/auth/callback?code=..."
+              rows={5}
+              value={openAICodexOAuthFlow.callback}
+            />
+          </Field>
+          {openAICodexOAuthFlow.message ? <p>{openAICodexOAuthFlow.message}</p> : null}
+          {openAICodexOAuthFlow.output ? (
+            <pre className="runtime-output">{openAICodexOAuthFlow.output}</pre>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        actions={
+          <>
+            <ActionButton
+              disabled={!miniMaxOAuthFlow.verificationUrl}
+              onClick={() =>
+                window.open(
+                  miniMaxOAuthFlow.verificationUrl,
+                  "_blank",
+                  "noopener,noreferrer",
+                )
+              }
+            >
+              Open MiniMax
+            </ActionButton>
+            <ActionButton
+              disabled={!miniMaxOAuthFlow.userCode}
+              onClick={async () => {
+                const copied = await copyTextValue(miniMaxOAuthFlow.userCode || "");
+                pushToast(
+                  copied ? "MiniMax code copied." : "Could not copy the MiniMax code.",
+                  copied ? "info" : "warn",
+                );
+              }}
+            >
+              Copy code
+            </ActionButton>
+            <ActionButton
+              disabled={miniMaxOAuthFlow.status === "checking"}
+              onClick={() => void completeMiniMaxOAuth()}
+              variant="primary"
+            >
+              {miniMaxOAuthFlow.status === "checking" ? "Checking..." : "Verify MiniMax"}
+            </ActionButton>
+          </>
+        }
+        onClose={() => setMiniMaxOAuthFlow(current => ({ ...current, open: false }))}
+        open={miniMaxOAuthFlow.open}
+        summary="MiniMax uses a portal user-code grant. Syntelos starts it on the NAS, then writes the completed token into the OpenClaw auth profile."
+        title="Complete MiniMax OpenClaw OAuth"
+      >
+        <div className="dialog-form">
+          <p>
+            Open MiniMax verification, approve access, then verify the NAS session.
+          </p>
+          {miniMaxOAuthFlow.verificationUrl ? (
+            <Field label="Verification URL">
+              <input readOnly value={miniMaxOAuthFlow.verificationUrl} />
+            </Field>
+          ) : null}
+          {miniMaxOAuthFlow.userCode ? (
+            <Field label="MiniMax code">
+              <pre className="runtime-output">{miniMaxOAuthFlow.userCode}</pre>
+            </Field>
+          ) : null}
+          {miniMaxOAuthFlow.command ? (
+            <Field label="Fallback command">
+              <pre className="runtime-output">{miniMaxOAuthFlow.command}</pre>
+            </Field>
+          ) : null}
+          {miniMaxOAuthFlow.message ? <p>{miniMaxOAuthFlow.message}</p> : null}
+          {miniMaxOAuthFlow.output ? (
+            <pre className="runtime-output">{miniMaxOAuthFlow.output}</pre>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        actions={
           <ActionButton onClick={handleWorkspaceSubmit} type="submit" variant="primary">
-            Save workspace
+            Save project
           </ActionButton>
         }
         onClose={() => setShowWorkspaceDialog(false)}
         open={showWorkspaceDialog}
-        summary="Workspace ownership stays in Syntelos. Legacy shell no longer controls this flow."
-        title="Add workspace"
+        summary="Choose the project folder Syntelos should work on. If NAS mirroring is enabled, missions run on the NAS working copy."
+        title="Add project"
       >
-        <form className="dialog-form" onSubmit={handleWorkspaceSubmit}>
-          <Field label="Workspace name">
+        <form className="dialog-form project-dialog-form" onSubmit={handleWorkspaceSubmit}>
+          <Field label="Project name">
             <input
               onChange={event =>
                 setWorkspaceForm(current => ({ ...current, name: event.target.value }))
@@ -9285,53 +10894,156 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               value={workspaceForm.name}
             />
           </Field>
-          <Field label="Workspace path">
+          <Field label="Project folder">
             <input
-              onChange={event =>
-                setWorkspaceForm(current => ({ ...current, path: event.target.value }))
-              }
-              placeholder="C:/Users/paul/projects/vibe-coding-platform"
+              onChange={event => {
+                const nextPath = event.target.value;
+                setWorkspaceForm(current => ({
+                  ...current,
+                  name: current.name || pathLeaf(nextPath),
+                  path: nextPath,
+                  localProjectPath: nextPath,
+                  nasProjectPath: current.nasProjectPath || defaultNasProjectPath(nextPath),
+                }));
+              }}
+              placeholder="C:/Users/paul/Projects/vibe-coding-platform"
               value={workspaceForm.path}
             />
           </Field>
+          {!hasTauriBackend() ? (
+            <p className="project-dialog-note">
+              Web mode: browse server folders or paste a project path manually.
+            </p>
+          ) : null}
+          {previewMode !== "live" ? (
+            <p className="project-dialog-note is-warn">
+              Saving is disabled in preview mode. Switch the backend mode to Live Backend first.
+            </p>
+          ) : null}
+          <label className="checkbox-row">
+            <input
+              checked={workspaceForm.autoSyncToNas}
+              onChange={event =>
+                setWorkspaceForm(current => ({
+                  ...current,
+                  autoSyncToNas: event.target.checked,
+                  syncMode: event.target.checked ? "auto_nas_mirror" : "manual",
+                  localProjectPath: current.localProjectPath || current.path,
+                  nasProjectPath: current.nasProjectPath || defaultNasProjectPath(current.path),
+                }))
+              }
+              type="checkbox"
+            />
+            <span>Run long missions on a NAS working copy</span>
+          </label>
+          {workspaceForm.autoSyncToNas ? (
+            <Field label="NAS working copy">
+              <input
+                onChange={event =>
+                  setWorkspaceForm(current => ({ ...current, nasProjectPath: event.target.value }))
+                }
+                placeholder="/volume1/Saclay/projects/vibe-coding-platform"
+                value={workspaceForm.nasProjectPath}
+              />
+            </Field>
+          ) : null}
+          {previewMode === "live" && hasCommandBackend() ? (
+            <div className="inline-actions">
+              <ActionButton onClick={() => void handleReferencePickWorkspaceFolder()} type="button">
+                {hasTauriBackend() ? "Browse for folder" : "Browse server folders"}
+              </ActionButton>
+            </div>
+          ) : null}
+        </form>
+      </Modal>
+
+      <Modal
+        actions={
+          <>
+            <ActionButton
+              disabled={!workspaceBrowser.parentPath || workspaceBrowser.loading}
+              onClick={() => void handleWorkspaceBrowserNavigate(workspaceBrowser.parentPath)}
+              type="button"
+            >
+              Up one level
+            </ActionButton>
+            <ActionButton
+              disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
+              onClick={handleWorkspaceBrowserUseCurrent}
+              type="button"
+              variant="primary"
+            >
+              Use this folder
+            </ActionButton>
+          </>
+        }
+        onClose={closeWorkspaceBrowser}
+        open={workspaceBrowser.open}
+        summary="Browse directories available to the web backend and choose a project folder."
+        title="Browse server folders"
+      >
+        <div className="dialog-form workspace-browser-dialog">
+          <Field label="Current folder">
+            <input
+              onChange={event =>
+                setWorkspaceBrowser(current => ({
+                  ...current,
+                  currentPath: event.target.value,
+                }))
+              }
+              value={workspaceBrowser.currentPath}
+            />
+          </Field>
           <div className="inline-actions">
-            <ActionButton onClick={() => void handleReferencePickWorkspaceFolder()} type="button">
-              Browse for folder
+            <ActionButton
+              disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
+              onClick={() => void handleWorkspaceBrowserNavigate(workspaceBrowser.currentPath)}
+              type="button"
+            >
+              Open path
             </ActionButton>
           </div>
-          <div className="field-row">
-            <Field label="Default runtime">
-              <select
-                onChange={event =>
-                  setWorkspaceForm(current => ({
-                    ...current,
-                    defaultRuntime: event.target.value,
-                  }))
-                }
-                value={workspaceForm.defaultRuntime}
-              >
-                <option value="openclaw">OpenClaw</option>
-                <option value="hermes">Hermes</option>
-              </select>
-            </Field>
-            <Field label="Operator profile">
-              <select
-                onChange={event =>
-                  setWorkspaceForm(current => ({ ...current, userProfile: event.target.value }))
-                }
-                value={workspaceForm.userProfile}
-              >
-                {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
-                  option => (
-                    <option key={option} value={option}>
-                      {titleizeToken(option)}
-                    </option>
-                  ),
-                )}
-              </select>
-            </Field>
+          {workspaceBrowser.roots.length ? (
+            <div className="workspace-browser-roots">
+              {workspaceBrowser.roots.map(rootPath => (
+                <button
+                  className="workspace-browser-root-button"
+                  disabled={workspaceBrowser.loading}
+                  key={rootPath}
+                  onClick={() => void handleWorkspaceBrowserNavigate(rootPath)}
+                  type="button"
+                >
+                  {rootPath}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {workspaceBrowser.error ? (
+            <p className="project-dialog-note is-warn">{workspaceBrowser.error}</p>
+          ) : null}
+          <div className="workspace-browser-list" role="list">
+            {workspaceBrowser.entries.length ? (
+              workspaceBrowser.entries.map(item => (
+                <button
+                  className={`workspace-browser-entry ${item.isDirectory ? "" : "is-file"}`.trim()}
+                  disabled={!item.isDirectory || workspaceBrowser.loading}
+                  key={item.path}
+                  onClick={() => void handleWorkspaceBrowserNavigate(item.path)}
+                  type="button"
+                >
+                  <span className="workspace-browser-entry-name">{item.name}</span>
+                  <span className="workspace-browser-entry-kind">
+                    {item.isDirectory ? "Folder" : "File"}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <p className="workspace-browser-empty">
+                {workspaceBrowser.loading ? "Loading folders..." : "No folders found here."}
+              </p>
+            )}
           </div>
-        </form>
+        </div>
       </Modal>
 
       <Modal
@@ -9441,7 +11153,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 onChange={event =>
                   setMissionForm(current => ({ ...current, modelEffort: event.target.value }))
                 }
-                value={missionForm.modelEffort}
+                value={normalizeRouteEffort(missionForm.modelEffort, "medium")}
               >
                 {MODEL_EFFORT_OPTIONS.map(option => (
                   <option key={`mission-effort-${option.value}`} value={option.value}>
@@ -10316,13 +12028,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </select>
                     </Field>
                     <Field label="Route role">
-                      <select onChange={event => setAgentRouteRole(event.target.value)} value={agentRouteRole}>
-                        {ROUTE_ROLE_OPTIONS.map(option => (
-                          <option key={`idle-role-${option}`} value={option}>
-                            {titleizeToken(option)}
-                          </option>
-                        ))}
-                      </select>
+                      <input readOnly value={`${titleizeToken(agentRouteRole)} (auto)`} />
                     </Field>
                     <Field label="Provider">
                       <select
@@ -10352,7 +12058,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <Field label="Reasoning">
                       <select
                         onChange={event => handleAgentRouteFieldChange("effort", event.target.value)}
-                        value={selectedAgentRoute.effort || "default"}
+                        value={normalizeRouteEffort(selectedAgentRoute.effort, "default")}
                       >
                         {MODEL_EFFORT_OPTIONS.map(option => (
                           <option key={`idle-effort-${option.value}`} value={option.value}>
@@ -10366,7 +12072,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <p>{agentRuntimeHint}</p>
                     <div className="thread-chip-row">
                       <span className="mini-pill muted">{agentRouteStatus}</span>
-                      <span className="mini-pill muted">{titleizeToken(agentRouteRole)} route</span>
+                      <span className="mini-pill muted">{titleizeToken(agentRouteRole)} auto role</span>
                       <span className="mini-pill muted">
                         Code execution {codeExecutionEnabled ? "on" : "off"}
                       </span>
@@ -10412,7 +12118,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                   />
                   <div className="thread-composer-actions">
                     <ActionButton onClick={handleAgentIdlePrimaryAction} type="button" variant="primary">
-                      {workspaces.length > 0 ? "Launch mission" : "Add workspace"}
+                      {workspaces.length > 0 ? "Launch mission" : "Add project"}
                     </ActionButton>
                   </div>
                 </form>
@@ -11148,13 +12854,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                       </select>
                     </Field>
                     <Field label="Route role">
-                      <select onChange={event => setAgentRouteRole(event.target.value)} value={agentRouteRole}>
-                        {ROUTE_ROLE_OPTIONS.map(option => (
-                          <option key={`agent-role-${option}`} value={option}>
-                            {titleizeToken(option)}
-                          </option>
-                        ))}
-                      </select>
+                      <input readOnly value={`${titleizeToken(agentRouteRole)} (auto)`} />
                     </Field>
                     <Field label="Provider">
                       <select
@@ -11184,7 +12884,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                     <Field label="Reasoning">
                       <select
                         onChange={event => handleAgentRouteFieldChange("effort", event.target.value)}
-                        value={selectedAgentRoute.effort || "default"}
+                        value={normalizeRouteEffort(selectedAgentRoute.effort, "default")}
                       >
                         {MODEL_EFFORT_OPTIONS.map(option => (
                           <option key={`agent-effort-${option.value}`} value={option.value}>
@@ -11305,7 +13005,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                         type="button"
                         variant="primary"
                       >
-                        {workspaces.length > 0 ? "Launch mission" : "Add workspace"}
+                        {workspaces.length > 0 ? "Launch mission" : "Add project"}
                       </ActionButton>
                     )}
                   </div>
@@ -11336,16 +13036,16 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
       <Modal
         actions={
           <ActionButton onClick={handleWorkspaceSubmit} type="submit" variant="primary">
-            Save workspace
+            Save project
           </ActionButton>
         }
         onClose={() => setShowWorkspaceDialog(false)}
         open={showWorkspaceDialog}
-        summary="Workspace ownership stays in Syntelos. Legacy shell no longer controls this flow."
-        title="Add workspace"
+        summary="Choose the project folder Syntelos should work on. If NAS mirroring is enabled, missions run on the NAS working copy."
+        title="Add project"
       >
-        <form className="dialog-form" onSubmit={handleWorkspaceSubmit}>
-          <Field label="Workspace name">
+        <form className="dialog-form project-dialog-form" onSubmit={handleWorkspaceSubmit}>
+          <Field label="Project name">
             <input
               onChange={event =>
                 setWorkspaceForm(current => ({ ...current, name: event.target.value }))
@@ -11354,47 +13054,66 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
               value={workspaceForm.name}
             />
           </Field>
-          <Field label="Workspace path">
+          <Field label="Project folder">
             <input
-              onChange={event =>
-                setWorkspaceForm(current => ({ ...current, path: event.target.value }))
-              }
-              placeholder="C:/Users/paul/projects/vibe-coding-platform"
+              onChange={event => {
+                const nextPath = event.target.value;
+                setWorkspaceForm(current => ({
+                  ...current,
+                  name: current.name || pathLeaf(nextPath),
+                  path: nextPath,
+                  localProjectPath: nextPath,
+                  nasProjectPath: current.nasProjectPath || defaultNasProjectPath(nextPath),
+                }));
+              }}
+              placeholder="C:/Users/paul/Projects/vibe-coding-platform"
               value={workspaceForm.path}
             />
           </Field>
-          <div className="field-row">
-            <Field label="Default runtime">
-              <select
+          {!hasTauriBackend() ? (
+            <p className="project-dialog-note">
+              Web mode: browse server folders or paste a project path manually.
+            </p>
+          ) : null}
+          {previewMode !== "live" ? (
+            <p className="project-dialog-note is-warn">
+              Saving is disabled in preview mode. Switch the backend mode to Live Backend first.
+            </p>
+          ) : null}
+          <label className="checkbox-row">
+            <input
+              checked={workspaceForm.autoSyncToNas}
+              onChange={event =>
+                setWorkspaceForm(current => ({
+                  ...current,
+                  autoSyncToNas: event.target.checked,
+                  syncMode: event.target.checked ? "auto_nas_mirror" : "manual",
+                  localProjectPath: current.localProjectPath || current.path,
+                  nasProjectPath: current.nasProjectPath || defaultNasProjectPath(current.path),
+                }))
+              }
+              type="checkbox"
+            />
+            <span>Run long missions on a NAS working copy</span>
+          </label>
+          {workspaceForm.autoSyncToNas ? (
+            <Field label="NAS working copy">
+              <input
                 onChange={event =>
-                  setWorkspaceForm(current => ({
-                    ...current,
-                    defaultRuntime: event.target.value,
-                  }))
+                  setWorkspaceForm(current => ({ ...current, nasProjectPath: event.target.value }))
                 }
-                value={workspaceForm.defaultRuntime}
-              >
-                <option value="openclaw">OpenClaw</option>
-                <option value="hermes">Hermes</option>
-              </select>
+                placeholder="/volume1/Saclay/projects/vibe-coding-platform"
+                value={workspaceForm.nasProjectPath}
+              />
             </Field>
-            <Field label="Operator profile">
-              <select
-                onChange={event =>
-                  setWorkspaceForm(current => ({ ...current, userProfile: event.target.value }))
-                }
-                value={workspaceForm.userProfile}
-              >
-                {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
-                  option => (
-                    <option key={option} value={option}>
-                      {titleizeToken(option)}
-                    </option>
-                  ),
-                )}
-              </select>
-            </Field>
-          </div>
+          ) : null}
+          {previewMode === "live" && hasCommandBackend() ? (
+            <div className="inline-actions">
+              <ActionButton onClick={() => void handleReferencePickWorkspaceFolder()} type="button">
+                {hasTauriBackend() ? "Browse for folder" : "Browse server folders"}
+              </ActionButton>
+            </div>
+          ) : null}
         </form>
       </Modal>
 
@@ -11505,7 +13224,7 @@ export function FluxioShellApp({ reportUiAction = () => {} }) {
                 onChange={event =>
                   setMissionForm(current => ({ ...current, modelEffort: event.target.value }))
                 }
-                value={missionForm.modelEffort}
+                value={normalizeRouteEffort(missionForm.modelEffort, "medium")}
               >
                 {MODEL_EFFORT_OPTIONS.map(option => (
                   <option key={`mission-reference-effort-${option.value}`} value={option.value}>

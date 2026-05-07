@@ -4,6 +4,7 @@ import argparse
 import getpass
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -165,6 +166,20 @@ def _remote_root_exists(sftp: Any, remote_root: str) -> bool:
         return False
 
 
+def _remote_root_exists_ssh(client: Any, remote_root: str, timeout: float) -> bool:
+    if not remote_root:
+        return False
+    remote_path = str(PurePosixPath(remote_root))
+    command = f"test -e {shlex.quote(remote_path)}"
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    try:
+        return stdout.channel.recv_exit_status() == 0
+    finally:
+        stdin.close()
+        stdout.close()
+        stderr.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Probe a NAS SSH/SFTP route without logging secrets.")
     parser.add_argument("--host", required=True)
@@ -237,9 +252,16 @@ def main() -> int:
             look_for_keys=False,
             allow_agent=False,
         )
-        sftp = client.open_sftp()
-        root_exists = _remote_root_exists(sftp, args.remote_root)
-        sftp.close()
+        sftp_available = True
+        sftp_error = ""
+        try:
+            sftp = client.open_sftp()
+            root_exists = _remote_root_exists(sftp, args.remote_root)
+            sftp.close()
+        except Exception as exc:
+            sftp_available = False
+            sftp_error = str(exc)
+            root_exists = _remote_root_exists_ssh(client, args.remote_root, args.timeout)
     except Exception as exc:  # pragma: no cover - depends on live NAS/network.
         _json_result(
             ok=False,
@@ -263,6 +285,8 @@ def main() -> int:
         user=args.user,
         remoteRoot=args.remote_root,
         remoteRootExists=root_exists,
+        sftpAvailable=sftp_available,
+        sftpError=sftp_error,
     )
     return 0
 

@@ -969,7 +969,7 @@ function GrandAgentLogin({
             </span>
             <div>
               <span className="grand-login-eyebrow">Local account</span>
-              <h2>Sign in to Local.Data control room</h2>
+              <h2>Sign in to Syntelos</h2>
               <p>Sign in with your local account password.</p>
             </div>
           </div>

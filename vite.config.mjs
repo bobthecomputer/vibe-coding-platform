@@ -10,6 +10,35 @@ const repoRoot = process.cwd();
 const webRoot = resolve(repoRoot, "web");
 const webSrc = resolve(webRoot, "src");
 
+function manualVendorChunks(id) {
+  if (!id.includes("node_modules")) {
+    return undefined;
+  }
+  if (id.includes("node_modules/react") || id.includes("node_modules/scheduler")) {
+    return "vendor-react";
+  }
+  if (id.includes("node_modules/react-dom")) {
+    return "vendor-react-dom";
+  }
+  if (id.includes("node_modules/@tauri-apps")) {
+    return "vendor-tauri";
+  }
+  if (
+    id.includes("node_modules/lucide-react") ||
+    id.includes("node_modules/@phosphor-icons")
+  ) {
+    return "vendor-icons";
+  }
+  if (
+    id.includes("node_modules/effect") ||
+    id.includes("node_modules/class-variance-authority") ||
+    id.includes("node_modules/tailwind-merge")
+  ) {
+    return "vendor-utils";
+  }
+  return "vendor";
+}
+
 export default defineConfig(({ command }) => ({
   // Packaged Tauri builds need relative asset URLs instead of /assets/... .
   base: command === "serve" ? "/" : "./",
@@ -45,5 +74,10 @@ export default defineConfig(({ command }) => ({
   build: {
     outDir: resolve(webRoot, "dist"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: manualVendorChunks,
+      },
+    },
   },
 }));

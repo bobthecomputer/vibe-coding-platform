@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 import webbrowser
 from dataclasses import asdict
@@ -72,6 +75,7 @@ from .runtime_supervisor import DelegatedRuntimeSupervisor
 from .session_store import SessionStore
 from .skill_library import SkillLibrary
 from .skills import SkillRegistry
+from .subprocess_utils import background_creationflags
 from .suite_report import build_suite_summary, write_suite_artifacts
 from .verification import VerificationRunner, detect_default_verification_commands
 from .workspace_actions import execute_control_room_workspace_action
@@ -109,7 +113,7 @@ OBJECTIVE_DEADLINE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 OBJECTIVE_RELATIVE_TIMER_PATTERN = re.compile(
-    r"\b(?:for|in|timer|timebox)\s+(\d{1,4})\s*(h(?:ours?)?|m(?:in(?:ute)?s?)?)\b",
+    r"\b(?:for|in|timer|timebox)\s+(\d{1,4})\s*(d(?:ays?)?|h(?:ours?)?|m(?:in(?:ute)?s?)?)\b",
     flags=re.IGNORECASE,
 )
 
@@ -947,6 +951,40 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(SUPPORTED_MINIMAX_AUTH_MODES),
         help="MiniMax auth contract mode for this workspace",
     )
+    workspace_cmd.add_argument(
+        "--local-project-path",
+        default="",
+        help="Original computer-side project path for NAS sync mapping",
+    )
+    workspace_cmd.add_argument(
+        "--nas-project-path",
+        default="",
+        help="NAS-side mirror path used by always-on runtimes",
+    )
+    workspace_cmd.add_argument(
+        "--sync-mode",
+        default="manual",
+        choices=["manual", "auto_nas_mirror", "synology_drive"],
+        help="Workspace sync mode for local/NAS project mapping",
+    )
+    workspace_cmd.add_argument(
+        "--sync-direction",
+        default="bidirectional",
+        choices=["bidirectional", "local_to_nas", "nas_to_local"],
+        help="Allowed sync direction for project files",
+    )
+    workspace_cmd.add_argument(
+        "--sync-conflict-policy",
+        default="keep_newer_and_log",
+        choices=["keep_newer_and_log", "nas_wins", "local_wins", "manual_review"],
+        help="Conflict policy for automatic local/NAS sync",
+    )
+    workspace_cmd.add_argument(
+        "--auto-sync-to-nas",
+        default="false",
+        choices=["true", "false"],
+        help="Use the NAS mirror path as the runtime workspace root",
+    )
 
     workspace_delete_cmd = subparsers.add_parser(
         "workspace-delete", help="Delete a managed workspace profile and scoped missions"
@@ -1029,6 +1067,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Require code execution tooling when compatible provider routes are active.",
     )
+    mission_start_cmd.add_argument(
+        "--launch-async",
+        action="store_true",
+        help="Create mission immediately and dispatch the first resume cycle in a background process.",
+    )
 
     mission_action_cmd = subparsers.add_parser(
         "mission-action", help="Apply a control-room action to an existing mission"
@@ -1048,6 +1091,11 @@ def build_parser() -> argparse.ArgumentParser:
             "reject-latest",
         ],
         help="Mission lifecycle action",
+    )
+    mission_action_cmd.add_argument(
+        "--launch-async",
+        action="store_true",
+        help="Dispatch resume action in a background process and return immediately.",
     )
 
     mission_follow_up_cmd = subparsers.add_parser(
@@ -2455,9 +2503,44 @@ def _parse_objective_relative_runtime_seconds(objective: str) -> int | None:
         return None
 
     unit = str(match.group(2) or "").strip().lower()
+    if unit.startswith("d"):
+        return amount * 86400
     if unit.startswith("h"):
         return amount * 3600
     return amount * 60
+
+
+def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
+    logs_dir = root / ".agent_control" / "mission_async"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f"{mission_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.log"
+    command = [
+        sys.executable,
+        "-m",
+        "grant_agent.cli",
+        "mission-action",
+        "--root",
+        str(root),
+        "--mission-id",
+        mission_id,
+        "--action",
+        "resume",
+    ]
+    with log_path.open("a", encoding="utf-8") as handle:
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            cwd=str(root),
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            creationflags=background_creationflags(),
+        )
+    return {
+        "pid": process.pid,
+        "logPath": str(log_path),
+        "command": command,
+    }
 
 
 def _mission_budget_settings(
@@ -2511,7 +2594,15 @@ def _latest_checkpoint_for_session(root: Path, session_id: str | None) -> str | 
 
 
 def _mission_poll_interval_seconds(mission) -> int:
-    return 15 if mission.run_budget.deadline_at else 0
+    if mission.run_budget.run_until_behavior != "continue_until_blocked":
+        return 0
+    configured = str(os.environ.get("FLUXIO_MISSION_POLL_SECONDS", "")).strip()
+    if configured:
+        try:
+            return max(1, int(configured))
+        except ValueError:
+            pass
+    return 15
 
 
 def _sleep_for_mission_poll(seconds: int) -> None:
@@ -2534,7 +2625,7 @@ def _mission_should_continue_after_result(mission, result: dict) -> bool:
     }:
         return False
     if pause_reason == "delegated_runtime_running":
-        return bool(mission.run_budget.deadline_at)
+        return mission.run_budget.run_until_behavior == "continue_until_blocked"
     if pause_reason.startswith("context_"):
         return mission.run_budget.run_until_behavior == "continue_until_blocked"
     if pause_reason:
@@ -3191,6 +3282,14 @@ def cmd_workspace_save(args: argparse.Namespace) -> int:
         execution_target_preference=getattr(
             args, "execution_target_preference", "profile_default"
         ),
+        local_project_path=getattr(args, "local_project_path", ""),
+        nas_project_path=getattr(args, "nas_project_path", ""),
+        sync_mode=getattr(args, "sync_mode", "manual"),
+        sync_direction=getattr(args, "sync_direction", "bidirectional"),
+        sync_conflict_policy=getattr(
+            args, "sync_conflict_policy", "keep_newer_and_log"
+        ),
+        auto_sync_to_nas=_parse_bool_flag(getattr(args, "auto_sync_to_nas", "false")),
         workspace_id=args.workspace_id,
     )
     payload = {"workspace": asdict(workspace), "snapshot": store.build_snapshot()}
@@ -3329,6 +3428,34 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
+    if bool(getattr(args, "launch_async", False)):
+        dispatch = _launch_async_mission_resume(root, mission.mission_id)
+        mission.state.status = "running"
+        mission.state.last_runtime_event = (
+            f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
+        )
+        mission.state.planner_loop_status = "launching"
+        mission.proof.summary = "Mission resume dispatched asynchronously."
+        sync_mission_state_snapshot(mission)
+        store.update_mission(mission)
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.resume_dispatched",
+                message="Mission resume was dispatched asynchronously.",
+                metadata=dispatch,
+            )
+        )
+        payload = {
+            "mission": asdict(mission),
+            "runtimeStatus": asdict(runtime_status),
+            "launchedAsync": True,
+            "dispatch": dispatch,
+            "snapshot": store.build_snapshot(),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
     synced = _run_mission_engine_cycles(
         store=store,
         mission=mission,
@@ -3419,6 +3546,37 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
                     )
                 )
                 return 0
+            if bool(getattr(args, "launch_async", False)):
+                dispatch = _launch_async_mission_resume(root, mission.mission_id)
+                mission.state.status = "running"
+                mission.state.last_runtime_event = (
+                    f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
+                )
+                mission.state.planner_loop_status = "launching"
+                mission.proof.summary = "Mission resume dispatched asynchronously."
+                sync_mission_state_snapshot(mission)
+                store.update_mission(mission)
+                store.append_event(
+                    MissionEvent(
+                        mission_id=mission.mission_id,
+                        kind="mission.resume_dispatched",
+                        message="Mission resume was dispatched asynchronously.",
+                        metadata=dispatch,
+                    )
+                )
+                print(
+                    json.dumps(
+                        {
+                            "mission": asdict(mission),
+                            "runtimeStatus": asdict(runtime_status),
+                            "launchedAsync": True,
+                            "dispatch": dispatch,
+                            "snapshot": store.build_snapshot(),
+                        },
+                        indent=2,
+                    )
+                )
+                return 0
             payload = _run_mission_engine_cycles(
                 store=store,
                 mission=mission,
@@ -3434,6 +3592,36 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
             print(json.dumps(payload, indent=2))
             result = payload.get("result", {})
             return 0 if not result or result.get("status") == "ok" else 2
+        if bool(getattr(args, "launch_async", False)):
+            dispatch = _launch_async_mission_resume(root, mission.mission_id)
+            mission.state.status = "running"
+            mission.state.last_runtime_event = (
+                f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
+            )
+            mission.state.planner_loop_status = "launching"
+            mission.proof.summary = "Mission resume dispatched asynchronously."
+            sync_mission_state_snapshot(mission)
+            store.update_mission(mission)
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.resume_dispatched",
+                    message="Mission resume was dispatched asynchronously.",
+                    metadata=dispatch,
+                )
+            )
+            print(
+                json.dumps(
+                    {
+                        "mission": asdict(mission),
+                        "launchedAsync": True,
+                        "dispatch": dispatch,
+                        "snapshot": store.build_snapshot(),
+                    },
+                    indent=2,
+                )
+            )
+            return 0
         payload = _run_mission_engine_cycles(
             store=store,
             mission=mission,

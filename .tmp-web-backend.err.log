@@ -1,0 +1,49 @@
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 35504)
+Traceback (most recent call last):
+  File "C:\Users\paul\Projects\vibe-coding-platform\src\grant_agent\web_backend.py", line 2323, in do_POST
+    _json_response(self, 200, {"ok": True, "data": result})
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\paul\Projects\vibe-coding-platform\src\grant_agent\web_backend.py", line 94, in _json_response
+    handler.wfile.write(body)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] Une connexion établie a été abandonnée par un logiciel de votre ordinateur hôte
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\http\server.py", line 436, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\http\server.py", line 424, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "C:\Users\paul\Projects\vibe-coding-platform\src\grant_agent\web_backend.py", line 2325, in do_POST
+    _json_response(self, 500, {"ok": False, "error": str(exc)})
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\paul\Projects\vibe-coding-platform\src\grant_agent\web_backend.py", line 93, in _json_response
+    handler.end_headers()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\http\server.py", line 538, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\http\server.py", line 542, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\paul\AppData\Local\Programs\Python\Python313\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] Une connexion établie a été abandonnée par un logiciel de votre ordinateur hôte
+----------------------------------------

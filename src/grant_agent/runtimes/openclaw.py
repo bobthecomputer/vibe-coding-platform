@@ -238,6 +238,8 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             thinking,
             "--json",
         ]
+        if self._use_local_agent_mode():
+            run_args.append("--local")
         if not model_id:
             return shell_join(run_args)
 
@@ -300,6 +302,9 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         if normalized in {"off", "minimal", "low", "medium", "high", "xhigh"}:
             return normalized
         return "high"
+
+    def _use_local_agent_mode(self) -> bool:
+        return os.environ.get("SYNTELOS_OPENCLAW_AGENT_MODE", "").strip().lower() == "local"
 
     def _agent_id(self, mission_id: str, model_id: str) -> str:
         digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]

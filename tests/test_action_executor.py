@@ -16,7 +16,7 @@ from grant_agent.action_executor import (
     execute_action,
     prepare_execution_scope,
 )
-from grant_agent.models import PlannedStep
+from grant_agent.models import ActionProposal, PlannedStep
 
 
 def _init_git_repo(root: pathlib.Path) -> None:
@@ -109,6 +109,50 @@ class ActionExecutorTests(unittest.TestCase):
             self.assertFalse(proposal.requires_approval)
             self.assertTrue(record.result.ok)
             self.assertIn("Fluxio Mission Note", readme.read_text(encoding="utf-8"))
+
+    def test_execute_action_timeout_returns_failed_record_not_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_timeout_test",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            proposal = ActionProposal(
+                action_id="action_timeout",
+                kind="test_run",
+                title="Run verification",
+                command="python -m unittest discover -s tests",
+                target_path=str(root),
+                mutability_class="execute",
+                policy_decision="auto_run",
+                requires_approval=False,
+            )
+            timeout_error = subprocess.TimeoutExpired(
+                cmd=proposal.command,
+                timeout=1,
+                output="partial stdout",
+                stderr="partial stderr",
+            )
+            with mock.patch(
+                "grant_agent.action_executor.subprocess.run",
+                side_effect=timeout_error,
+            ):
+                record = execute_action(
+                    proposal,
+                    root,
+                    execution_scope=scope,
+                    execution_policy=policy,
+                    timeout_seconds=1,
+                )
+
+            self.assertFalse(record.result.ok)
+            self.assertEqual(record.result.exit_code, 124)
+            self.assertIn("timed out", record.result.error.lower())
+            self.assertIn("timed out", record.result.stderr.lower())
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     @mock.patch("grant_agent.action_executor.runtime_adapter_map")

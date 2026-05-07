@@ -147,6 +147,27 @@ class RuntimeAdapterTests(unittest.TestCase):
             "openai-codex/gpt-5.4-mini",
         )
 
+    def test_openclaw_launch_can_use_local_agent_mode_for_web_backend_env_auth(self) -> None:
+        adapter = OpenClawRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_local1234",
+            objective="Use web backend provider env for OpenClaw",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "effort": "low",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        with mock.patch.dict("os.environ", {"SYNTELOS_OPENCLAW_AGENT_MODE": "local"}):
+            launch = adapter.start_mission(mission, workspace)
+
+        self.assertIn("--local", str(launch["launch_command"]))
+
     def test_hermes_launch_uses_wsl_bash_lc_when_hermes_only_in_wsl(self) -> None:
         adapter = HermesRuntimeAdapter()
         mission = mock.Mock(
