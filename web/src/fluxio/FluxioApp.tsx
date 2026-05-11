@@ -25,6 +25,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { FluxioShellApp } from "./FluxioShell.jsx";
+import { buildLiveReviewWorkbench, getSnapshot } from "./fluxioBridge.ts";
 
 const PRODUCT_NAME = "Syntelos";
 const PRODUCT_TAGLINE = "Turn AI agents into second brains.";
@@ -464,6 +465,8 @@ function PublicProductPage() {
                   </div>
                 </div>
 
+                <LiveReviewWorkbench mode={activePreviewMode} />
+
                 <div className="syntelos-builder-strip" aria-label="Builder and app previews">
                   <div>
                     <Browser aria-hidden="true" size={19} weight="duotone" />
@@ -839,6 +842,225 @@ function PublicProductPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function LiveReviewWorkbench({ mode }: { mode: "agent" | "builder" }) {
+  const [snapshot, setSnapshot] = React.useState<Record<string, unknown>>({});
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [selectedTargetKind, setSelectedTargetKind] = React.useState("browser");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void getSnapshot()
+      .then(next => {
+        if (cancelled) {
+          return;
+        }
+        setSnapshot(next);
+        setError("");
+      })
+      .catch(caught => {
+        if (cancelled) {
+          return;
+        }
+        setError(caught instanceof Error ? caught.message : String(caught));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const workbench = React.useMemo(() => buildLiveReviewWorkbench(snapshot), [snapshot]);
+  const targetOptions = Array.isArray(workbench.targetOptions) ? workbench.targetOptions : [];
+  const selectedTarget =
+    targetOptions.find(item => String(item?.kind || "") === selectedTargetKind) ||
+    workbench.target ||
+    targetOptions[0] ||
+    { kind: "browser", label: "Browser workspace", detail: "Live review target" };
+  const annotations = Array.isArray(workbench.annotations) ? workbench.annotations : [];
+  const panes = Array.isArray(workbench.panes) ? workbench.panes : [];
+  const replayWindow = Array.isArray(workbench.replayWindow) ? workbench.replayWindow : [];
+  const evidence = workbench.evidence && typeof workbench.evidence === "object" ? workbench.evidence : {};
+  const runtimeStatus = workbench.runtimeStatus && typeof workbench.runtimeStatus === "object" ? workbench.runtimeStatus : {};
+  const agentFeedback =
+    workbench.agentFeedback && typeof workbench.agentFeedback === "object"
+      ? (workbench.agentFeedback as Record<string, unknown>)
+      : {};
+
+  React.useEffect(() => {
+    setSelectedTargetKind(String((workbench.target as Record<string, unknown> | undefined)?.kind || "browser"));
+  }, [workbench.target]);
+
+  return (
+    <section className="syntelos-review-workbench" aria-label="Live review workbench">
+      <div className="syntelos-review-head">
+        <div>
+          <span>{mode === "builder" ? "Builder review" : "Live review"}</span>
+          <strong>{mode === "builder" ? "Comment on live runtime proof." : "Steer the agent with structured UI feedback."}</strong>
+        </div>
+        <p>{loading ? "Syncing runtime snapshot..." : error || workbench.replaySummary}</p>
+      </div>
+
+      <div className="syntelos-review-layout">
+        <aside className="syntelos-review-sidepanel">
+          <div className="syntelos-review-target-picker" aria-label="Annotation target model">
+            {targetOptions.map(item => (
+              <button
+                className={String(item.kind) === selectedTargetKind ? "active" : ""}
+                key={String(item.kind)}
+                onClick={() => setSelectedTargetKind(String(item.kind))}
+                type="button"
+              >
+                <span>{String(item.kind).toUpperCase()}</span>
+                <strong>{String(item.label || "")}</strong>
+              </button>
+            ))}
+          </div>
+
+          <div className="syntelos-review-target-meta">
+            <span>Selected surface</span>
+            <strong>{String(selectedTarget.label || selectedTarget.kind)}</strong>
+            <p>{String(selectedTarget.detail || "Live UI, window, or document surface")}</p>
+            <small>
+              {String(selectedTarget.kind).toUpperCase()} · {annotations.length} pins · {replayWindow.length} replay events
+            </small>
+          </div>
+
+          <div className="syntelos-review-status-grid" aria-label="Runtime status">
+            <div>
+              <span>Browser</span>
+              <strong>{String((runtimeStatus as Record<string, unknown>).browser || "ready")}</strong>
+            </div>
+            <div>
+              <span>Computer use</span>
+              <strong>{String((runtimeStatus as Record<string, unknown>).computerUse || "connected")}</strong>
+            </div>
+            <div>
+              <span>Autotest</span>
+              <strong>{String((runtimeStatus as Record<string, unknown>).autotest || "queued")}</strong>
+            </div>
+          </div>
+
+          <div className="syntelos-review-pane-list" aria-label="Review panes">
+            <div className="syntelos-review-section-head">
+              <span>Panes</span>
+              <strong>{panes.length} linked</strong>
+            </div>
+            {panes.map(pane => (
+              <article className="syntelos-review-pane" key={String(pane.id || pane.label)}>
+                <span>{String(pane.label || pane.id || "pane")}</span>
+                <strong>{String(pane.purpose || "Live review pane")}</strong>
+                <em>{String(pane.status || "linked")}</em>
+              </article>
+            ))}
+          </div>
+
+          <div className="syntelos-review-annotation-list">
+            <div className="syntelos-review-section-head">
+              <span>Annotations</span>
+              <strong>{annotations.length} pins</strong>
+            </div>
+            {annotations.map(annotation => (
+              <article className="syntelos-review-annotation" key={String(annotation.id || annotation.pin)}>
+                <b>{String(annotation.pin || "•")}</b>
+                <div>
+                  <span>
+                    {String(annotation.region || annotation.target || "region")} · {String(annotation.pane || "live-preview")}
+                  </span>
+                  <strong>{String(annotation.comment || annotation.feedback || "")}</strong>
+                  <em>{String(annotation.selector || annotation.evidence || "agent feedback")}</em>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="syntelos-review-evidence">
+            <div className="syntelos-review-section-head">
+              <span>Evidence</span>
+              <strong>Snapshots and replay</strong>
+            </div>
+            <div className="syntelos-review-evidence-grid">
+              <div>
+                <span>Screenshot</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).screenshots) ? (evidence as Record<string, unknown>).screenshots.length : 0}</strong>
+              </div>
+              <div>
+                <span>Timelapse</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).timelapse) ? (evidence as Record<string, unknown>).timelapse.length : 0}</strong>
+              </div>
+              <div>
+                <span>Files</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).files) ? (evidence as Record<string, unknown>).files.length : 0}</strong>
+              </div>
+              <div>
+                <span>Tools</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).tools) ? (evidence as Record<string, unknown>).tools.length : 0}</strong>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <div className="syntelos-review-preview">
+          <div className="syntelos-review-preview-head">
+            <div>
+              <span>Target</span>
+              <strong>{String(selectedTarget.label || selectedTarget.kind)}</strong>
+            </div>
+            <p>{String(selectedTarget.detail || "Live UI, window, or document surface")}</p>
+          </div>
+
+          <div className="syntelos-review-preview-stage">
+            <span className="syntelos-review-preview-badge">{String(selectedTarget.kind).toUpperCase()}</span>
+            <div className="syntelos-review-preview-card primary" />
+            <div className="syntelos-review-preview-card secondary" />
+            <div className="syntelos-review-preview-card tertiary active" />
+            {annotations.map(annotation => (
+              <span className={`syntelos-review-preview-pin pin-${String(annotation.pin || "1")}`} key={String(annotation.id || annotation.pin)}>
+                {String(annotation.pin || "•")}
+              </span>
+            ))}
+            <div className="syntelos-review-preview-note">
+              <strong>{mode === "builder" ? "Builder sees proof first" : "Agent sees live guidance"}</strong>
+              <span>{loading ? "Fetching activity replay" : workbench.replaySummary}</span>
+            </div>
+          </div>
+
+          <div className="syntelos-review-activity" aria-label="Activity replay">
+            {replayWindow.length ? (
+              replayWindow.map(item => (
+                <article key={`${String(item.kind || "activity")}-${String(item.timestamp || "")}`}>
+                  <b>{String(item.kind || "activity")}</b>
+                  <span>{String(item.message || "")}</span>
+                  <em>{String(item.timestamp || "")}</em>
+                </article>
+              ))
+            ) : (
+              <article>
+                <b>activity</b>
+                <span>Waiting for runtime replay state.</span>
+                <em>idle</em>
+              </article>
+            )}
+          </div>
+
+          <div className="syntelos-review-feedback-payload" aria-label="Structured agent feedback">
+            <div className="syntelos-review-section-head">
+              <span>Agent payload</span>
+              <strong>Structured feedback</strong>
+            </div>
+            <pre>{JSON.stringify(agentFeedback, null, 2)}</pre>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
