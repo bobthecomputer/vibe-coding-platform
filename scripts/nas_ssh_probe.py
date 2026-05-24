@@ -8,8 +8,16 @@ import shlex
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from grant_agent.port_safety import reserve_port_probe
 
 
 def _json_result(**payload: Any) -> None:
@@ -190,7 +198,39 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument("--prompt", action="store_true")
     parser.add_argument("--diagnose", action="store_true")
+    parser.add_argument("--force", action="store_true", help="Bypass the local probe cooldown.")
+    parser.add_argument("--cooldown-seconds", type=int, default=int(os.environ.get("FLUXIO_PORT_PROBE_COOLDOWN_SECONDS", "20")))
+    parser.add_argument("--window-seconds", type=int, default=int(os.environ.get("FLUXIO_PORT_PROBE_WINDOW_SECONDS", "60")))
+    parser.add_argument("--max-attempts", type=int, default=int(os.environ.get("FLUXIO_PORT_PROBE_MAX_ATTEMPTS", "6")))
     args = parser.parse_args()
+
+    guard = reserve_port_probe(
+        host=args.host,
+        port=args.port,
+        purpose="nas-ssh",
+        identity=args.user,
+        root=ROOT,
+        cooldown_seconds=args.cooldown_seconds,
+        window_seconds=args.window_seconds,
+        max_attempts=args.max_attempts,
+        force=args.force,
+    )
+    if not guard.get("allowed"):
+        _json_result(
+            ok=False,
+            stage="guard",
+            host=args.host,
+            port=args.port,
+            user=args.user,
+            remoteRoot=args.remote_root,
+            error=(
+                "Port probe guard blocked this attempt to avoid overloading the NAS/SSH route. "
+                f"Retry after {guard.get('retryAfterSeconds', 1)} second(s), or pass --force for a deliberate manual probe."
+            ),
+            errorType="PortProbeGuard",
+            guard=guard,
+        )
+        return 6
 
     socket_result = _socket_probe(args.host, args.port, args.timeout)
     if not socket_result.get("ok"):

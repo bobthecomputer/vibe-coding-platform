@@ -1,2 +1,4 @@
 [console_scripts]
+grand-agent-web = grant_agent.web_backend:main
 grant-agent = grant_agent.cli:main
+syntelos-codex-oauth-helper = grant_agent.codex_local_oauth_helper:main

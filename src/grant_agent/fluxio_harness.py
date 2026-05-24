@@ -860,6 +860,23 @@ class FluxioHarness:
                     ],
                 )
                 continue
+            if delegated_replan_trigger == "delegated_runtime_failed":
+                autopilot_status = "paused"
+                autopilot_pause_reason = "delegated_runtime_failed"
+                blocker_history, latest_blocker = self._remember_blocker(
+                    blocker=self._classify_blocker(
+                        reason="delegated_runtime_failed",
+                        detail="Delegated runtime failed before producing a usable result. Repair runtime auth or route selection before continuing.",
+                        phase="execute",
+                        runtime_id=runtime_id,
+                    ),
+                    blocker_history=blocker_history,
+                )
+                context_manager.record(
+                    "system",
+                    "Delegated runtime failed; Fluxio paused instead of retrying the same failing lane.",
+                )
+                break
             if delegated_status == "running":
                 blocker = self._classify_blocker(
                     reason="delegated_runtime_running",
@@ -1118,6 +1135,19 @@ class FluxioHarness:
                     repeated_failure_count += 1
                     stable_success_streak = 0
                     continue
+                if delegated_replan_trigger == "delegated_runtime_failed":
+                    autopilot_status = "paused"
+                    autopilot_pause_reason = "delegated_runtime_failed"
+                    blocker_history, latest_blocker = self._remember_blocker(
+                        blocker=self._classify_blocker(
+                            reason="delegated_runtime_failed",
+                            detail="Delegated runtime failed after launch. Repair runtime auth or route selection before continuing.",
+                            phase="execute",
+                            runtime_id=runtime_id,
+                        ),
+                        blocker_history=blocker_history,
+                    )
+                    break
                 if delegated_status == "waiting_for_approval":
                     autopilot_status = "paused"
                     autopilot_pause_reason = "approval_required"
@@ -2100,6 +2130,9 @@ class FluxioHarness:
         if normalized in {"verification_failed", "verification_failure", "action_failed"}:
             blocker_class = "safe_to_replan"
             resolution = "auto_replan"
+        elif normalized in {"delegated_runtime_failed", "delegated_runtime_failure"}:
+            blocker_class = "operator_only"
+            resolution = "runtime_auth_or_route_repair"
         elif normalized in {
             "delegated_runtime_running",
             "context_rollover",
@@ -2241,13 +2274,22 @@ class FluxioHarness:
         session_provider = str(getattr(session, "target_provider", "") or "").strip().lower()
         session_model = str(getattr(session, "target_model", "") or "").strip()
         session_effort = str(getattr(session, "target_effort", "") or "").strip().lower()
-        if session_provider and session_provider != desired_route.provider:
+        desired_provider = str(desired_route.provider or "").strip().lower()
+        equivalent_providers = {
+            ("openai", "openai-codex"),
+            ("openai-codex", "openai"),
+        }
+        if (
+            session_provider
+            and session_provider != desired_provider
+            and (session_provider, desired_provider) not in equivalent_providers
+        ):
             return True
         if session_model and session_model != desired_route.model:
             return True
         if session_effort and session_effort != desired_route.effort:
             return True
-        if not session_provider and desired_route.provider:
+        if not session_provider and desired_provider:
             return True
         if not session_model and desired_route.model:
             return True
@@ -2305,7 +2347,7 @@ class FluxioHarness:
             workspace_id="delegated",
             runtime_id=str(getattr(session, "runtime_id", "openclaw") or "openclaw"),
             objective=(
-                step.title
+                f"{step.title}\n\nMission objective: {objective}"
                 if step is not None and step.title
                 else (objective or "Continue delegated mission work")
             ),
@@ -2402,13 +2444,21 @@ class FluxioHarness:
             elif not session.acknowledged and step is not None:
                 if session.status == "completed":
                     step.status = "completed"
+                    changed_count = len(getattr(session, "changed_files", []) or [])
+                    changed_detail = (
+                        f" Changed files captured: {changed_count}."
+                        if changed_count
+                        else ""
+                    )
                     notes.append(
                         f"Delegated runtime {session.runtime_id} completed for step {step.title}: "
-                        f"{session.last_event or session.detail}"
+                        f"{session.last_event or session.detail}{changed_detail}"
                     )
                 else:
                     step.status = "blocked"
                     step.attempts += 1
+                    if session.status == "failed":
+                        replan_trigger = "delegated_runtime_failed"
                     if any(
                         entry.get("status") == "rejected"
                         for entry in session.approval_history

@@ -1,0 +1,12 @@
+{
+  "ruleInfo": {
+    "bodyChars": 1322,
+    "hasAudit": true,
+    "hasCorePolicy": true,
+    "heading": "Rule Sets",
+    "overlay": false,
+    "text": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nSYNTELOS\nHome\nWORKSPACE\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nOP\nOrbit Pro\nPro Plan\n\nWorkspace / Rule Sets\n\nRule Sets\nCore policy\nAudit permissions\nNew rule set\nPermission modes\n1 active\nWorkspace Access Policy\n\nAccess, approvals, and scope\n\nRisk-based\nFrontend Sandbox\n\nAutonomy for sandbox envs\n\nLow risk auto-approve\nProduction Deployments\n\nDeployment guardrails\n\nStrict\nDocs Workspace\n\nDocs and content permissions\n\nRisk-based\nBilling Restrictions\n\nBilling and secrets restrictions\n\nStrict\nWorkspace Access Policy\nDuplicate\nEdit\nApplies to\nAutonomy\nApproval mode\nReviewer\nAllowed\nEdit files\nCreate branches\nRun tests\nApproval required\nMerge to main\nDeploy to production\nAccess shared data\nRestricted\nDelete repositories\nBilling access\nSecrets man",
+    "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=rule-sets"
+  },
+  "errors2": []
+}

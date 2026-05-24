@@ -18,9 +18,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from grant_agent.cli import cmd_mission_follow_up, cmd_workspace_delete
 from grant_agent.mission_control import (
     ControlRoomStore,
+    _build_generated_image_artifacts_snapshot,
     _build_git_actions,
     _build_validation_actions,
     _mission_title,
+    _platform_path_for_windows_drive,
+    _recover_evidence_path,
     _sync_project_tree,
     build_harness_lab_snapshot,
     build_release_readiness_snapshot,
@@ -28,7 +31,7 @@ from grant_agent.mission_control import (
     mission_mode_to_engine_mode,
     mission_time_budget_window,
 )
-from grant_agent.models import DelegatedRuntimeSession, utc_now_iso
+from grant_agent.models import DelegatedRuntimeSession, MissionEvent, utc_now_iso
 from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
@@ -98,6 +101,42 @@ class MissionControlTests(unittest.TestCase):
             loaded = store.load_workspaces()
 
             self.assertEqual(loaded[0].root_path, str(external_root))
+
+    def test_generated_image_artifact_snapshot_includes_direct_images_without_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            artifact_dir = root / ".agent_control" / "generated_image_artifacts"
+            artifact_dir.mkdir(parents=True)
+            image = artifact_dir / "direct-output.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n" + (b"0" * 1024))
+
+            snapshot = _build_generated_image_artifacts_snapshot(root)
+
+            self.assertEqual(snapshot["summary"]["total"], 1)
+            item = snapshot["items"][0]
+            self.assertEqual(item["artifactId"], "direct-output")
+            self.assertIn("/api/artifact?id=", item["previewUrl"])
+            self.assertEqual(item["source"], "generated_image_artifact_file")
+
+    def test_recover_evidence_path_extracts_embedded_windows_runtime_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            runtime_dir = root / ".agent_control" / "runtime_sessions"
+            runtime_dir.mkdir(parents=True)
+            evidence = runtime_dir / "delegate.events.jsonl"
+            evidence.write_text('{"kind":"runtime.output"}\n', encoding="utf-8")
+            if not evidence.drive:
+                self.skipTest("Embedded Windows-path recovery is Windows-specific.")
+            malformed = f"/mnt/c/Users/paul/Projects/demo/{evidence}"
+
+            self.assertEqual(_recover_evidence_path(root, malformed), evidence.resolve())
+
+    def test_mission_evidence_windows_path_translates_for_wsl(self) -> None:
+        with mock.patch("grant_agent.mission_control.os.name", "posix"):
+            self.assertEqual(
+                str(_platform_path_for_windows_drive(r"C:\volume1\Saclay\evidence.log")),
+                "/mnt/c/volume1/Saclay/evidence.log",
+            )
 
     def test_delete_workspace_removes_scoped_missions_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -435,6 +474,9 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("providerSetupStatus", snapshot)
             self.assertIn("efficiencyAutotune", snapshot)
             self.assertIn("releaseReadiness", snapshot)
+            self.assertIn("runtimeCompartments", snapshot)
+            self.assertIn("hermesMissionEvidence", snapshot)
+            self.assertIn("nasDeployReadiness", snapshot)
             self.assertIn("gitSnapshot", snapshot["workspaces"][0])
             self.assertFalse(snapshot["workspaces"][0]["gitSnapshot"]["repoDetected"])
             self.assertIn("serviceManagement", snapshot["workspaces"][0])
@@ -460,6 +502,85 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("reviewStatus", workflow)
             self.assertIn("serviceIds", workflow)
             self.assertIn("verificationDefaults", workflow)
+
+    def test_snapshot_includes_runtime_compartments_and_hermes_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Collect Hermes mission evidence.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            session = DelegatedRuntimeSession(
+                delegated_id="delegate_test",
+                runtime_id="hermes",
+                launch_command="hermes chat -q test",
+                status="running",
+                detail="Hermes delegated lane is running.",
+                session_path=str(root / ".agent_control" / "runtime_sessions" / "delegate_test.json"),
+                workspace_root=str(root),
+                execution_root=str(root),
+                latest_events=[
+                    {
+                        "kind": "runtime.proof",
+                        "message": "Hermes produced proof event.",
+                        "status": "running",
+                        "timestamp": "2026-05-12T10:00:00+00:00",
+                    }
+                ],
+            )
+            session_file = pathlib.Path(session.session_path)
+            session_file.parent.mkdir(parents=True)
+            session_file.write_text(json.dumps(asdict(session), indent=2), encoding="utf-8")
+            mission.delegated_runtime_sessions = [session]
+            mission.state.delegated_runtime_sessions = [asdict(session)]
+            mission.proof.passed_checks = ["Hermes proof captured"]
+            store.save_missions([mission])
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="hermes.proof",
+                    message="Hermes proof event persisted.",
+                    timestamp="2026-05-12T10:01:00+00:00",
+                    metadata={"source": "hermes"},
+                )
+            )
+
+            snapshot = ControlRoomStore(root).build_snapshot()
+
+            compartments = snapshot["runtimeCompartments"]
+            self.assertGreaterEqual(compartments["summary"]["total"], 1)
+            self.assertEqual(compartments["items"][0]["runtime"], "hermes")
+            self.assertEqual(compartments["items"][0]["status"], "running")
+            self.assertIn("recentActivity", compartments["items"][0])
+
+            evidence = snapshot["hermesMissionEvidence"]
+            self.assertTrue(evidence["items"])
+            self.assertTrue(
+                all(
+                    {"timestamp", "status", "source", "message"}.issubset(item)
+                    for item in evidence["items"]
+                )
+            )
+
+    def test_empty_snapshot_reports_honest_runtime_and_hermes_empty_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+
+            snapshot = ControlRoomStore(root).build_snapshot()
+
+            self.assertEqual(snapshot["runtimeCompartments"]["items"], [])
+            self.assertIn("emptyState", snapshot["runtimeCompartments"])
+            self.assertEqual(snapshot["hermesMissionEvidence"]["items"], [])
+            self.assertIn("emptyState", snapshot["hermesMissionEvidence"])
+            self.assertIn("checks", snapshot["nasDeployReadiness"])
 
     def test_create_mission_persists_and_builds_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -490,6 +611,107 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("effectiveRouteContract", mission_payload)
             self.assertIn("currentCyclePhase", mission_payload["missionLoop"])
             self.assertIn("timeBudget", mission_payload["missionLoop"])
+            self.assertIn("autonomousWorkflows", snapshot)
+            workflow_record = next(
+                item
+                for item in snapshot["autonomousWorkflows"]["items"]
+                if item["missionId"] == mission.mission_id
+            )
+            self.assertEqual(workflow_record["objective"], mission.objective)
+            self.assertEqual(workflow_record["mode"], "Autopilot")
+            self.assertEqual(workflow_record["verification"]["commands"], ["python -m unittest"])
+            self.assertGreaterEqual(workflow_record["eventCount"], 1)
+
+    def test_autonomous_workflow_records_runtime_evidence_and_approvals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Record autonomous runtime evidence.",
+                success_checks=["Runtime evidence captured"],
+                mode="Deep Run",
+                verification_commands=["python -m pytest tests -q"],
+                max_runtime_seconds=7200,
+            )
+            sessions_dir = root / ".agent_control" / "runtime_sessions"
+            sessions_dir.mkdir(parents=True)
+            session = DelegatedRuntimeSession(
+                delegated_id="delegate_recording",
+                runtime_id="hermes",
+                launch_command="hermes chat -q test",
+                status="waiting_for_approval",
+                detail="Approval required.",
+                session_path=str(sessions_dir / "delegate_recording.json"),
+                workspace_root=str(root),
+                execution_root=str(root),
+                log_path=str(sessions_dir / "delegate_recording.log"),
+                events_path=str(sessions_dir / "delegate_recording.events.jsonl"),
+                decision_path=str(sessions_dir / "delegate_recording.approval.json"),
+                pending_approval={
+                    "request_id": "approval_1",
+                    "delegated_id": "delegate_recording",
+                    "runtime_id": "hermes",
+                    "prompt": "Approve file write?",
+                    "risk_level": "medium",
+                    "status": "pending",
+                    "created_at": "2026-05-20T12:00:00+00:00",
+                    "metadata": {},
+                },
+                changed_files=["src/demo.py"],
+            )
+            pathlib.Path(session.log_path).write_text("runtime log\n", encoding="utf-8")
+            pathlib.Path(session.events_path).write_text(
+                json.dumps(
+                    {
+                        "event_id": "evt_1",
+                        "delegated_id": "delegate_recording",
+                        "runtime_id": "hermes",
+                        "kind": "approval.request",
+                        "message": "Approve file write?",
+                        "status": "waiting_for_approval",
+                        "created_at": "2026-05-20T12:00:00+00:00",
+                        "data": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            pathlib.Path(session.session_path).write_text(
+                json.dumps(asdict(session), indent=2),
+                encoding="utf-8",
+            )
+            mission.state.status = "needs_approval"
+            mission.state.latest_session_id = session.delegated_id
+            mission.delegated_runtime_sessions = [session]
+            mission.proof.pending_approvals = ["Approve file write?"]
+            mission.proof.failed_checks = ["verification blocked until approval"]
+            store.update_mission(mission)
+
+            records = store.load_autonomous_workflows()
+            record = next(item for item in records if item["missionId"] == mission.mission_id)
+
+            self.assertEqual(record["runtimeSummary"]["delegatedSessionCount"], 1)
+            self.assertEqual(record["approvalSummary"]["pendingCount"], 1)
+            self.assertIn("src/demo.py", record["changedFiles"])
+            self.assertTrue(
+                any(
+                    item["label"] == "session events" and item["exists"]
+                    for item in record["evidenceFiles"]
+                )
+            )
+            self.assertEqual(
+                record["verification"]["failedChecks"],
+                ["verification blocked until approval"],
+            )
+
+            snapshot = ControlRoomStore(root).build_snapshot()
+            workflows = snapshot["autonomousWorkflows"]
+            self.assertEqual(workflows["summary"]["needsApproval"], 1)
+            self.assertGreaterEqual(workflows["summary"]["failedOrBlocked"], 1)
 
     def test_minimax_portal_auth_does_not_mark_provider_truth_ready_without_openclaw_oauth(self) -> None:
         with mock.patch.dict(

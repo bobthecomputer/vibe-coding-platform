@@ -15,7 +15,9 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.cli import (
+    _launch_async_mission_resume,
     _mission_budget_settings,
+    _pid_exists,
     _invoke_engine,
     _mission_poll_interval_seconds,
     _mission_should_continue_after_result,
@@ -131,38 +133,44 @@ class CliPreferenceTests(unittest.TestCase):
             _init_git_repo(root)
 
             with mock.patch(
-                "grant_agent.cli.AutonomousEngine.run",
-                return_value={
-                    "status": "ok",
-                    "session_path": str(root / ".agent_runs" / "session_legacy"),
-                    "autopilot_status": "completed",
-                    "autopilot_pause_reason": "",
-                    "verification_failures": [],
-                    "remaining_steps": [],
-                },
-            ) as mocked_run:
-                result = _invoke_engine(
-                    root=root,
-                    objective="Compare the legacy harness contract.",
-                    docs=["README.md"],
-                    mode_name="autopilot",
-                    profile_name="hands_free_builder",
-                    persona_override=None,
-                    iterations=2,
-                    verify_commands=[],
-                    project_profile="Legacy harness contract test",
-                    resume_from=None,
-                    resume_checkpoint=None,
-                    checkpoint_every=1,
-                    pause_on_verification_failure=True,
-                    runtime_id="hermes",
-                    mission_id="mission_legacy",
-                    harness_preference="legacy_autonomous_engine",
-                    routing_strategy_override="uniform_quality",
-                    execution_target_preference="isolated_worktree",
-                )
+                "grant_agent.cli.detect_default_verification_commands",
+                return_value=["python -m pytest tests -q"],
+            ):
+                with mock.patch(
+                    "grant_agent.cli.AutonomousEngine.run",
+                    return_value={
+                        "status": "ok",
+                        "session_path": str(root / ".agent_runs" / "session_legacy"),
+                        "autopilot_status": "completed",
+                        "autopilot_pause_reason": "",
+                        "verification_failures": [],
+                        "remaining_steps": [],
+                    },
+                ) as mocked_run:
+                    result = _invoke_engine(
+                        root=root,
+                        objective="Compare the legacy harness contract.",
+                        docs=["README.md"],
+                        mode_name="autopilot",
+                        profile_name="hands_free_builder",
+                        persona_override=None,
+                        iterations=2,
+                        verify_commands=[],
+                        project_profile="Legacy harness contract test",
+                        resume_from=None,
+                        resume_checkpoint=None,
+                        checkpoint_every=1,
+                        pause_on_verification_failure=True,
+                        runtime_id="hermes",
+                        mission_id="mission_legacy",
+                        harness_preference="legacy_autonomous_engine",
+                        routing_strategy_override="uniform_quality",
+                        execution_target_preference="isolated_worktree",
+                    )
 
             self.assertTrue(mocked_run.called)
+            self.assertEqual(mocked_run.call_args.kwargs["verify_commands"], [])
+            self.assertEqual(result["effective_verify_commands"], [])
             self.assertEqual(result["harness_id"], "legacy_autonomous_engine")
             self.assertEqual(result["effective_harness"], "legacy_autonomous_engine")
             self.assertEqual(
@@ -500,7 +508,7 @@ class CliPreferenceTests(unittest.TestCase):
         self.assertEqual(settings["run_until_behavior"], "continue_until_blocked")
         self.assertTrue(settings["deadline_at"])
 
-    def test_mission_loop_continues_while_delegated_runtime_is_running(self) -> None:
+    def test_mission_loop_pauses_while_delegated_runtime_is_running(self) -> None:
         mission = argparse.Namespace(
             run_budget=argparse.Namespace(
                 run_until_behavior="continue_until_blocked",
@@ -516,7 +524,7 @@ class CliPreferenceTests(unittest.TestCase):
                 "remaining_steps": ["wait"],
             },
         )
-        self.assertTrue(should_continue)
+        self.assertFalse(should_continue)
         self.assertGreaterEqual(_mission_poll_interval_seconds(mission), 1)
 
     def test_mission_loop_stops_when_delegated_runtime_running_but_pause_mode(self) -> None:
@@ -615,6 +623,68 @@ class CliPreferenceTests(unittest.TestCase):
             self.assertEqual(payload["dispatch"]["pid"], 4242)
             self.assertEqual(payload["mission"]["state"]["status"], "running")
             mocked_cycles.assert_not_called()
+
+    def test_launch_async_mission_resume_skips_duplicate_active_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            events_path = root / ".agent_control" / "mission_events.jsonl"
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            events_path.write_text(
+                json.dumps(
+                    {
+                        "mission_id": "mission_guard",
+                        "kind": "mission.resume_dispatched",
+                        "metadata": {
+                            "pid": 6262,
+                            "logPath": str(root / "mission.log"),
+                            "command": [
+                                "python",
+                                "-m",
+                                "grant_agent.cli",
+                                "mission-action",
+                                "--mission-id",
+                                "mission_guard",
+                                "--action",
+                                "resume",
+                            ],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch("grant_agent.cli._pid_exists", return_value=True),
+                mock.patch(
+                    "grant_agent.cli._process_command",
+                    return_value=(
+                        "python -m grant_agent.cli mission-action "
+                        "--mission-id mission_guard --action resume"
+                    ),
+                ),
+                mock.patch("grant_agent.cli.subprocess.Popen") as mocked_popen,
+            ):
+                dispatch = _launch_async_mission_resume(root, "mission_guard")
+
+            self.assertTrue(dispatch["skipped"])
+            self.assertEqual(dispatch["pid"], 6262)
+            self.assertEqual(dispatch["reason"], "mission_resume_already_running")
+            mocked_popen.assert_not_called()
+
+    def test_windows_pid_check_rejects_localized_no_task_output(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["tasklist"],
+            returncode=0,
+            stdout="Information : aucune tâche en service ne correspond aux critères spécifiés.\n",
+            stderr="",
+        )
+        with (
+            mock.patch("grant_agent.cli.os.name", "nt"),
+            mock.patch("grant_agent.cli.subprocess.run", return_value=completed),
+        ):
+            self.assertFalse(_pid_exists(42944))
 
     def test_mission_action_resume_launch_async_dispatches_background_worker(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

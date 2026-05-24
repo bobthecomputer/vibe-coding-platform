@@ -5,6 +5,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream},
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex, OnceLock,
@@ -35,6 +36,7 @@ use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
 };
 use tokio::{
+    io::AsyncWriteExt,
     net::TcpListener,
     process::Command as TokioCommand,
     sync::mpsc,
@@ -1086,6 +1088,7 @@ struct OpenAiCodexOAuthResponse {
     expires: Option<i64>,
     auth_url: Option<String>,
     redirect_uri: Option<String>,
+    hermes_sync: Option<Value>,
     message: String,
 }
 
@@ -5361,11 +5364,22 @@ async fn start_openai_codex_oauth_command(
 ) -> Result<OpenAiCodexOAuthResponse, String> {
     let (code_verifier, code_challenge) = generate_openai_codex_pkce();
     let state = generate_oauth_random_value();
-    let redirect_uri = format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}/auth/callback");
-    let auth_url = build_openai_codex_authorize_url(&redirect_uri, &code_challenge, &state);
-    let listener = match StdTcpListener::bind(("127.0.0.1", OPENAI_CODEX_OAUTH_PORT)) {
-        Ok(listener) => listener,
+    let preferred_redirect_uri =
+        format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}/auth/callback");
+    let listener_result = StdTcpListener::bind(("127.0.0.1", OPENAI_CODEX_OAUTH_PORT))
+        .or_else(|_| StdTcpListener::bind(("127.0.0.1", 0)));
+    let (listener, callback_port, redirect_uri) = match listener_result {
+        Ok(listener) => {
+            let callback_port = listener
+                .local_addr()
+                .map_err(|error| format!("Failed to inspect OAuth callback listener: {error}"))?
+                .port();
+            let redirect_uri = format!("http://localhost:{callback_port}/auth/callback");
+            (listener, callback_port, redirect_uri)
+        }
         Err(error) => {
+            let auth_url =
+                build_openai_codex_authorize_url(&preferred_redirect_uri, &code_challenge, &state);
             {
                 let oauth_state = app.state::<OverlayAppState>();
                 let mut pending = oauth_state
@@ -5375,14 +5389,14 @@ async fn start_openai_codex_oauth_command(
                 *pending = Some(OpenAiCodexOAuthPending {
                     code_verifier,
                     state,
-                    redirect_uri: redirect_uri.clone(),
+                    redirect_uri: preferred_redirect_uri.clone(),
                 });
             }
             open_url_in_browser(&auth_url).await?;
             append_audit_entry(
                 &app,
                 "openai_codex.oauth_manual_required",
-                json!({ "reason": error.to_string(), "redirectUri": redirect_uri }),
+                json!({ "reason": error.to_string(), "redirectUri": preferred_redirect_uri }),
             );
             return Ok(OpenAiCodexOAuthResponse {
                 status: "manual_required".to_string(),
@@ -5390,13 +5404,15 @@ async fn start_openai_codex_oauth_command(
                 account_id: None,
                 expires: None,
                 auth_url: Some(auth_url),
-                redirect_uri: Some(redirect_uri),
+                redirect_uri: Some(preferred_redirect_uri),
+                hermes_sync: None,
                 message: format!(
-                    "Could not bind localhost callback port {OPENAI_CODEX_OAUTH_PORT}: {error}. Paste the final redirect URL to finish sign-in."
+                    "Could not bind any localhost callback port for OpenAI Codex OAuth: {error}. Paste the final redirect URL to finish sign-in."
                 ),
             });
         }
     };
+    let auth_url = build_openai_codex_authorize_url(&redirect_uri, &code_challenge, &state);
     listener
         .set_nonblocking(false)
         .map_err(|error| format!("Failed to configure OAuth callback listener: {error}"))?;
@@ -5407,7 +5423,7 @@ async fn start_openai_codex_oauth_command(
     append_audit_entry(
         &app,
         "openai_codex.oauth_started",
-        json!({ "redirectUri": redirect_uri }),
+        json!({ "redirectUri": redirect_uri, "callbackPort": callback_port }),
     );
     let callback = tokio::task::spawn_blocking(move || {
         listener
@@ -5416,7 +5432,7 @@ async fn start_openai_codex_oauth_command(
         let (stream, _) = listener
             .accept()
             .map_err(|error| format!("Failed to accept OAuth callback: {error}"))?;
-        read_oauth_callback_from_stream(stream)
+        read_oauth_callback_from_stream(stream, callback_port)
     })
     .await
     .map_err(|error| format!("OpenAI Codex OAuth callback task failed: {error}"))??;
@@ -5426,17 +5442,20 @@ async fn start_openai_codex_oauth_command(
     }
     let credential = exchange_openai_codex_oauth_code(&code, &redirect_uri, &code_verifier).await?;
     save_openai_codex_oauth_credential(&credential)?;
+    let hermes_sync = sync_openai_codex_oauth_to_wsl_hermes(&credential).await;
     append_audit_entry(
         &app,
         "openai_codex.oauth_saved",
-        json!({ "accountId": credential.account_id, "expires": credential.expires }),
+        json!({ "accountId": credential.account_id, "expires": credential.expires, "hermesSync": hermes_sync.clone() }),
     );
     emit_control_room_changed(&app, "openai_codex.oauth_saved");
-    Ok(oauth_response_from_credential(
+    let mut response = oauth_response_from_credential(
         "authenticated",
         &credential,
         "OpenAI Codex OAuth credentials saved.",
-    ))
+    );
+    response.hermes_sync = Some(hermes_sync);
+    Ok(response)
 }
 
 #[tauri::command]
@@ -5463,6 +5482,7 @@ async fn complete_openai_codex_oauth_command(
         exchange_openai_codex_oauth_code(&code, &pending.redirect_uri, &pending.code_verifier)
             .await?;
     save_openai_codex_oauth_credential(&credential)?;
+    let hermes_sync = sync_openai_codex_oauth_to_wsl_hermes(&credential).await;
     {
         let oauth_state = app.state::<OverlayAppState>();
         let mut pending = oauth_state
@@ -5474,14 +5494,16 @@ async fn complete_openai_codex_oauth_command(
     append_audit_entry(
         &app,
         "openai_codex.oauth_saved",
-        json!({ "accountId": credential.account_id, "expires": credential.expires }),
+        json!({ "accountId": credential.account_id, "expires": credential.expires, "hermesSync": hermes_sync.clone() }),
     );
     emit_control_room_changed(&app, "openai_codex.oauth_saved");
-    Ok(oauth_response_from_credential(
+    let mut response = oauth_response_from_credential(
         "authenticated",
         &credential,
         "OpenAI Codex OAuth credentials saved.",
-    ))
+    );
+    response.hermes_sync = Some(hermes_sync);
+    Ok(response)
 }
 
 fn minimax_openclaw_method_for_region(
@@ -5842,7 +5864,10 @@ async fn open_url_in_browser(target: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn read_oauth_callback_from_stream(mut stream: StdTcpStream) -> Result<String, String> {
+fn read_oauth_callback_from_stream(
+    mut stream: StdTcpStream,
+    callback_port: u16,
+) -> Result<String, String> {
     let mut reader = BufReader::new(
         stream
             .try_clone()
@@ -5877,7 +5902,7 @@ fn read_oauth_callback_from_stream(mut stream: StdTcpStream) -> Result<String, S
     if !path.starts_with("/auth/callback") {
         return Err("OAuth callback path was not /auth/callback.".to_string());
     }
-    Ok(format!("http://localhost:{OPENAI_CODEX_OAUTH_PORT}{path}"))
+    Ok(format!("http://localhost:{callback_port}{path}"))
 }
 
 fn parse_oauth_callback(callback: &str) -> Result<(String, String), String> {
@@ -6017,6 +6042,100 @@ async fn exchange_openai_codex_oauth_code(
     })
 }
 
+async fn sync_openai_codex_oauth_to_wsl_hermes(
+    credential: &OpenAiCodexOAuthCredential,
+) -> Value {
+    if !cfg!(target_os = "windows") {
+        return json!({ "synced": false, "reason": "wsl_unavailable" });
+    }
+    let payload = json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": Value::Null,
+        "tokens": {
+            "id_token": credential.id_token.clone().unwrap_or_else(|| credential.access.clone()),
+            "access_token": credential.access.clone(),
+            "refresh_token": credential.refresh.clone(),
+            "account_id": credential.account_id.clone().unwrap_or_default(),
+        },
+        "last_refresh": credential.stored_at.clone(),
+    })
+    .to_string();
+    let script = r#"
+import json
+from pathlib import Path
+import sys
+
+payload = json.loads(sys.stdin.read() or "{}")
+codex_home = Path.home() / ".codex"
+codex_home.mkdir(parents=True, exist_ok=True)
+auth_path = codex_home / "auth.json"
+auth_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+try:
+    auth_path.chmod(0o600)
+except OSError:
+    pass
+
+hermes_root = Path.home() / ".hermes" / "hermes-agent"
+sys.path.insert(0, str(hermes_root))
+try:
+    from hermes_cli.auth import (
+        DEFAULT_CODEX_BASE_URL,
+        _import_codex_cli_tokens,
+        _save_codex_tokens,
+        _update_config_for_provider,
+        get_codex_auth_status,
+    )
+
+    imported = _import_codex_cli_tokens()
+    if not imported:
+        raise RuntimeError("Hermes could not import the freshly written Codex CLI tokens.")
+    _save_codex_tokens(imported)
+    config_path = _update_config_for_provider("openai-codex", DEFAULT_CODEX_BASE_URL)
+    status = get_codex_auth_status()
+    print(json.dumps({
+        "synced": bool(status.get("logged_in")),
+        "source": status.get("source") or "hermes-auth-store",
+        "configPath": str(config_path),
+    }))
+except Exception as exc:
+    print(json.dumps({"synced": False, "reason": str(exc)}))
+"#;
+    let mut command = TokioCommand::new("wsl");
+    command
+        .arg("python3")
+        .arg("-c")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_child_console(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return json!({ "synced": false, "reason": error.to_string() }),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(error) = stdin.write_all(payload.as_bytes()).await {
+            return json!({ "synced": false, "reason": error.to_string() });
+        }
+    }
+    let output = match timeout(Duration::from_secs(45), child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => return json!({ "synced": false, "reason": error.to_string() }),
+        Err(_) => return json!({ "synced": false, "reason": "wsl_sync_timeout" }),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if let Some(line) = stdout.lines().last() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(line) {
+            return parsed;
+        }
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    json!({
+        "synced": false,
+        "reason": if stderr.trim().is_empty() { "empty_wsl_sync_output" } else { stderr.trim() },
+    })
+}
+
 fn oauth_response_from_credential(
     status: &str,
     credential: &OpenAiCodexOAuthCredential,
@@ -6029,6 +6148,7 @@ fn oauth_response_from_credential(
         expires: credential.expires,
         auth_url: None,
         redirect_uri: None,
+        hermes_sync: None,
         message: message.to_string(),
     }
 }

@@ -11,6 +11,7 @@ from errno import EBUSY, ETXTBSY
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 from .models import (
     ApprovalEscalation,
@@ -344,6 +345,7 @@ class ControlRoomStore:
         self.missions_path = self.control_dir / "missions.json"
         self.events_path = self.control_dir / "mission_events.jsonl"
         self.workspace_actions_path = self.control_dir / "workspace_actions.json"
+        self.autonomous_workflows_path = self.control_dir / "autonomous_workflows.json"
 
     def _write_json_if_changed(self, path: Path, payload: object) -> None:
         serialized = json.dumps(payload, indent=2)
@@ -451,6 +453,95 @@ class ControlRoomStore:
             self.missions_path,
             [asdict(item) for item in missions],
         )
+
+    def load_autonomous_workflows(self) -> list[dict]:
+        payload = self._load_json(self.autonomous_workflows_path, [])
+        if isinstance(payload, dict):
+            payload = payload.get("workflows", [])
+        if not isinstance(payload, list):
+            return []
+        return [dict(item) for item in payload if isinstance(item, dict)]
+
+    def save_autonomous_workflows(self, workflows: list[dict]) -> None:
+        workflows = sorted(
+            workflows,
+            key=lambda item: str(item.get("updatedAt") or item.get("createdAt") or ""),
+            reverse=True,
+        )
+        self._write_json_if_changed(
+            self.autonomous_workflows_path,
+            {
+                "schemaVersion": "autonomous-workflows.v1",
+                "updatedAt": utc_now_iso(),
+                "workflows": workflows[:200],
+            },
+        )
+
+    def record_autonomous_workflow(self, mission: Mission) -> dict:
+        workflows = self.load_autonomous_workflows()
+        previous = next(
+            (item for item in workflows if item.get("missionId") == mission.mission_id),
+            {},
+        )
+        record = _build_autonomous_workflow_record(
+            mission,
+            root=self.root,
+            event_count=self._mission_event_count(mission.mission_id),
+            previous=previous,
+        )
+        next_workflows = [
+            item for item in workflows if item.get("missionId") != mission.mission_id
+        ]
+        next_workflows.append(record)
+        self.save_autonomous_workflows(next_workflows)
+        return record
+
+    def reconcile_autonomous_workflows(self, missions: list[Mission]) -> dict:
+        workflows = self.load_autonomous_workflows()
+        by_mission = {
+            str(item.get("missionId") or ""): dict(item)
+            for item in workflows
+            if item.get("missionId")
+        }
+        next_workflows: list[dict] = []
+        mission_ids = {mission.mission_id for mission in missions}
+        for mission in missions:
+            next_workflows.append(
+                _build_autonomous_workflow_record(
+                    mission,
+                    root=self.root,
+                    event_count=self._mission_event_count(mission.mission_id),
+                    previous=by_mission.get(mission.mission_id, {}),
+                )
+            )
+        for record in workflows:
+            mission_id = str(record.get("missionId") or "")
+            if mission_id and mission_id not in mission_ids:
+                archived = dict(record)
+                archived["archived"] = True
+                archived.setdefault("archivedReason", "mission_not_in_current_store")
+                next_workflows.append(archived)
+        self.save_autonomous_workflows(next_workflows)
+        return _build_autonomous_workflow_records_snapshot(next_workflows)
+
+    def _mission_event_count(self, mission_id: str) -> int:
+        if not self.events_path.exists():
+            return 0
+        count = 0
+        try:
+            with self.events_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(payload.get("mission_id") or payload.get("missionId") or "") == mission_id:
+                        count += 1
+        except OSError:
+            return 0
+        return count
 
     def upsert_workspace(
         self,
@@ -767,6 +858,7 @@ class ControlRoomStore:
                 },
             )
         )
+        self.record_autonomous_workflow(mission)
         return mission
 
     def update_mission(self, mission: Mission) -> Mission:
@@ -777,9 +869,11 @@ class ControlRoomStore:
             if item.mission_id == mission.mission_id:
                 missions[index] = updated
                 self.save_missions(missions)
+                self.record_autonomous_workflow(updated)
                 return updated
         missions.append(updated)
         self.save_missions(missions)
+        self.record_autonomous_workflow(updated)
         return updated
 
     def get_workspace(self, workspace_id: str) -> WorkspaceProfile | None:
@@ -849,6 +943,8 @@ class ControlRoomStore:
     def build_snapshot(self) -> dict:
         workspaces = self.load_workspaces()
         missions = self.load_missions()
+        if os.environ.get("FLUXIO_CONTROL_ROOM_FAST") == "1":
+            return self._build_fast_snapshot(workspaces, missions)
         workspace_action_history = self.load_workspace_actions()
         setup_history = workspace_action_history.get("__setup__", [])
         runtime_statuses = detect_runtime_statuses(self.root)
@@ -942,7 +1038,10 @@ class ControlRoomStore:
             _sync_execution_scope_snapshot(mission)
             refreshed_sessions = []
             for session in mission.delegated_runtime_sessions:
-                refreshed = runtime_supervisor.refresh_session(session)
+                try:
+                    refreshed = runtime_supervisor.refresh_session(session)
+                except FileNotFoundError:
+                    refreshed = session
                 refreshed_sessions.append(refreshed)
             mission.delegated_runtime_sessions = refreshed_sessions
             mission.action_history = normalize_action_history(mission.action_history)
@@ -1099,6 +1198,27 @@ class ControlRoomStore:
         storage_bridge = _build_storage_bridge_snapshot(
             connected_apps_snapshot.get("connectedSessions", [])
         )
+        runtime_compartments = _build_runtime_compartments_snapshot(
+            self.root,
+            missions,
+            runtime_statuses=runtime_statuses,
+            setup_health=setup_health,
+            storage_bridge=storage_bridge,
+            provider_auth_presence=provider_auth_presence,
+        )
+        generated_image_artifacts = _build_generated_image_artifacts_snapshot(self.root)
+        hermes_mission_evidence = _build_hermes_mission_evidence(
+            self.root,
+            missions,
+            activity,
+        )
+        nas_deploy_readiness = build_nas_deploy_readiness_snapshot(
+            self.root,
+            onboarding=onboarding,
+            setup_health=setup_health,
+            storage_bridge=storage_bridge,
+        )
+        autonomous_workflows = self.reconcile_autonomous_workflows(missions)
 
         return {
             "workspaceRoot": str(self.root),
@@ -1143,6 +1263,100 @@ class ControlRoomStore:
             "bridgeLab": connected_apps_snapshot,
             "storageBridge": storage_bridge,
             "releaseReadiness": release_readiness,
+            "runtimeCompartments": runtime_compartments,
+            "generatedImageArtifacts": generated_image_artifacts,
+            "hermesMissionEvidence": hermes_mission_evidence,
+            "nasDeployReadiness": nas_deploy_readiness,
+            "autonomousWorkflows": autonomous_workflows,
+        }
+
+    def _build_fast_snapshot(self, workspaces: list[WorkspaceProfile], missions: list[Mission]) -> dict:
+        activity = self.recent_events()
+        provider_auth_presence = _provider_auth_presence_from_env()
+        workspace_payload = [
+            {
+                **asdict(workspace),
+                "openaiCodexSetupStatus": _openai_codex_setup_status_for_workspace(
+                    workspace,
+                    auth_presence=provider_auth_presence,
+                ),
+                "minimaxSetupStatus": {},
+                "runtimeStatus": None,
+                "gitSnapshot": {},
+                "gitActions": [],
+                "validationActions": [],
+                "verificationCommands": [],
+                "workspaceActionHistory": [],
+                "profileParameters": {},
+                "skillRecommendations": [],
+                "integrationRecommendations": [],
+                "recommendedSkillPacks": [],
+                "serviceManagement": {},
+            }
+            for workspace in workspaces
+        ]
+        missions_payload = []
+        for mission in missions:
+            _sync_execution_scope_snapshot(mission)
+            mission_payload = asdict(mission)
+            mission_payload["missionLoop"] = build_mission_loop_snapshot(mission)
+            mission_payload["effectiveRouteContract"] = (
+                mission.effective_route_contract
+                if mission.effective_route_contract
+                else _effective_route_contract_for_mission(mission)
+            )
+            mission_payload["providerTruth"] = dict(mission.state.provider_runtime_truth or {})
+            missions_payload.append(mission_payload)
+        storage_bridge: dict = {}
+        setup_health: dict = {"actionHistory": []}
+        autonomous_workflows = self.reconcile_autonomous_workflows(missions)
+        return {
+            "workspaceRoot": str(self.root),
+            "ui": {
+                "uiMode": "agent",
+                "defaultMode": "agent",
+                "availableModes": ["agent", "builder"],
+                "layout": "t3_workbench",
+                "sharedMissionState": True,
+            },
+            "workspaces": workspace_payload,
+            "missions": missions_payload,
+            "runtimes": [],
+            "activity": activity,
+            "inbox": [],
+            "onboarding": {"setupHealth": setup_health},
+            "setupHealth": setup_health,
+            "guidance": {},
+            "profiles": {"defaultProfile": "builder", "availableProfiles": [], "details": {}},
+            "skillLibrary": {"items": [], "recommendedPacks": []},
+            "workflowStudio": {},
+            "harnessLab": {},
+            "providerSetupStatus": {},
+            "efficiencyAutotune": {},
+            "bridgeLab": {"connectedSessions": []},
+            "storageBridge": storage_bridge,
+            "releaseReadiness": {},
+            "runtimeCompartments": _build_runtime_compartments_snapshot(
+                self.root,
+                missions,
+                runtime_statuses=[],
+                setup_health=setup_health,
+                storage_bridge=storage_bridge,
+                provider_auth_presence=provider_auth_presence,
+            ),
+            "generatedImageArtifacts": _build_generated_image_artifacts_snapshot(self.root),
+            "hermesMissionEvidence": _build_hermes_mission_evidence(
+                self.root,
+                missions,
+                activity,
+            ),
+            "nasDeployReadiness": build_nas_deploy_readiness_snapshot(
+                self.root,
+                onboarding={"setupHealth": setup_health},
+                setup_health=setup_health,
+                storage_bridge=storage_bridge,
+            ),
+            "autonomousWorkflows": autonomous_workflows,
         }
 
     def _default_workspace_profile(self) -> WorkspaceProfile:
@@ -1691,7 +1905,20 @@ def _sync_project_tree(source: Path, target: Path, *, conflict_policy: str) -> d
             target_file = target_root / file_name
             if target_file.exists():
                 if conflict_policy == "local_wins":
-                    pass
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                    copy_result = _copy_project_file_with_retry(source_file, target_file)
+                    if copy_result == "copied":
+                        copied += 1
+                        continue
+                    skipped += 1
+                    if copy_result == "locked":
+                        locked_skipped += 1
+                        if len(locked_samples) < SYNC_LOCKED_FILE_SAMPLE_LIMIT:
+                            locked_samples.append(str(source_file))
+                        continue
+                    if copy_result == "missing":
+                        missing_skipped += 1
+                        continue
                 elif conflict_policy == "nas_wins":
                     skipped += 1
                     continue
@@ -3083,6 +3310,224 @@ def _build_workflow_studio(
     }
 
 
+def _as_mapping(value: object) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "__dataclass_fields__"):
+        return asdict(value)
+    return {}
+
+
+def _unique_texts(values: list[object]) -> list[str]:
+    seen: set[str] = set()
+    items: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        items.append(text)
+    return items
+
+
+def _workflow_record_path(root: Path, raw_path: object, *, label: str, source: str) -> dict:
+    value = str(raw_path or "").strip()
+    if not value:
+        return {}
+    path = _recover_evidence_path(root, value)
+    return {
+        "label": label,
+        "path": value,
+        "resolvedPath": str(path),
+        "exists": path.exists(),
+        "servedUrl": _artifact_api_url_if_safe(path),
+        "source": source,
+    }
+
+
+def _build_autonomous_workflow_record(
+    mission: Mission,
+    *,
+    root: Path,
+    event_count: int = 0,
+    previous: dict | None = None,
+) -> dict:
+    previous = previous or {}
+    delegated_sessions = [
+        _as_mapping(session) for session in mission.delegated_runtime_sessions or []
+    ]
+    delegated_sessions = [item for item in delegated_sessions if item]
+    action_history = [
+        _as_mapping(action) for action in mission.action_history or []
+    ]
+    action_history = [item for item in action_history if item]
+    mission_loop = build_mission_loop_snapshot(mission)
+
+    changed_files: list[object] = list(mission.proof.changed_files or [])
+    for session in delegated_sessions:
+        changed_files.extend(session.get("changed_files") or [])
+    for action in action_history:
+        result = _as_mapping(action.get("result"))
+        changed_files.extend(result.get("changed_files") or [])
+
+    approval_history = list(mission.state.approval_history or [])
+    pending_approvals = list(mission.proof.pending_approvals or [])
+    for session in delegated_sessions:
+        pending = _as_mapping(session.get("pending_approval"))
+        if pending and str(pending.get("status") or "pending") == "pending":
+            pending_approvals.append(pending.get("prompt") or pending.get("request_id"))
+        approval_history.extend(
+            item for item in session.get("approval_history") or [] if isinstance(item, dict)
+        )
+
+    evidence_files: list[dict] = []
+    for session in delegated_sessions:
+        for raw_path, label, source in (
+            (session.get("session_path"), "session state", "delegated_runtime_session"),
+            (session.get("events_path"), "session events", "delegated_runtime_events"),
+            (session.get("log_path"), "runtime log", "delegated_runtime_log"),
+        ):
+            evidence = _workflow_record_path(root, raw_path, label=label, source=source)
+            if evidence:
+                evidence_files.append(evidence)
+    deduped_evidence: list[dict] = []
+    seen_evidence: set[str] = set()
+    for evidence in evidence_files:
+        key = str(evidence.get("resolvedPath") or evidence.get("path") or "")
+        if not key or key in seen_evidence:
+            continue
+        seen_evidence.add(key)
+        deduped_evidence.append(evidence)
+
+    session_statuses = [
+        str(session.get("status") or "").strip()
+        for session in delegated_sessions
+        if session.get("status")
+    ]
+    failed_sessions = sum(1 for status in session_statuses if status == "failed")
+    active_sessions = sum(
+        1
+        for status in session_statuses
+        if status in {"queued", "launching", "running", "waiting_for_approval"}
+    )
+    workflow_id = str(previous.get("workflowId") or f"workflow_{mission.mission_id}")
+    created_at = str(previous.get("createdAt") or mission.created_at)
+    updated_at_candidates = [
+        mission.updated_at,
+        *[str(session.get("updated_at") or "") for session in delegated_sessions],
+    ]
+    updated_at = max((item for item in updated_at_candidates if item), default=mission.updated_at)
+
+    return {
+        "schemaVersion": "autonomous-workflow-record.v1",
+        "workflowId": workflow_id,
+        "missionId": mission.mission_id,
+        "workspaceId": mission.workspace_id,
+        "title": mission.title or _mission_title(mission.objective),
+        "objective": mission.objective,
+        "status": mission.state.status,
+        "runtimeId": mission.runtime_id,
+        "mode": mission.run_budget.mode,
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+        "currentPhase": mission_loop.get("currentCyclePhase", ""),
+        "continuityState": mission_loop.get("continuityState", ""),
+        "continuityDetail": mission_loop.get("continuityDetail", ""),
+        "runBudget": {
+            "mode": mission.run_budget.mode,
+            "maxRuntimeSeconds": mission.run_budget.max_runtime_seconds,
+            "remainingSeconds": mission.state.remaining_runtime_seconds,
+            "status": mission.state.time_budget_status,
+            "runUntilBehavior": mission.run_budget.run_until_behavior,
+        },
+        "executionScope": asdict(mission.execution_scope),
+        "executionPolicy": asdict(mission.execution_policy),
+        "routeContract": (
+            mission.effective_route_contract
+            if mission.effective_route_contract
+            else _effective_route_contract_for_mission(mission)
+        ),
+        "runtimeSummary": {
+            "delegatedSessionCount": len(delegated_sessions),
+            "activeSessionCount": active_sessions,
+            "failedSessionCount": failed_sessions,
+            "latestSessionId": mission.state.latest_session_id
+            or (str(delegated_sessions[-1].get("delegated_id") or "") if delegated_sessions else ""),
+            "currentRuntimeLane": mission_loop.get("currentRuntimeLane", ""),
+            "lastRuntimeEvent": mission.state.last_runtime_event,
+        },
+        "approvalSummary": {
+            "pending": _unique_texts(pending_approvals),
+            "pendingCount": len(_unique_texts(pending_approvals)),
+            "historyCount": len(approval_history),
+            "latest": approval_history[-1] if approval_history else {},
+        },
+        "verification": {
+            "commands": list(mission.verification_policy.commands or []),
+            "lastResult": mission_loop.get("lastVerificationResult", ""),
+            "lastSummary": mission_loop.get("lastVerificationSummary", ""),
+            "passedChecks": list(mission.proof.passed_checks or []),
+            "failedChecks": list(mission.proof.failed_checks or []),
+            "verificationFailures": list(mission.state.verification_failures or []),
+        },
+        "risk": {
+            "blockers": list(mission.proof.blocked_by or []),
+            "blockerClassification": dict(mission.state.blocker_classification or {}),
+            "pendingMutatingActions": mission.state.pending_mutating_actions,
+            "stopReason": mission.state.stop_reason or "",
+        },
+        "changedFiles": _unique_texts(changed_files),
+        "eventCount": event_count,
+        "evidenceFiles": deduped_evidence,
+        "lastProofSummary": mission.proof.summary,
+        "archived": False,
+    }
+
+
+def _build_autonomous_workflow_records_snapshot(workflows: list[dict]) -> dict:
+    active_records = [item for item in workflows if not item.get("archived")]
+    needs_approval = [
+        item
+        for item in active_records
+        if item.get("status") == "needs_approval"
+        or int(item.get("approvalSummary", {}).get("pendingCount", 0) or 0) > 0
+    ]
+    running = [
+        item
+        for item in active_records
+        if item.get("status") in {"running", "queued", "delegated_active"}
+        or item.get("runtimeSummary", {}).get("activeSessionCount", 0)
+    ]
+    failed = [
+        item
+        for item in active_records
+        if item.get("status") in {"failed", "verification_failed", "blocked"}
+        or item.get("runtimeSummary", {}).get("failedSessionCount", 0)
+        or item.get("verification", {}).get("failedChecks")
+        or item.get("verification", {}).get("verificationFailures")
+        or item.get("risk", {}).get("blockers")
+    ]
+    completed = [item for item in active_records if item.get("status") == "completed"]
+    return {
+        "schemaVersion": "autonomous-workflows.v1",
+        "items": workflows[:80],
+        "summary": {
+            "total": len(active_records),
+            "running": len(running),
+            "needsApproval": len(needs_approval),
+            "failedOrBlocked": len(failed),
+            "completed": len(completed),
+            "archived": len(workflows) - len(active_records),
+        },
+        "emptyState": (
+            "No autonomous workflow records have been captured yet. Start a mission to create an audit record."
+            if not active_records
+            else ""
+        ),
+        "source": "agent_control_autonomous_workflows",
+    }
+
+
 def detect_workspace_type(root: Path) -> str:
     root = root.resolve()
     if (root / "src-tauri").exists() and (root / "pyproject.toml").exists():
@@ -3453,6 +3898,946 @@ def _build_proving_cycle_readiness(root: Path) -> dict:
         "missingProofs": missing,
         "ready": not missing,
         "nextActions": next_actions[:4],
+    }
+
+
+def _event_timestamp(event: dict) -> str:
+    return str(
+        event.get("timestamp")
+        or event.get("at")
+        or event.get("created_at")
+        or event.get("updated_at")
+        or event.get("executed_at")
+        or ""
+    )
+
+
+def _safe_artifact_id(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:24]
+
+
+def _runtime_lane_rows_for_mission(mission: Mission, session: DelegatedRuntimeSession | None = None) -> list[dict]:
+    contract = (
+        mission.effective_route_contract
+        if mission.effective_route_contract
+        else _effective_route_contract_for_mission(mission)
+    )
+    route_rows = contract.get("roles") if isinstance(contract, dict) else []
+    if not isinstance(route_rows, list):
+        route_rows = []
+    provider_truth = mission.state.provider_runtime_truth if isinstance(mission.state.provider_runtime_truth, dict) else {}
+    active_route = provider_truth.get("activeRoute") if isinstance(provider_truth.get("activeRoute"), dict) else {}
+    active_role = str(active_route.get("role") or "").strip().lower()
+    auth_present = bool(provider_truth.get("authPresent"))
+    last_failure = provider_truth.get("lastFailure") if isinstance(provider_truth.get("lastFailure"), dict) else {}
+    lanes: list[dict] = []
+    seen_roles: set[str] = set()
+    for role in ("planner", "executor", "verifier"):
+        route = next(
+            (
+                dict(item)
+                for item in route_rows
+                if isinstance(item, dict) and str(item.get("role", "")).strip().lower() == role
+            ),
+            {},
+        )
+        provider = str(route.get("provider") or active_route.get("provider") or "openai-codex").strip().lower()
+        model = str(route.get("model") or active_route.get("model") or "gpt-5.5").strip()
+        health = "ready" if auth_present and provider in {"openai", "openai-codex"} else ("blocked" if provider else "unknown")
+        blocker = ""
+        if provider not in {"openai", "openai-codex"}:
+            blocker = "Route is not using the OpenAI Codex coding path."
+            health = "blocked"
+        elif not auth_present:
+            blocker = "OpenAI Codex OAuth/API auth is not present for this runtime."
+        if last_failure and str(last_failure.get("role", "")).strip().lower() == role:
+            blocker = str(last_failure.get("summary") or blocker)
+            health = "blocked"
+        lanes.append(
+            {
+                "role": role,
+                "phase": "plan" if role == "planner" else ("verify" if role == "verifier" else "execute"),
+                "provider": provider,
+                "model": model,
+                "effort": str(route.get("effort") or active_route.get("effort") or "medium"),
+                "authPresent": auth_present if provider in {"openai", "openai-codex"} else False,
+                "authPath": str(provider_truth.get("authPath") or "OpenAI Codex OAuth"),
+                "health": health,
+                "active": role == active_role or (not active_role and role == "executor"),
+                "blocker": blocker,
+                "actions": [
+                    "inspect-events",
+                    "resume" if session and session.status in {"running", "waiting_for_approval", "failed", "stopped"} else "open-proof",
+                ],
+            }
+        )
+        seen_roles.add(role)
+    for item in route_rows:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        if role and role not in seen_roles:
+            lanes.append(
+                {
+                    "role": role,
+                    "phase": role,
+                    "provider": str(item.get("provider") or ""),
+                    "model": str(item.get("model") or ""),
+                    "effort": str(item.get("effort") or "medium"),
+                    "authPresent": False,
+                    "authPath": "",
+                    "health": "unknown",
+                    "active": False,
+                    "blocker": "",
+                    "actions": ["inspect-events"],
+                }
+            )
+    return lanes
+
+
+def _build_runtime_compartments_snapshot(
+    root: Path,
+    missions: list[Mission],
+    *,
+    runtime_statuses: list | None = None,
+    setup_health: dict | None = None,
+    storage_bridge: dict | None = None,
+    provider_auth_presence: dict[str, bool] | None = None,
+) -> dict:
+    items: list[dict] = []
+    seen_ids: set[str] = set()
+
+    compartment_dir = root / ".agent_control" / "runtime_compartments"
+    if compartment_dir.exists():
+        for path in sorted(compartment_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            session_id = str(payload.get("sessionId") or path.stem).strip()
+            if not session_id:
+                continue
+            seen_ids.add(session_id)
+            timeline = payload.get("toolTimeline") if isinstance(payload.get("toolTimeline"), list) else []
+            route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+            state = str(payload.get("state") or payload.get("status") or "recorded")
+            streaming = str(payload.get("streaming") or payload.get("lifecycle") or "recorded")
+            items.append(
+                {
+                    "id": session_id,
+                    "sessionId": session_id,
+                    "runtime": str(payload.get("runtime") or "codex"),
+                    "status": state,
+                    "state": state,
+                    "lifecycle": streaming,
+                    "streaming": streaming,
+                    "cwd": str(payload.get("cwd") or ""),
+                    "host": str(payload.get("host") or ""),
+                    "route": route,
+                    "updatedAt": str(payload.get("updatedAt") or ""),
+                    "source": "web_backend_compartment",
+                    "recentActivity": timeline[-8:],
+                    "toolTimeline": timeline[-12:],
+                    "messages": payload.get("messages")
+                    if isinstance(payload.get("messages"), list)
+                    else [],
+                    "lanes": payload.get("lanes") if isinstance(payload.get("lanes"), list) else [],
+                    "blockers": payload.get("blockers") if isinstance(payload.get("blockers"), list) else [],
+                    "actions": payload.get("actions") if isinstance(payload.get("actions"), list) else ["open-proof"],
+                    "restartControls": payload.get("restartControls")
+                    if isinstance(payload.get("restartControls"), dict)
+                    else {},
+                    "filesChanged": payload.get("filesChanged")
+                    if isinstance(payload.get("filesChanged"), list)
+                    else [],
+                    "approvals": payload.get("approvals") if isinstance(payload.get("approvals"), list) else [],
+                }
+            )
+
+    for mission in missions:
+        for session in mission.delegated_runtime_sessions or []:
+            session_id = session.delegated_id or session.session_path or f"{mission.mission_id}:{session.runtime_id}"
+            if session_id in seen_ids:
+                continue
+            seen_ids.add(session_id)
+            recent_events = session.latest_events[-8:] if isinstance(session.latest_events, list) else []
+            lanes = _runtime_lane_rows_for_mission(mission, session)
+            blockers = [
+                lane["blocker"]
+                for lane in lanes
+                if isinstance(lane, dict) and str(lane.get("blocker") or "").strip()
+            ]
+            items.append(
+                {
+                    "id": session_id,
+                    "sessionId": session.delegated_id,
+                    "missionId": mission.mission_id,
+                    "missionTitle": mission.title or mission.objective,
+                    "runtime": session.runtime_id or mission.runtime_id,
+                    "status": session.status or mission.state.status,
+                    "state": session.status or mission.state.status,
+                    "lifecycle": (
+                        "live"
+                        if session.status in {"queued", "launching", "running", "waiting_for_approval"}
+                        else "recorded"
+                    ),
+                    "streaming": (
+                        "live"
+                        if session.status in {"queued", "launching", "running", "waiting_for_approval"}
+                        else "recorded"
+                    ),
+                    "cwd": session.execution_root or session.workspace_root,
+                    "host": session.host_locality,
+                    "route": {
+                        "phase": session.target_phase,
+                        "role": session.target_role,
+                        "provider": session.target_provider,
+                        "model": session.target_model,
+                        "effort": session.target_effort,
+                    },
+                    "updatedAt": session.updated_at,
+                    "source": "delegated_runtime_session",
+                    "recentActivity": recent_events,
+                    "toolTimeline": recent_events,
+                    "messages": [],
+                    "lanes": lanes,
+                    "blockers": blockers,
+                    "actions": [
+                        "resume" if session.status in {"running", "waiting_for_approval", "failed", "stopped"} else "inspect-events",
+                        "open-proof",
+                        "restart",
+                    ],
+                    "restartControls": {
+                        "canRestart": True,
+                        "canResume": session.status in {"running", "waiting_for_approval", "failed", "stopped"},
+                    },
+                    "filesChanged": session.changed_files,
+                    "approvals": session.approval_history,
+                    "heartbeat": {
+                        "status": session.heartbeat_status,
+                        "at": session.heartbeat_at,
+                        "ageSeconds": session.heartbeat_age_seconds,
+                    },
+                }
+            )
+
+    def sort_key(item: dict) -> str:
+        return str(item.get("updatedAt") or "")
+
+    items.sort(key=sort_key, reverse=True)
+    live_count = sum(1 for item in items if item.get("lifecycle") == "live")
+    compartments = _build_control_compartment_overview(
+        root,
+        runtime_statuses=runtime_statuses,
+        setup_health=setup_health,
+        storage_bridge=storage_bridge,
+        provider_auth_presence=provider_auth_presence,
+    )
+    return {
+        "items": items[:40],
+        "compartments": compartments,
+        "summary": {
+            "total": len(items),
+            "live": live_count,
+            "recorded": len(items) - live_count,
+            "controlCompartments": len(compartments),
+        },
+        "emptyState": (
+            "No live runtime compartment has been recorded yet. Send a live Agent chat or start a mission to create one."
+            if not items
+            else ""
+        ),
+        "source": "agent_control_runtime_state",
+    }
+
+
+def _artifact_api_url(path: Path) -> str:
+    return f"/api/artifact?{urlencode({'id': _safe_artifact_id(path)})}"
+
+
+SAFE_ARTIFACT_SUFFIXES = {
+    ".apng",
+    ".avif",
+    ".gif",
+    ".jpeg",
+    ".jpg",
+    ".json",
+    ".jsonl",
+    ".log",
+    ".md",
+    ".png",
+    ".svg",
+    ".txt",
+    ".webp",
+}
+
+
+def _artifact_api_url_if_safe(path: Path) -> str:
+    return _artifact_api_url(path) if path.exists() and path.suffix.lower() in SAFE_ARTIFACT_SUFFIXES else ""
+
+
+def _platform_path_for_windows_drive(raw_path: object) -> Path:
+    value = str(raw_path or "").strip()
+    match = re.match(r"^([A-Za-z]):[\\/](.*)$", value)
+    if not match:
+        return Path(value)
+    if os.name == "nt":
+        return Path(value)
+    drive = match.group(1).lower()
+    rest = match.group(2).replace("\\", "/").lstrip("/")
+    return Path(f"/mnt/{drive}/{rest}")
+
+
+def _recover_evidence_path(root: Path, raw_path: object) -> Path:
+    raw = str(raw_path or "").strip()
+    candidates: list[Path] = []
+    if raw:
+        candidate = Path(raw)
+        candidates.append(candidate if candidate.is_absolute() else root / candidate)
+        normalized = raw.replace("\\", "/")
+        if re.match(r"^[A-Za-z]:[\\/]", raw):
+            candidates.append(_platform_path_for_windows_drive(raw))
+        embedded_windows = re.search(r"([A-Za-z]:[\\/][^\r\n]+)$", raw)
+        if embedded_windows:
+            candidates.append(_platform_path_for_windows_drive(embedded_windows.group(1)))
+        embedded_normalized = re.search(r"([A-Za-z]:/[^\r\n]+)$", normalized)
+        if embedded_normalized:
+            candidates.append(_platform_path_for_windows_drive(embedded_normalized.group(1)))
+        if normalized.startswith("/volume1/"):
+            candidates.append(Path("C:/volume1") / normalized.removeprefix("/volume1/"))
+            if os.name != "nt":
+                candidates.append(Path("/mnt/c/volume1") / normalized.removeprefix("/volume1/"))
+        direct_hits: list[Path] = []
+        seen_direct: set[str] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if not resolved.exists():
+                continue
+            key = str(resolved)
+            if key in seen_direct:
+                continue
+            seen_direct.add(key)
+            direct_hits.append(resolved)
+        if direct_hits:
+            return direct_hits[0]
+        return candidates[0] if candidates else root
+        name = Path(normalized).name
+        if name:
+            for search_root in (
+                root / ".agent_control" / "runtime_sessions",
+                root / ".agent_control" / "mission_async",
+                root / ".agent_runs",
+                Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"),
+                Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"),
+                Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"),
+            ):
+                if search_root.exists():
+                    candidates.extend(search_root.rglob(name))
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.exists():
+            return resolved
+    return candidates[0] if candidates else root
+
+
+def _path_evidence(path: Path, *, source: str, label: str | None = None) -> dict:
+    exists = path.exists()
+    timestamp = ""
+    if exists:
+        try:
+            timestamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+        except OSError:
+            timestamp = ""
+    return {
+        "label": label or path.name,
+        "path": str(path),
+        "exists": exists,
+        "timestamp": timestamp,
+        "source": source,
+        "provenance": "filesystem",
+    }
+
+
+def _latest_matching_files(root: Path, patterns: list[str], *, limit: int = 8) -> list[Path]:
+    matches: list[Path] = []
+    for pattern in patterns:
+        matches.extend(root.glob(pattern))
+    existing = [item for item in matches if item.exists() and item.is_file()]
+    existing.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    return existing[:limit]
+
+
+def _build_control_compartment_overview(
+    root: Path,
+    *,
+    runtime_statuses: list | None = None,
+    setup_health: dict | None = None,
+    storage_bridge: dict | None = None,
+    provider_auth_presence: dict[str, bool] | None = None,
+) -> list[dict]:
+    runtime_statuses = runtime_statuses or []
+    setup_health = setup_health or {}
+    storage_bridge = storage_bridge or {}
+    provider_auth_presence = provider_auth_presence or _provider_auth_presence_from_env()
+    service_summary = setup_health.get("serviceManagementSummary", {}) if isinstance(setup_health, dict) else {}
+    total_services = int(service_summary.get("totalItems", 0) or 0) if isinstance(service_summary, dict) else 0
+    healthy_services = int(service_summary.get("healthyCount", 0) or 0) if isinstance(service_summary, dict) else 0
+    codex_command = shutil.which("codex")
+    runtime_bin = root / ".agent_control" / "runtime" / "bin"
+    frontend_dist = root / "web" / "dist" / "index.html"
+    backend_script = root / "scripts" / "run_web_backend.py"
+    nas_doctor = root / "scripts" / "nas_runtime_doctor.py"
+    nas_probe = root / "scripts" / "nas_ssh_probe.py"
+    codex_auth_ready = bool(provider_auth_presence.get("openai-codex") or provider_auth_presence.get("openai"))
+    runtime_evidence = [
+        {
+            "label": item.label,
+            "status": "detected" if item.detected else "missing",
+            "source": "runtime_adapter_scan",
+            "timestamp": utc_now_iso(),
+            "provenance": item.command or item.install_hint or "detect_runtime_statuses",
+        }
+        for item in runtime_statuses
+    ]
+    compartments = [
+        {
+            "id": "setup",
+            "label": "Setup",
+            "status": "ready" if total_services > 0 and healthy_services == total_services else "offline-safe",
+            "ports": [],
+            "paths": [str(root / ".agent_control"), str(root / "config")],
+            "actions": ["python scripts/nas_runtime_doctor.py --root .", "python scripts/nas_setup.py --help"],
+            "evidence": [
+                {
+                    "label": "setup service health",
+                    "source": "onboarding.setupHealth",
+                    "timestamp": utc_now_iso(),
+                    "provenance": f"{healthy_services}/{total_services} services healthy",
+                }
+            ],
+        },
+        {
+            "id": "runtime",
+            "label": "Runtime",
+            "status": "ready" if codex_auth_ready else "blocked",
+            "ports": [],
+            "paths": [str(runtime_bin), str(root / ".agent_control" / "runtime_sessions")],
+            "actions": [
+                "syntelos-codex-oauth-helper",
+                "codex exec --model gpt-5.5 --sandbox read-only",
+            ],
+            "evidence": runtime_evidence
+            + [
+                {
+                    "label": "OpenAI Codex OAuth/API auth",
+                    "source": "provider_auth_presence",
+                    "timestamp": utc_now_iso(),
+                    "provenance": "openai-codex" if provider_auth_presence.get("openai-codex") else "openai api key/env",
+                    "passed": codex_auth_ready,
+                },
+                {
+                    "label": "Codex CLI",
+                    "source": "PATH",
+                    "timestamp": utc_now_iso(),
+                    "provenance": codex_command or "codex command not found",
+                    "passed": bool(codex_command),
+                },
+            ],
+        },
+        {
+            "id": "backend",
+            "label": "Backend",
+            "status": "ready" if backend_script.exists() else "blocked",
+            "ports": [int(os.environ.get("FLUXIO_WEB_PORT", "47880") or 47880)],
+            "paths": [str(backend_script), str(root / ".agent_control" / "web-backend.log")],
+            "actions": ["python scripts/run_web_backend.py --host 127.0.0.1 --port 47880"],
+            "portSafety": {
+                "duplicateListenerPreflight": True,
+                "allowOverrideFlag": "--allow-port-reuse",
+                "purpose": "avoid starting multiple Fluxio backends on the same local port",
+            },
+            "evidence": [_path_evidence(backend_script, source="filesystem", label="web backend runner")],
+        },
+        {
+            "id": "frontend",
+            "label": "Frontend",
+            "status": "ready" if frontend_dist.exists() else "offline-safe",
+            "ports": [int(os.environ.get("TAURI_DEV_PORT", "1420") or 1420)],
+            "paths": [str(root / "web" / "src"), str(root / "web" / "dist")],
+            "actions": ["npm run frontend:build", "npm run frontend:dev"],
+            "evidence": [_path_evidence(frontend_dist, source="filesystem", label="built /control shell")],
+        },
+        {
+            "id": "browser",
+            "label": "Browser",
+            "status": "ready" if frontend_dist.exists() else "offline-safe",
+            "ports": [int(os.environ.get("TAURI_DEV_PORT", "1420") or 1420)],
+            "paths": ["/control", "/api/backend", "/api/artifact"],
+            "actions": ["node scripts/control_route_smoke.mjs", "open http://127.0.0.1:1420/control"],
+            "evidence": [
+                {
+                    "label": "control route contract",
+                    "source": "frontend_route",
+                    "timestamp": utc_now_iso(),
+                    "provenance": "/control served by Vite or web backend SPA fallback",
+                }
+            ],
+        },
+        {
+            "id": "nas",
+            "label": "NAS",
+            "status": "ready" if storage_bridge.get("available") else "offline-safe",
+            "ports": [22, int(os.environ.get("FLUXIO_WEB_PORT", "47880") or 47880)],
+            "paths": [
+                str(root / ".agent_control"),
+                "/volume1/Saclay/projects/vibe-coding-platform",
+                r"C:\volume1\Saclay\projects\vibe-coding-platform",
+            ],
+            "actions": [
+                "python scripts/nas_setup.py --help",
+                "python scripts/nas_runtime_doctor.py --root .",
+                "python scripts/nas_ssh_probe.py --help",
+                "python scripts/nas_ssh_probe.py --host <nas> --port 22 --user <user> --diagnose --cooldown-seconds 20",
+            ],
+            "portSafety": {
+                "guarded": True,
+                "ports": [22],
+                "cooldownSeconds": 20,
+                "windowSeconds": 60,
+                "maxAttempts": 6,
+                "statePath": str(root / ".agent_control" / "port_safety.json"),
+                "purpose": "avoid repeated SSH/SFTP probes overloading NAS port 22",
+            },
+            "evidence": [
+                _path_evidence(nas_doctor, source="filesystem", label="NAS doctor"),
+                _path_evidence(nas_probe, source="filesystem", label="NAS SSH probe"),
+            ],
+        },
+    ]
+    for compartment in compartments:
+        compartment["updatedAt"] = utc_now_iso()
+    return compartments
+
+
+def _build_generated_image_artifacts_snapshot(root: Path) -> dict:
+    artifact_roots = [
+        root / ".agent_control" / "image_playground_artifacts",
+        root / ".agent_control" / "generated_image_artifacts",
+        root / ".agent_control" / "design_references",
+    ]
+    image_suffixes = {".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+    min_visual_artifact_bytes = 512
+    items: list[dict] = []
+    seen_paths: set[str] = set()
+
+    def add_image_artifact(image_path: Path, manifest_path: Path | None = None, manifest: dict | None = None) -> None:
+        manifest = manifest if isinstance(manifest, dict) else {}
+        try:
+            if image_path.stat().st_size < min_visual_artifact_bytes:
+                return
+        except OSError:
+            return
+        try:
+            key = str(image_path.resolve())
+        except OSError:
+            key = str(image_path)
+        if key in seen_paths:
+            return
+        seen_paths.add(key)
+        items.append(
+            {
+                "artifactId": str(manifest.get("artifactId") or manifest.get("requestId") or image_path.stem),
+                "servedArtifactId": str(manifest.get("servedArtifactId") or _safe_artifact_id(image_path)),
+                "requestId": str(manifest.get("requestId") or ""),
+                "status": "served",
+                "provider": str(manifest.get("provider") or "Syntelos local artifact lane"),
+                "operation": str(manifest.get("operation") or "generate"),
+                "createdAt": str(
+                    manifest.get("createdAt")
+                    or datetime.fromtimestamp(image_path.stat().st_mtime, timezone.utc).isoformat()
+                ),
+                "artifactPath": str(image_path),
+                "manifestPath": str(manifest_path or ""),
+                "previewUrl": _artifact_api_url(image_path),
+                "manifestUrl": _artifact_api_url(manifest_path) if manifest_path else "",
+                "contentType": str(manifest.get("contentType") or "image/png"),
+                "safeArtifactArea": str(
+                    manifest.get("safeArtifactArea")
+                    or ".agent_control/design_references/codex_image_artifacts"
+                ),
+                "localPath": str(manifest.get("localPath") or image_path),
+                "nasPathCandidates": manifest.get("nasPathCandidates")
+                if isinstance(manifest.get("nasPathCandidates"), list)
+                else [],
+                "provenance": manifest.get("provenance") if isinstance(manifest.get("provenance"), dict) else {
+                    "servedBy": "web-backend",
+                    "safeEndpoint": "/api/artifact",
+                    "arbitraryWorkspaceFilesExposed": False,
+                },
+                "metadata": {
+                    "artifactSha256": manifest.get("artifactSha256") or "",
+                    "manifestSha256": manifest.get("manifestSha256") or "",
+                    "prompt": manifest.get("prompt") if isinstance(manifest.get("prompt"), dict) else {},
+                    "canvas": manifest.get("canvas") if isinstance(manifest.get("canvas"), dict) else {},
+                },
+                "source": "generated_image_artifact_manifest" if manifest_path else "generated_image_artifact_file",
+            }
+        )
+
+    for artifact_root in artifact_roots:
+        if not artifact_root.exists():
+            continue
+        manifest_paths = sorted(
+            artifact_root.rglob("*.manifest.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for manifest_path in manifest_paths[:80]:
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                manifest = {}
+            if not isinstance(manifest, dict):
+                manifest = {}
+            image_path = Path(str(manifest.get("artifactPath") or ""))
+            if not image_path.is_absolute():
+                image_path = manifest_path.with_suffix("").with_suffix(".png")
+            if not image_path.exists():
+                sibling_images = [
+                    item
+                    for item in manifest_path.parent.glob(f"{manifest_path.name.removesuffix('.manifest.json')}.*")
+                    if item.suffix.lower() in image_suffixes
+                ]
+                image_path = sibling_images[0] if sibling_images else image_path
+            if not image_path.exists() or image_path.suffix.lower() not in image_suffixes:
+                continue
+            add_image_artifact(image_path, manifest_path, manifest)
+        direct_images = sorted(
+            [item for item in artifact_root.rglob("*") if item.is_file() and item.suffix.lower() in image_suffixes],
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for image_path in direct_images[:120]:
+            add_image_artifact(image_path)
+
+    return {
+        "items": items[:40],
+        "summary": {"total": len(items[:40])},
+        "emptyState": (
+            "No generated image artifacts are available yet. Generate an image in live mode to create served artifact URLs."
+            if not items
+            else ""
+        ),
+        "source": "agent_control_artifact_manifests",
+    }
+
+
+def _build_hermes_mission_evidence(root: Path, missions: list[Mission], activity: list[dict]) -> dict:
+    items: list[dict] = []
+
+    for mission in missions:
+        mission_is_hermes = str(mission.runtime_id).lower() == "hermes"
+        hermes_sessions = [
+            session
+            for session in mission.delegated_runtime_sessions or []
+            if str(session.runtime_id).lower() == "hermes"
+        ]
+        if mission_is_hermes or hermes_sessions:
+            mission_artifacts = []
+            proof_artifacts = getattr(mission, "proof_artifacts", None)
+            if proof_artifacts is None:
+                proof_artifacts = getattr(mission.proof, "artifacts", None)
+            for artifact in proof_artifacts or []:
+                artifact_text = str(artifact)
+                artifact_path = _recover_evidence_path(root, artifact_text)
+                mission_artifacts.append(
+                    {
+                        "label": artifact_path.name or artifact_text,
+                        "path": artifact_text,
+                        "servedUrl": _artifact_api_url_if_safe(artifact_path),
+                        "exists": artifact_path.exists(),
+                    }
+                )
+            command_evidence = []
+            for action in mission.action_history[-8:]:
+                result = action.get("result", {}) if isinstance(action, dict) else {}
+                proposal = action.get("proposal", {}) if isinstance(action, dict) else {}
+                command_evidence.append(
+                    {
+                        "title": str(proposal.get("title") or action.get("action_id") or "action"),
+                        "command": str(result.get("command") or result.get("executed_command") or ""),
+                        "ok": bool(result.get("ok")) if "ok" in result else not bool(result.get("error")),
+                        "summary": str(result.get("result_summary") or result.get("error") or result.get("stdout") or ""),
+                        "timestamp": str(action.get("executed_at") or mission.updated_at),
+                        "provenance": "mission.action_history",
+                    }
+                )
+            for session in hermes_sessions:
+                for raw_path, label, source in (
+                    (session.session_path, "session state", "delegated_runtime_session"),
+                    (session.events_path, "session events", "delegated_runtime_events"),
+                    (session.log_path, "runtime log", "delegated_runtime_log"),
+                ):
+                    if not raw_path:
+                        continue
+                    evidence_path = _recover_evidence_path(root, raw_path)
+                    mission_artifacts.append(
+                        {
+                            **_path_evidence(evidence_path, source=source, label=label),
+                            "servedUrl": _artifact_api_url_if_safe(evidence_path),
+                        }
+                    )
+            for evidence_path in _latest_matching_files(
+                root,
+                [
+                    ".agent_control/mission_async/*.log",
+                ],
+                limit=8,
+            ):
+                mission_artifacts.append(
+                    {
+                        **_path_evidence(evidence_path, source="run_evidence", label=evidence_path.name),
+                        "servedUrl": _artifact_api_url_if_safe(evidence_path),
+                    }
+                )
+            failure_reasons = [
+                *[str(item) for item in mission.proof.failed_checks],
+                *[str(item) for item in mission.state.verification_failures],
+                *[str(item.get("blocker") or "") for item in _runtime_lane_rows_for_mission(mission) if item.get("blocker")],
+            ]
+            items.append(
+                {
+                    "timestamp": mission.updated_at,
+                    "status": mission.state.status,
+                    "source": "mission_summary",
+                    "missionId": mission.mission_id,
+                    "objective": mission.objective,
+                    "successChecks": list(mission.success_checks),
+                    "message": mission.proof.summary or mission.title or mission.objective,
+                    "artifacts": mission_artifacts,
+                    "commandEvidence": command_evidence,
+                    "failureReasons": [item for item in failure_reasons if item],
+                    "provenance": "mission_control_store",
+                }
+            )
+            for check in mission.proof.passed_checks:
+                items.append(
+                    {
+                        "timestamp": mission.updated_at,
+                        "status": "passed",
+                        "source": "mission_proof",
+                        "missionId": mission.mission_id,
+                        "message": str(check),
+                        "provenance": "mission.proof.passed_checks",
+                    }
+                )
+            for check in mission.proof.failed_checks:
+                items.append(
+                    {
+                        "timestamp": mission.updated_at,
+                        "status": "failed",
+                        "source": "mission_proof",
+                        "missionId": mission.mission_id,
+                        "message": str(check),
+                        "provenance": "mission.proof.failed_checks",
+                    }
+                )
+        for session in hermes_sessions:
+            for event in session.latest_events[-12:]:
+                if not isinstance(event, dict):
+                    continue
+                kind = str(event.get("kind") or "").lower()
+                if not any(token in kind for token in ("proof", "evidence", "runtime", "approval", "session")):
+                    continue
+                items.append(
+                    {
+                        "timestamp": _event_timestamp(event) or session.updated_at,
+                        "status": str(event.get("status") or session.status or "recorded"),
+                        "source": "hermes_runtime_session",
+                        "missionId": mission.mission_id,
+                        "sessionId": session.delegated_id,
+                        "kind": event.get("kind") or "runtime.event",
+                        "message": str(event.get("message") or event.get("summary") or session.detail or ""),
+                        "provenance": "delegated_runtime_session.latest_events",
+                    }
+                )
+
+    for event in activity:
+        if not isinstance(event, dict):
+            continue
+        kind = str(event.get("kind") or "").lower()
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        source = str(metadata.get("source") or event.get("source") or "").lower()
+        if "hermes" not in kind and "hermes" not in source:
+            continue
+        items.append(
+            {
+                "timestamp": _event_timestamp(event),
+                "status": str(event.get("status") or metadata.get("status") or "recorded"),
+                "source": str(metadata.get("source") or "mission_event"),
+                "missionId": str(event.get("mission_id") or event.get("missionId") or ""),
+                "kind": event.get("kind") or "mission.event",
+                "message": str(event.get("message") or ""),
+                "provenance": "mission_events.jsonl",
+            }
+        )
+
+    for artifact in _build_generated_image_artifacts_snapshot(root).get("items", []):
+        if not isinstance(artifact, dict):
+            continue
+        items.append(
+            {
+                "timestamp": str(artifact.get("createdAt") or ""),
+                "status": "served",
+                "source": "generated_artifact_manifest",
+                "missionId": "",
+                "kind": "artifact.generated",
+                "message": str(artifact.get("artifactId") or artifact.get("artifactPath") or "generated artifact"),
+                "artifacts": [artifact],
+                "provenance": "agent_control_artifact_manifests",
+            }
+        )
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items:
+        key = (
+            str(item.get("timestamp") or ""),
+            str(item.get("source") or ""),
+            str(item.get("message") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    deduped.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+    return {
+        "items": deduped[:40],
+        "summary": {
+            "total": len(deduped),
+            "passed": sum(1 for item in deduped if item.get("status") in {"passed", "completed", "ok"}),
+            "failed": sum(1 for item in deduped if item.get("status") in {"failed", "error"}),
+        },
+        "emptyState": (
+            "No Hermes mission evidence has been captured yet. Run a Hermes mission or delegated lane to populate proof events."
+            if not deduped
+            else ""
+        ),
+        "source": "mission_events_and_runtime_sessions",
+    }
+
+
+def build_nas_deploy_readiness_snapshot(
+    root: Path,
+    *,
+    onboarding: dict | None = None,
+    setup_health: dict | None = None,
+    storage_bridge: dict | None = None,
+) -> dict:
+    root = root.resolve()
+    onboarding_payload = onboarding or detect_onboarding_status(root)
+    setup_health_payload = setup_health or onboarding_payload.get("setupHealth", {})
+    storage_bridge_payload = storage_bridge or {}
+
+    checks = [
+        {
+            "checkId": "web_backend_script",
+            "label": "web backend runner",
+            "required": True,
+            "passed": (root / "scripts" / "run_web_backend.py").exists(),
+            "details": "scripts/run_web_backend.py is present for NAS HTTP serving.",
+            "source": "filesystem",
+        },
+        {
+            "checkId": "nas_setup_script",
+            "label": "NAS setup script",
+            "required": True,
+            "passed": (root / "scripts" / "nas_setup.py").exists(),
+            "details": "scripts/nas_setup.py is present for offline setup planning.",
+            "source": "filesystem",
+        },
+        {
+            "checkId": "doctor_script",
+            "label": "NAS runtime doctor",
+            "required": True,
+            "passed": (root / "scripts" / "nas_runtime_doctor.py").exists(),
+            "details": "scripts/nas_runtime_doctor.py is present for operator-run diagnostics.",
+            "source": "filesystem",
+        },
+        {
+            "checkId": "web_dist",
+            "label": "frontend build assets",
+            "required": False,
+            "passed": (root / "web" / "dist" / "index.html").exists()
+            and (root / "web" / "dist" / "assets").exists(),
+            "details": "web/dist/index.html and web/dist/assets exist after npm run frontend:build.",
+            "source": "filesystem",
+        },
+        {
+            "checkId": "artifact_serving",
+            "label": "safe artifact serving",
+            "required": True,
+            "passed": True,
+            "details": "Generated artifacts are served through /api/artifact with allowed-root resolution.",
+            "source": "web_backend_contract",
+        },
+        {
+            "checkId": "runtime_auth_health",
+            "label": "runtime/auth health",
+            "required": False,
+            "passed": bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT")),
+            "details": (
+                "OpenAI Codex route auth is visible to this backend runtime."
+                if bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"))
+                else "OpenAI Codex auth is not visible in this offline check; runtime launch should block rather than fall back."
+            ),
+            "source": "environment",
+        },
+        {
+            "checkId": "storage_bridge_mapping",
+            "label": "NAS storage mapping",
+            "required": False,
+            "passed": bool(storage_bridge_payload.get("nas", {}).get("available") or storage_bridge_payload.get("available")),
+            "details": str(storage_bridge_payload.get("summary") or "No NAS storage bridge is currently mapped."),
+            "source": "control_room_snapshot",
+        },
+    ]
+    service_summary = setup_health_payload.get("serviceManagementSummary", {})
+    if isinstance(service_summary, dict):
+        total_items = int(service_summary.get("totalItems", 0) or 0)
+        healthy_count = int(service_summary.get("healthyCount", 0) or 0)
+        checks.append(
+            {
+                "checkId": "setup_doctor_services",
+                "label": "setup doctor services",
+                "required": False,
+                "passed": total_items > 0 and healthy_count == total_items,
+                "details": f"{healthy_count}/{total_items} setup services are healthy.",
+                "source": "setupHealth",
+            }
+        )
+
+    for item in checks:
+        item["status"] = "passed" if item["passed"] else ("blocked" if item["required"] else "warn")
+
+    missing_required = [item["label"] for item in checks if item["required"] and not item["passed"]]
+    return {
+        "ready": not missing_required,
+        "checks": checks,
+        "missingRequired": missing_required,
+        "setupHealth": setup_health_payload,
+        "source": "offline_control_room_checks",
+        "emptyState": "Run NAS setup or doctor scripts to add live host evidence." if missing_required else "",
     }
 
 

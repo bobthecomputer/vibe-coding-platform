@@ -13,6 +13,7 @@ from grant_agent.action_executor import (
     build_action_proposal,
     build_execution_policy,
     cleanup_execution_scope,
+    delegated_cycle_phase_for_step,
     execute_action,
     prepare_execution_scope,
 )
@@ -109,6 +110,60 @@ class ActionExecutorTests(unittest.TestCase):
             self.assertFalse(proposal.requires_approval)
             self.assertTrue(record.result.ok)
             self.assertIn("Fluxio Mission Note", readme.read_text(encoding="utf-8"))
+
+    def test_verify_words_in_objective_do_not_turn_non_verify_step_into_test_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_objective_verify_text",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            step = PlannedStep(
+                step_id="step_docs",
+                title="Review referenced docs and extract constraints",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective=(
+                    "Implement product files first. After product files change, "
+                    "run only focused verification."
+                ),
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertNotEqual(proposal.kind, "test_run")
+
+    def test_verify_words_in_objective_do_not_route_execute_step_to_verifier(self) -> None:
+        step = PlannedStep(
+            step_id="step_execute",
+            title="Implement smallest vertical slice in product files",
+            description="Patch the Live Review model and UI before focused verification.",
+            kind="primary",
+        )
+
+        phase = delegated_cycle_phase_for_step(
+            step,
+            objective=(
+                "EXECUTE FIRST, NO PREFLIGHT TESTS. After product files change, "
+                "run only focused verification relevant to touched files."
+            ),
+            route_configs=[
+                {"role": "planner"},
+                {"role": "executor"},
+                {"role": "verifier"},
+            ],
+        )
+
+        self.assertEqual(phase, "execute")
 
     def test_execute_action_timeout_returns_failed_record_not_exception(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -223,6 +278,31 @@ class ActionExecutorTests(unittest.TestCase):
                 proposal.delegation_metadata["route_configs"][0]["model"],
                 "gpt-5.4",
             )
+
+    def test_balanced_delegation_does_not_hide_approval_gated_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(root, "mission_approval_gate_test", requested_scope="direct", profile_name="builder")
+            step = PlannedStep(
+                step_id="step_review",
+                title="Review referenced docs and extract constraints",
+                description="Review referenced docs and extract constraints",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Verify the repo with approval-gated verification",
+                workspace_root=root,
+                verification_commands=["git reset --hard"],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+                route_configs=[],
+            )
+
+            self.assertNotEqual(proposal.kind, "runtime_delegate")
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     @mock.patch("grant_agent.action_executor.runtime_adapter_map")

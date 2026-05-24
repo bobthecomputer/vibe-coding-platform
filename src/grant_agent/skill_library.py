@@ -37,7 +37,14 @@ class SkillLibrary:
     def _load_skill_rows(self, path: Path) -> list[dict]:
         if not path.exists():
             return []
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return []
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return payload if isinstance(payload, list) else []
 
     def _load_usage_records(self) -> list[SkillUsageRecord]:
         payload = self._load_skill_rows(self.usage_path)

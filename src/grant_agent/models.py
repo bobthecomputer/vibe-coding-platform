@@ -378,6 +378,7 @@ class DelegatedSessionSnapshot:
     handoff_count: int = 0
     handoff_reason: str = ""
     source_delegated_id: str = ""
+    changed_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -423,6 +424,7 @@ class DelegatedRuntimeSession:
     handoff_count: int = 0
     handoff_reason: str = ""
     source_delegated_id: str = ""
+    changed_files: list[str] = field(default_factory=list)
 
 
 @dataclass

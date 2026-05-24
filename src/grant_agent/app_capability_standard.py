@@ -865,7 +865,7 @@ def _synology_bridge_plan(
     if remote_project_root:
         if not target_root:
             target_root = remote_project_root
-        elif _looks_windows_drive_path(target_root):
+        elif _looks_unavailable_mapped_drive_path(target_root, source_root):
             if not Path(target_root).expanduser().exists():
                 target_root = remote_project_root
     active_direction = str(job_payload.get("direction") or "").strip().lower()
@@ -970,6 +970,14 @@ def _safe_int(value: object) -> int:
 
 def _looks_windows_drive_path(value: str) -> bool:
     return len(value) >= 3 and value[1] == ":" and value[2] in {"/", "\\"}
+
+
+def _looks_unavailable_mapped_drive_path(value: str, source_root: str = "") -> bool:
+    if not _looks_windows_drive_path(value):
+        return False
+    if not _looks_windows_drive_path(source_root):
+        return True
+    return value[0].lower() != source_root[0].lower()
 
 
 def _as_bool(value: object, *, default: bool = False) -> bool:

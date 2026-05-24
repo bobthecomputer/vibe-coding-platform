@@ -1,0 +1,21 @@
+{
+  "afterResults": [
+    {
+      "name": "after-rule-sets-surface",
+      "bodyChars": 803,
+      "hasRuleSetsNav": true,
+      "overlay": false,
+      "text": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nSYNTELOS\nHome\nWORKSPACE\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nOP\nOrbit Pro\nPro Plan\nSyntelos\n\nTurn AI agents into second brains.\n\nAgent\n\nAsk Syntelos to plan, build, check, and keep progress visible.\n\nOpen\nBuilder\n\nCreate and manage projects with powerful tools.\n\nOpen\nSkills\n\nManage reusable procedures, trigger conditions, and agent behaviors.\n\nOpen\nRule Sets\n\nControl approvals, file scope, commands, runtimes, and autonomy boundaries.\n\nOpen\nImages\n\nLayer, edit, compare, and continue image generations from precise manual compositions.\n\nOpen\nWork",
+      "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=rule-sets"
+    },
+    {
+      "name": "after-home-core-surfaces",
+      "bodyChars": 803,
+      "hasRuleSetsNav": true,
+      "overlay": false,
+      "text": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nSYNTELOS\nHome\nWORKSPACE\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nOP\nOrbit Pro\nPro Plan\nSyntelos\n\nTurn AI agents into second brains.\n\nAgent\n\nAsk Syntelos to plan, build, check, and keep progress visible.\n\nOpen\nBuilder\n\nCreate and manage projects with powerful tools.\n\nOpen\nSkills\n\nManage reusable procedures, trigger conditions, and agent behaviors.\n\nOpen\nRule Sets\n\nControl approvals, file scope, commands, runtimes, and autonomy boundaries.\n\nOpen\nImages\n\nLayer, edit, compare, and continue image generations from precise manual compositions.\n\nOpen\nWork",
+      "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=home"
+    }
+  ],
+  "browserErrors": []
+}

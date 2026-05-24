@@ -17,11 +17,284 @@ from grant_agent.web_backend import (
     MISSION_START_TIMEOUT_SECONDS,
     OpenAICodexOAuthSession,
     MiniMaxOAuthSession,
+    _platform_path_for_windows_drive,
     add_or_reset_admin_user,
 )
 
 
 class FluxioWebBackendTests(unittest.TestCase):
+    def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            png_bytes = (
+                b"\x89PNG\r\n\x1a\n"
+                b"\x00\x00\x00\rIHDR"
+                b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+                b"\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\x0cIDATx\x9cc``\xf8\xff\xff?\x00\x05\xfe\x02\xfeA\xd9\x8b\x8d"
+                b"\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):
+                self.assertIn("openclaw", args[0])
+                self.assertIn("image", args)
+                self.assertIn("generate", args)
+                self.assertIn("openai/gpt-image-2", args)
+                output_path = pathlib.Path(args[args.index("--output") + 1])
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(png_bytes)
+                payload = {
+                    "ok": True,
+                    "provider": "openai-codex",
+                    "model": "gpt-image-2",
+                    "attempts": [{"provider": "openai-codex", "model": "gpt-image-2"}],
+                    "outputs": [{"path": str(output_path), "mimeType": "image/png", "size": len(png_bytes)}],
+                }
+                return payload, json.dumps(payload), "", 120
+
+            with mock.patch(
+                "grant_agent.web_backend._openai_codex_oauth_status",
+                return_value={"authenticated": True, "source": "openclaw-auth-profile"},
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="openclaw"):
+                    with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                        result = backend.dispatch(
+                            "image_playground_operation_command",
+                            {
+                                "requestId": "imgreq-test",
+                                "operation": "generate",
+                                "providerId": "codex_subscription_gpt_image2",
+                                "canvas": {"width": 320, "height": 240},
+                                "prompt": {"text": "served artifact"},
+                            },
+                        )
+
+            image_path = pathlib.Path(result["outputArtifactPath"])
+            manifest_path = pathlib.Path(result["manifestPath"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertTrue(image_path.exists())
+            self.assertTrue(manifest_path.exists())
+            self.assertIn("/api/artifact?id=", result["previewUrl"])
+            self.assertEqual(result["layer"]["src"], result["previewUrl"])
+            self.assertEqual(result["provider"], "openai-codex")
+            self.assertEqual(result["model"], "gpt-image-2")
+            self.assertEqual(result["billingNote"], "codex subscription")
+            self.assertEqual(manifest["provider"], "openai-codex")
+            self.assertEqual(manifest["model"], "gpt-image-2")
+            self.assertEqual(manifest["billingNote"], "codex subscription")
+            self.assertEqual(manifest["route"], "codex_subscription")
+            artifact_id = result["previewUrl"].split("id=", 1)[1]
+            self.assertEqual(backend._resolve_artifact_id(artifact_id), image_path)
+            self.assertEqual(backend._resolve_artifact_path(str(image_path)), image_path)
+
+    def test_image_playground_accepts_openai_json_when_stderr_proves_codex_oauth(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            png_bytes = (
+                b"\x89PNG\r\n\x1a\n"
+                b"\x00\x00\x00\rIHDR"
+                b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+                b"\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\x0cIDATx\x9cc``\xf8\xff\xff?\x00\x05\xfe\x02\xfeA\xd9\x8b\x8d"
+                b"\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):
+                output_path = pathlib.Path(args[args.index("--output") + 1])
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(png_bytes)
+                payload = {
+                    "ok": True,
+                    "provider": "openai",
+                    "model": "gpt-image-2",
+                    "outputs": [{"path": str(output_path), "mimeType": "image/png", "size": len(png_bytes)}],
+                }
+                stderr = (
+                    "[image-generation/openai] image auth selected: "
+                    "provider=openai-codex mode=oauth transport=codex-responses "
+                    "requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=300000"
+                )
+                return payload, json.dumps(payload), stderr, 120
+
+            with mock.patch(
+                "grant_agent.web_backend._openai_codex_oauth_status",
+                return_value={"authenticated": True, "source": "openclaw-auth-profile"},
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="openclaw"):
+                    with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                        result = backend.dispatch(
+                            "image_playground_operation_command",
+                            {
+                                "requestId": "imgreq-openai-json-codex-oauth",
+                                "operation": "generate",
+                                "providerId": "codex_subscription_gpt_image2",
+                                "canvas": {"width": 320, "height": 240},
+                                "prompt": {"text": "served artifact"},
+                            },
+                        )
+
+            manifest = json.loads(pathlib.Path(result["manifestPath"]).read_text(encoding="utf-8"))
+            self.assertEqual(result["providerStatus"], "available")
+            self.assertEqual(result["provider"], "openai-codex")
+            self.assertEqual(manifest["provenance"]["routeEvidence"]["rawProvider"], "openai")
+            self.assertEqual(manifest["provenance"]["routeEvidence"]["authProvider"], "openai-codex")
+            self.assertEqual(manifest["provenance"]["routeEvidence"]["authMode"], "oauth")
+            self.assertEqual(manifest["provenance"]["routeEvidence"]["transport"], "codex-responses")
+
+    def test_image_playground_codex_subscription_reports_blocked_when_openclaw_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch(
+                "grant_agent.web_backend._openai_codex_oauth_status",
+                return_value={"authenticated": True, "source": "openclaw-auth-profile"},
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value=None):
+                    result = backend.dispatch(
+                        "image_playground_operation_command",
+                        {
+                            "requestId": "imgreq-blocked",
+                            "providerId": "codex_subscription_gpt_image2",
+                            "operation": "generate",
+                            "canvas": {"width": 640, "height": 512},
+                            "prompt": {"text": "coastal retreat at sunset, cinematic architecture"},
+                        },
+                    )
+
+            self.assertEqual(result["status"], "unavailable")
+            self.assertEqual(result["providerStatus"], "blocked")
+            self.assertEqual(result["blockedReason"], "openclaw_missing")
+            self.assertEqual(result["billingNote"], "codex subscription")
+
+    def test_artifact_resolver_maps_nas_absolute_path_to_local_volume_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            mirrored = root / ".agent_control" / "design_references" / "codex_image_artifacts"
+            mirrored.mkdir(parents=True)
+            artifact = mirrored / "nas-reference.png"
+            artifact.write_bytes(b"png")
+            backend = FluxioWebBackend(root, root)
+
+            resolved = backend._resolve_artifact_path(
+                "/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references/codex_image_artifacts/nas-reference.png"
+            )
+
+            self.assertEqual(resolved, artifact)
+
+    def test_artifact_resolver_rejects_general_workspace_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            readme = root / "README.md"
+            readme.write_text("# private workspace note\n", encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            with self.assertRaises(RuntimeError):
+                backend._resolve_artifact_path(str(readme))
+
+    def test_artifact_resolver_serves_runtime_evidence_files_only_from_control_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            events_dir = root / ".agent_control" / "runtime_sessions"
+            events_dir.mkdir(parents=True)
+            events = events_dir / "delegate.events.jsonl"
+            events.write_text('{"kind":"runtime.output"}\n', encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            self.assertEqual(backend._resolve_artifact_path(str(events)), events)
+            self.assertEqual(backend._resolve_artifact_id(backend._artifact_id(events)), events)
+
+    def test_artifact_resolver_recovers_embedded_windows_runtime_evidence_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            events_dir = root / ".agent_control" / "runtime_sessions"
+            events_dir.mkdir(parents=True)
+            events = events_dir / "delegate.events.jsonl"
+            events.write_text('{"kind":"runtime.output"}\n', encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+            if not events.drive:
+                self.skipTest("Embedded Windows-path recovery is Windows-specific.")
+            malformed_path = f"/mnt/c/Users/paul/Projects/demo/{events}"
+
+            self.assertEqual(backend._resolve_artifact_path(malformed_path), events)
+
+    def test_windows_drive_path_translates_for_wsl_artifact_serving(self) -> None:
+        with mock.patch("grant_agent.web_backend.os.name", "posix"):
+            self.assertEqual(
+                str(_platform_path_for_windows_drive(r"C:\volume1\Saclay\artifact.jsonl")),
+                "/mnt/c/volume1/Saclay/artifact.jsonl",
+            )
+
+    def test_chat_compartment_records_messages_and_runtime_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "chat-live",
+                    "message": "What changed?",
+                    "runtime": "codex",
+                    "workspacePath": str(workspace),
+                    "route": {
+                        "role": "executor",
+                        "provider": "openai-codex",
+                        "model": "gpt-5.5",
+                        "effort": "medium",
+                    },
+                },
+                {
+                    "sessionId": "chat-live",
+                    "reply": "The runtime wrote a proof receipt.",
+                    "runtime": "codex",
+                    "elapsedMs": 842,
+                    "filesChanged": ["web/src/fluxio/FluxioShell.jsx"],
+                    "toolTimeline": [
+                        {
+                            "kind": "command.execution",
+                            "at": "2026-05-13T10:00:00Z",
+                            "summary": "npm run frontend:build",
+                            "status": "completed",
+                        }
+                    ],
+                    "route": {
+                        "role": "executor",
+                        "provider": "openai-codex",
+                        "model": "gpt-5.5",
+                        "effort": "medium",
+                    },
+                },
+            )
+
+            self.assertEqual(compartment["cwd"], str(workspace))
+            self.assertGreaterEqual(len(compartment["messages"]), 2)
+            self.assertEqual([lane["role"] for lane in compartment["lanes"]], ["planner", "executor", "verifier"])
+            self.assertTrue(next(lane for lane in compartment["lanes"] if lane["role"] == "executor")["active"])
+            self.assertIn("resume-chat", compartment["actions"])
+            self.assertEqual(compartment["lastRoundtripMs"], 842)
+            self.assertIn("web/src/fluxio/FluxioShell.jsx", compartment["filesChanged"])
+            timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
+            self.assertIn("runtime.roundtrip", timeline_kinds)
+
+    def test_nas_deploy_readiness_command_returns_offline_safe_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            readiness = backend.dispatch("get_nas_deploy_readiness_command", {})
+
+            self.assertIn("ready", readiness)
+            self.assertIn("checks", readiness)
+            check_ids = {item["checkId"] for item in readiness["checks"]}
+            self.assertIn("web_backend_script", check_ids)
+            self.assertIn("nas_setup_script", check_ids)
+            self.assertIn("doctor_script", check_ids)
+            self.assertIn("setupHealth", readiness)
+            self.assertIn("source", readiness)
+
     def test_provider_secret_presence_uses_session_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -244,6 +517,35 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(status["authenticated"])
             self.assertEqual(status["source"], "openclaw-auth-profile")
 
+    def test_web_backend_reports_openai_codex_hermes_auth_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            home = root / "home"
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(home),
+                    "OPENCLAW_STATE_DIR": str(home / ".openclaw"),
+                    "OPENAI_API_KEY": "",
+                    "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT": "",
+                },
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="wsl"):
+                    with mock.patch(
+                        "grant_agent.web_backend.subprocess.run",
+                        return_value=mock.Mock(
+                            returncode=0,
+                            stdout="openai-codex: logged in\n",
+                            stderr="",
+                        ),
+                    ):
+                        status = backend.dispatch("get_openai_codex_oauth_status_command", {})
+
+            self.assertTrue(status["authenticated"])
+            self.assertEqual(status["source"], "hermes-auth-store")
+
     def test_agent_chat_command_runs_openclaw_with_selected_non_codex_route(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -452,7 +754,11 @@ class FluxioWebBackendTests(unittest.TestCase):
                             )
 
             self.assertTrue(result["authenticated"])
-            exchange_mock.assert_called_once_with("abc", "verifier")
+            exchange_mock.assert_called_once_with(
+                "abc",
+                "verifier",
+                redirect_uri=web_backend.OPENAI_CODEX_REDIRECT_URI,
+            )
             write_profile_mock.assert_called_once()
 
     def test_openai_codex_oauth_relay_completes_relative_callback_path(self) -> None:
@@ -490,7 +796,11 @@ class FluxioWebBackendTests(unittest.TestCase):
                             )
 
             self.assertTrue(result["authenticated"])
-            exchange_mock.assert_called_once_with("abc", "verifier")
+            exchange_mock.assert_called_once_with(
+                "abc",
+                "verifier",
+                redirect_uri=web_backend.OPENAI_CODEX_REDIRECT_URI,
+            )
 
     def test_openai_codex_oauth_session_status_reports_single_active_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -724,6 +1034,28 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(handler.headers_out.get("X-Frame-Options"), "DENY")
             self.assertEqual(handler.headers_out.get("Referrer-Policy"), "no-referrer")
             self.assertEqual(handler.headers_out.get("Cache-Control"), "no-store")
+
+    def test_main_refuses_duplicate_backend_port(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            with mock.patch(
+                "grant_agent.web_backend.tcp_port_accepts_connection",
+                return_value=True,
+            ):
+                result = web_backend.main(
+                    [
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        "47880",
+                        "--root",
+                        str(root),
+                        "--static-root",
+                        str(root),
+                    ]
+                )
+
+            self.assertEqual(result, 98)
 
 
 if __name__ == "__main__":

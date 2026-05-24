@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -1257,7 +1258,7 @@ def _invoke_engine(
     profile_name: str | None,
     persona_override: str | None,
     iterations: int,
-    verify_commands: list[str],
+    verify_commands: list[str] | None,
     project_profile: str,
     resume_from: str | None,
     resume_checkpoint: str | None,
@@ -1382,8 +1383,10 @@ def _invoke_engine(
         skill_library=SkillLibrary(root=root, registry=skills),
     )
 
-    effective_verify_commands = verify_commands or detect_default_verification_commands(
-        root
+    effective_verify_commands = (
+        detect_default_verification_commands(root)
+        if verify_commands is None
+        else list(verify_commands)
     )
     resolved_profile_name = resolved_profile.name if resolved_profile else "builder"
     resolved_harness = _normalize_harness_preference(harness_preference)
@@ -1568,7 +1571,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         profile_name=getattr(args, "profile", None),
         persona_override=args.persona,
         iterations=args.iterations,
-        verify_commands=args.verify,
+        verify_commands=args.verify or None,
         project_profile=args.project_profile,
         resume_from=args.resume_from,
         resume_checkpoint=getattr(args, "resume_checkpoint", None),
@@ -1901,7 +1904,7 @@ def cmd_vibe_continue(args: argparse.Namespace) -> int:
             profile_name=args.profile,
             persona_override=None,
             iterations=args.iterations,
-            verify_commands=[],
+            verify_commands=None,
             project_profile=args.project_profile,
             resume_from=current_session.name,
             resume_checkpoint=str(latest_ckpt) if latest_ckpt else None,
@@ -2134,7 +2137,7 @@ def cmd_soak(args: argparse.Namespace) -> int:
             profile_name=args.profile,
             persona_override=None,
             iterations=args.iterations,
-            verify_commands=[],
+            verify_commands=None,
             project_profile=args.project_profile,
             resume_from=latest_session_id,
             resume_checkpoint=latest_checkpoint,
@@ -2510,7 +2513,36 @@ def _parse_objective_relative_runtime_seconds(objective: str) -> int | None:
     return amount * 60
 
 
+def _mission_resume_dispatch_message(dispatch: dict) -> str:
+    if dispatch.get("skipped"):
+        return (
+            f"Mission resume already running (pid {dispatch['pid']}); "
+            "new dispatch skipped."
+        )
+    return f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
+
+
+def _mission_resume_dispatch_summary(dispatch: dict) -> str:
+    if dispatch.get("skipped"):
+        return "Mission resume already running; duplicate dispatch skipped."
+    return "Mission resume dispatched asynchronously."
+
+
+def _mission_resume_event_message(dispatch: dict) -> str:
+    if dispatch.get("skipped"):
+        return "Mission resume dispatch skipped because one is already running."
+    return "Mission resume was dispatched asynchronously."
+
+
 def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
+    active = _active_mission_async_dispatches(root, mission_id)
+    if active:
+        dispatch = dict(active[-1])
+        dispatch["skipped"] = True
+        dispatch["reason"] = "mission_resume_already_running"
+        dispatch["activePids"] = [item["pid"] for item in active]
+        return dispatch
+
     logs_dir = root / ".agent_control" / "mission_async"
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / f"{mission_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.log"
@@ -2526,6 +2558,29 @@ def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
         "--action",
         "resume",
     ]
+    env = os.environ.copy()
+    python_path_entries = [str(root / "src")]
+    existing_python_path = str(env.get("PYTHONPATH", "")).strip()
+    if existing_python_path:
+        python_path_entries.append(existing_python_path)
+    env["PYTHONPATH"] = os.pathsep.join(
+        entry for entry in python_path_entries if entry
+    )
+    runtime_bin_candidates = [
+        root / ".agent_control" / "runtime" / "bin",
+        root.parent / "runtime" / "bin",
+        root.parent.parent / "runtime" / "bin",
+        root.parent / "syntelos" / "runtime" / "bin",
+    ]
+    runtime_bin_entries = [
+        str(candidate.resolve())
+        for candidate in runtime_bin_candidates
+        if candidate.exists()
+    ]
+    if runtime_bin_entries:
+        env["PATH"] = os.pathsep.join([*runtime_bin_entries, env.get("PATH", "")])
+        env.setdefault("FLUXIO_RUNTIME_BIN_DIR", runtime_bin_entries[0])
+        env.setdefault("SYNTELOS_RUNTIME_BIN_DIR", runtime_bin_entries[0])
     with log_path.open("a", encoding="utf-8") as handle:
         process = subprocess.Popen(  # noqa: S603
             command,
@@ -2535,12 +2590,319 @@ def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
             stderr=subprocess.STDOUT,
             close_fds=True,
             creationflags=background_creationflags(),
+            env=env,
         )
     return {
         "pid": process.pid,
         "logPath": str(log_path),
         "command": command,
     }
+
+
+def _mission_async_dispatch_pids(root: Path, mission_id: str) -> list[int]:
+    return [item["pid"] for item in _mission_async_dispatches(root, mission_id)]
+
+
+def _mission_async_dispatches(root: Path, mission_id: str) -> list[dict]:
+    events_path = root / ".agent_control" / "mission_events.jsonl"
+    if not events_path.exists():
+        return []
+    dispatches: list[dict] = []
+    seen: set[int] = set()
+    for line in events_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("mission_id") != mission_id:
+            continue
+        if event.get("kind") not in {
+            "mission.resume_dispatched",
+            "mission.auto_resume_dispatched",
+        }:
+            continue
+        metadata = event.get("metadata") or {}
+        dispatch = metadata.get("dispatch") if isinstance(metadata, dict) else {}
+        if not isinstance(dispatch, dict):
+            dispatch = metadata
+        try:
+            pid = int(dispatch.get("pid", 0))
+        except (TypeError, ValueError):
+            pid = 0
+        if pid > 0 and pid not in seen:
+            normalized = dict(dispatch)
+            normalized["pid"] = pid
+            dispatches.append(normalized)
+            seen.add(pid)
+    return dispatches
+
+
+def _process_command(pid: int) -> str:
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        "Get-CimInstance Win32_Process -Filter "
+                        f"\"ProcessId = {int(pid)}\" | "
+                        "Select-Object -ExpandProperty CommandLine"
+                    ),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except (OSError, ValueError):
+            return ""
+        return result.stdout.strip()
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return ""
+    return result.stdout.strip()
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError:
+            return False
+        output = result.stdout.strip()
+        return result.returncode == 0 and f',"{pid}",' in output
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _mission_resume_command_matches(command: str, mission_id: str) -> bool:
+    normalized = command.replace("\\", "/")
+    return (
+        mission_id in command
+        and "grant_agent.cli" in command
+        and "mission-action" in command
+        and "--action" in command
+        and "resume" in normalized.split()
+    )
+
+
+def _active_mission_async_dispatches(root: Path, mission_id: str) -> list[dict]:
+    active: list[dict] = []
+    for dispatch in _mission_async_dispatches(root, mission_id):
+        pid = int(dispatch.get("pid", 0) or 0)
+        if not _pid_exists(pid):
+            continue
+        command = _process_command(pid)
+        if command and not _mission_resume_command_matches(command, mission_id):
+            continue
+        active.append(dispatch)
+    return active
+
+
+def _descendant_pids(pid: int) -> list[int]:
+    if os.name == "nt":
+        return []
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return []
+    children: dict[int, list[int]] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            child_pid = int(parts[0])
+            parent_pid = int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(parent_pid, []).append(child_pid)
+    found: list[int] = []
+    stack = list(children.get(pid, []))
+    while stack:
+        child = stack.pop()
+        if child in found:
+            continue
+        found.append(child)
+        stack.extend(children.get(child, []))
+    return found
+
+
+def _stop_async_mission_resumes(root: Path, mission_id: str) -> list[dict]:
+    stopped: list[dict] = []
+    for pid in _mission_async_dispatch_pids(root, mission_id):
+        if os.name == "nt":
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode == 0:
+                stopped.append({"pid": pid, "method": "taskkill"})
+            continue
+
+        command = _process_command(pid)
+        if not command:
+            continue
+        if mission_id not in command or "grant_agent.cli" not in command:
+            stopped.append(
+                {
+                    "pid": pid,
+                    "skipped": True,
+                    "reason": "pid no longer matches mission resume command",
+                }
+            )
+            continue
+        targets = [*_descendant_pids(pid), pid]
+        for target in reversed(targets):
+            try:
+                os.kill(target, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except PermissionError as exc:
+                stopped.append({"pid": target, "error": str(exc)})
+        time.sleep(0.5)
+        for target in reversed(targets):
+            try:
+                os.kill(target, 0)
+            except ProcessLookupError:
+                continue
+            try:
+                os.kill(target, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                continue
+        stopped.append(
+            {
+                "pid": pid,
+                "method": "sigterm_tree",
+                "descendants": [item for item in targets if item != pid],
+            }
+        )
+    return stopped
+
+
+def _auto_resume_ready_delegated_missions(
+    root: Path,
+    store: ControlRoomStore,
+) -> list[dict]:
+    runtime_supervisor = DelegatedRuntimeSupervisor(root)
+    dispatched: list[dict] = []
+    missions = store.load_missions()
+    changed = False
+    for mission in missions:
+        if mission.run_budget.run_until_behavior != "continue_until_blocked":
+            continue
+        if mission.state.status in {"completed", "failed", "stopped"}:
+            continue
+        if mission.state.planner_loop_status == "launching":
+            continue
+        if mission.state.stop_reason != "delegated_runtime_running":
+            continue
+        if not mission.delegated_runtime_sessions:
+            continue
+
+        refreshed = []
+        missing_sessions = []
+        for session in mission.delegated_runtime_sessions:
+            try:
+                refreshed.append(runtime_supervisor.refresh_session(session))
+            except FileNotFoundError as exc:
+                session.status = "failed"
+                session.detail = "Delegated runtime session record is missing; refresh skipped."
+                session.last_event = str(exc)
+                session.updated_at = utc_now_iso()
+                session.acknowledged = True
+                refreshed.append(session)
+                missing_sessions.append(session.delegated_id)
+        if missing_sessions:
+            mission.state.last_runtime_event = "Missing delegated runtime session records were skipped during control-room refresh."
+            mission.state.last_error = "delegated_runtime_session_missing"
+            mission.state.stop_reason = "delegated_runtime_session_missing"
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.delegated_runtime_missing",
+                    message="Control-room refresh skipped missing delegated runtime session records.",
+                    metadata={"delegatedSessionIds": missing_sessions},
+                )
+            )
+            changed = True
+        if any(session.status in {"launching", "running", "waiting_for_approval"} for session in refreshed):
+            mission.delegated_runtime_sessions = refreshed
+            mission.state.delegated_runtime_sessions = [asdict(item) for item in refreshed]
+            changed = True
+            continue
+        if not any(
+            session.status in {"completed", "failed", "stopped"} and not session.acknowledged
+            for session in refreshed
+        ):
+            continue
+
+        dispatch = _launch_async_mission_resume(root, mission.mission_id)
+        mission.delegated_runtime_sessions = refreshed
+        mission.state.delegated_runtime_sessions = [asdict(item) for item in refreshed]
+        mission.state.status = "running"
+        mission.state.stop_reason = None
+        mission.state.last_error = None
+        mission.state.planner_loop_status = "launching"
+        mission.state.last_runtime_event = _mission_resume_dispatch_message(dispatch)
+        mission.proof.summary = (
+            "Delegated lane finished; Fluxio skipped duplicate reconciliation."
+            if dispatch.get("skipped")
+            else "Delegated lane finished; Fluxio dispatched automatic reconciliation."
+        )
+        sync_mission_state_snapshot(mission)
+        store.append_event(
+            MissionEvent(
+                mission_id=mission.mission_id,
+                kind="mission.auto_resume_dispatched",
+                message=_mission_resume_event_message(dispatch),
+                metadata=dispatch,
+            )
+        )
+        dispatched.append(
+            {
+                "missionId": mission.mission_id,
+                "pid": dispatch["pid"],
+                "logPath": dispatch["logPath"],
+            }
+        )
+        changed = True
+    if changed:
+        store.save_missions(missions)
+    return dispatched
 
 
 def _mission_budget_settings(
@@ -2625,7 +2987,7 @@ def _mission_should_continue_after_result(mission, result: dict) -> bool:
     }:
         return False
     if pause_reason == "delegated_runtime_running":
-        return mission.run_budget.run_until_behavior == "continue_until_blocked"
+        return False
     if pause_reason.startswith("context_"):
         return mission.run_budget.run_until_behavior == "continue_until_blocked"
     if pause_reason:
@@ -2637,6 +2999,7 @@ def _mission_should_continue_after_result(mission, result: dict) -> bool:
 
 def _mark_mission_budget_exhausted(store: ControlRoomStore, mission) -> dict:
     mission.state.status = "blocked"
+    mission.state.planner_loop_status = "paused"
     mission.state.stop_reason = "runtime_budget"
     mission.state.last_error = "runtime_budget"
     mission.proof.summary = (
@@ -2858,6 +3221,31 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         ),
         None,
     )
+    result_changed_files = [
+        str(item)
+        for item in (result.get("changed_files", []) or [])
+        if str(item).strip()
+    ]
+    delegated_changed_files = [
+        str(path)
+        for session in mission.delegated_runtime_sessions
+        for path in (session.changed_files or [])
+        if str(path).strip()
+    ]
+    requires_product_changes = any(
+        "product files changed" in str(check).lower()
+        or "product-file changes" in str(check).lower()
+        for check in (mission.success_checks or [])
+    )
+    completed_without_required_changes = (
+        result.get("autopilot_status") == "completed"
+        and requires_product_changes
+        and not result_changed_files
+        and not delegated_changed_files
+    )
+    if completed_without_required_changes and "required_product_changes_missing" not in mission.state.verification_failures:
+        mission.state.verification_failures.append("required_product_changes_missing")
+
     if mission.state.verification_failures:
         mission.state.status = "verification_failed"
     elif waiting_delegated is not None:
@@ -3189,7 +3577,10 @@ def _update_latest_approval_requirement(
 def cmd_control_room(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
+    auto_resume_dispatches = _auto_resume_ready_delegated_missions(root, store)
     payload = store.build_snapshot()
+    if auto_resume_dispatches:
+        payload["autoResumeDispatches"] = auto_resume_dispatches
     if "onboarding" not in payload:
         payload["onboarding"] = detect_onboarding_status(root)
     print(json.dumps(payload, indent=2))
@@ -3431,18 +3822,16 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
     if bool(getattr(args, "launch_async", False)):
         dispatch = _launch_async_mission_resume(root, mission.mission_id)
         mission.state.status = "running"
-        mission.state.last_runtime_event = (
-            f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
-        )
-        mission.state.planner_loop_status = "launching"
-        mission.proof.summary = "Mission resume dispatched asynchronously."
+        mission.state.last_runtime_event = _mission_resume_dispatch_message(dispatch)
+        mission.state.planner_loop_status = "running" if dispatch.get("skipped") else "launching"
+        mission.proof.summary = _mission_resume_dispatch_summary(dispatch)
         sync_mission_state_snapshot(mission)
         store.update_mission(mission)
         store.append_event(
             MissionEvent(
                 mission_id=mission.mission_id,
                 kind="mission.resume_dispatched",
-                message="Mission resume was dispatched asynchronously.",
+                message=_mission_resume_event_message(dispatch),
                 metadata=dispatch,
             )
         )
@@ -3549,18 +3938,16 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
             if bool(getattr(args, "launch_async", False)):
                 dispatch = _launch_async_mission_resume(root, mission.mission_id)
                 mission.state.status = "running"
-                mission.state.last_runtime_event = (
-                    f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
-                )
-                mission.state.planner_loop_status = "launching"
-                mission.proof.summary = "Mission resume dispatched asynchronously."
+                mission.state.last_runtime_event = _mission_resume_dispatch_message(dispatch)
+                mission.state.planner_loop_status = "running" if dispatch.get("skipped") else "launching"
+                mission.proof.summary = _mission_resume_dispatch_summary(dispatch)
                 sync_mission_state_snapshot(mission)
                 store.update_mission(mission)
                 store.append_event(
                     MissionEvent(
                         mission_id=mission.mission_id,
                         kind="mission.resume_dispatched",
-                        message="Mission resume was dispatched asynchronously.",
+                        message=_mission_resume_event_message(dispatch),
                         metadata=dispatch,
                     )
                 )
@@ -3595,18 +3982,16 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         if bool(getattr(args, "launch_async", False)):
             dispatch = _launch_async_mission_resume(root, mission.mission_id)
             mission.state.status = "running"
-            mission.state.last_runtime_event = (
-                f"Mission resume dispatched asynchronously (pid {dispatch['pid']})."
-            )
-            mission.state.planner_loop_status = "launching"
-            mission.proof.summary = "Mission resume dispatched asynchronously."
+            mission.state.last_runtime_event = _mission_resume_dispatch_message(dispatch)
+            mission.state.planner_loop_status = "running" if dispatch.get("skipped") else "launching"
+            mission.proof.summary = _mission_resume_dispatch_summary(dispatch)
             sync_mission_state_snapshot(mission)
             store.update_mission(mission)
             store.append_event(
                 MissionEvent(
                     mission_id=mission.mission_id,
                     kind="mission.resume_dispatched",
-                    message="Mission resume was dispatched asynchronously.",
+                    message=_mission_resume_event_message(dispatch),
                     metadata=dispatch,
                 )
             )
@@ -3694,6 +4079,7 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         return 0
 
     if args.action == "stop":
+        stopped_async_resumes = _stop_async_mission_resumes(root, mission.mission_id)
         stopped_sessions = []
         for item in mission.delegated_runtime_sessions:
             refreshed = runtime_supervisor.stop_session(item)
@@ -3702,6 +4088,10 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         mission.state.delegated_runtime_sessions = [asdict(item) for item in stopped_sessions]
         mission.state.status = "stopped"
         mission.proof.summary = "Mission was stopped from the control room."
+        if stopped_async_resumes:
+            mission.state.last_runtime_event = (
+                f"Stopped {len(stopped_async_resumes)} async resume process tree(s)."
+            )
     elif args.action == "complete":
         mission.state.status = "completed"
         mission.proof.summary = "Mission marked complete by operator."
@@ -3735,6 +4125,8 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         )
     )
     payload = {"mission": asdict(mission), "snapshot": store.build_snapshot()}
+    if args.action == "stop" and "stopped_async_resumes" in locals():
+        payload["stoppedAsyncResumes"] = stopped_async_resumes
     if cleanup_payload:
         payload["cleanup"] = cleanup_payload
     print(json.dumps(payload, indent=2))

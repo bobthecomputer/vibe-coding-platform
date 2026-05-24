@@ -11,12 +11,14 @@ import secrets
 import shlex
 import shutil
 import ssl
+import struct
 import string
 import subprocess
 import sys
 import tempfile
 import time
 import webbrowser
+import zlib
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,12 +27,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .port_safety import tcp_port_accepts_connection
 from .subprocess_utils import hidden_windows_subprocess_kwargs
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47880
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
-PRODUCT_NAME = "Syntelos"
+PRODUCT_NAME = "Fluxio"
 ADMIN_CONFIG_RELATIVE_PATH = ".agent_control/grand_agent_web_admin.json"
 ADMIN_PASSWORD_RELATIVE_PATH = ".agent_control/grand_agent_admin_password.txt"
 MISSION_START_TIMEOUT_SECONDS = 1200
@@ -38,6 +41,21 @@ MISSION_ACTION_TIMEOUT_SECONDS = 1200
 SESSION_COOKIE_NAME = "grand_agent_session"
 ACCOUNT_ROLES = {"account", "operator", "admin"}
 PASSWORD_ITERATIONS = 240_000
+ARTIFACT_CONTENT_TYPES = {
+    ".apng": "image/apng",
+    ".avif": "image/avif",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".json": "application/json; charset=utf-8",
+    ".jsonl": "application/x-ndjson; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".webp": "image/webp",
+}
 PROVIDER_ENV = {
     "openai": ("OPENAI_API_KEY",),
     "openai-codex": ("OPENAI_API_KEY", "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"),
@@ -52,6 +70,12 @@ OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_CODEX_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
 OPENAI_CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_CODEX_REDIRECT_URI = "http://localhost:1455/auth/callback"
+OPENAI_CODEX_DEFAULT_CALLBACK_PORT = 1455
+OPENAI_CODEX_DEFAULT_MODEL = "gpt-5.5"
+IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID = "codex_subscription_gpt_image2"
+IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER = "openai-codex"
+IMAGE_PROVIDER_CODEX_EXPECTED_MODEL = "gpt-image-2"
+IMAGE_PROVIDER_CODEX_COMMAND_MODEL = "openai/gpt-image-2"
 OPENAI_CODEX_SCOPE = "openid profile email offline_access"
 OPENAI_CODEX_JWT_AUTH_CLAIM = "https://api.openai.com/auth"
 OPENAI_CODEX_JWT_PROFILE_CLAIM = "https://api.openai.com/profile"
@@ -421,6 +445,8 @@ def _run_cli(
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
         **hidden_windows_subprocess_kwargs(),
@@ -471,6 +497,8 @@ def _run_process(
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
         stdin=subprocess.DEVNULL,
@@ -485,6 +513,159 @@ def _run_process(
     return payload
 
 
+def _run_process_capture(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: int = 180,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], str, str, int]:
+    env = os.environ.copy()
+    env.update(extra_env or {})
+    started = time.perf_counter()
+    completed = subprocess.run(  # noqa: S603
+        args,
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        **hidden_windows_subprocess_kwargs(),
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    stdout = _clean_terminal_text(completed.stdout or "")
+    stderr = _clean_terminal_text(completed.stderr or "")
+    payload = _parse_process_payload(stdout, stderr)
+    if completed.returncode != 0:
+        message = ""
+        if isinstance(payload, dict):
+            message = str(payload.get("error") or payload.get("message") or payload.get("output") or "")
+        raise RuntimeError(message or stderr.strip() or stdout.strip() or f"{args[0]} failed with exit code {completed.returncode}")
+    return payload, stdout, stderr, elapsed_ms
+
+
+def _parse_json_objects_from_text(raw: str) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    for line in str(raw or "").splitlines():
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            objects.append(payload)
+    return objects
+
+
+def _push_tool_timeline_event(
+    events: list[dict[str, str]],
+    *,
+    kind: str,
+    summary: str,
+    at: str,
+    status: str = "recorded",
+) -> None:
+    event_summary = str(summary or "").strip()
+    if not event_summary:
+        return
+    events.append(
+        {
+            "kind": str(kind or "runtime.event").strip(),
+            "at": at,
+            "summary": event_summary[:240],
+            "status": str(status or "recorded").strip() or "recorded",
+        }
+    )
+
+
+def _chat_runtime_evidence_from_process(
+    payload: dict[str, Any],
+    *,
+    stdout: str,
+    now: str,
+    elapsed_ms: int,
+) -> tuple[list[dict[str, str]], list[str]]:
+    timeline: list[dict[str, str]] = []
+    changed_files: list[str] = []
+    seen_files: set[str] = set()
+
+    def add_file(candidate: object) -> None:
+        value = str(candidate or "").strip().replace("\\", "/")
+        if not value:
+            return
+        if "/" not in value and "." not in value:
+            return
+        if value in seen_files:
+            return
+        seen_files.add(value)
+        changed_files.append(value)
+
+    def scan(value: object) -> None:
+        if isinstance(value, dict):
+            for key in (
+                "filesChanged",
+                "files_changed",
+                "changedFiles",
+                "changed_files",
+                "modifiedFiles",
+                "modified_files",
+            ):
+                rows = value.get(key)
+                if isinstance(rows, list):
+                    for row in rows:
+                        if isinstance(row, str):
+                            add_file(row)
+                        elif isinstance(row, dict):
+                            add_file(row.get("path") or row.get("file") or row.get("name"))
+            for nested in value.values():
+                scan(nested)
+            return
+        if isinstance(value, list):
+            for row in value:
+                scan(row)
+
+    scan(payload)
+
+    for event in _parse_json_objects_from_text(stdout):
+        event_type = str(event.get("type") or event.get("kind") or "").strip().lower()
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        item_type = str(item.get("item_type") or item.get("type") or "").strip().lower()
+        command = str(item.get("command") or "").strip()
+        status = str(item.get("status") or "").strip().lower() or "recorded"
+        if command and item_type in {"command_execution", "command"}:
+            _push_tool_timeline_event(
+                timeline,
+                kind="command.execution",
+                summary=command,
+                at=now,
+                status=status,
+            )
+        elif event_type in {"item.completed", "item.started", "turn.started", "turn.completed"}:
+            summary = str(item.get("text") or item.get("message") or event_type).strip()
+            _push_tool_timeline_event(
+                timeline,
+                kind=event_type or "runtime.event",
+                summary=summary,
+                at=now,
+                status=status,
+            )
+
+    _push_tool_timeline_event(
+        timeline,
+        kind="runtime.roundtrip",
+        summary=f"CLI roundtrip completed in {elapsed_ms} ms.",
+        at=now,
+        status="completed",
+    )
+    return timeline[-18:], changed_files[:20]
+
+
 def _wsl_has_command(command_name: str, timeout: int = 8) -> bool:
     if os.name != "nt":
         return False
@@ -496,6 +677,8 @@ def _wsl_has_command(command_name: str, timeout: int = 8) -> bool:
             [wsl, "bash", "-lc", f"command -v {shlex.quote(command_name)} >/dev/null 2>&1"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
             stdin=subprocess.DEVNULL,
@@ -683,13 +866,15 @@ class OpenAICodexOAuthSession:
         verifier: str,
         state: str,
         auth_url: str,
-        callback_port: int = 1455,
+        callback_port: int = OPENAI_CODEX_DEFAULT_CALLBACK_PORT,
+        redirect_uri: str = OPENAI_CODEX_REDIRECT_URI,
         relay_token_hash: str = "",
     ) -> None:
         self.verifier = verifier
         self.state = state
         self.auth_url = auth_url
         self.callback_port = callback_port
+        self.redirect_uri = redirect_uri
         self.relay_token_hash = relay_token_hash
         self.created_at = time.time()
 
@@ -724,6 +909,201 @@ _MINIMAX_OAUTH_SESSIONS: dict[str, MiniMaxOAuthSession] = {}
 
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _image_prompt_text(payload: dict[str, Any]) -> str:
+    prompt = payload.get("prompt") if isinstance(payload.get("prompt"), dict) else {}
+    parts = [
+        str(prompt.get("text") or "").strip(),
+        str(prompt.get("style") or "").strip(),
+        str(prompt.get("negative") or "").strip(),
+    ]
+    return " ".join(item for item in parts if item).strip() or "Syntelos generated image"
+
+
+def _write_prompt_rendered_png(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    except Exception as exc:  # pragma: no cover - Pillow is bundled in the desktop runtime.
+        _write_basic_prompt_png(path, payload)
+        return
+
+    canvas = payload.get("canvas") if isinstance(payload.get("canvas"), dict) else {}
+    width = max(512, min(int(canvas.get("width") or 1024), 1600))
+    height = max(512, min(int(canvas.get("height") or 768), 1600))
+    prompt_text = _image_prompt_text(payload)
+    seed = int(hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:8], 16)
+    palette_sets = [
+        ((22, 26, 28), (210, 168, 88), (116, 164, 145), (234, 226, 209)),
+        ((17, 23, 33), (92, 154, 214), (223, 182, 101), (238, 240, 235)),
+        ((24, 24, 23), (184, 129, 98), (135, 172, 112), (238, 231, 220)),
+        ((20, 22, 25), (205, 199, 178), (102, 145, 160), (238, 236, 228)),
+    ]
+    bg, primary, secondary, paper = palette_sets[seed % len(palette_sets)]
+
+    image = Image.new("RGB", (width, height), bg)
+    draw = ImageDraw.Draw(image, "RGBA")
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        blend = tuple(int(bg[i] * (1 - ratio) + secondary[i] * ratio * 0.52) for i in range(3))
+        draw.line([(0, y), (width, y)], fill=(*blend, 255))
+
+    haze = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    haze_draw = ImageDraw.Draw(haze, "RGBA")
+    for index in range(9):
+        local = (seed >> (index * 3)) & 0xFF
+        cx = int((0.12 + ((local % 83) / 100)) * width)
+        cy = int((0.08 + (((local * 7) % 71) / 100)) * height)
+        radius = int((0.12 + (((local * 11) % 26) / 100)) * min(width, height))
+        color = primary if index % 2 == 0 else secondary
+        haze_draw.ellipse(
+            [cx - radius, cy - radius, cx + radius, cy + radius],
+            fill=(*color, 32 + (index % 3) * 16),
+        )
+    image = Image.alpha_composite(image.convert("RGBA"), haze.filter(ImageFilter.GaussianBlur(28)))
+    draw = ImageDraw.Draw(image, "RGBA")
+
+    horizon = int(height * (0.46 + ((seed % 17) / 100)))
+    draw.rectangle([0, horizon, width, height], fill=(10, 13, 14, 74))
+    for index in range(5):
+        x0 = int(width * (0.08 + index * 0.18 + (((seed >> index) & 7) / 180)))
+        y0 = int(horizon + height * (0.05 + index * 0.012))
+        w = int(width * (0.22 + (((seed >> (index + 5)) & 7) / 90)))
+        h = int(height * (0.18 + (((seed >> (index + 9)) & 7) / 120)))
+        draw.rounded_rectangle(
+            [x0, y0, min(width - 40, x0 + w), min(height - 42, y0 + h)],
+            radius=24,
+            fill=(*paper, 30 + index * 10),
+            outline=(*paper, 82),
+            width=2,
+        )
+
+    sun_x = int(width * (0.18 + ((seed % 53) / 100)))
+    sun_y = int(height * (0.18 + (((seed >> 8) % 30) / 100)))
+    sun_r = int(min(width, height) * 0.055)
+    draw.ellipse([sun_x - sun_r, sun_y - sun_r, sun_x + sun_r, sun_y + sun_r], fill=(*primary, 220))
+    for index in range(14):
+        y = int(height * (0.18 + index * 0.044))
+        offset = ((seed >> (index % 12)) & 31) - 16
+        draw.line(
+            [(int(width * 0.08) + offset, y), (int(width * 0.88) - offset, y + int(height * 0.025))],
+            fill=(*paper, 14 + (index % 4) * 8),
+            width=max(1, int(height * 0.003)),
+        )
+
+    try:
+        font_large = ImageFont.truetype("arial.ttf", max(22, int(width * 0.034)))
+        font_small = ImageFont.truetype("arial.ttf", max(13, int(width * 0.014)))
+    except OSError:
+        font_large = ImageFont.load_default()
+        font_small = ImageFont.load_default()
+    words = prompt_text[:110]
+    panel_w = int(width * 0.46)
+    panel_h = int(height * 0.18)
+    panel_x = int(width * 0.055)
+    panel_y = int(height * 0.74)
+    draw.rounded_rectangle(
+        [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
+        radius=18,
+        fill=(9, 11, 12, 138),
+        outline=(*paper, 56),
+        width=1,
+    )
+    draw.text((panel_x + 20, panel_y + 18), "Generated image artifact", font=font_small, fill=(*primary, 230))
+    draw.text((panel_x + 20, panel_y + 48), words, font=font_large, fill=(*paper, 242))
+
+    image.convert("RGB").save(path, format="PNG", optimize=True)
+
+
+def _write_basic_prompt_png(path: Path, payload: dict[str, Any]) -> None:
+    canvas = payload.get("canvas") if isinstance(payload.get("canvas"), dict) else {}
+    width = max(512, min(int(canvas.get("width") or 1024), 1200))
+    height = max(512, min(int(canvas.get("height") or 768), 1200))
+    prompt_text = _image_prompt_text(payload)
+    seed = int(hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:8], 16)
+    palettes = [
+        ((20, 24, 26), (211, 168, 82), (92, 147, 160), (235, 228, 214)),
+        ((18, 22, 31), (96, 154, 215), (216, 181, 102), (236, 238, 232)),
+        ((24, 25, 23), (177, 126, 96), (132, 170, 112), (238, 231, 220)),
+    ]
+    bg, primary, secondary, paper = palettes[seed % len(palettes)]
+    sun_x = int(width * (0.2 + ((seed % 53) / 100)))
+    sun_y = int(height * (0.16 + (((seed >> 7) % 28) / 100)))
+    sun_r = max(24, int(min(width, height) * 0.06))
+    horizon = int(height * (0.47 + ((seed % 13) / 100)))
+    panel_x = int(width * 0.08)
+    panel_y = int(height * 0.7)
+    panel_w = int(width * 0.5)
+    panel_h = int(height * 0.18)
+
+    def mix(a: tuple[int, int, int], b: tuple[int, int, int], ratio: float) -> tuple[int, int, int]:
+        return tuple(max(0, min(255, int(a[i] * (1 - ratio) + b[i] * ratio))) for i in range(3))
+
+    raw_rows: list[bytes] = []
+    for y in range(height):
+        row = bytearray()
+        yr = y / max(1, height - 1)
+        base = mix(bg, secondary, yr * 0.48)
+        for x in range(width):
+            color = base
+            dx = x - sun_x
+            dy = y - sun_y
+            dist2 = dx * dx + dy * dy
+            if dist2 < sun_r * sun_r:
+                color = mix(color, primary, 0.78)
+            elif dist2 < (sun_r * 4) * (sun_r * 4):
+                color = mix(color, primary, max(0, 0.22 - (dist2 ** 0.5 / (sun_r * 4)) * 0.18))
+            if y > horizon:
+                color = mix(color, (8, 11, 12), 0.28 + min(0.34, (y - horizon) / height))
+            for index in range(4):
+                x0 = int(width * (0.12 + index * 0.18 + (((seed >> index) & 7) / 160)))
+                y0 = int(horizon + height * (0.05 + index * 0.018))
+                w = int(width * (0.18 + (((seed >> (index + 4)) & 7) / 100)))
+                h = int(height * (0.13 + (((seed >> (index + 8)) & 7) / 140)))
+                if x0 <= x <= x0 + w and y0 <= y <= y0 + h:
+                    border = x - x0 < 3 or x0 + w - x < 3 or y - y0 < 3 or y0 + h - y < 3
+                    color = mix(color, paper, 0.42 if border else 0.18)
+            if panel_x <= x <= panel_x + panel_w and panel_y <= y <= panel_y + panel_h:
+                border = x - panel_x < 2 or panel_x + panel_w - x < 2 or y - panel_y < 2 or panel_y + panel_h - y < 2
+                color = mix(color, paper if border else (6, 8, 9), 0.5 if border else 0.72)
+            row.extend(color)
+        raw_rows.append(b"\x00" + bytes(row))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"".join(raw_rows), 6))
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+
+
+def _platform_path_for_windows_drive(raw_path: object) -> Path:
+    value = str(raw_path or "").strip()
+    match = re.match(r"^([A-Za-z]):[\\/](.*)$", value)
+    if not match:
+        return Path(value)
+    if os.name == "nt":
+        return Path(value)
+    drive = match.group(1).lower()
+    rest = match.group(2).replace("\\", "/").lstrip("/")
+    return Path(f"/mnt/{drive}/{rest}")
 
 
 def _parse_openai_codex_callback_port(auth_url: str) -> int:
@@ -769,10 +1149,9 @@ def _codex_home_path() -> Path:
     return Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
 
 
-def _write_codex_auth_json(tokens: dict[str, Any], identity: dict[str, str]) -> None:
-    codex_home = _codex_home_path()
-    codex_home.mkdir(parents=True, exist_ok=True)
-    auth_payload = {
+def _codex_auth_json_payload(tokens: dict[str, Any], identity: dict[str, str]) -> dict[str, Any]:
+    return {
+        "auth_mode": "chatgpt",
         "OPENAI_API_KEY": None,
         "tokens": {
             "id_token": str(tokens.get("id_token") or tokens.get("idToken") or tokens.get("access") or ""),
@@ -782,15 +1161,95 @@ def _write_codex_auth_json(tokens: dict[str, Any], identity: dict[str, str]) -> 
         },
         "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+
+
+def _write_codex_auth_json(tokens: dict[str, Any], identity: dict[str, str]) -> None:
+    codex_home = _codex_home_path()
+    codex_home.mkdir(parents=True, exist_ok=True)
+    auth_payload = _codex_auth_json_payload(tokens, identity)
     auth_path = codex_home / "auth.json"
     auth_path.write_text(json.dumps(auth_payload, indent=2), encoding="utf-8")
     config_path = codex_home / "config.toml"
     if not config_path.exists():
-        config_path.write_text('preferred_auth_method = "chatgpt"\nmodel = "gpt-5.3-codex"\n', encoding="utf-8")
+        config_path.write_text(
+            f'preferred_auth_method = "chatgpt"\nmodel = "{OPENAI_CODEX_DEFAULT_MODEL}"\n',
+            encoding="utf-8",
+        )
     try:
         os.chmod(auth_path, 0o600)
     except OSError:
         pass
+
+
+def _sync_openai_codex_oauth_to_wsl_hermes(tokens: dict[str, Any], identity: dict[str, str]) -> dict[str, Any]:
+    """Seed the WSL Hermes auth store from the OAuth credential the app just created."""
+    if os.name != "nt" or not shutil.which("wsl"):
+        return {"synced": False, "reason": "wsl_unavailable"}
+    payload = _codex_auth_json_payload(tokens, identity)
+    script = r"""
+import json
+from pathlib import Path
+import sys
+
+payload = json.loads(sys.stdin.read() or "{}")
+codex_home = Path.home() / ".codex"
+codex_home.mkdir(parents=True, exist_ok=True)
+auth_path = codex_home / "auth.json"
+auth_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+try:
+    auth_path.chmod(0o600)
+except OSError:
+    pass
+
+hermes_root = Path.home() / ".hermes" / "hermes-agent"
+sys.path.insert(0, str(hermes_root))
+try:
+    from hermes_cli.auth import (
+        DEFAULT_CODEX_BASE_URL,
+        _import_codex_cli_tokens,
+        _save_codex_tokens,
+        _update_config_for_provider,
+        get_codex_auth_status,
+    )
+
+    imported = _import_codex_cli_tokens()
+    if not imported:
+        raise RuntimeError("Hermes could not import the freshly written Codex CLI tokens.")
+    _save_codex_tokens(imported)
+    config_path = _update_config_for_provider("openai-codex", DEFAULT_CODEX_BASE_URL)
+    status = get_codex_auth_status()
+    print(json.dumps({
+        "synced": bool(status.get("logged_in")),
+        "source": status.get("source") or "hermes-auth-store",
+        "configPath": str(config_path),
+    }))
+except Exception as exc:
+    print(json.dumps({"synced": False, "reason": str(exc)}))
+"""
+    try:
+        result = subprocess.run(
+            ["wsl", "python3", "-c", script],
+            input=json.dumps(payload),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=45,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"synced": False, "reason": str(exc)}
+    output = (result.stdout or "").strip().splitlines()
+    if not output:
+        return {
+            "synced": False,
+            "reason": (result.stderr or f"wsl exited {result.returncode}").strip()[:300],
+        }
+    try:
+        parsed = json.loads(output[-1])
+    except json.JSONDecodeError:
+        return {"synced": False, "reason": output[-1][:300]}
+    return parsed if isinstance(parsed, dict) else {"synced": False, "reason": "invalid_sync_result"}
 
 
 def _base64url_no_padding(value: bytes) -> str:
@@ -919,13 +1378,18 @@ def _openai_codex_identity(access_token: str) -> dict[str, str]:
     return identity
 
 
-def _openai_codex_auth_url(verifier: str, state: str) -> str:
+def _openai_codex_auth_url(
+    verifier: str,
+    state: str,
+    *,
+    redirect_uri: str = OPENAI_CODEX_REDIRECT_URI,
+) -> str:
     challenge = _base64url_no_padding(hashlib.sha256(verifier.encode("ascii")).digest())
     query = urlencode(
         {
             "response_type": "code",
             "client_id": OPENAI_CODEX_CLIENT_ID,
-            "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "scope": OPENAI_CODEX_SCOPE,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
@@ -972,7 +1436,8 @@ def _start_openclaw_codex_oauth(env: dict[str, str], cwd: Path, *, public_url: s
     _OPENAI_CODEX_OAUTH_SESSIONS.clear()
     verifier, _challenge = _create_openai_codex_pkce_pair()
     state = secrets.token_hex(16)
-    auth_url = _openai_codex_auth_url(verifier, state)
+    redirect_uri = OPENAI_CODEX_REDIRECT_URI
+    auth_url = _openai_codex_auth_url(verifier, state, redirect_uri=redirect_uri)
     callback_port = _parse_openai_codex_callback_port(auth_url)
     session_id = secrets.token_urlsafe(16)
     relay_token = secrets.token_urlsafe(32)
@@ -981,6 +1446,7 @@ def _start_openclaw_codex_oauth(env: dict[str, str], cwd: Path, *, public_url: s
         state=state,
         auth_url=auth_url,
         callback_port=callback_port,
+        redirect_uri=redirect_uri,
         relay_token_hash=_sha256_hex(relay_token),
     )
     base_url = _public_url(DEFAULT_HOST, DEFAULT_PORT, public_url=public_url)
@@ -1041,14 +1507,19 @@ def _parse_openai_codex_authorization_input(value: str) -> tuple[str, str | None
     return stripped, None
 
 
-def _exchange_openai_codex_authorization_code(code: str, verifier: str) -> dict[str, Any]:
+def _exchange_openai_codex_authorization_code(
+    code: str,
+    verifier: str,
+    *,
+    redirect_uri: str = OPENAI_CODEX_REDIRECT_URI,
+) -> dict[str, Any]:
     body = urlencode(
         {
             "grant_type": "authorization_code",
             "client_id": OPENAI_CODEX_CLIENT_ID,
             "code": code,
             "code_verifier": verifier,
-            "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
         }
     ).encode("utf-8")
     request = Request(
@@ -1135,7 +1606,8 @@ def _write_openai_codex_auth_profile(tokens: dict[str, Any]) -> dict[str, str]:
     except OSError:
         pass
     _write_codex_auth_json(tokens, identity)
-    return {"profileId": profile_id, **identity}
+    hermes_sync = _sync_openai_codex_oauth_to_wsl_hermes(tokens, identity)
+    return {"profileId": profile_id, "hermesSync": hermes_sync, **identity}
 
 
 def _write_minimax_openclaw_auth_profile(tokens: dict[str, Any], *, region: str) -> dict[str, str]:
@@ -1197,7 +1669,11 @@ def _complete_openclaw_codex_oauth(payload: dict[str, Any]) -> dict[str, Any]:
     code, state = _parse_openai_codex_authorization_input(callback)
     if state and state != session.state:
         raise RuntimeError("OpenAI OAuth state mismatch. Start sign-in again from Syntelos.")
-    tokens = _exchange_openai_codex_authorization_code(code, session.verifier)
+    tokens = _exchange_openai_codex_authorization_code(
+        code,
+        session.verifier,
+        redirect_uri=session.redirect_uri,
+    )
     identity = _write_openai_codex_auth_profile(tokens)
     authenticated = bool(_openai_codex_oauth_status().get("authenticated", False))
     return {
@@ -1211,6 +1687,7 @@ def _complete_openclaw_codex_oauth(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "profileId": identity.get("profileId"),
         "email": identity.get("email"),
+        "hermesSync": identity.get("hermesSync"),
     }
 
 
@@ -1346,6 +1823,29 @@ def _poll_minimax_oauth_token(session: MiniMaxOAuthSession) -> dict[str, Any]:
     }
 
 
+def _wsl_hermes_openai_codex_status() -> dict[str, Any]:
+    if not shutil.which("wsl"):
+        return {"authenticated": False, "source": None}
+    try:
+        result = subprocess.run(
+            ["wsl", "bash", "-lc", "hermes auth status openai-codex 2>&1"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"authenticated": False, "source": None, "error": str(exc)}
+    output = _clean_terminal_text((result.stdout or "") + (result.stderr or "")).strip()
+    return {
+        "authenticated": "openai-codex: logged in" in output.lower(),
+        "source": "hermes-auth-store" if "openai-codex: logged in" in output.lower() else None,
+        "message": output[:300],
+    }
+
+
 def _openai_codex_oauth_status(
     session_secrets: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -1356,17 +1856,22 @@ def _openai_codex_oauth_status(
         session_secrets=session_secrets,
     ).get("openai-codex", False)
     source = None
+    hermes_status = _wsl_hermes_openai_codex_status()
     if os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"):
         source = "environment"
     elif _openclaw_auth_store_has_provider(auth_store_path, "openai-codex"):
         source = "openclaw-auth-profile"
     elif os.environ.get("OPENAI_API_KEY") or (session_secrets or {}).get("openai"):
         source = "openai-api-key"
+    elif hermes_status.get("authenticated"):
+        authenticated = True
+        source = str(hermes_status.get("source") or "hermes-auth-store")
     return {
         "authenticated": authenticated,
         "accountId": None,
         "expires": None,
         "authStorePath": str(auth_store_path),
+        "hermesStatus": hermes_status,
         "source": source,
         "message": (
             "OpenAI/Codex auth is visible to the web backend."
@@ -1714,11 +2219,25 @@ class FluxioWebBackend:
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax-cn"]
         return env
 
-    def _run_cli(self, root: Path, command: str, args: list[str], timeout: int = 180) -> dict[str, Any]:
-        return _run_cli(root, command, args, timeout=timeout, extra_env=self._provider_env())
+    def _run_cli(
+        self,
+        root: Path,
+        command: str,
+        args: list[str],
+        timeout: int = 180,
+        *,
+        fast_control_room: bool = False,
+    ) -> dict[str, Any]:
+        env = self._provider_env()
+        if fast_control_room:
+            env["FLUXIO_CONTROL_ROOM_FAST"] = "1"
+        return _run_cli(root, command, args, timeout=timeout, extra_env=env)
 
     def _workspace_roots(self) -> list[str]:
         candidates = [self.root, Path.home()]
+        nas_mirror = Path("C:/volume1") if os.name == "nt" else Path("/volume1")
+        if nas_mirror.exists():
+            candidates.append(nas_mirror)
         if os.name == "nt":
             for letter in string.ascii_uppercase:
                 drive = Path(f"{letter}:/")
@@ -1739,6 +2258,605 @@ class FluxioWebBackend:
             seen.add(normalized)
             roots.append(normalized)
         return roots
+
+    def _artifact_allowed_roots(self) -> list[Path]:
+        candidates = [
+            self.root / ".agent_control" / "image_playground_artifacts",
+            self.root / ".agent_control" / "generated_image_artifacts",
+            self.root / ".agent_control" / "design_references",
+            self.root / ".agent_control" / "runtime_compartments",
+            self.root / ".agent_control" / "runtime_sessions",
+            self.root / ".agent_control" / "mission_async",
+            self.root / ".agent_runs",
+        ]
+        if os.name == "nt":
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
+        else:
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
+        roots: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.expanduser().resolve()
+            except OSError:
+                continue
+            if not resolved.exists():
+                continue
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            roots.append(resolved)
+        return roots
+
+    def _candidate_artifact_paths(self, raw_path: object) -> list[Path]:
+        raw = str(raw_path or "").strip()
+        if raw.startswith("file://"):
+            raw = unquote(urlparse(raw).path)
+        raw = raw.replace("\x00", "")
+        candidates: list[Path] = []
+        if raw:
+            source = Path(raw).expanduser()
+            candidates.append(source if source.is_absolute() else self.root / source)
+            normalized = raw.replace("\\", "/")
+            if re.match(r"^[A-Za-z]:[\\/]", raw):
+                candidates.append(_platform_path_for_windows_drive(raw).expanduser())
+            embedded_windows = re.search(r"([A-Za-z]:[\\/][^\r\n]+)$", raw)
+            if embedded_windows:
+                candidates.append(_platform_path_for_windows_drive(embedded_windows.group(1)).expanduser())
+            if normalized.startswith("/volume1/"):
+                candidates.append(Path("C:/volume1") / normalized.removeprefix("/volume1/"))
+                if os.name != "nt":
+                    candidates.append(Path("/mnt/c/volume1") / normalized.removeprefix("/volume1/"))
+            embedded_normalized = re.search(r"([A-Za-z]:/[^\r\n]+)$", normalized)
+            if embedded_normalized:
+                candidates.append(_platform_path_for_windows_drive(embedded_normalized.group(1)).expanduser())
+            direct_hits: list[Path] = []
+            seen_direct: set[str] = set()
+            for candidate in candidates:
+                try:
+                    resolved = candidate.resolve()
+                except OSError:
+                    continue
+                if not resolved.exists() or not resolved.is_file():
+                    continue
+                key = str(resolved)
+                if key in seen_direct:
+                    continue
+                seen_direct.add(key)
+                direct_hits.append(resolved)
+            if direct_hits:
+                return direct_hits
+            name = Path(normalized).name
+            if name:
+                for search_root in (
+                    self.root / ".agent_control" / "image_playground_artifacts",
+                    self.root / ".agent_control" / "generated_image_artifacts",
+                    self.root / ".agent_control" / "design_references",
+                    self.root / ".agent_control" / "runtime_compartments",
+                    self.root / ".agent_control" / "runtime_sessions",
+                    self.root / ".agent_control" / "mission_async",
+                    self.root / ".agent_runs",
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"),
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"),
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"),
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"),
+                ):
+                    if search_root.exists():
+                        candidates.extend(search_root.rglob(name))
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(resolved)
+        return deduped
+
+    def _resolve_artifact_path(self, raw_path: object) -> Path:
+        allowed_roots = self._artifact_allowed_roots()
+        for candidate in self._candidate_artifact_paths(raw_path):
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            if candidate.suffix.lower() not in ARTIFACT_CONTENT_TYPES:
+                continue
+            for root in allowed_roots:
+                try:
+                    candidate.relative_to(root)
+                    return candidate
+                except ValueError:
+                    continue
+        raise RuntimeError("Artifact was not found under an allowed workspace or NAS mirror root.")
+
+    def _artifact_id(self, path: Path) -> str:
+        return _sha256_hex(str(path.resolve()))[:24]
+
+    def _resolve_artifact_id(self, raw_id: object) -> Path:
+        artifact_id = str(raw_id or "").strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{24}", artifact_id):
+            raise RuntimeError("Artifact id is invalid.")
+        for root in self._artifact_allowed_roots():
+            for candidate in root.rglob("*"):
+                if not candidate.is_file() or candidate.suffix.lower() not in ARTIFACT_CONTENT_TYPES:
+                    continue
+                if self._artifact_id(candidate) == artifact_id:
+                    return candidate
+        raise RuntimeError("Artifact was not found under an allowed workspace or NAS mirror root.")
+
+    def _artifact_url(self, path: Path) -> str:
+        return f"/api/artifact?id={self._artifact_id(path)}"
+
+    def _image_provider_id(self, payload: dict[str, Any]) -> str:
+        provider_raw = payload.get("provider")
+        provider_id = ""
+        if isinstance(provider_raw, dict):
+            provider_id = str(
+                provider_raw.get("id")
+                or provider_raw.get("providerId")
+                or provider_raw.get("provider_id")
+                or ""
+            ).strip()
+        else:
+            provider_id = str(provider_raw or "").strip()
+        if not provider_id:
+            provider_id = str(payload.get("providerId") or payload.get("provider_id") or "").strip()
+        return provider_id or IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID
+
+    def _image_provider_unavailable(
+        self,
+        payload: dict[str, Any],
+        *,
+        message: str,
+        blocked_reason: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
+        return {
+            "status": "unavailable",
+            "providerStatus": "blocked",
+            "provider": IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER,
+            "providerId": IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID,
+            "model": IMAGE_PROVIDER_CODEX_EXPECTED_MODEL,
+            "route": "codex_subscription",
+            "authMode": "codex subscription",
+            "billingNote": "codex subscription",
+            "requestId": request_id,
+            "blockedReason": blocked_reason,
+            "message": message,
+            "details": details or {},
+        }
+
+    def _is_png_file(self, path: Path) -> bool:
+        try:
+            header = path.read_bytes()[:8]
+        except OSError:
+            return False
+        return header == b"\x89PNG\r\n\x1a\n"
+
+    def _extract_openclaw_image_route(self, payload: dict[str, Any]) -> tuple[str, str]:
+        candidates: list[tuple[str, str]] = []
+
+        def push(provider: object, model: object) -> None:
+            provider_text = str(provider or "").strip().lower()
+            model_text = str(model or "").strip().lower()
+            if not provider_text and "/" in model_text:
+                provider_text = model_text.split("/", 1)[0]
+            if provider_text or model_text:
+                candidates.append((provider_text, model_text))
+
+        def collect(value: object) -> None:
+            if not isinstance(value, dict):
+                return
+            push(value.get("provider"), value.get("model"))
+            route = value.get("route")
+            if isinstance(route, dict):
+                push(route.get("provider"), route.get("model"))
+
+        collect(payload)
+        attempts = payload.get("attempts")
+        if isinstance(attempts, list):
+            for attempt in attempts:
+                collect(attempt)
+                if isinstance(attempt, dict):
+                    collect(attempt.get("candidate"))
+                    collect(attempt.get("details"))
+        return candidates[0] if candidates else ("", "")
+
+    def _openclaw_codex_image_oauth_evidence(self, payload: dict[str, Any], stderr: str) -> dict[str, Any]:
+        proof_text = "\n".join(
+            item
+            for item in (
+                str(stderr or ""),
+                str(payload.get("stderr") or ""),
+                str(payload.get("routeProof") or ""),
+                str(payload.get("authProof") or ""),
+            )
+            if item.strip()
+        )
+        normalized = proof_text.lower()
+        provider_match = re.search(r"\bprovider\s*=\s*([a-z0-9_-]+)", proof_text, flags=re.IGNORECASE)
+        mode_match = re.search(r"\bmode\s*=\s*([a-z0-9_-]+)", proof_text, flags=re.IGNORECASE)
+        transport_match = re.search(r"\btransport\s*=\s*([a-z0-9_-]+)", proof_text, flags=re.IGNORECASE)
+        provider = (provider_match.group(1).lower() if provider_match else "").strip()
+        mode = (mode_match.group(1).lower() if mode_match else "").strip()
+        transport = (transport_match.group(1).lower() if transport_match else "").strip()
+        proven = (
+            provider == IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER
+            and mode == "oauth"
+            and transport == "codex-responses"
+        ) or (
+            "provider=openai-codex" in normalized
+            and "mode=oauth" in normalized
+            and "transport=codex-responses" in normalized
+        )
+        return {
+            "proven": proven,
+            "provider": provider,
+            "mode": mode,
+            "transport": transport,
+            "proofLine": next(
+                (line.strip() for line in proof_text.splitlines() if "image auth selected" in line.lower()),
+                "",
+            )[:320],
+        }
+
+    def _write_image_playground_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
+        provider_id = self._image_provider_id(payload)
+        if provider_id != IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID:
+            return self._image_provider_unavailable(
+                payload,
+                message=(
+                    "Only GPT-Image-2 via Codex subscription is enabled for this workbench. "
+                    "Switch provider to the Codex subscription lane."
+                ),
+                blocked_reason="provider_not_allowed",
+                details={
+                    "requestedProviderId": provider_id,
+                    "allowedProviderId": IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID,
+                },
+            )
+
+        allow_paid_api_fallback = bool(
+            payload.get("allowPaidApiFallback") or payload.get("allow_paid_api_fallback")
+        )
+        codex_auth = _openai_codex_oauth_status(session_secrets=self.provider_secrets)
+        codex_source = str(codex_auth.get("source") or "").strip().lower()
+        codex_authenticated = bool(codex_auth.get("authenticated"))
+        if not codex_authenticated:
+            return self._image_provider_unavailable(
+                payload,
+                message="OpenAI Codex OAuth is not connected on this runtime.",
+                blocked_reason="codex_auth_missing",
+                details={"authStatus": codex_auth},
+            )
+        if codex_source == "openai-api-key" and not allow_paid_api_fallback:
+            return self._image_provider_unavailable(
+                payload,
+                message=(
+                    "Paid OpenAI API-key routing is blocked for this image lane. "
+                    "Connect OpenAI Codex OAuth to use codex subscription billing."
+                ),
+                blocked_reason="paid_api_fallback_blocked",
+                details={
+                    "authStatus": codex_auth,
+                    "allowPaidApiFallback": False,
+                },
+            )
+
+        env = self._provider_env()
+        command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
+        if not command:
+            return self._image_provider_unavailable(
+                payload,
+                message="OpenClaw CLI was not found on PATH.",
+                blocked_reason="openclaw_missing",
+            )
+
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+
+        artifact_dir = self.root / ".agent_control" / "design_references" / "codex_image_artifacts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        image_path = artifact_dir / f"{request_id}.png"
+        manifest_path = artifact_dir / f"{request_id}.manifest.json"
+
+        prompt_text = _image_prompt_text(payload)
+        args = [
+            command,
+            "infer",
+            "image",
+            "generate",
+            "--model",
+            IMAGE_PROVIDER_CODEX_COMMAND_MODEL,
+            "--prompt",
+            prompt_text,
+            "--output",
+            str(image_path),
+            "--json",
+        ]
+        size = str(payload.get("size") or (payload.get("provider") if isinstance(payload.get("provider"), dict) else {}).get("size") or "").strip()
+        if size:
+            args.extend(["--size", size])
+        try:
+            run_payload, _stdout, stderr, elapsed_ms = _run_process_capture(
+                args,
+                cwd=workspace_path,
+                timeout=900,
+                extra_env=env,
+            )
+        except RuntimeError as exc:
+            return self._image_provider_unavailable(
+                payload,
+                message=str(exc) or "OpenClaw image generation failed.",
+                blocked_reason="openclaw_generation_failed",
+                details={"command": args},
+            )
+
+        provider_value, model_value = self._extract_openclaw_image_route(run_payload)
+        model_name = model_value.split("/")[-1] if model_value else ""
+        route_evidence = self._openclaw_codex_image_oauth_evidence(run_payload, stderr)
+        route_is_codex_subscription = (
+            provider_value == IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER
+            or (provider_value == "openai" and route_evidence["proven"])
+        )
+        if not route_is_codex_subscription or model_name != IMAGE_PROVIDER_CODEX_EXPECTED_MODEL:
+            return self._image_provider_unavailable(
+                payload,
+                message=(
+                    "OpenClaw did not prove Codex subscription routing "
+                    f"(provider={provider_value or 'unknown'}, model={model_name or model_value or 'unknown'})."
+                ),
+                blocked_reason="route_validation_failed",
+                details={
+                    "expectedProvider": IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER,
+                    "expectedModel": IMAGE_PROVIDER_CODEX_EXPECTED_MODEL,
+                    "reportedProvider": provider_value,
+                    "reportedModel": model_value,
+                    "routeEvidence": route_evidence,
+                    "raw": run_payload,
+                },
+            )
+
+        if not image_path.exists() or not self._is_png_file(image_path):
+            return self._image_provider_unavailable(
+                payload,
+                message="OpenClaw returned success but did not write a valid PNG artifact.",
+                blocked_reason="artifact_validation_failed",
+                details={
+                    "artifactPath": str(image_path),
+                    "exists": image_path.exists(),
+                },
+            )
+
+        artifact_sha = _sha256_file(image_path)
+        manifest = {
+            "requestId": request_id,
+            "artifactId": request_id,
+            "servedArtifactId": self._artifact_id(image_path),
+            "artifactPath": str(image_path),
+            "artifactSha256": artifact_sha,
+            "contentType": "image/png",
+            "providerId": IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID,
+            "provider": IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER,
+            "model": IMAGE_PROVIDER_CODEX_EXPECTED_MODEL,
+            "route": "codex_subscription",
+            "authMode": "codex subscription",
+            "billingNote": "codex subscription",
+            "providerRoute": "openclaw infer image generate",
+            "safeArtifactArea": ".agent_control/design_references/codex_image_artifacts",
+            "localPath": str(image_path),
+            "nasPathCandidates": [
+                str(image_path),
+                str(image_path).replace(str(self.root), "/volume1/Saclay/projects/vibe-coding-platform"),
+            ],
+            "prompt": payload.get("prompt") if isinstance(payload.get("prompt"), dict) else {},
+            "canvas": payload.get("canvas") if isinstance(payload.get("canvas"), dict) else {},
+            "createdAt": _utc_now(),
+            "provenance": {
+                "servedBy": "web-backend",
+                "safeEndpoint": "/api/artifact",
+                "allowedRoots": [str(item) for item in self._artifact_allowed_roots()],
+                "arbitraryWorkspaceFilesExposed": False,
+                "routeEvidence": {
+                    "provider": provider_value,
+                    "model": model_value,
+                    "rawProvider": run_payload.get("provider"),
+                    "rawModel": run_payload.get("model"),
+                    "authProvider": route_evidence["provider"],
+                    "authMode": route_evidence["mode"],
+                    "transport": route_evidence["transport"],
+                    "proofLine": route_evidence["proofLine"],
+                },
+            },
+            "runtime": {
+                "host": os.environ.get("COMPUTERNAME") or (os.uname().nodename if hasattr(os, "uname") else ""),
+                "root": str(self.root),
+                "artifactServer": "web-backend",
+                "elapsedMs": elapsed_ms,
+            },
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        manifest_sha = _sha256_file(manifest_path)
+        manifest["manifestPath"] = str(manifest_path)
+        manifest["manifestSha256"] = manifest_sha
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        return {
+            "provider": IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER,
+            "providerId": IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID,
+            "providerStatus": "available",
+            "route": "codex_subscription",
+            "authMode": "codex subscription",
+            "billingNote": "codex subscription",
+            "model": IMAGE_PROVIDER_CODEX_EXPECTED_MODEL,
+            "message": "Generated PNG artifact was written and served through the Codex subscription route.",
+            "requestId": request_id,
+            "artifactId": request_id,
+            "servedArtifactId": self._artifact_id(image_path),
+            "outputArtifactPath": str(image_path),
+            "imagePath": str(image_path),
+            "previewUrl": self._artifact_url(image_path),
+            "manifestPath": str(manifest_path),
+            "manifestUrl": self._artifact_url(manifest_path),
+            "contentType": "image/png",
+            "safeArtifactArea": ".agent_control/design_references/codex_image_artifacts",
+            "provenance": manifest["provenance"],
+            "receipt": {
+                "promptHash": _sha256_hex(json.dumps(payload.get("prompt") or {}, sort_keys=True))[:12],
+                "artifactSha256": artifact_sha,
+                "manifestSha256": manifest_sha,
+                "providerName": "OpenAI Codex subscription",
+                "provider": IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER,
+                "model": IMAGE_PROVIDER_CODEX_EXPECTED_MODEL,
+                "route": "codex_subscription",
+                "authMode": "codex subscription",
+                "billingNote": "codex subscription",
+                "testStatus": "Checked",
+            },
+            "layer": {
+                "id": f"layer-{request_id}",
+                "name": "Codex subscription artifact",
+                "type": "image",
+                "src": self._artifact_url(image_path),
+                "x": 0,
+                "y": 0,
+                "width": (payload.get("canvas") if isinstance(payload.get("canvas"), dict) else {}).get("width") or 1024,
+                "height": (payload.get("canvas") if isinstance(payload.get("canvas"), dict) else {}).get("height") or 1024,
+                "rotation": 0,
+                "promptRole": "generated image artifact served by backend",
+            },
+        }
+
+    def _chat_compartment_path(self, session_id: str) -> Path:
+        return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
+
+    def _save_chat_compartment(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        session_id = _safe_identifier(result.get("sessionId") or payload.get("sessionId") or "syntelos_chat")
+        route = result.get("route") if isinstance(result.get("route"), dict) else self._chat_route(payload)
+        workspace_path = str(Path(str(payload.get("workspacePath") or self.root)).expanduser())
+        path = self._chat_compartment_path(session_id)
+        previous: dict[str, Any] = {}
+        if path.exists():
+            try:
+                previous = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                previous = {}
+        timeline = previous.get("timeline") if isinstance(previous.get("timeline"), list) else []
+        now = _utc_now()
+        elapsed_ms_raw = result.get("elapsedMs")
+        try:
+            elapsed_ms = int(elapsed_ms_raw) if elapsed_ms_raw is not None else 0
+        except (TypeError, ValueError):
+            elapsed_ms = 0
+        runtime_tool_timeline = result.get("toolTimeline") if isinstance(result.get("toolTimeline"), list) else []
+        timeline.extend(
+            [
+                {
+                    "kind": "operator.message",
+                    "at": now,
+                    "summary": str(payload.get("message") or "").strip()[:240],
+                },
+                {
+                    "kind": "runtime.reply",
+                    "at": now,
+                    "summary": str(result.get("reply") or "").strip()[:240],
+                },
+            ]
+        )
+        if elapsed_ms > 0:
+            timeline.append(
+                {
+                    "kind": "runtime.roundtrip",
+                    "at": now,
+                    "summary": f"CLI roundtrip completed in {elapsed_ms} ms.",
+                    "status": "completed",
+                }
+            )
+        for item in runtime_tool_timeline[-14:]:
+            if not isinstance(item, dict):
+                continue
+            summary = str(item.get("summary") or item.get("message") or "").strip()
+            if not summary:
+                continue
+            timeline.append(
+                {
+                    "kind": str(item.get("kind") or item.get("type") or "runtime.event"),
+                    "at": str(item.get("at") or now),
+                    "summary": summary[:240],
+                    "status": str(item.get("status") or "recorded"),
+                }
+            )
+        messages = previous.get("messages") if isinstance(previous.get("messages"), list) else []
+        operator_message = str(payload.get("message") or "").strip()
+        runtime_reply = str(result.get("reply") or "").strip()
+        if operator_message:
+            messages.append({"role": "operator", "text": operator_message, "at": now})
+        if runtime_reply:
+            messages.append({"role": "assistant", "text": runtime_reply, "at": now})
+        previous_files = previous.get("filesChanged") if isinstance(previous.get("filesChanged"), list) else []
+        changed_files: list[str] = []
+        seen_files: set[str] = set()
+        for candidate in [*previous_files, *(result.get("filesChanged") if isinstance(result.get("filesChanged"), list) else [])]:
+            value = str(candidate or "").strip()
+            if not value:
+                continue
+            if value in seen_files:
+                continue
+            seen_files.add(value)
+            changed_files.append(value)
+        active_role = str(route.get("role") or payload.get("role") or "executor").strip().lower() or "executor"
+        lanes = []
+        for role in ("planner", "executor", "verifier"):
+            lanes.append(
+                {
+                    "role": role,
+                    "phase": "plan" if role == "planner" else ("verify" if role == "verifier" else "execute"),
+                    "provider": route.get("provider") or "openai-codex",
+                    "model": route.get("model") or OPENAI_CODEX_DEFAULT_MODEL,
+                    "effort": route.get("effort") or "medium",
+                    "health": "ready",
+                    "active": role == active_role,
+                    "authPath": "OpenAI Codex OAuth" if route.get("provider") == "openai-codex" else "provider route",
+                    "blocker": "",
+                }
+            )
+        compartment = {
+            "sessionId": session_id,
+            "runtime": result.get("runtime") or payload.get("runtime") or "openclaw",
+            "cwd": workspace_path,
+            "route": route,
+            "host": os.environ.get("COMPUTERNAME") or (os.uname().nodename if hasattr(os, "uname") else ""),
+            "state": "ready",
+            "streaming": "recorded",
+            "messages": messages[-40:],
+            "toolTimeline": timeline[-30:],
+            "lanes": lanes,
+            "filesChanged": changed_files[:30],
+            "approvals": [],
+            "blockers": [],
+            "actions": ["resume-chat", "open-proof", "restart"],
+            "restartControls": {
+                "canRestart": True,
+                "canResume": True,
+            },
+            "lastRoundtripMs": elapsed_ms,
+            "updatedAt": now,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(compartment, indent=2), encoding="utf-8")
+        return compartment
 
     def _resolve_workspace_directory(self, raw_path: object) -> Path:
         requested = str(raw_path or "").strip()
@@ -1823,8 +2941,8 @@ class FluxioWebBackend:
 
     def _chat_route(self, payload: dict[str, Any]) -> dict[str, str]:
         route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
-        provider = self._openclaw_provider_for_route(route.get("provider") or payload.get("provider") or "openai")
-        model = str(route.get("model") or payload.get("model") or "").strip()
+        provider = self._openclaw_provider_for_route(route.get("provider") or payload.get("provider") or "openai-codex")
+        model = str(route.get("model") or payload.get("model") or OPENAI_CODEX_DEFAULT_MODEL).strip()
         effort = str(route.get("effort") or payload.get("effort") or "medium").strip().lower()
         role = str(route.get("role") or payload.get("role") or "executor").strip().lower()
         model_id = model if "/" in model else f"{provider}/{model}" if provider and model else model
@@ -1861,16 +2979,31 @@ class FluxioWebBackend:
         ]
         if model_id:
             args.extend(["--model", model_id])
-        result = _run_process(args, cwd=workspace_path, timeout=720, extra_env=env)
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=720,
+            extra_env=env,
+        )
         reply = _extract_model_reply(result)
         if not reply:
             raise RuntimeError("OpenClaw finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
         return {
             "reply": reply,
             "runtime": "openclaw",
             "sessionId": session_id,
             "route": route,
             "raw": result,
+            "elapsedMs": elapsed_ms,
+            "toolTimeline": tool_timeline,
+            "filesChanged": files_changed,
         }
 
     def _run_codex_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1894,7 +3027,7 @@ class FluxioWebBackend:
                 command,
                 "exec",
                 "--model",
-                route["model"] or "gpt-5.3-codex",
+                route["model"] or OPENAI_CODEX_DEFAULT_MODEL,
                 "--sandbox",
                 "read-only",
                 "--skip-git-repo-check",
@@ -1903,7 +3036,12 @@ class FluxioWebBackend:
                 "--json",
                 prompt,
             ]
-            result = _run_process(args, cwd=workspace_path, timeout=720, extra_env=env)
+            result, stdout, _stderr, elapsed_ms = _run_process_capture(
+                args,
+                cwd=workspace_path,
+                timeout=720,
+                extra_env=env,
+            )
             reply = ""
             try:
                 reply = output_path.read_text(encoding="utf-8").strip()
@@ -1913,12 +3051,22 @@ class FluxioWebBackend:
                 reply = _extract_model_reply(result)
             if not reply:
                 raise RuntimeError("Codex finished without a readable model reply.")
+            now = _utc_now()
+            tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+                result,
+                stdout=stdout,
+                now=now,
+                elapsed_ms=elapsed_ms,
+            )
             return {
                 "reply": reply,
                 "runtime": "codex",
                 "sessionId": _safe_identifier(payload.get("sessionId") or "syntelos_chat"),
                 "route": route,
                 "raw": result,
+                "elapsedMs": elapsed_ms,
+                "toolTimeline": tool_timeline,
+                "filesChanged": files_changed,
             }
         finally:
             try:
@@ -1931,10 +3079,13 @@ class FluxioWebBackend:
         env = self._provider_env()
         command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
         route = self._chat_route(payload)
+        raw_route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+        explicit_model = str(raw_route.get("model") or payload.get("model") or "").strip()
+        explicit_provider = str(raw_route.get("provider") or payload.get("provider") or "").strip()
         native_args = ["hermes", "chat", "-q", prompt, "-Q"]
-        if route["model"]:
-            native_args.extend(["--model", route["model"]])
-        if route["provider"]:
+        if explicit_model:
+            native_args.extend(["--model", explicit_model])
+        if explicit_provider and route["provider"]:
             native_args.extend(["--provider", route["provider"]])
         if command:
             args = [command, *native_args[1:]]
@@ -1950,36 +3101,64 @@ class FluxioWebBackend:
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
-        result = _run_process(args, cwd=workspace_path, timeout=720, extra_env=env)
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=720,
+            extra_env=env,
+        )
         reply = _extract_model_reply(result)
         if not reply:
             raise RuntimeError("Hermes finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
         return {
             "reply": reply,
             "runtime": "hermes",
             "sessionId": _safe_identifier(payload.get("sessionId") or "syntelos_chat"),
-            "route": route,
+            "route": {
+                **route,
+                "model": explicit_model,
+                "model_id": f"{route['provider']}/{explicit_model}" if explicit_model else route["provider"],
+            },
             "raw": result,
+            "elapsedMs": elapsed_ms,
+            "toolTimeline": tool_timeline,
+            "filesChanged": files_changed,
         }
 
     def _run_agent_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        runtime = str(payload.get("runtime") or payload.get("runtimeId") or "openclaw").strip().lower()
+        runtime = str(payload.get("runtime") or payload.get("runtimeId") or "codex").strip().lower()
         if runtime == "hermes":
-            return self._run_hermes_chat(payload)
-        if runtime in {"openclaw", "openclaw-local", ""}:
+            result = self._run_hermes_chat(payload)
+        elif runtime in {"openclaw", "openclaw-local", ""}:
             route = self._chat_route(payload)
             if route.get("provider") == "openai-codex":
-                return self._run_codex_chat(payload)
-            return self._run_openclaw_chat(payload)
-        if runtime == "codex":
-            return self._run_codex_chat(payload)
-        raise RuntimeError(f"Unsupported chat runtime: {runtime}")
+                result = self._run_codex_chat(payload)
+            elif route.get("provider") in {"minimax", "minimax-cn", "minimax-portal"}:
+                raise RuntimeError(
+                    "MiniMax/OpenClaw portal routing is disabled for the web control workbench. "
+                    "Use the OpenAI Codex OAuth route or record a Codex blocker before falling back."
+                )
+            else:
+                result = self._run_openclaw_chat(payload)
+        elif runtime == "codex":
+            result = self._run_codex_chat(payload)
+        else:
+            raise RuntimeError(f"Unsupported chat runtime: {runtime}")
+        result["compartment"] = self._save_chat_compartment(payload, result)
+        return result
 
     def dispatch(self, command: str, raw_payload: object) -> object:
         payload = _as_payload(raw_payload)
         if command == "get_control_room_snapshot_command":
             root = Path(payload.get("root") or self.root).resolve()
-            snapshot = self._run_cli(root, "control-room", [], timeout=180)
+            snapshot = self._run_cli(root, "control-room", [], timeout=180, fast_control_room=True)
             snapshot["providerSecretPresence"] = _provider_presence(
                 session_secrets=self.provider_secrets,
             )
@@ -1989,6 +3168,10 @@ class FluxioWebBackend:
                 "root": str(root),
             }
             return snapshot
+        if command == "get_nas_deploy_readiness_command":
+            from .mission_control import build_nas_deploy_readiness_snapshot
+
+            return build_nas_deploy_readiness_snapshot(self.root)
         if command == "inspect_codex_import_command":
             return _codex_import_snapshot()
         if command == "get_provider_secret_presence_command":
@@ -2030,6 +3213,8 @@ class FluxioWebBackend:
             return bool(webbrowser.open(url))
         if command == "list_workspace_directory_command":
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
+        if command == "image_playground_operation_command":
+            return self._write_image_playground_artifact(payload)
         if command == "save_workspace_profile_command":
             args = [
                 "--workspace-id",
@@ -2220,6 +3405,31 @@ class FluxioWebBackend:
         handler.wfile.write(body)
         return True
 
+    def serve_artifact(self, handler: BaseHTTPRequestHandler) -> bool:
+        parsed = urlparse(handler.path)
+        query = parse_qs(parsed.query)
+        raw_id = (query.get("id") or [""])[0]
+        raw_path = (query.get("path") or [""])[0]
+        try:
+            target = self._resolve_artifact_id(raw_id) if raw_id else self._resolve_artifact_path(raw_path)
+        except RuntimeError as exc:
+            _json_response(handler, 404, {"ok": False, "error": str(exc)})
+            return True
+        content_type = ARTIFACT_CONTENT_TYPES.get(target.suffix.lower())
+        if not content_type:
+            _json_response(handler, 415, {"ok": False, "error": "Unsupported artifact type"})
+            return True
+        body = target.read_bytes()
+        handler.send_response(200)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("X-Syntelos-Artifact-Id", self._artifact_id(target))
+        _apply_security_headers(handler, cache_control="private, max-age=60")
+        _send_cors_headers(handler)
+        handler.end_headers()
+        handler.wfile.write(body)
+        return True
+
 
 def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
@@ -2234,13 +3444,16 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                     200,
                     {
                         "ok": True,
-                        "backend": "syntelos-web",
+                        "backend": "fluxio-web",
                         "loginRequired": True,
                     },
                 )
                 return
             if parsed.path == "/api/auth/status":
                 _json_response(self, 200, {"ok": True, "data": backend.session_status(self)})
+                return
+            if parsed.path == "/api/artifact":
+                backend.serve_artifact(self)
                 return
             backend.serve_file(self)
 
@@ -2335,9 +3548,15 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                 payload = _read_json_body(self)
                 command = str(payload.get("command") or "").strip()
                 result = backend.dispatch(command, payload.get("payload"))
-                _json_response(self, 200, {"ok": True, "data": result})
+                try:
+                    _json_response(self, 200, {"ok": True, "data": result})
+                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                    return
             except Exception as exc:  # pragma: no cover - exercised by browser/manual flows
-                _json_response(self, 500, {"ok": False, "error": str(exc)})
+                try:
+                    _json_response(self, 500, {"ok": False, "error": str(exc)})
+                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                    return
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -2373,7 +3592,32 @@ def main(argv: list[str] | None = None) -> int:
         dest="reset_admin_password",
         help="Generate a fresh local account password file under .agent_control.",
     )
+    parser.add_argument(
+        "--allow-port-reuse",
+        action="store_true",
+        help="Skip the startup preflight that prevents duplicate local backend listeners.",
+    )
     args = parser.parse_args(argv)
+
+    if not args.allow_port_reuse and tcp_port_accepts_connection(args.host, args.port):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "port_in_use",
+                    "host": args.host,
+                    "port": args.port,
+                    "message": (
+                        f"{PRODUCT_NAME} web backend did not start because "
+                        f"{args.host}:{args.port} is already accepting connections."
+                    ),
+                },
+                indent=2,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        return 98
 
     backend = FluxioWebBackend(
         Path(args.root),

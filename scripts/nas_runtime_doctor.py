@@ -14,7 +14,7 @@ DEFAULT_RUNTIME_BIN_DIRS = [
     ROOT / ".agent_control" / "runtime" / "bin",
     ROOT.parent / "runtime" / "bin",
 ]
-COMMANDS = ("node", "npm", "npx", "openclaw", "hermes", "python3", "python")
+COMMANDS = ("node", "npm", "npx", "openclaw", "hermes", "python3", "python", "pytest", "git")
 
 
 def runtime_path_entries(extra_bin_dir: list[str] | None = None) -> list[str]:
@@ -72,6 +72,11 @@ def inspect_commands(extra_bin_dir: list[str] | None = None) -> dict[str, object
             "command": resolved or "",
             "version": command_version(command, env) if resolved else "",
         }
+    verification_ready = bool(
+        commands["python"]["detected"]
+        and commands["pytest"]["detected"]
+        and commands["git"]["detected"]
+    )
     return {
         "runtimeBinDirs": runtime_path_entries(extra_bin_dir),
         "commands": commands,
@@ -81,8 +86,19 @@ def inspect_commands(extra_bin_dir: list[str] | None = None) -> dict[str, object
             and commands["openclaw"]["detected"]
             and commands["hermes"]["detected"]
         ),
+        "verificationReady": verification_ready,
+        "verificationIssues": [
+            message
+            for detected, message in (
+                (commands["python"]["detected"], "Runtime python is missing."),
+                (commands["pytest"]["detected"], "pytest is missing from the runtime PATH."),
+                (commands["git"]["detected"], "git is missing from the runtime PATH; git diff/status cannot work."),
+            )
+            if not detected
+        ],
         "installPlan": [
             "Run: python scripts/install_nas_runtime_stack.py --install-openclaw --install-hermes.",
+            "Install Synology Git through Package Center or ensure a compatible git binary is on PATH.",
             "Start the web backend with SYNTELOS_RUNTIME_BIN_DIR pointing to the runtime bin directory if it is not one of the default locations.",
             "Run openclaw onboard --install-daemon and configure provider auth before the first model request.",
             "Run hermes setup or connect provider auth before the first Hermes model request.",
@@ -113,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Runtime bin directories:")
         for value in payload["runtimeBinDirs"]:
             print(f"  {value}")
+    if not payload["verificationReady"]:
+        print("")
+        print("Verification issues:")
+        for issue in payload["verificationIssues"]:
+            print(f"- {issue}")
     if not payload["ready"]:
         print("")
         print("Install plan:")

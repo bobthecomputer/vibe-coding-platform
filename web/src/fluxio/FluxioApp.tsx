@@ -25,9 +25,10 @@ import {
 } from "@phosphor-icons/react";
 
 import { FluxioShellApp } from "./FluxioShell.jsx";
+import { buildLiveReviewWorkbench, getSnapshot } from "./fluxioBridge.ts";
 
-const PRODUCT_NAME = "Syntelos";
-const PRODUCT_TAGLINE = "Turn AI agents into second brains.";
+const PRODUCT_NAME = "Fluxio";
+const PRODUCT_TAGLINE = "Agent operating system for workspaces.";
 const PUBLIC_ROADMAP_EVENTS = [
   {
     id: "nas-bridge",
@@ -179,6 +180,17 @@ type BoundaryState = {
   capturedAt: string;
 };
 
+function hardReloadControl(reason: string) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("_syntelos_reload", `${Date.now()}`);
+    url.searchParams.set("_syntelos_reason", reason);
+    window.location.replace(url.toString());
+  } catch {
+    window.location.reload();
+  }
+}
+
 class FluxioErrorBoundary extends React.Component<BoundaryProps, BoundaryState> {
   state: BoundaryState = {
     error: null,
@@ -202,8 +214,7 @@ class FluxioErrorBoundary extends React.Component<BoundaryProps, BoundaryState> 
   }
 
   handleRecover = () => {
-    this.setState({ error: null, capturedAt: "" });
-    this.props.onRecover();
+    hardReloadControl("recover");
   };
 
   render() {
@@ -237,7 +248,7 @@ class FluxioErrorBoundary extends React.Component<BoundaryProps, BoundaryState> 
             <button className="action-btn primary" onClick={this.handleRecover} type="button">
               Recover UI
             </button>
-            <button className="action-btn" onClick={() => window.location.reload()} type="button">
+            <button className="action-btn" onClick={() => hardReloadControl("reload")} type="button">
               Reload app
             </button>
           </div>
@@ -319,7 +330,7 @@ function PublicProductPage() {
               View GitHub
             </a>
             <a className="grand-public-ghost" href="#setup">
-              Set up Syntelos
+              Set up Fluxio
               <ArrowRight aria-hidden="true" size={16} weight="bold" />
             </a>
           </div>
@@ -332,7 +343,7 @@ function PublicProductPage() {
             <div>
               <HardDrives aria-hidden="true" size={22} weight="duotone" />
               <strong>Runs anywhere local</strong>
-              <span>NAS is optional. It keeps Syntelos always on.</span>
+              <span>NAS is optional. It keeps Fluxio always on.</span>
             </div>
             <div id="live-ui">
               <Browser aria-hidden="true" size={22} weight="duotone" />
@@ -434,7 +445,7 @@ function PublicProductPage() {
                       <p>Make this app explain itself to a first-time student on a school laptop.</p>
                     </div>
                     <div className="syntelos-message agent">
-                      <strong>Syntelos Agent</strong>
+                      <strong>Fluxio Agent</strong>
                       <p>
                         Plan: update the tutorial, capture UI proof, run checks, then post the compact summary.
                       </p>
@@ -463,6 +474,8 @@ function PublicProductPage() {
                     </div>
                   </div>
                 </div>
+
+                <LiveReviewWorkbench mode={activePreviewMode} />
 
                 <div className="syntelos-builder-strip" aria-label="Builder and app previews">
                   <div>
@@ -531,7 +544,7 @@ function PublicProductPage() {
           <p>
             The project started from a practical frustration: normal chat workflows can plan,
             but they do not naturally keep going from plan mode into execution mode, verification,
-            and follow-up without a human constantly babysitting the session. Syntelos is the
+            and follow-up without a human constantly babysitting the session. Fluxio is the
             attempt to make that loop truly automatic while still showing proof and asking for
             judgment at real risk boundaries.
           </p>
@@ -566,7 +579,7 @@ function PublicProductPage() {
           <p className="grand-public-kicker">Roadmap</p>
           <h2>The path to autonomous work.</h2>
           <p>
-            Syntelos grows in clear phases: first a dependable bridge between your computer,
+            Fluxio grows in clear phases: first a dependable bridge between your computer,
             NAS, and cloud drives, then stronger browser and desktop control, a selectable
             comment layer for any UI, tutorials for each skill level, and focused workspaces
             for coding, school, research, benchmarks, creative work, style/texture
@@ -842,6 +855,334 @@ function PublicProductPage() {
   );
 }
 
+function LiveReviewWorkbench({ mode }: { mode: "agent" | "builder" }) {
+  const [snapshot, setSnapshot] = React.useState<Record<string, unknown>>({});
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [selectedTargetKind, setSelectedTargetKind] = React.useState("browser");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void getSnapshot()
+      .then(next => {
+        if (cancelled) {
+          return;
+        }
+        setSnapshot(next);
+        setError("");
+      })
+      .catch(caught => {
+        if (cancelled) {
+          return;
+        }
+        setError(caught instanceof Error ? caught.message : String(caught));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const workbench = React.useMemo(() => buildLiveReviewWorkbench(snapshot), [snapshot]);
+  const targetOptions = Array.isArray(workbench.targetOptions) ? workbench.targetOptions : [];
+  const selectedTarget =
+    targetOptions.find(item => String(item?.kind || "") === selectedTargetKind) ||
+    workbench.target ||
+    targetOptions[0] ||
+    { kind: "browser", label: "Browser workspace", detail: "Live review target" };
+  const annotations = Array.isArray(workbench.annotations) ? workbench.annotations : [];
+  const panes = Array.isArray(workbench.panes) ? workbench.panes : [];
+  const replayWindow = Array.isArray(workbench.replayWindow) ? workbench.replayWindow : [];
+  const evidence = workbench.evidence && typeof workbench.evidence === "object" ? workbench.evidence : {};
+  const runtimeStatus = workbench.runtimeStatus && typeof workbench.runtimeStatus === "object" ? workbench.runtimeStatus : {};
+  const agentFeedback =
+    workbench.agentFeedback && typeof workbench.agentFeedback === "object"
+      ? (workbench.agentFeedback as Record<string, unknown>)
+      : {};
+  const skillInfluence =
+    agentFeedback.skillInfluence && typeof agentFeedback.skillInfluence === "object"
+      ? (agentFeedback.skillInfluence as Record<string, unknown>)
+      : {};
+  const coworkStatus =
+    agentFeedback.coworkStatus && typeof agentFeedback.coworkStatus === "object"
+      ? (agentFeedback.coworkStatus as Record<string, unknown>)
+      : {};
+  const plannerBridgePacket =
+    agentFeedback.plannerBridgePacket && typeof agentFeedback.plannerBridgePacket === "object"
+      ? (agentFeedback.plannerBridgePacket as Record<string, unknown>)
+      : {};
+  const routeContext =
+    plannerBridgePacket.routeContext && typeof plannerBridgePacket.routeContext === "object"
+      ? (plannerBridgePacket.routeContext as Record<string, unknown>)
+      : {};
+  const taskContext =
+    plannerBridgePacket.taskContext && typeof plannerBridgePacket.taskContext === "object"
+      ? (plannerBridgePacket.taskContext as Record<string, unknown>)
+      : {};
+  const verifierFeedback =
+    plannerBridgePacket.verifierFeedback && typeof plannerBridgePacket.verifierFeedback === "object"
+      ? (plannerBridgePacket.verifierFeedback as Record<string, unknown>)
+      : {};
+  const statusUpdates = Array.isArray(coworkStatus.statusUpdates) ? coworkStatus.statusUpdates : [];
+  const selectedSkills = Array.isArray(skillInfluence.selectedSkills) ? skillInfluence.selectedSkills : [];
+  const plannerRules = Array.isArray(skillInfluence.plannerRules) ? skillInfluence.plannerRules : [];
+  const designPrompts = Array.isArray(skillInfluence.designPrompts) ? skillInfluence.designPrompts : [];
+
+  React.useEffect(() => {
+    setSelectedTargetKind(String((workbench.target as Record<string, unknown> | undefined)?.kind || "browser"));
+  }, [workbench.target]);
+
+  return (
+    <section className="syntelos-review-workbench" aria-label="Live review workbench">
+      <div className="syntelos-review-head">
+        <div>
+          <span>{mode === "builder" ? "Builder review" : "Live review"}</span>
+          <strong>{mode === "builder" ? "Comment on live runtime proof." : "Steer the agent with structured UI feedback."}</strong>
+        </div>
+        <p>{loading ? "Syncing runtime snapshot..." : error || workbench.replaySummary}</p>
+      </div>
+
+      <div className="syntelos-review-layout">
+        <aside className="syntelos-review-sidepanel">
+          <div className="syntelos-review-target-picker" aria-label="Annotation target model">
+            {targetOptions.map(item => (
+              <button
+                className={String(item.kind) === selectedTargetKind ? "active" : ""}
+                key={String(item.kind)}
+                onClick={() => setSelectedTargetKind(String(item.kind))}
+                type="button"
+              >
+                <span>{String(item.kind).toUpperCase()}</span>
+                <strong>{String(item.label || "")}</strong>
+              </button>
+            ))}
+          </div>
+
+          <div className="syntelos-review-target-meta">
+            <span>Selected surface</span>
+            <strong>{String(selectedTarget.label || selectedTarget.kind)}</strong>
+            <p>{String(selectedTarget.detail || "Live UI, window, or document surface")}</p>
+            <small>
+              {String(selectedTarget.kind).toUpperCase()} · {annotations.length} pins · {replayWindow.length} replay events
+            </small>
+          </div>
+
+          <div className="syntelos-review-status-grid" aria-label="Runtime status">
+            <div>
+              <span>Browser</span>
+              <strong>{String((runtimeStatus as Record<string, unknown>).browser || "ready")}</strong>
+            </div>
+            <div>
+              <span>Computer use</span>
+              <strong>{String((runtimeStatus as Record<string, unknown>).computerUse || "connected")}</strong>
+            </div>
+            <div>
+              <span>Autotest</span>
+              <strong>{String((runtimeStatus as Record<string, unknown>).autotest || "queued")}</strong>
+            </div>
+          </div>
+
+          <div className="syntelos-review-pane-list" aria-label="Review panes">
+            <div className="syntelos-review-section-head">
+              <span>Panes</span>
+              <strong>{panes.length} linked</strong>
+            </div>
+            {panes.map(pane => (
+              <article className="syntelos-review-pane" key={String(pane.id || pane.label)}>
+                <span>{String(pane.label || pane.id || "pane")}</span>
+                <strong>{String(pane.purpose || "Live review pane")}</strong>
+                <em>{String(pane.status || "linked")}</em>
+              </article>
+            ))}
+          </div>
+
+          <div className="syntelos-review-annotation-list">
+            <div className="syntelos-review-section-head">
+              <span>Annotations</span>
+              <strong>{annotations.length} pins</strong>
+            </div>
+            {annotations.map(annotation => (
+              <article className="syntelos-review-annotation" key={String(annotation.id || annotation.pin)}>
+                <b>{String(annotation.pin || "•")}</b>
+                <div>
+                  <span>
+                    {String(annotation.region || annotation.target || "region")} · {String(annotation.pane || "live-preview")}
+                  </span>
+                  <strong>{String(annotation.comment || annotation.feedback || "")}</strong>
+                  <em>{String(annotation.selector || annotation.evidence || "agent feedback")}</em>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="syntelos-review-evidence">
+            <div className="syntelos-review-section-head">
+              <span>Evidence</span>
+              <strong>Snapshots and replay</strong>
+            </div>
+            <div className="syntelos-review-evidence-grid">
+              <div>
+                <span>Screenshot</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).screenshots) ? (evidence as Record<string, unknown>).screenshots.length : 0}</strong>
+              </div>
+              <div>
+                <span>Timelapse</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).timelapse) ? (evidence as Record<string, unknown>).timelapse.length : 0}</strong>
+              </div>
+              <div>
+                <span>Files</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).files) ? (evidence as Record<string, unknown>).files.length : 0}</strong>
+              </div>
+              <div>
+                <span>Tools</span>
+                <strong>{Array.isArray((evidence as Record<string, unknown>).tools) ? (evidence as Record<string, unknown>).tools.length : 0}</strong>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <div className="syntelos-review-preview">
+          <div className="syntelos-review-preview-head">
+            <div>
+              <span>Target</span>
+              <strong>{String(selectedTarget.label || selectedTarget.kind)}</strong>
+            </div>
+            <p>{String(selectedTarget.detail || "Live UI, window, or document surface")}</p>
+          </div>
+
+          <div className="syntelos-review-preview-stage">
+            <span className="syntelos-review-preview-badge">{String(selectedTarget.kind).toUpperCase()}</span>
+            <div className="syntelos-review-preview-card primary" />
+            <div className="syntelos-review-preview-card secondary" />
+            <div className="syntelos-review-preview-card tertiary active" />
+            {annotations.map(annotation => (
+              <span className={`syntelos-review-preview-pin pin-${String(annotation.pin || "1")}`} key={String(annotation.id || annotation.pin)}>
+                {String(annotation.pin || "•")}
+              </span>
+            ))}
+            <div className="syntelos-review-preview-note">
+              <strong>{mode === "builder" ? "Builder sees proof first" : "Agent sees live guidance"}</strong>
+              <span>{loading ? "Fetching activity replay" : workbench.replaySummary}</span>
+            </div>
+          </div>
+
+          <div className="syntelos-review-cowork-grid" aria-label="Co-working status">
+            <article>
+              <span>Side-by-side preview</span>
+              <strong>{String(coworkStatus.sideBySidePreview || "active")}</strong>
+            </article>
+            <article>
+              <span>Feedback bridge</span>
+              <strong>{String(coworkStatus.feedbackBridge || "ready")}</strong>
+            </article>
+            <article>
+              <span>Evidence timeline</span>
+              <strong>{String(coworkStatus.evidenceTimeline || "capturing")}</strong>
+            </article>
+          </div>
+
+          <div className="syntelos-review-bridge-packet" aria-label="Planner executor bridge packet">
+            <div className="syntelos-review-section-head">
+              <span>Planner → executor bridge packet</span>
+              <strong>Route/model/task context</strong>
+            </div>
+            <div className="syntelos-review-bridge-grid">
+              <article>
+                <span>Route context</span>
+                <strong>{String(routeContext.strategy || "profile_default")}</strong>
+                <p>Planner {String(routeContext.plannerModel || "gpt-5.5")} → Executor {String(routeContext.executorModel || "gpt-5.5")}</p>
+              </article>
+              <article>
+                <span>Task context</span>
+                <strong>{String(taskContext.objective || "Live review polish in progress")}</strong>
+                <p>{String(taskContext.check || "Verify with focused tests and build")}</p>
+              </article>
+              <article>
+                <span>Verifier feedback</span>
+                <strong>{String(verifierFeedback.verdict || "pending")}</strong>
+                <p>{String(verifierFeedback.summary || "Verifier feedback not attached yet.")}</p>
+              </article>
+            </div>
+          </div>
+
+          <div className="syntelos-review-skill-influence" aria-label="Skill ruleset influence">
+            <div className="syntelos-review-section-head">
+              <span>Skill/ruleset impact</span>
+              <strong>{String(skillInfluence.decisionInfluence || "Selected skills shape execution")}</strong>
+            </div>
+            <div className="syntelos-review-chip-groups">
+              <div>
+                <span>Selected skills</span>
+                <p>{selectedSkills.length ? selectedSkills.join(" · ") : "No captured skills yet"}</p>
+              </div>
+              <div>
+                <span>Planner rules</span>
+                <p>{plannerRules.length ? plannerRules.join(" · ") : "No planner rules yet"}</p>
+              </div>
+              <div>
+                <span>Design prompts + next idea</span>
+                <p>{designPrompts.length ? designPrompts.join(" · ") : "No design prompts captured"}</p>
+                <p>{String(skillInfluence.nextIdea || "Capture a concrete next idea from this review.")}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="syntelos-review-activity" aria-label="Activity replay">
+            {replayWindow.length ? (
+              replayWindow.map(item => (
+                <article key={`${String(item.kind || "activity")}-${String(item.timestamp || "")}`}>
+                  <b>{String(item.kind || "activity")}</b>
+                  <span>{String(item.message || "")}</span>
+                  <em>{String(item.timestamp || "")}</em>
+                </article>
+              ))
+            ) : (
+              <article>
+                <b>activity</b>
+                <span>Waiting for runtime replay state.</span>
+                <em>idle</em>
+              </article>
+            )}
+          </div>
+
+          <div className="syntelos-review-status-updates" aria-label="Status updates">
+            <div className="syntelos-review-section-head">
+              <span>Status updates</span>
+              <strong>{statusUpdates.length} recent</strong>
+            </div>
+            {statusUpdates.length ? statusUpdates.map(item => (
+              <article key={`${String((item as Record<string, unknown>).kind || "update")}-${String((item as Record<string, unknown>).at || "")}`}>
+                <b>{String((item as Record<string, unknown>).kind || "update")}</b>
+                <span>{String((item as Record<string, unknown>).message || "")}</span>
+                <em>{String((item as Record<string, unknown>).at || "")}</em>
+              </article>
+            )) : (
+              <article>
+                <b>update</b>
+                <span>Waiting for planner/executor status updates.</span>
+                <em>pending</em>
+              </article>
+            )}
+          </div>
+
+          <div className="syntelos-review-feedback-payload" aria-label="Structured agent feedback">
+            <div className="syntelos-review-section-head">
+              <span>Agent payload</span>
+              <strong>Structured feedback</strong>
+            </div>
+            <pre>{JSON.stringify(agentFeedback, null, 2)}</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function GrandAgentLogin({
   auth,
   onAuthenticated,
@@ -915,7 +1256,7 @@ function GrandAgentLogin({
         <aside className="grand-login-hero">
           <p className="grand-login-kicker">
             <span aria-hidden="true" />
-            Syntelos login
+            Fluxio login
           </p>
           <h1>{PRODUCT_NAME}</h1>
           <p>
@@ -969,7 +1310,7 @@ function GrandAgentLogin({
             </span>
             <div>
               <span className="grand-login-eyebrow">Local account</span>
-              <h2>Sign in to Syntelos</h2>
+              <h2>Sign in to Fluxio</h2>
               <p>Sign in with your local account password.</p>
             </div>
           </div>

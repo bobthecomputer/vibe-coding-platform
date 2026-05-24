@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-05-20T19:07:51.118777+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-builder.png",
+  "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-builder.html",
+  "expectedFragments": [
+    "Builder",
+    "Rule Set",
+    "Timeline"
+  ],
+  "missingFragments": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 486,
+    "averageLuma": 18.19,
+    "nonBlank": true
+  },
+  "passed": true
+}

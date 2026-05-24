@@ -9,6 +9,8 @@
     "web:backend": "python scripts/run_web_backend.py",
     "web:serve": "npm run frontend:build && python scripts/run_web_backend.py",
     "nas:setup": "python scripts/nas_setup.py",
+    "verify:browser": "node scripts/control_route_smoke.mjs",
+    "verify:control": "python scripts/verify_control_workspace.py",
     "verify:desktop": "python -m pytest tests -q && npm run frontend:build && npm run tauri build -- --debug",
     "dev": "tauri dev",
     "dev:live": "powershell -NoProfile -Command \"Get-Process vibe-coding-platform,cargo -ErrorAction SilentlyContinue | Stop-Process -Force\"; tauri dev",

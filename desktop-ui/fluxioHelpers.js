@@ -58,10 +58,72 @@ export function describeMissionLocus(mission) {
   return "Local / direct";
 }
 
+function missionControlPriority(mission) {
+  const statusPriority = {
+    running: 5,
+    needs_approval: 4,
+    blocked: 3,
+    verification_failed: 3,
+    queued: 2,
+  };
+  return statusPriority[String(mission?.state?.status || "").toLowerCase()] || 0;
+}
+
+function missionControlTime(mission) {
+  const candidates = [
+    mission?.updated_at,
+    mission?.state?.updated_at,
+    mission?.missionLoop?.updatedAt,
+    ...(Array.isArray(mission?.delegated_runtime_sessions)
+      ? mission.delegated_runtime_sessions.map(item => item?.updated_at)
+      : []),
+  ];
+  return Math.max(
+    0,
+    ...candidates
+      .map(value => Date.parse(String(value || "")))
+      .filter(value => Number.isFinite(value)),
+  );
+}
+
+function preferredMission(snapshot) {
+  const missions = snapshot?.missions || [];
+  return (
+    missions
+      .slice()
+      .sort((left, right) => {
+        const priorityDelta = missionControlPriority(right) - missionControlPriority(left);
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+        return missionControlTime(right) - missionControlTime(left);
+      })[0] ||
+    missions[missions.length - 1] ||
+    null
+  );
+}
+
 export function selectedWorkspace(snapshot, selectedWorkspaceId) {
   const workspaces = snapshot?.workspaces || [];
+  const mission = preferredMission(snapshot);
+  const selected = workspaces.find(item => item.workspace_id === selectedWorkspaceId);
+  const preferred = workspaces.find(item => item.workspace_id === mission?.workspace_id);
+  if (
+    selected &&
+    preferred &&
+    selected.workspace_id !== preferred.workspace_id &&
+    missionControlPriority(mission) > 0
+  ) {
+    const selectedBest = preferredMission({
+      missions: (snapshot?.missions || []).filter(item => item?.workspace_id === selected.workspace_id),
+    });
+    if (missionControlPriority(mission) > missionControlPriority(selectedBest)) {
+      return preferred;
+    }
+  }
   return (
-    workspaces.find(item => item.workspace_id === selectedWorkspaceId) ||
+    selected ||
+    preferred ||
     workspaces[0] ||
     null
   );
@@ -69,10 +131,19 @@ export function selectedWorkspace(snapshot, selectedWorkspaceId) {
 
 export function selectedMission(snapshot, selectedMissionId) {
   const missions = snapshot?.missions || [];
+  const selected = missions.find(item => item.mission_id === selectedMissionId);
+  const preferred = preferredMission(snapshot);
+  if (
+    selected &&
+    preferred &&
+    selected.mission_id !== preferred.mission_id &&
+    missionControlPriority(preferred) > missionControlPriority(selected)
+  ) {
+    return preferred;
+  }
   return (
-    missions.find(item => item.mission_id === selectedMissionId) ||
-    missions[missions.length - 1] ||
-    null
+    selected ||
+    preferred
   );
 }
 

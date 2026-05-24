@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-05-20T19:08:12.154711+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=rule-sets",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-rule-sets.png",
+  "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-rule-sets.html",
+  "expectedFragments": [
+    "Rule Sets",
+    "Core policy",
+    "Approval"
+  ],
+  "missingFragments": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 330,
+    "averageLuma": 26.46,
+    "nonBlank": true
+  },
+  "passed": true
+}

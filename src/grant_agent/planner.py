@@ -11,6 +11,35 @@ class PlanBundle:
 
 
 def build_docs_first_plan(objective: str, docs: list[str]) -> PlanBundle:
+    lowered = objective.lower()
+    execute_first = (
+        "execute first" in lowered
+        or "no preflight" in lowered
+        or "first action must" in lowered
+    )
+    if execute_first:
+        steps = [
+            "Implement smallest vertical slice in product files",
+            "Run focused verification checks and inspect diffs",
+            "Prepare receipt with changed files and next product slice",
+        ]
+        alternatives = [
+            "Patch the narrowest existing product model/UI surface before broadening scope",
+            "Delegate the implementation lane directly, then verify only touched surfaces",
+        ]
+        checks = [
+            "Product files changed before any verification command",
+            "Focused verification runs only after implementation",
+            "Receipt includes changed files, remaining gaps, and next idea",
+        ]
+        if "ui" in lowered or "preview" in lowered:
+            checks.append("Preview reflects expected UI behavior on desktop and mobile")
+        return PlanBundle(
+            plan_steps=steps,
+            creative_alternatives=alternatives,
+            acceptance_checks=checks,
+        )
+
     doc_step = (
         "Review referenced docs and extract constraints"
         if docs

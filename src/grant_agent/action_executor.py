@@ -259,13 +259,14 @@ class HybridExecutionAdapter(ExecutionAdapter):
         execution_policy: ExecutionPolicy,
         route_configs: list[dict] | list[ModelRouteConfig] | None = None,
     ) -> ActionProposal:
-        lowered = f"{step.title} {step.description} {objective}".lower()
+        step_text = f"{step.title} {step.description}".lower()
+        lowered = f"{step_text} {objective}".lower()
         action_id = f"action_{uuid.uuid4().hex[:10]}"
         event_id = f"evt_{uuid.uuid4().hex[:10]}"
         scope_root = Path(execution_scope.execution_root or workspace_root)
         target_path = _infer_target_path(objective, scope_root)
 
-        if _matches(lowered, VERIFY_HINTS):
+        if _matches(step_text, VERIFY_HINTS):
             command = verification_commands[0] if verification_commands else "git diff --stat"
             return self._proposal(
                 action_id=action_id,
@@ -950,7 +951,7 @@ def _should_delegate_step(text: str, policy: ExecutionPolicy) -> bool:
             )
         )
     if delegation == "balanced":
-        return any(hint in text for hint in ("approval", "bridge", "runtime lane"))
+        return any(hint in text for hint in ("bridge", "runtime lane"))
     return False
 
 
@@ -971,10 +972,13 @@ def _delegated_cycle_phase(
         if "verifier" in explicit_roles and "executor" not in explicit_roles:
             return "verify"
 
-    lowered = f"{step.title} {step.description} {objective} {step.kind}".lower()
-    if _matches(lowered, DELEGATED_VERIFY_HINTS):
+    step_text = f"{step.title} {step.description} {step.kind}".lower()
+    objective_text = objective.lower()
+    if "execute first" in objective_text and _matches(step_text, WRITE_HINTS):
+        return "execute"
+    if _matches(step_text, DELEGATED_VERIFY_HINTS):
         return "verify"
-    if _matches(lowered, DELEGATED_PLAN_HINTS):
+    if _matches(step_text, DELEGATED_PLAN_HINTS):
         return "plan"
     return "execute"
 

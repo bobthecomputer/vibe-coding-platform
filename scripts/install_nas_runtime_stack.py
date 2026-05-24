@@ -173,6 +173,7 @@ def install_hermes(runtime_root: Path, bin_dir: Path, source_url: str = DEFAULT_
     run([str(uv_path), "venv", "venv", "--python", "3.11"], cwd=install_dir, env=env)
     env["VIRTUAL_ENV"] = str(install_dir / "venv")
     run([str(uv_path), "pip", "install", "-e", "."], cwd=install_dir, env=env)
+    run([str(uv_path), "pip", "install", "pytest"], cwd=install_dir, env=env)
 
     for name in [
         "cron",
@@ -203,6 +204,27 @@ def install_hermes(runtime_root: Path, bin_dir: Path, source_url: str = DEFAULT_
         encoding="utf-8",
     )
     shim.chmod(shim.stat().st_mode | 0o111)
+    for name in ("python", "python3"):
+        python_shim = bin_dir / name
+        python_shim.write_text(
+            "#!/bin/sh\n"
+            f"RUNTIME={runtime_root}\n"
+            'export HOME="$RUNTIME/home"\n'
+            'export PATH="$RUNTIME/bin:$PATH"\n'
+            'exec "$RUNTIME/hermes-agent/venv/bin/python" "$@"\n',
+            encoding="utf-8",
+        )
+        python_shim.chmod(python_shim.stat().st_mode | 0o111)
+    pytest_shim = bin_dir / "pytest"
+    pytest_shim.write_text(
+        "#!/bin/sh\n"
+        f"RUNTIME={runtime_root}\n"
+        'export HOME="$RUNTIME/home"\n'
+        'export PATH="$RUNTIME/bin:$PATH"\n'
+        'exec "$RUNTIME/hermes-agent/venv/bin/python" -m pytest "$@"\n',
+        encoding="utf-8",
+    )
+    pytest_shim.chmod(pytest_shim.stat().st_mode | 0o111)
 
 
 def main(argv: list[str] | None = None) -> int:

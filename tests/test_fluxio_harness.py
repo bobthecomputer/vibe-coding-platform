@@ -14,6 +14,7 @@ from grant_agent.fluxio_harness import (
     recommended_model_routes,
     resolve_efficiency_autotune_policy,
 )
+from grant_agent.models import DelegatedRuntimeSession, ModelRouteConfig, PlannedStep, PlanRevision
 from grant_agent.session_store import SessionStore
 from grant_agent.skill_library import SkillLibrary
 from grant_agent.skills import SkillRegistry
@@ -49,6 +50,92 @@ class FluxioHarnessTests(unittest.TestCase):
             verification_runner=VerificationRunner(),
             skill_library=SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json")),
         )
+
+    def test_skill_library_ignores_empty_control_json_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "skills.json").write_text("[]", encoding="utf-8")
+            control_dir = root / ".agent_control"
+            control_dir.mkdir()
+            (control_dir / "learned_skills.json").write_text("", encoding="utf-8")
+
+            library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+
+            self.assertEqual(library.learned_skills, [])
+
+    def test_openai_codex_provider_does_not_force_repeated_handoff(self) -> None:
+        session = type(
+            "Session",
+            (),
+            {
+                "target_phase": "execute",
+                "target_provider": "openai-codex",
+                "target_model": "gpt-5.4-mini",
+                "target_effort": "medium",
+            },
+        )()
+        desired = ModelRouteConfig(
+            role="executor",
+            provider="openai",
+            model="gpt-5.4-mini",
+            effort="medium",
+        )
+
+        self.assertFalse(
+            FluxioHarness._delegated_route_mismatch(
+                session,
+                desired_phase="execute",
+                desired_route=desired,
+            )
+        )
+
+    def test_failed_delegated_runtime_sets_blocking_trigger(self) -> None:
+        step = PlannedStep(
+            step_id="step_auth",
+            title="Run delegated Hermes lane",
+            description="Run delegated Hermes lane",
+        )
+        plan_revisions = [
+            PlanRevision(
+                revision_id="rev_auth",
+                trigger="mission_start",
+                summary="Test plan",
+                steps=[step],
+                active_step_id=step.step_id,
+            )
+        ]
+        session = DelegatedRuntimeSession(
+            delegated_id="delegate_auth",
+            runtime_id="hermes",
+            launch_command="hermes chat -q demo -Q",
+            status="failed",
+            detail="Delegated runtime process failed.",
+            last_event="Codex token refresh failed with status 401.",
+            source_step_id=step.step_id,
+        )
+        supervisor = type(
+            "Supervisor",
+            (),
+            {"refresh_session": staticmethod(lambda _item: session)},
+        )()
+
+        refreshed, active_status, replan_trigger = FluxioHarness._reconcile_delegated_sessions(
+            delegated_runtime_sessions=[{}],
+            plan_revisions=plan_revisions,
+            runtime_supervisor=supervisor,
+            notes=[],
+            risks=[],
+            objective="Repair control room",
+            route_configs=[],
+        )
+
+        self.assertEqual(active_status, "")
+        self.assertEqual(replan_trigger, "delegated_runtime_failed")
+        self.assertEqual(plan_revisions[-1].steps[0].status, "blocked")
+        self.assertEqual(plan_revisions[-1].steps[0].attempts, 1)
+        self.assertTrue(refreshed[0]["acknowledged"])
 
     def test_harness_runs_and_promotes_learned_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -717,6 +717,8 @@ function deriveServiceStudio(workspace, setupHealth) {
             commandSurface: action.commandSurface || "",
             detail: action.description || action.detail || action.followUp || "",
             requiresApproval: Boolean(action.requiresApproval),
+            autoRunVerify: Boolean(action.autoRunVerify),
+            followUp: action.followUp || "",
             surface,
           };
         });
@@ -2101,6 +2103,396 @@ function deriveLiveReviewStudio({
     });
   }
 
+  const previewUrl = mission?.state?.last_preview_url || mission?.state?.preview_url || "No preview URL captured";
+  const screenshotPath =
+    mission?.proof?.latest_screenshot_path || mission?.state?.last_screenshot_path || "screenshots/latest.png";
+  const verificationStep =
+    asList(mission?.state?.verification_failures).length > 0 ? "Verification blocked by failing checks" : "Verification checks in progress";
+  const imageArtifacts = asList(mission?.proof?.artifacts)
+    .map(item => item?.path || item?.artifact_path || "")
+    .filter(Boolean)
+    .slice(0, 2);
+  const nowDate = new Date();
+  const nowTimestamp = nowDate.toISOString();
+  const progressWindow =
+    mission?.state?.last_progress_update_at || mission?.state?.updated_at || mission?.updated_at || mission?.created_at || "";
+  const progressWindowDate = progressWindow ? new Date(progressWindow) : null;
+  const progressWindowAgeMinutes =
+    progressWindowDate && Number.isFinite(progressWindowDate.getTime())
+      ? Math.max(0, Math.round((nowDate.getTime() - progressWindowDate.getTime()) / 60000))
+      : null;
+  const progressCadenceState =
+    progressWindowAgeMinutes == null
+      ? "missing"
+      : progressWindowAgeMinutes <= 20
+        ? "healthy"
+        : progressWindowAgeMinutes <= 35
+          ? "stale"
+          : "overdue";
+  const runtimeActivitySignals = uniq(
+    asList(snapshot?.activity)
+      .slice(0, 10)
+      .map(item => item?.message || item?.kind || "")
+      .filter(Boolean),
+  ).slice(0, 4);
+  const latestPlanRevision = asList(mission?.plan_revisions).slice(-1)[0] || {};
+  const plannerSelectedSkills = uniq([
+    ...asList(latestPlanRevision?.selected_skills),
+    ...asList(latestPlanRevision?.selectedSkills),
+    ...asList(mission?.state?.selected_skills),
+    ...asList(mission?.state?.selectedSkills),
+  ]).slice(0, 6);
+  const plannerRules = uniq([
+    ...asList(latestPlanRevision?.rules),
+    ...asList(latestPlanRevision?.guardrails),
+    ...asList(mission?.state?.rules),
+    ...asList(mission?.state?.guardrails),
+  ]).slice(0, 5);
+  const plannerDesignPrompts = uniq([
+    ...asList(latestPlanRevision?.design_prompts),
+    ...asList(latestPlanRevision?.designPrompts),
+    ...asList(mission?.state?.design_prompts),
+    ...asList(mission?.state?.designPrompts),
+  ]).slice(0, 4);
+  const plannerNextIdea =
+    latestPlanRevision?.next_idea ||
+    latestPlanRevision?.nextIdea ||
+    mission?.state?.next_idea ||
+    mission?.state?.nextIdea ||
+    "No next-idea handoff captured yet.";
+  const latestStructuredFeedbackReceiptRaw = asList(snapshot?.connectedDeviceBridge?.receipts)
+    .slice()
+    .reverse()
+    .find(receipt => receipt?.receiptKind === "live_review_structured_feedback") || null;
+  const latestStructuredFeedbackReceipt = latestStructuredFeedbackReceiptRaw
+    ? {
+        receiptKind: "live_review_structured_feedback",
+        eventId: latestStructuredFeedbackReceiptRaw.eventId || latestStructuredFeedbackReceiptRaw.event_id || "",
+        plannerExecutorHandoffId:
+          latestStructuredFeedbackReceiptRaw.plannerExecutorHandoffId ||
+          latestStructuredFeedbackReceiptRaw.planner_executor_handoff_id ||
+          "",
+        nextIdea: latestStructuredFeedbackReceiptRaw.nextIdea || latestStructuredFeedbackReceiptRaw.next_idea || "",
+        timestamp: latestStructuredFeedbackReceiptRaw.timestamp || "",
+        status: latestStructuredFeedbackReceiptRaw.status || "received",
+      }
+    : null;
+  const structuredFeedbackReceipt = latestStructuredFeedbackReceipt;
+  const decisionInfluence = [
+    {
+      id: "skills-to-layout",
+      source: plannerSelectedSkills.length > 0 ? plannerSelectedSkills.map(titleizeToken).join(" · ") : "No selected skill captured",
+      appliedTo: "UI hierarchy and mobile-safe component density",
+      evidence: plannerDesignPrompts[0] || "Design prompt not captured yet",
+      verifierFeedback: asList(mission?.state?.verification_failures)[0] || "No verifier objection recorded",
+    },
+    {
+      id: "rules-to-execution",
+      source: plannerRules.length > 0 ? plannerRules.join(" · ") : "Default planner guardrails",
+      appliedTo: "Executor scope, route preservation, and proof collection",
+      evidence: plannerNextIdea,
+      verifierFeedback: verificationStep,
+    },
+  ];
+  const internalSupervisorState = snapshot?.internalContinuationSupervisor || {};
+  const continuationSupervisor = {
+    enabled: internalSupervisorState.enabled !== false,
+    hardenedHarness: true,
+    state:
+      mission?.state?.continuation_reconcile_decision ||
+      internalSupervisorState.lastDecision ||
+      mission?.missionLoop?.continuityState ||
+      mission?.state?.continuity_state ||
+      (mission?.state?.status === "running" ? "active" : mission ? "queued" : "idle"),
+    lastCompletionAt:
+      mission?.state?.continuation_completed_at ||
+      mission?.missionLoop?.lastCompletionAt ||
+      mission?.state?.last_delegate_completed_at ||
+      mission?.state?.updated_at ||
+      "",
+    reconcileRecordedAt:
+      mission?.state?.continuation_dispatch_at || internalSupervisorState.lastDispatchAt || internalSupervisorState.lastRunAt || "",
+    expectedDispatchWindowMinutes: "0-2",
+    dispatchLagMinutes:
+      Number.isFinite(progressWindowAgeMinutes) && progressWindowAgeMinutes >= 0
+        ? progressWindowAgeMinutes
+        : null,
+    failureReason:
+      mission?.state?.continuation_reconcile_reason ||
+      internalSupervisorState.lastSkippedReason ||
+      mission?.missionLoop?.continuityDetail ||
+      mission?.state?.continuity_detail ||
+      (mission ? "No immediate-continuation failure recorded." : "No active mission to supervise."),
+    reconcileLatencyMs:
+      asInt(
+        mission?.state?.continuation_reconcile_latency_ms ??
+          internalSupervisorState.lastContinuationLatencyMs ??
+          0,
+      ),
+    blockerReason:
+      mission?.state?.blocker_classification?.reason ||
+      internalSupervisorState.lastSkippedReason ||
+      mission?.state?.continuation_reconcile_reason ||
+      "",
+    externalHeartbeatRequired: Boolean(internalSupervisorState.externalHeartbeatRequired),
+    safeToStop: Boolean(mission?.missionLoop?.safeToStop || mission?.state?.safe_to_stop),
+    budgetGuard: mission?.run_budget?.run_until_behavior || mission?.state?.run_until_behavior || "pause_on_failure",
+    routePreservation: {
+      selectedSkills: plannerSelectedSkills,
+      designPrompts: plannerDesignPrompts,
+      nextIdea: plannerNextIdea,
+      model:
+        mission?.model_route?.executor?.model ||
+        mission?.model_route?.planner?.model ||
+        mission?.state?.model ||
+        "unrecorded",
+      provider:
+        mission?.model_route?.executor?.provider ||
+        mission?.model_route?.planner?.provider ||
+        mission?.state?.model_provider ||
+        "unrecorded",
+      effort:
+        mission?.model_route?.executor?.effort ||
+        mission?.model_route?.planner?.effort ||
+        mission?.state?.model_effort ||
+        "unrecorded",
+      executionRoot:
+        mission?.execution_scope?.execution_root || mission?.state?.execution_root || workspace?.root_path || "unrecorded",
+    },
+  };
+
+  const events = [
+    {
+      id: "evt-file-change",
+      kind: "file_change",
+      label: "File changes",
+      title: missionFiles[0] || "No tracked file changes yet",
+      detail: missionFiles.length > 0 ? `${missionFiles.join(" · ")}` : "Run a mission to capture changed paths.",
+      tone: missionFiles.length > 0 ? "good" : "neutral",
+      timestamp: progressWindow,
+      artifactPaths: missionFiles,
+      source: "workspace_diff",
+    },
+    {
+      id: "evt-browser-qa",
+      kind: "browser_qa",
+      label: "Browser QA",
+      title: "Browser-use actions",
+      detail: `Preview URL: ${previewUrl}`,
+      tone: previewMode === "live" ? "good" : "neutral",
+      timestamp: nowTimestamp,
+      previewUrl,
+      browserActions: ["open_page", "audit_layout", "report_issue"],
+      deepLink: { type: "review_target", targetId: reviewTargets[0]?.id || "" },
+    },
+    {
+      id: "evt-computer-use",
+      kind: "computer_use",
+      label: "Computer-use",
+      title: "Program launch and handoff",
+      detail:
+        mission?.state?.current_runtime_lane || mission?.runtime_id
+          ? `Lane ${mission?.state?.current_runtime_lane || mission?.runtime_id} active`
+          : "No runtime lane reported yet",
+      tone: mission?.state?.current_runtime_lane || mission?.runtime_id ? "good" : "warn",
+      timestamp: nowTimestamp,
+      launchedPrograms: asList(mission?.state?.launched_programs).slice(0, 3),
+      runtimeActivity: runtimeActivitySignals,
+      deepLink: { type: "drawer", drawerId: "runtime" },
+    },
+    {
+      id: "evt-screenshot",
+      kind: "preview_refresh",
+      label: "Preview refresh",
+      title: "Screenshot and preview sync",
+      detail: `Latest screenshot artifact: ${screenshotPath}`,
+      tone: liveSyncSuspended ? "warn" : "good",
+      timestamp: mission?.state?.last_preview_refresh_at || nowTimestamp,
+      screenshotFrames: [
+        {
+          id: "frame-latest",
+          label: "Latest",
+          path: screenshotPath,
+          thumbnailPath: screenshotPath,
+          timestamp: mission?.state?.last_preview_refresh_at || nowTimestamp,
+        },
+        {
+          id: "frame-previous",
+          label: "Previous",
+          path: mission?.state?.previous_screenshot_path || "screenshots/previous.png",
+          thumbnailPath: mission?.state?.previous_screenshot_path || "screenshots/previous.png",
+          timestamp: mission?.state?.previous_preview_refresh_at || mission?.updated_at || nowTimestamp,
+        },
+      ],
+    },
+    {
+      id: "evt-verification",
+      kind: "verification",
+      label: "Verification",
+      title: "Test and gate checks",
+      detail: verificationStep,
+      tone: asList(mission?.state?.verification_failures).length > 0 ? "bad" : "warn",
+      timestamp: mission?.state?.last_verification_at || nowTimestamp,
+      tests:
+        asList(mission?.proof?.passed_checks).length > 0
+          ? asList(mission?.proof?.passed_checks).slice(0, 4)
+          : ["python -m compileall -q src", "frontend build pending"],
+      deepLink: { type: "drawer", drawerId: "proof" },
+    },
+    {
+      id: "evt-image-playground",
+      kind: "image_playground",
+      label: "Image Playground",
+      title: "Provider route, queue timeline, and layer handoff",
+      detail: imageArtifacts.length > 0 ? `Artifacts: ${imageArtifacts.join(" · ")}` : "Awaiting generated image artifacts",
+      tone: imageArtifacts.length > 0 ? "good" : "neutral",
+      timestamp: mission?.state?.last_image_event_at || nowTimestamp,
+      queueTimeline: ["queued", "provider", "layer_handoff", "artifact", "verified"],
+      providerEvents: ["provider_selected", "image_generated", "artifact_registered"],
+      layerHandoff: ["prompt_layer", "render_layer", "artifact_layer"],
+      generatedImages:
+        imageArtifacts.length > 0
+          ? imageArtifacts.map(path => ({ path, label: path.split("/").slice(-1)[0] || "artifact" }))
+          : [{ path: "screenshots/latest.png", label: "latest.png" }],
+      artifactPaths: imageArtifacts,
+    },
+    {
+      id: "evt-operator-followup",
+      kind: "operator_followup",
+      label: "Operator follow-up",
+      title: "Messages and acknowledgements",
+      detail:
+        asList(mission?.state?.operator_notes).length > 0
+          ? `${asList(mission?.state?.operator_notes).length} follow-up note(s) recorded`
+          : "No operator follow-up message recorded yet",
+      tone: asList(mission?.state?.operator_notes).length > 0 ? "good" : "neutral",
+      timestamp: mission?.state?.last_operator_note_at || nowTimestamp,
+      operatorMessages: asList(mission?.state?.operator_notes).slice(0, 3),
+      acknowledgedBy: asList(mission?.state?.operator_acks).slice(0, 3),
+    },
+    {
+      id: "evt-progress-window",
+      kind: "progress_update",
+      label: "10-20 min update",
+      title: "Periodic progress snapshot",
+      detail:
+        mission
+          ? `Changed: ${missionFiles[0] || "none"} · Blocker: ${asList(mission?.state?.verification_failures)[0] || "none"} · Next: ${deriveNextCheckpoint(mission)}`
+          : "Progress updates appear every 10-20 minutes once a mission is running.",
+      tone: mission ? "warn" : "neutral",
+      timestamp: progressWindow || nowTimestamp,
+      cadenceMinutes: "10-20",
+      cadenceState: progressCadenceState,
+      cadenceAgeMinutes: progressWindowAgeMinutes,
+      progressUpdate: {
+        changed: missionFiles[0] || "none",
+        blocker: asList(mission?.state?.verification_failures)[0] || "none",
+        tests:
+          asList(mission?.proof?.passed_checks).length > 0
+            ? mission.proof.passed_checks.slice(0, 2).join(" · ")
+            : "pending",
+        next: mission ? deriveNextCheckpoint(mission) : "Start mission",
+      },
+      selectedSkills: plannerSelectedSkills,
+      plannerRules,
+      designPrompts: plannerDesignPrompts,
+      nextIdea: plannerNextIdea,
+      structuredFeedbackReceipt,
+    },
+    {
+      id: "evt-runtime-activity",
+      kind: "runtime_activity",
+      label: "Runtime activity",
+      title: "Recent tool and lane actions",
+      detail:
+        runtimeActivitySignals.length > 0
+          ? runtimeActivitySignals.join(" · ")
+          : "No runtime activity stream captured yet.",
+      tone: runtimeActivitySignals.length > 0 ? "good" : "neutral",
+      timestamp: asList(snapshot?.activity)[0]?.timestamp || nowTimestamp,
+      runtimeActivity: runtimeActivitySignals,
+      deepLink: { type: "drawer", drawerId: "context" },
+    },
+    {
+      id: "evt-continuation-supervisor",
+      kind: "continuation_supervisor",
+      label: "Internal supervisor",
+      title: "Immediate continuation reconcile",
+      detail: `State ${titleizeToken(continuationSupervisor.state)} · dispatch window ${continuationSupervisor.expectedDispatchWindowMinutes}m`,
+      tone:
+        continuationSupervisor.state === "failed" || continuationSupervisor.state === "stale"
+          ? "bad"
+          : continuationSupervisor.state === "queued"
+            ? "warn"
+            : "good",
+      timestamp: continuationSupervisor.lastCompletionAt || nowTimestamp,
+      continuationSupervisor,
+      selectedSkills: continuationSupervisor.routePreservation.selectedSkills,
+      designPrompts: continuationSupervisor.routePreservation.designPrompts,
+      nextIdea: continuationSupervisor.routePreservation.nextIdea,
+      structuredFeedbackReceipt,
+      deepLink: { type: "drawer", drawerId: "context" },
+    },
+    {
+      id: "evt-replay",
+      kind: "replay_marker",
+      label: "Replay marker",
+      title: "Rewind and timelapse snapshot",
+      detail:
+        asList(builderBoard?.nexuses || builderBoard?.nexus).length > 0
+          ? `${asList(builderBoard?.nexuses || builderBoard?.nexus).length} timeline marker(s) available for replay`
+          : "No timeline markers yet",
+      tone: asList(builderBoard?.nexuses || builderBoard?.nexus).length > 0 ? "good" : "neutral",
+      timestamp: nowTimestamp,
+      replayMarkers: asList(builderBoard?.nexuses || builderBoard?.nexus)
+        .slice(0, 3)
+        .map((item, index) => ({
+          id: item?.id || `marker-${index}`,
+          label: item?.title || item?.label || "marker",
+          timestamp: item?.updatedAt || item?.timestamp || nowTimestamp,
+          snapshotPath: item?.artifactPath || item?.path || screenshotPath,
+          frameId: index === 0 ? "frame-latest" : "frame-previous",
+          deepLink: {
+            proofTarget: item?.proofId || mission?.id || "",
+            threadTarget: item?.threadId || mission?.mission_id || mission?.id || "",
+          },
+        })),
+    },
+  ];
+
+  const annotationReadiness = {
+    enabled: true,
+    blocks: [
+      {
+        id: "anno-home-hero",
+        label: "Hero layout",
+        severity: "high",
+        note: "CTA stack overlaps in compact width; preserve hierarchy and spacing rhythm.",
+        recoveryAction: "Reduce heading width, keep CTA buttons stacked with safe gap.",
+        page: "landing",
+        rectangle: { x: 6, y: 14, width: 88, height: 34, layer: "preview" },
+      },
+      {
+        id: "anno-right-panel",
+        label: "Live panel card",
+        severity: "medium",
+        note: "Queue chips become dense during long runs; trim microcopy before wrapping.",
+        recoveryAction: "Collapse details under a disclosure after 3 visible lines.",
+        page: "review-panel",
+        rectangle: { x: 54, y: 48, width: 42, height: 42, layer: "live-review" },
+      },
+      {
+        id: "anno-operator-pin",
+        label: "Operator follow-up pin",
+        severity: "low",
+        note: "Acknowledge follow-up quickly so mission thread and review panel stay in sync.",
+        recoveryAction: "Auto-add acknowledgement row after send succeeds.",
+        page: "operator-thread",
+        pin: { x: 80, y: 26, layer: "sidebar" },
+      },
+    ],
+  };
+
   return {
     headline: "Live UI review",
     summary:
@@ -2114,6 +2506,87 @@ function deriveLiveReviewStudio({
       builderBoard.activeConversations.length > 0
         ? "Use live review targets to steer the active mission, then jump back through nexuses if the direction changes."
         : "Use fixture review now, then launch the UI review loop once a real mission is active.",
+    events,
+    annotationReadiness,
+    plannerProof: {
+      selectedSkills: plannerSelectedSkills,
+      plannerRules,
+      designPrompts: plannerDesignPrompts,
+      nextIdea: plannerNextIdea,
+      structuredFeedbackReceipt,
+      latestStructuredFeedbackReceipt,
+      decisionInfluence,
+    },
+    continuationSupervisor,
+  };
+}
+
+function deriveMissionActivityPulse({ mission, workspace, snapshot, pendingQuestions, pendingApprovals }) {
+  const delegatedSessions = asList(mission?.delegated_runtime_sessions).filter(
+    item => !["completed", "failed", "stopped"].includes(String(item?.status || "").toLowerCase()),
+  );
+  const approvals = asList(mission?.proof?.pending_approvals).length + asList(pendingApprovals).length;
+  const questions = asList(pendingQuestions).length;
+  const verificationFailures = asList(mission?.state?.verification_failures).length;
+  const changedFiles = deriveChanged(mission, workspace).slice(0, 5);
+  const toolMentions = uniq([
+    ...asList(mission?.action_history).map(item => item?.proposal?.tool_id || item?.proposal?.toolId || ""),
+    ...delegatedSessions.map(item => item?.runtime_id || ""),
+    ...asList(snapshot?.activity)
+      .slice(0, 20)
+      .map(item => {
+        const message = String(item?.message || "").toLowerCase();
+        if (message.includes("browser")) return "browser";
+        if (message.includes("terminal")) return "terminal";
+        if (message.includes("pytest") || message.includes("test")) return "tests";
+        if (message.includes("build")) return "build";
+        return "";
+      }),
+  ]).slice(0, 6);
+  const current = deriveCurrentTask(mission);
+  const next = deriveNextCheckpoint(mission);
+  const timeline = asList(snapshot?.activity).slice(0, 8);
+  const stage =
+    mission?.state?.status === "running"
+      ? "Executing"
+      : mission?.state?.status === "completed"
+        ? "Completed"
+        : mission?.state?.status === "failed"
+          ? "Failed"
+          : approvals > 0 || questions > 0
+            ? "Awaiting operator"
+            : delegatedSessions.length > 0
+              ? "Delegating"
+              : "Planning";
+  const tone =
+    mission?.state?.status === "failed"
+      ? "bad"
+      : verificationFailures > 0 || approvals > 0 || questions > 0
+        ? "warn"
+        : mission?.state?.status === "completed"
+          ? "good"
+          : "neutral";
+
+  return {
+    stage,
+    tone,
+    current,
+    next,
+    changedFiles,
+    toolMentions,
+    delegatedCount: delegatedSessions.length,
+    approvals,
+    questions,
+    verificationFailures,
+    backgroundSummary:
+      delegatedSessions[0]?.detail ||
+      delegatedSessions[0]?.last_event ||
+      (delegatedSessions.length > 0 ? `${delegatedSessions.length} delegated lane(s) active.` : "No delegated lane active."),
+    timeline: timeline.map(item => ({
+      label: titleizeToken(item?.kind || "activity"),
+      message: item?.message || "Activity event",
+      timestamp: item?.timestamp || "",
+    })),
   };
 }
 
@@ -2330,6 +2803,13 @@ export function buildMissionControlModel({
     qualityRoadmap.nextCount +
     qualityRoadmap.blockedCount +
     requiredGateFailures;
+  const activityPulse = deriveMissionActivityPulse({
+    mission,
+    workspace,
+    snapshot,
+    pendingQuestions,
+    pendingApprovals,
+  });
 
   return {
     topBar: {
@@ -2387,6 +2867,7 @@ export function buildMissionControlModel({
       ]).slice(0, 8),
       composerPlaceholder:
         "Write an operator note, scope clarification, or approval rationale for this mission thread.",
+      activityPulse,
     },
     drawers: {
       queue: {
@@ -2453,6 +2934,7 @@ export function buildMissionControlModel({
         stateAudit,
         events: events.slice(0, 10),
         board: builderBoard,
+        activityPulse,
         mode: uiMode,
       },
     },

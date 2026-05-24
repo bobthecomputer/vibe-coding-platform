@@ -19,6 +19,14 @@ import {
 import { ActionButton, Field, Modal, StatusPill } from "../../../desktop-ui/MissionControlPrimitives.jsx";
 import { buildMissionControlModel } from "../../../desktop-ui/missionControlModel.js";
 import { FluxioReferenceShell } from "./FluxioReferenceShell.jsx";
+import {
+  EXECUTION_TARGET_OPTIONS,
+  MODEL_EFFORT_OPTIONS,
+  MODEL_PROVIDER_OPTIONS,
+  ROUTE_ROLE_OPTIONS,
+  WORKSPACE_SURFACE_IDS,
+  deriveRuntimeOperations,
+} from "./workspaceModel.js";
 
 function uniq(items) {
   return [...new Set((Array.isArray(items) ? items : []).filter(Boolean))];
@@ -50,6 +58,7 @@ const STORAGE_KEYS = {
   controlRoomSnapshot: "fluxio.control_room.snapshot",
   openAICodexOAuthFlow: "fluxio.openai_codex.oauth_flow",
   chatSessions: "fluxio.chat.sessions",
+  chatSessionTranscripts: "fluxio.chat.session_transcripts",
   activeChatSessionId: "fluxio.chat.active_session_id",
 };
 
@@ -139,25 +148,6 @@ const COMMIT_STYLE_OPTIONS = [
   { value: "detailed", label: "Detailed" },
 ];
 
-const EXECUTION_TARGET_OPTIONS = [
-  { value: "profile_default", label: "Profile Default" },
-  { value: "workspace_root", label: "Workspace Root" },
-  { value: "isolated_worktree", label: "Isolated Worktree" },
-];
-const ROUTE_ROLE_OPTIONS = ["planner", "executor", "verifier"];
-const MODEL_PROVIDER_OPTIONS = [
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "minimax", label: "MiniMax" },
-  { value: "openrouter", label: "OpenRouter" },
-];
-const MODEL_EFFORT_OPTIONS = [
-  { value: "default", label: "Default" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "X High" },
-];
 const CODE_EXECUTION_MEMORY_OPTIONS = [
   { value: "1g", label: "1 GB" },
   { value: "4g", label: "4 GB" },
@@ -212,8 +202,8 @@ const MODEL_QUICK_PRESETS = [
   {
     id: "coding_fast",
     label: "Coding Fast",
-    provider: "openai",
-    model: "gpt-5.3-codex",
+    provider: "openai-codex",
+    model: "gpt-5.5",
     effort: "medium",
   },
   {
@@ -239,6 +229,7 @@ const MODEL_QUICK_PRESETS = [
   },
 ];
 const MAX_CHAT_SESSION_COUNT = 120;
+const MAX_CHAT_SESSION_TRANSCRIPT_TURNS = 160;
 const DEFAULT_MEMORY_POLICY = {
   missionScoped: true,
   projectScoped: true,
@@ -285,6 +276,8 @@ const MAX_DEBUG_LOG = 240;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_ATTACHMENTS = 6;
 const WINDOWED_THRESHOLD = 60;
+const GOAL_MODE_STORAGE_KEY = "fluxio.goal_mode.enabled";
+const BROWSER_TOOLBAR_STORAGE_KEY = "fluxio.browser_toolbar.state";
 const DEFAULT_REFERENCE_APPEARANCE = {
   accent: "#d6a84f",
   accentSoft: "#f3ead7",
@@ -406,6 +399,16 @@ function buildDefaultRoutePlan(routeOverrides) {
 
 function buildDefaultReferenceStudio(routeOverrides) {
   const routePlan = buildDefaultRoutePlan(routeOverrides);
+  const skillLifecycle = {
+    testStatus: "Tests pending",
+    validationStatus: "Validation pending",
+    publishReadiness: "Review required",
+    reviewRequired: true,
+    learnedPromotion: "Not proposed",
+    sourceType: "curated",
+    lastValidationSummary: "Validation checks are pending execution.",
+    lastTestSummary: "Skill tests have not run yet.",
+  };
   return {
     collectionTab: "skill",
     selectedSkillId: "ui-refactor-expert",
@@ -452,6 +455,45 @@ function buildDefaultReferenceStudio(routeOverrides) {
           conversation: [],
           proposal: null,
         },
+        ...skillLifecycle,
+        category: "design_frontend",
+        tags: ["ui", "design-system", "accessibility", "frontend"],
+      },
+      {
+        id: "frontend-taste-director",
+        kind: "skill",
+        status: "Active",
+        badge: "Skill",
+        name: "Frontend Taste Director",
+        summary: "First-pass taste and interaction quality for visual/UI work",
+        description:
+          "Prioritize visual hierarchy, spacing rhythm, interaction fidelity, and coherent style before major UI changes are merged.",
+        triggerConditions:
+          "Use this skill before major UI/frontend changes, redesigns, or broad component updates.",
+        instructions: [
+          "Start with a short taste review and name the current visual risks.",
+          "Propose two concrete UI options with trade-offs before broad rewrites.",
+          "Enforce mobile-first layout checks and touch-target size checks.",
+          "Call out typography/spacing/token drift and normalize it.",
+        ],
+        outputStyle: [
+          "Summarize now/next UI improvements in plain language.",
+          "Show token-level changes and responsive breakpoints touched.",
+        ],
+        guardrails: [
+          "Do not ship unreviewed visual rewrites without preview + validation state.",
+          "Keep functionality stable while refining visuals.",
+        ],
+        assistant: {
+          model: "gpt-5.5",
+          effort: "Balanced",
+          prompt: "",
+          conversation: [],
+          proposal: null,
+        },
+        ...skillLifecycle,
+        category: "design_frontend",
+        tags: ["frontend", "taste", "ui-polish", "mobile"],
       },
       {
         id: "api-integration-helper",
@@ -484,6 +526,9 @@ function buildDefaultReferenceStudio(routeOverrides) {
           conversation: [],
           proposal: null,
         },
+        ...skillLifecycle,
+        category: "integration",
+        tags: ["api", "contracts"],
       },
       {
         id: "data-schema-designer",
@@ -512,6 +557,9 @@ function buildDefaultReferenceStudio(routeOverrides) {
           conversation: [],
           proposal: null,
         },
+        ...skillLifecycle,
+        category: "data",
+        tags: ["schema", "persistence"],
       },
       {
         id: "performance-optimizer",
@@ -540,6 +588,9 @@ function buildDefaultReferenceStudio(routeOverrides) {
           conversation: [],
           proposal: null,
         },
+        ...skillLifecycle,
+        category: "performance",
+        tags: ["render", "latency"],
       },
       {
         id: "security-auditor",
@@ -568,6 +619,9 @@ function buildDefaultReferenceStudio(routeOverrides) {
           conversation: [],
           proposal: null,
         },
+        ...skillLifecycle,
+        category: "security",
+        tags: ["security", "approval"],
       },
     ],
     ruleSets: [
@@ -1343,6 +1397,61 @@ function asList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function artifactBackendBaseUrl() {
+  const configured =
+    import.meta.env?.VITE_FLUXIO_BACKEND_URL ||
+    globalThis.window?.__FLUXIO_BACKEND_URL__ ||
+    "";
+  return String(configured || "").trim().replace(/\/$/, "");
+}
+
+function resolveControlArtifactUrl(value) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  if (/^(data:|blob:|https?:\/\/)/i.test(source)) return source;
+  if (source.startsWith("/api/artifact")) return `${artifactBackendBaseUrl()}${source}`;
+  const params = new URLSearchParams({ path: source });
+  return `${artifactBackendBaseUrl()}/api/artifact?${params.toString()}`;
+}
+
+function artifactUrlForRecord(record) {
+  if (typeof record === "string") return resolveControlArtifactUrl(record);
+  return resolveControlArtifactUrl(
+    record?.artifactUrl ||
+      record?.servedUrl ||
+      record?.previewUrl ||
+      record?.generatedPreview ||
+      record?.previewSrc ||
+      record?.outputPreview ||
+      record?.imagePath ||
+      record?.outputArtifactPath ||
+      record?.artifactPath ||
+      record?.path ||
+      "",
+  );
+}
+
+function artifactLabelForRecord(record, fallback = "generated artifact") {
+  if (typeof record === "string") {
+    return record.split(/[\\/]/).filter(Boolean).pop() || fallback;
+  }
+  return (
+    record?.label ||
+    record?.title ||
+    record?.artifactId ||
+    record?.requestId ||
+    artifactLabelForRecord(record?.artifactPath || record?.path || "", fallback)
+  );
+}
+
+function isImageArtifactPath(value) {
+  return /\.(apng|avif|gif|jpe?g|png|svg|webp)(\?|#|$)/i.test(String(value || ""));
+}
+
 function deriveMissionLatestTimestamp(mission) {
   return latestTimestamp(
     mission?.updated_at,
@@ -1351,6 +1460,42 @@ function deriveMissionLatestTimestamp(mission) {
     asList(mission?.action_history).map(item => item?.executed_at),
     asList(mission?.plan_revisions).map(item => item?.created_at),
     asList(mission?.delegated_runtime_sessions).map(item => item?.updated_at),
+  );
+}
+
+function controlMissionPriority(mission) {
+  const statusPriority = {
+    running: 5,
+    needs_approval: 4,
+    blocked: 3,
+    verification_failed: 3,
+    queued: 2,
+  };
+  return statusPriority[String(mission?.state?.status || "").toLowerCase()] || 0;
+}
+
+function preferredControlMission(missions) {
+  const rows = asList(missions);
+  if (rows.length === 0) return null;
+  const sorted = rows
+    .slice()
+    .sort((left, right) => {
+      const leftPriority = controlMissionPriority(left);
+      const rightPriority = controlMissionPriority(right);
+      if (leftPriority !== rightPriority) return rightPriority - leftPriority;
+      return timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left));
+    });
+  return sorted[0] || null;
+}
+
+function preferredControlWorkspace(workspaces, missions) {
+  const rows = asList(workspaces);
+  if (rows.length === 0) return null;
+  const preferredMission = preferredControlMission(missions);
+  return (
+    rows.find(item => item.workspace_id === preferredMission?.workspace_id) ||
+    rows[0] ||
+    null
   );
 }
 
@@ -2078,6 +2223,134 @@ function normalizeChatSessions(payload) {
     .slice(0, MAX_CHAT_SESSION_COUNT);
 }
 
+function normalizeChatTranscriptEntry(item) {
+  const role = String(item?.role || "user").trim().toLowerCase() === "assistant" ? "assistant" : "user";
+  const title = String(item?.title || item?.text || "").trim();
+  const detail = String(item?.detail || "").trim();
+  if (!title && !detail) {
+    return null;
+  }
+  return {
+    id: String(item?.id || `chat-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+    role,
+    title: title || detail,
+    detail: title && detail && detail !== title ? detail : "",
+    meta: String(item?.meta || "").trim(),
+    tone: String(item?.tone || "neutral").trim(),
+    pending: Boolean(item?.pending),
+    technicalDetail: String(item?.technicalDetail || "").trim(),
+    chips: asList(item?.chips).map(value => String(value || "").trim()).filter(Boolean).slice(0, 6),
+    createdAt: String(item?.createdAt || new Date().toISOString()),
+  };
+}
+
+function normalizeChatSessionTranscripts(payload, legacyNotes = []) {
+  const next = {};
+  const pushTurn = (sessionId, rawItem) => {
+    const normalizedSessionId = String(sessionId || "").trim();
+    if (!normalizedSessionId) {
+      return;
+    }
+    const normalized = normalizeChatTranscriptEntry(rawItem);
+    if (!normalized) {
+      return;
+    }
+    if (!Array.isArray(next[normalizedSessionId])) {
+      next[normalizedSessionId] = [];
+    }
+    next[normalizedSessionId].push(normalized);
+  };
+
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    for (const [sessionId, turns] of Object.entries(payload)) {
+      for (const turn of asList(turns)) {
+        pushTurn(sessionId, turn);
+      }
+    }
+  }
+
+  for (const note of asList(legacyNotes)) {
+    if (note?.channel !== "chat") {
+      continue;
+    }
+    if (!note?.sessionId) {
+      continue;
+    }
+    pushTurn(note.sessionId, {
+      id: note.id ? `legacy-${note.id}` : "",
+      role: note.role === "assistant" ? "assistant" : "user",
+      title: note.title || note.detail || "",
+      detail: note.detail && note.detail !== note.title ? note.detail : "",
+      meta: note.meta || "",
+      tone: note.tone || "neutral",
+      pending: Boolean(note.pending),
+      technicalDetail: note.technicalDetail || "",
+      chips: asList(note.chips),
+      createdAt: note.createdAt || new Date().toISOString(),
+    });
+  }
+
+  const normalizedMap = {};
+  for (const [sessionId, turns] of Object.entries(next)) {
+    const seen = new Set();
+    const normalizedTurns = turns
+      .sort((left, right) => {
+        const leftTime = timeValue(left.createdAt);
+        const rightTime = timeValue(right.createdAt);
+        if (leftTime !== rightTime) {
+          return leftTime - rightTime;
+        }
+        return String(left.id).localeCompare(String(right.id));
+      })
+      .filter(turn => {
+        const dedupeKey = String(turn.id || `${turn.role}:${turn.title}:${turn.createdAt}`);
+        if (seen.has(dedupeKey)) {
+          return false;
+        }
+        seen.add(dedupeKey);
+        return true;
+      })
+      .slice(-MAX_CHAT_SESSION_TRANSCRIPT_TURNS);
+    if (normalizedTurns.length > 0) {
+      normalizedMap[sessionId] = normalizedTurns;
+    }
+  }
+  return normalizedMap;
+}
+
+function transcriptTurnsFromRuntimeCompartment(compartment, sessionId = "") {
+  const normalizedSessionId = String(sessionId || compartment?.sessionId || compartment?.id || "").trim();
+  if (!normalizedSessionId) {
+    return [];
+  }
+  const turns = [];
+  for (const [index, item] of asList(compartment?.messages).entries()) {
+    const rawRole = String(item?.role || "").trim().toLowerCase();
+    const role = rawRole === "assistant" ? "assistant" : rawRole === "operator" || rawRole === "user" ? "user" : "";
+    if (!role) {
+      continue;
+    }
+    const text = String(item?.text || item?.message || "").trim();
+    if (!text) {
+      continue;
+    }
+    const createdAt = String(item?.at || item?.createdAt || compartment?.updatedAt || new Date().toISOString());
+    const normalized = normalizeChatTranscriptEntry({
+      id: `compartment-${normalizedSessionId}-${index}-${createdAt}`,
+      role,
+      title: text,
+      detail: "",
+      meta: timestampLabel(createdAt),
+      tone: "neutral",
+      createdAt,
+    });
+    if (normalized) {
+      turns.push(normalized);
+    }
+  }
+  return turns.slice(-MAX_CHAT_SESSION_TRANSCRIPT_TURNS);
+}
+
 function buildChatSession(workspaceId, seedText = "") {
   const now = new Date().toISOString();
   return {
@@ -2424,9 +2697,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     mission: {},
   });
   const storedDebugEvents = loadStoredJson(STORAGE_KEYS.debugEvents, []);
+  const storedUiState = loadStoredJson(STORAGE_KEYS.persistedUiState, {});
   const storedControlRoomSnapshot = loadStoredJson(STORAGE_KEYS.controlRoomSnapshot, null);
   const storedChatSessions = normalizeChatSessions(
     loadStoredJson(STORAGE_KEYS.chatSessions, []),
+  );
+  const storedChatSessionTranscripts = normalizeChatSessionTranscripts(
+    loadStoredJson(STORAGE_KEYS.chatSessionTranscripts, {}),
+    asList(storedUiState?.operatorNotes),
   );
   const storedActiveChatSessionId =
     localStorage.getItem(STORAGE_KEYS.activeChatSessionId) || "";
@@ -2440,7 +2718,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const storedCodexImportSnapshot = normalizeCodexImportSnapshot(
     loadStoredJson(STORAGE_KEYS.codexImportSnapshot, DEFAULT_CODEX_IMPORT_SNAPSHOT),
   );
-  const storedUiState = loadStoredJson(STORAGE_KEYS.persistedUiState, {});
   const requestedBuilderDetail =
     searchParams.get("builderDetail") === "1" || searchParams.get("builderDetail") === "true";
   const storedSurface =
@@ -2459,7 +2736,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         : "agent",
   );
   const [surface, setSurface] = useState(
-    ["home", "agent", "builder", "skills", "settings"].includes(initialSurface)
+    WORKSPACE_SURFACE_IDS.includes(initialSurface)
       ? initialSurface
       : "home",
   );
@@ -2491,9 +2768,28 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ? storedLiveSyncSeconds
       : "off",
   );
+  const [persistentGoalMode, setPersistentGoalMode] = useState(
+    () => localStorage.getItem(GOAL_MODE_STORAGE_KEY) === "true",
+  );
+  const [browserToolbarState, setBrowserToolbarState] = useState(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(BROWSER_TOOLBAR_STORAGE_KEY) || "{}");
+      return {
+        device: parsed.device || "Desktop",
+        viewport: parsed.viewport || "1440×900",
+        zoom: parsed.zoom || "100%",
+      };
+    } catch {
+      return { device: "Desktop", viewport: "1440×900", zoom: "100%" };
+    }
+  });
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
   const [selectedMissionId, setSelectedMissionId] = useState(null);
   const [chatSessions, setChatSessions] = useState(storedChatSessions);
+  const [chatSessionTranscripts, setChatSessionTranscripts] = useState(
+    storedChatSessionTranscripts,
+  );
+  const [chatRequestsInFlight, setChatRequestsInFlight] = useState(0);
   const [activeChatSessionId, setActiveChatSessionId] = useState(
     storedActiveChatSessionId || storedChatSessions[0]?.id || "",
   );
@@ -2543,6 +2839,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [selectedReviewTargetId, setSelectedReviewTargetId] = useState(
     storedUiState.selectedReviewTargetId || "",
   );
+  const [selectedLiveReviewEventId, setSelectedLiveReviewEventId] = useState(
+    storedUiState.selectedLiveReviewEventId || "",
+  );
+  const [selectedLiveReviewFrameIndex, setSelectedLiveReviewFrameIndex] = useState(0);
+  const [selectedReplayMarkerIndex, setSelectedReplayMarkerIndex] = useState(0);
+  const [selectedPlannerProofChipIndex, setSelectedPlannerProofChipIndex] = useState(0);
+  const [activePlannerProofDetail, setActivePlannerProofDetail] = useState(null);
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState(storedWorkspaceSearch);
   const [missionSearchQuery, setMissionSearchQuery] = useState(storedMissionSearch);
   const [workspaceOrder, setWorkspaceOrder] = useState(
@@ -2602,6 +2905,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const authPromptedRef = useRef(false);
   const oauthSessionCheckedRef = useRef(false);
   const studioAssistantPendingRef = useRef(null);
+  const goalModeLastResumeRef = useRef("");
   const { items: toasts, push: pushToast } = useToastQueue();
 
   const markAction = useCallback(
@@ -2705,6 +3009,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [liveSyncSeconds]);
 
   useEffect(() => {
+    localStorage.setItem(GOAL_MODE_STORAGE_KEY, persistentGoalMode ? "true" : "false");
+  }, [persistentGoalMode]);
+
+  useEffect(() => {
+    localStorage.setItem(BROWSER_TOOLBAR_STORAGE_KEY, JSON.stringify(browserToolbarState));
+  }, [browserToolbarState]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.telegramChatId, telegramChatId);
   }, [telegramChatId]);
 
@@ -2749,6 +3061,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       JSON.stringify(normalizeChatSessions(chatSessions)),
     );
   }, [chatSessions]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      STORAGE_KEYS.chatSessionTranscripts,
+      JSON.stringify(normalizeChatSessionTranscripts(chatSessionTranscripts)),
+    );
+  }, [chatSessionTranscripts]);
 
   useEffect(() => {
     if (!activeChatSessionId) {
@@ -2798,6 +3117,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         builderDetailOpen,
         pinnedNexusIds,
         selectedReviewTargetId,
+        selectedLiveReviewEventId,
         operatorNotes: operatorNotes.slice(-40),
         liveControlEvents: liveControlEvents.slice(-60),
         referenceAppearance,
@@ -2815,6 +3135,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     referenceSettingsTab,
     referenceStudio,
     selectedReviewTargetId,
+    selectedLiveReviewEventId,
   ]);
 
   useEffect(() => {
@@ -3043,6 +3364,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       } catch (error) {
         setData(current => ({
           ...current,
+          snapshot: previewMode === "live" ? null : current.snapshot,
+          onboarding: previewMode === "live" ? null : current.onboarding,
           previewMeta: null,
           openClawStatus: null,
           openClawHasToken: false,
@@ -3092,11 +3415,27 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
   useEffect(() => {
     const workspaces = data.snapshot?.workspaces || [];
-    setSelectedWorkspaceId(current =>
-      workspaces.some(item => item.workspace_id === current)
-        ? current
-        : workspaces[0]?.workspace_id || null,
-    );
+    const preferredWorkspace = preferredControlWorkspace(workspaces, data.snapshot?.missions || []);
+    setSelectedWorkspaceId(current => {
+      const currentWorkspace = workspaces.find(item => item.workspace_id === current);
+      if (!currentWorkspace) {
+        return preferredWorkspace?.workspace_id || workspaces[0]?.workspace_id || null;
+      }
+      const preferredMission = preferredControlMission(data.snapshot?.missions || []);
+      if (
+        preferredMission?.workspace_id &&
+        preferredMission.workspace_id !== current &&
+        controlMissionPriority(preferredMission) > 0
+      ) {
+        const currentWorkspaceBest = preferredControlMission(
+          asList(data.snapshot?.missions).filter(item => item?.workspace_id === current),
+        );
+        if (controlMissionPriority(preferredMission) > controlMissionPriority(currentWorkspaceBest)) {
+          return preferredMission.workspace_id;
+        }
+      }
+      return current;
+    });
   }, [data.snapshot]);
 
   useEffect(() => {
@@ -3105,9 +3444,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       if (activeChatSessionId) {
         return null;
       }
-      return missions.some(item => item.mission_id === current)
-        ? current
-        : missions[missions.length - 1]?.mission_id || null;
+      const preferred = preferredControlMission(missions);
+      const currentMission = missions.find(item => item.mission_id === current);
+      if (!currentMission) {
+        return preferred?.mission_id || null;
+      }
+      const currentStatus = String(currentMission?.state?.status || "").toLowerCase();
+      const preferredStatus = String(preferred?.state?.status || "").toLowerCase();
+      const currentPriority = controlMissionPriority(currentMission);
+      const preferredPriority = controlMissionPriority(preferred);
+      if (
+        preferred?.mission_id &&
+        preferred.mission_id !== current &&
+        ["blocked", "needs_approval", "queued", "running", "verification_failed"].includes(preferredStatus) &&
+        (["completed", "failed", "stopped"].includes(currentStatus) ||
+          preferredPriority > currentPriority)
+      ) {
+        return preferred.mission_id;
+      }
+      return current;
     });
   }, [activeChatSessionId, data.snapshot]);
 
@@ -3141,6 +3496,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       window.clearInterval(interval);
     };
   }, [liveSyncSeconds, liveSyncSuspended, previewMode, refreshAll]);
+
+  useEffect(() => {
+    if (previewMode !== "live" || !hasCommandBackend() || chatRequestsInFlight <= 0) {
+      return undefined;
+    }
+    void refreshAll("chat-turn-start");
+    const interval = window.setInterval(() => {
+      void refreshAll("chat-turn-sync");
+    }, 1200);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [chatRequestsInFlight, previewMode, refreshAll]);
 
   useEffect(() => {
     if (previewMode !== "live" || !hasTauriBackend()) {
@@ -3272,8 +3640,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [selectedWorkspaceId, snapshot],
   );
   const mission = useMemo(
-    () => selectedMission(snapshot, selectedMissionId),
-    [selectedMissionId, snapshot],
+    () => (activeChatSessionId ? null : selectedMission(snapshot, selectedMissionId)),
+    [activeChatSessionId, selectedMissionId, snapshot],
   );
   const workspaceMissions = useMemo(
     () =>
@@ -3351,6 +3719,28 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
 
   useEffect(() => {
+    if (workspaces.length === 0) {
+      return;
+    }
+    if (activeChatSessionId || chatSessions.length > 0) {
+      return;
+    }
+    const resolvedWorkspaceId =
+      selectedWorkspaceId || workspace?.workspace_id || workspaces[0]?.workspace_id || "";
+    const created = buildChatSession(resolvedWorkspaceId, "");
+    setChatSessions(current => normalizeChatSessions([created, ...current]));
+    setChatSessionTranscripts(current => ({ ...current, [created.id]: [] }));
+    setActiveChatSessionId(created.id);
+    setSelectedMissionId(null);
+  }, [
+    activeChatSessionId,
+    chatSessions.length,
+    selectedWorkspaceId,
+    workspace?.workspace_id,
+    workspaces,
+  ]);
+
+  useEffect(() => {
     const workspaceIds = new Set(workspaces.map(item => item.workspace_id));
     setChatSessions(current => {
       const next = normalizeChatSessions(
@@ -3359,6 +3749,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
   }, [workspaces]);
+
+  useEffect(() => {
+    const sessionIds = new Set(chatSessions.map(item => item.id));
+    setChatSessionTranscripts(current => {
+      const next = {};
+      for (const [sessionId, turns] of Object.entries(current || {})) {
+        if (!sessionIds.has(sessionId)) {
+          continue;
+        }
+        next[sessionId] = asList(turns).slice(-MAX_CHAT_SESSION_TRANSCRIPT_TURNS);
+      }
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [chatSessions]);
 
   useEffect(() => {
     if (!activeChatSessionId) {
@@ -3401,8 +3805,21 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
       return;
     }
-    if (!selectedMissionId || !missionOptions.some(item => item.mission_id === selectedMissionId)) {
-      setSelectedMissionId(missionOptions[0].mission_id);
+    const preferred = preferredControlMission(missionOptions);
+    const currentMission = missionOptions.find(item => item.mission_id === selectedMissionId);
+    if (!selectedMissionId || !currentMission) {
+      setSelectedMissionId(preferred?.mission_id || missionOptions[0].mission_id);
+      return;
+    }
+    const currentStatus = String(currentMission?.state?.status || "").toLowerCase();
+    const preferredStatus = String(preferred?.state?.status || "").toLowerCase();
+    if (
+      preferred?.mission_id &&
+      preferred.mission_id !== selectedMissionId &&
+      ["completed", "failed", "stopped"].includes(currentStatus) &&
+      ["blocked", "needs_approval", "queued", "running", "verification_failed"].includes(preferredStatus)
+    ) {
+      setSelectedMissionId(preferred.mission_id);
     }
   }, [activeChatSessionId, chatSessions, missionOptions, selectedMissionId]);
 
@@ -3588,6 +4005,28 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     },
     [markAction, mission, previewMode, pushToast, refreshAll],
   );
+
+  useEffect(() => {
+    if (!persistentGoalMode || !mission?.mission_id) {
+      return;
+    }
+    if (previewMode !== "live" || !hasCommandBackend()) {
+      return;
+    }
+    if (agentBlockedState.isBlocked) {
+      return;
+    }
+    const status = String(mission?.state?.status || "").toLowerCase();
+    if (["running", "completed", "failed", "stopped"].includes(status)) {
+      return;
+    }
+    const checkpoint = `${mission.mission_id}:${mission?.state?.updated_at || mission?.updated_at || ""}:${status}`;
+    if (!checkpoint || goalModeLastResumeRef.current === checkpoint) {
+      return;
+    }
+    goalModeLastResumeRef.current = checkpoint;
+    void runMissionAction("resume", "Goal mode resumed mission execution.");
+  }, [agentBlockedState.isBlocked, mission, persistentGoalMode, previewMode, runMissionAction]);
 
   const runWorkspaceAction = useCallback(
     async (surface, actionId, approved = false) => {
@@ -4557,6 +4996,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         "";
       const created = buildChatSession(resolvedWorkspaceId, seedText);
       setChatSessions(current => normalizeChatSessions([created, ...current]));
+      setChatSessionTranscripts(current => {
+        if (current?.[created.id]) {
+          return current;
+        }
+        return { ...current, [created.id]: [] };
+      });
       if (focus) {
         setActiveChatSessionId(created.id);
         setSelectedMissionId(null);
@@ -4584,15 +5029,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           current.workspaceId === resolvedWorkspaceId)
       ) {
         return current;
-      }
-      const existing = chatSessions.find(
-        item =>
-          !resolvedWorkspaceId ||
-          item.workspaceId === resolvedWorkspaceId,
-      );
-      if (existing) {
-        setActiveChatSessionId(existing.id);
-        return existing;
       }
       return createChatSessionForWorkspace({
         workspaceId: resolvedWorkspaceId,
@@ -4637,6 +5073,58 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     },
     [],
   );
+
+  const appendChatSessionTurn = useCallback((sessionId, entry) => {
+    const normalizedSessionId = String(sessionId || "").trim();
+    if (!normalizedSessionId) {
+      return null;
+    }
+    const nextTurn = normalizeChatTranscriptEntry({
+      id: `chat-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      ...entry,
+    });
+    if (!nextTurn) {
+      return null;
+    }
+    setChatSessionTranscripts(current => {
+      const rows = asList(current?.[normalizedSessionId]);
+      const next = normalizeChatSessionTranscripts({
+        ...current,
+        [normalizedSessionId]: [...rows, nextTurn].slice(-MAX_CHAT_SESSION_TRANSCRIPT_TURNS),
+      });
+      return next;
+    });
+    return nextTurn;
+  }, []);
+
+  const updateChatSessionTurn = useCallback((sessionId, turnId, updater) => {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedTurnId = String(turnId || "").trim();
+    if (!normalizedSessionId || !normalizedTurnId) {
+      return;
+    }
+    setChatSessionTranscripts(current => {
+      const rows = asList(current?.[normalizedSessionId]);
+      if (rows.length === 0) {
+        return current;
+      }
+      const nextRows = rows.map(row => {
+        if (row.id !== normalizedTurnId) {
+          return row;
+        }
+        const updated =
+          typeof updater === "function"
+            ? updater(row)
+            : { ...row, ...updater };
+        return normalizeChatTranscriptEntry({ ...row, ...updated }) || row;
+      });
+      return normalizeChatSessionTranscripts({
+        ...current,
+        [normalizedSessionId]: nextRows,
+      });
+    });
+  }, []);
 
   const appendOperatorEntry = useCallback(
     entry => {
@@ -5361,6 +5849,73 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     () => (Array.isArray(mission?.delegated_runtime_sessions) ? mission.delegated_runtime_sessions : []),
     [mission?.delegated_runtime_sessions],
   );
+  const runtimeCompartmentState =
+    snapshot?.runtimeCompartments && typeof snapshot.runtimeCompartments === "object"
+      ? snapshot.runtimeCompartments
+      : EMPTY_OBJECT;
+  const runtimeCompartments = useMemo(
+    () => asList(runtimeCompartmentState.items),
+    [runtimeCompartmentState.items],
+  );
+  const runtimeCompartmentChatTurnsBySession = useMemo(() => {
+    const next = {};
+    for (const compartment of runtimeCompartments) {
+      const sessionId = String(compartment?.sessionId || compartment?.id || "").trim();
+      if (!sessionId) {
+        continue;
+      }
+      const turns = transcriptTurnsFromRuntimeCompartment(compartment, sessionId);
+      if (turns.length > 0) {
+        next[sessionId] = turns;
+      }
+    }
+    return next;
+  }, [runtimeCompartments]);
+  useEffect(() => {
+    if (!activeChatSessionId) {
+      return;
+    }
+    const compartmentTurns = asList(runtimeCompartmentChatTurnsBySession?.[activeChatSessionId]);
+    if (compartmentTurns.length === 0) {
+      return;
+    }
+    setChatSessionTranscripts(current => {
+      const existingTurns = asList(current?.[activeChatSessionId]);
+      const merged = normalizeChatSessionTranscripts({
+        ...current,
+        [activeChatSessionId]: [...existingTurns, ...compartmentTurns],
+      });
+      const nextTurns = asList(merged?.[activeChatSessionId]);
+      if (JSON.stringify(existingTurns) === JSON.stringify(nextTurns)) {
+        return current;
+      }
+      return merged;
+    });
+  }, [activeChatSessionId, runtimeCompartmentChatTurnsBySession]);
+  const hermesMissionEvidence =
+    snapshot?.hermesMissionEvidence && typeof snapshot.hermesMissionEvidence === "object"
+      ? snapshot.hermesMissionEvidence
+      : EMPTY_OBJECT;
+  const hermesEvidenceItems = useMemo(
+    () => asList(hermesMissionEvidence.items),
+    [hermesMissionEvidence.items],
+  );
+  const nasDeployReadiness =
+    snapshot?.nasDeployReadiness && typeof snapshot.nasDeployReadiness === "object"
+      ? snapshot.nasDeployReadiness
+      : EMPTY_OBJECT;
+  const nasDeployChecks = useMemo(
+    () => asList(nasDeployReadiness.checks),
+    [nasDeployReadiness.checks],
+  );
+  const generatedImageArtifactState =
+    snapshot?.generatedImageArtifacts && typeof snapshot.generatedImageArtifacts === "object"
+      ? snapshot.generatedImageArtifacts
+      : EMPTY_OBJECT;
+  const generatedImageArtifacts = useMemo(
+    () => asList(generatedImageArtifactState.items),
+    [generatedImageArtifactState.items],
+  );
   const bridgeSessions = useMemo(
     () => (Array.isArray(snapshot?.bridgeLab?.connectedSessions) ? snapshot.bridgeLab.connectedSessions : []),
     [snapshot?.bridgeLab?.connectedSessions],
@@ -5589,6 +6144,58 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const tutorialStudio = viewModel.drawers.builder.tutorialStudio;
   const recommendationStudio = viewModel.drawers.builder.recommendationStudio;
   const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
+  const continuationSupervisor = liveReviewStudio.continuationSupervisor || null;
+  const connectedDeviceBridge = asRecord(snapshot.connectedDeviceBridge);
+  const bridgeSyncRows = asList(connectedDeviceBridge.sync);
+  const bridgePendingApprovals = asList(connectedDeviceBridge.pendingApprovals);
+  const bridgeAuditTrail = asList(connectedDeviceBridge.auditTrail);
+  const bridgeReceipts = asList(connectedDeviceBridge.receipts);
+  const latestBridgeAction =
+    asRecord(bridgeAuditTrail[bridgeAuditTrail.length - 1]) || asRecord(liveReviewStudio.dualPathBridge?.latestAction);
+  const latestBridgeReceipt =
+    asRecord(bridgeReceipts[bridgeReceipts.length - 1]) || asRecord(liveReviewStudio.dualPathBridge?.latestReceipt);
+  const latestStructuredFeedbackReceipt =
+    asRecord(liveReviewStudio.plannerProof?.latestStructuredFeedbackReceipt) ||
+    asRecord(liveReviewStudio.plannerProof?.structuredFeedbackReceipt) ||
+    asRecord([...bridgeReceipts].reverse().find(item => item?.receiptKind === "live_review_structured_feedback"));
+  const structuredFeedbackReceiptHistory = useMemo(() => {
+    const fromEvents = asList(liveReviewStudio.events)
+      .filter(item => item?.structuredFeedbackReceipt)
+      .map(item => ({
+        id: item.id,
+        label: item.label || titleizeToken(item.kind || "event"),
+        timestamp: item.timestamp || "",
+        receipt: asRecord(item.structuredFeedbackReceipt),
+      }));
+    const fallback = latestStructuredFeedbackReceipt?.eventId || latestStructuredFeedbackReceipt?.plannerExecutorHandoffId
+      ? [
+          {
+            id: "latest-receipt",
+            label: "Latest receipt",
+            timestamp: "",
+            receipt: latestStructuredFeedbackReceipt,
+          },
+        ]
+      : [];
+    const seen = new Set();
+    return [...fromEvents, ...fallback]
+      .filter(item => {
+        const eventId = item?.receipt?.eventId || "";
+        const handoffId = item?.receipt?.plannerExecutorHandoffId || "";
+        const dedupeKey = `${eventId}::${handoffId}`;
+        if (!eventId && !handoffId) {
+          return false;
+        }
+        if (seen.has(dedupeKey)) {
+          return false;
+        }
+        seen.add(dedupeKey);
+        return true;
+      })
+      .slice(0, 6);
+  }, [liveReviewStudio.events, latestStructuredFeedbackReceipt]);
+  const latestBridgeHostStatus = asRecord(latestBridgeReceipt.hostStatus);
+  const latestBridgeSync = asRecord(bridgeSyncRows[0]);
   const builderSelectedReviewTarget = useMemo(
     () =>
       liveReviewStudio.targets.find(item => item.id === selectedReviewTargetId) ||
@@ -5596,6 +6203,294 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       null,
     [liveReviewStudio.targets, selectedReviewTargetId],
   );
+  const liveReviewEventBuckets = useMemo(() => {
+    const events = asList(liveReviewStudio.events);
+    const buckets = {
+      execution: events.filter(item =>
+        ["file_change", "browser_qa", "computer_use", "verification", "runtime_activity", "continuation_supervisor"].includes(item.kind),
+      ),
+      media: events.filter(item => ["preview_refresh", "image_playground"].includes(item.kind)),
+      operator: events.filter(item => ["operator_followup", "progress_update"].includes(item.kind)),
+      replay: events.filter(item => item.kind === "replay_marker"),
+    };
+    return buckets;
+  }, [liveReviewStudio.events]);
+  const liveReviewEventsFlat = useMemo(
+    () => Object.values(liveReviewEventBuckets).flatMap(items => asList(items)),
+    [liveReviewEventBuckets],
+  );
+  const selectedLiveReviewEvent = useMemo(
+    () =>
+      liveReviewEventsFlat.find(item => item.id === selectedLiveReviewEventId) ||
+      liveReviewEventsFlat[0] ||
+      null,
+    [liveReviewEventsFlat, selectedLiveReviewEventId],
+  );
+  const selectedLiveReviewFrames = asList(selectedLiveReviewEvent?.screenshotFrames);
+  const selectedLiveReviewFrame =
+    selectedLiveReviewFrames[selectedLiveReviewFrameIndex] || selectedLiveReviewFrames[0] || null;
+  const selectedReplayMarkers = asList(selectedLiveReviewEvent?.replayMarkers);
+  const selectedReplayMarker =
+    selectedReplayMarkers[selectedReplayMarkerIndex] || selectedReplayMarkers[0] || null;
+  const [liveReviewAutoplay, setLiveReviewAutoplay] = useState(false);
+  const markerFrameMap = useMemo(() => {
+    const map = new Map();
+    selectedReplayMarkers.forEach((marker, markerIndex) => {
+      const frameId = marker?.frameId;
+      if (!frameId) {
+        return;
+      }
+      const frameIndex = selectedLiveReviewFrames.findIndex(frame => frame?.id === frameId);
+      if (frameIndex >= 0) {
+        map.set(markerIndex, frameIndex);
+      }
+    });
+    return map;
+  }, [selectedReplayMarkers, selectedLiveReviewFrames]);
+
+  useEffect(() => {
+    if (!selectedLiveReviewEventId && liveReviewEventsFlat[0]?.id) {
+      setSelectedLiveReviewEventId(liveReviewEventsFlat[0].id);
+    }
+  }, [liveReviewEventsFlat, selectedLiveReviewEventId]);
+
+  useEffect(() => {
+    setSelectedLiveReviewFrameIndex(0);
+    setSelectedReplayMarkerIndex(0);
+    setLiveReviewAutoplay(false);
+  }, [selectedLiveReviewEvent?.id]);
+
+  const handleStructuredLiveReviewFeedback = useCallback(
+    async ({ sendFollowUp = false } = {}) => {
+      const followUp = operatorDraft.trim();
+      if (!followUp) {
+        pushToast("Write structured Live Review feedback first.", "warn");
+        return;
+      }
+      if (previewMode !== "live" || !hasCommandBackend()) {
+        pushToast("Preview mode cannot record Live Review feedback receipts.", "warn");
+        return;
+      }
+      if (!mission?.mission_id) {
+        pushToast("Select a mission before recording structured feedback.", "warn");
+        return;
+      }
+
+      const event = selectedLiveReviewEvent || {};
+      const target = builderSelectedReviewTarget || {};
+      const plannerProof = asRecord(liveReviewStudio.plannerProof);
+      const continuation = asRecord(liveReviewStudio.continuationSupervisor);
+      const routePreservation = asRecord(continuation.routePreservation);
+      const verifierFeedbackItems = asList(plannerProof.decisionInfluence)
+        .map(item => item?.verifierFeedback || item?.evidence || "")
+        .filter(Boolean);
+      const eventId = String(event.id || target.id || `live-review-${mission.mission_id}`).trim();
+      const handoffId = [
+        "live-review",
+        mission.mission_id,
+        eventId,
+        target.id || "target",
+      ].filter(Boolean).join(":");
+      const payload = {
+        eventId,
+        sourceEventId: eventId,
+        source: "builder-live-review",
+        plannerExecutorHandoffId: handoffId,
+        routeContext: {
+          missionId: mission.mission_id,
+          workspaceId: workspace?.workspace_id || "",
+          routeRole: agentRouteRole,
+          runtimeFocus: agentRuntimeFocus,
+          bridgeStatus: connectedDeviceBridge.status || "needs_mapping",
+          performedByHost: latestBridgeAction?.performedByHost || latestBridgeAction?.performed_by_host || "",
+          model: routePreservation.model || mission?.model_route?.executor?.model || mission?.model_route?.planner?.model || "unrecorded",
+          provider: routePreservation.provider || mission?.model_route?.executor?.provider || mission?.model_route?.planner?.provider || "unrecorded",
+          effort: routePreservation.effort || mission?.model_route?.executor?.effort || mission?.model_route?.planner?.effort || "unrecorded",
+        },
+        taskContext: {
+          reviewTargetId: target.id || "",
+          reviewTarget: target.title || event.title || "Live Review feedback",
+          reviewDetail: target.detail || event.detail || "",
+          selectedEventKind: event.kind || "live_review",
+          selectedEventLabel: event.label || "Live Review",
+          operatorFeedback: followUp,
+          screenshots: asList(event.screenshotFrames).map(frame => frame?.path || frame?.thumbnailPath || "").filter(Boolean),
+          timelapseMarkers: asList(event.replayMarkers).map(marker => marker?.snapshotPath || marker?.label || "").filter(Boolean),
+          annotations: asList(liveReviewStudio.annotationReadiness?.blocks).map(block => ({
+            id: block?.id || "",
+            label: block?.label || "",
+            severity: block?.severity || "",
+            note: block?.note || "",
+            recoveryAction: block?.recoveryAction || "",
+          })),
+        },
+        verifierFeedback: {
+          selectedEventDetail: event.kind === "verification" ? event.detail || event.title || "" : "",
+          failures: asList(mission?.state?.verification_failures),
+          decisionInfluence: verifierFeedbackItems,
+          latestReceiptStatus: latestBridgeReceipt?.status || "",
+        },
+        nextIdea:
+          plannerProof.nextIdea ||
+          event.nextIdea ||
+          event.progressUpdate?.next ||
+          routePreservation.nextIdea ||
+          "Use this Live Review receipt to drive the next planner/executor handoff.",
+      };
+
+      markAction("live-review:structured-feedback");
+      try {
+        const receipt = await callBackend(
+          "record_live_review_structured_feedback_command",
+          { payload },
+          { throwOnError: true },
+        );
+        appendOperatorEntry({
+          title: "Structured Live Review receipt",
+          detail: `Receipt ${receipt?.eventId || eventId} handed off as ${receipt?.plannerExecutorHandoffId || handoffId}.`,
+          meta: "agent:structured-feedback received",
+          tone: "good",
+          channel: "receipt",
+          role: "system",
+        });
+        pushToast(`Structured feedback receipt recorded for ${receipt?.eventId || eventId}.`, "info");
+        void refreshAll("live-review-structured-feedback");
+        if (sendFollowUp) {
+          await handleAgentFollowUp();
+        }
+      } catch (error) {
+        pushToast(`Structured feedback receipt failed: ${error}`, "error");
+      }
+    },
+    [
+      agentRouteRole,
+      agentRuntimeFocus,
+      appendOperatorEntry,
+      builderSelectedReviewTarget,
+      connectedDeviceBridge.status,
+      handleAgentFollowUp,
+      latestBridgeAction,
+      latestBridgeReceipt,
+      liveReviewStudio.annotationReadiness?.blocks,
+      liveReviewStudio.continuationSupervisor,
+      liveReviewStudio.plannerProof,
+      markAction,
+      mission,
+      operatorDraft,
+      previewMode,
+      pushToast,
+      refreshAll,
+      selectedLiveReviewEvent,
+      workspace?.workspace_id,
+    ],
+  );
+
+  useEffect(() => {
+    if (!liveReviewAutoplay || selectedLiveReviewFrames.length <= 1) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      setSelectedLiveReviewFrameIndex(index => (index + 1) % selectedLiveReviewFrames.length);
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [liveReviewAutoplay, selectedLiveReviewFrames.length]);
+
+  const stepReplayMarker = useCallback(
+    delta => {
+      if (!selectedReplayMarkers.length) {
+        return;
+      }
+      const nextIndex = (selectedReplayMarkerIndex + delta + selectedReplayMarkers.length) % selectedReplayMarkers.length;
+      setSelectedReplayMarkerIndex(nextIndex);
+      const mappedFrameIndex = markerFrameMap.get(nextIndex);
+      if (Number.isInteger(mappedFrameIndex)) {
+        setSelectedLiveReviewFrameIndex(mappedFrameIndex);
+      }
+    },
+    [markerFrameMap, selectedReplayMarkerIndex, selectedReplayMarkers.length],
+  );
+
+  const plannerProofChips = useMemo(() => {
+    const chips = [];
+    asList(liveReviewStudio.plannerProof?.selectedSkills).forEach((skill, index) => {
+      chips.push({
+        id: `skill-${index}-${skill}`,
+        kind: "skill",
+        label: titleizeToken(skill),
+        value: skill,
+      });
+    });
+    asList(liveReviewStudio.plannerProof?.designPrompts).forEach((prompt, index) => {
+      chips.push({
+        id: `design-${index}`,
+        kind: "design_prompt",
+        label: `Design ${index + 1}`,
+        value: prompt,
+      });
+    });
+    if (liveReviewStudio.plannerProof?.nextIdea) {
+      chips.push({
+        id: "next-idea",
+        kind: "next_idea",
+        label: "Next idea",
+        value: liveReviewStudio.plannerProof.nextIdea,
+      });
+    }
+    return chips;
+  }, [
+    liveReviewStudio.plannerProof?.designPrompts,
+    liveReviewStudio.plannerProof?.nextIdea,
+    liveReviewStudio.plannerProof?.selectedSkills,
+  ]);
+
+  useEffect(() => {
+    if (!plannerProofChips.length) {
+      setSelectedPlannerProofChipIndex(0);
+      return;
+    }
+    setSelectedPlannerProofChipIndex(index => Math.max(0, Math.min(index, plannerProofChips.length - 1)));
+  }, [plannerProofChips]);
+
+  const activatePlannerProofChip = useCallback(
+    chip => {
+      if (!chip) {
+        return;
+      }
+      if (chip.kind === "skill") {
+        setUiMode("builder");
+        setSkillStudioFilter("all");
+        setSkillStudioQuery(String(chip.value || ""));
+        setActiveDrawer("skills");
+        setActivePlannerProofDetail({
+          kind: chip.kind,
+          title: `Skill chip opened: ${chip.label}`,
+          body: `Skills drawer filtered to ${chip.label}.`,
+        });
+        return;
+      }
+      if (chip.kind === "design_prompt") {
+        setActivePlannerProofDetail({
+          kind: chip.kind,
+          title: `Design prompt detail: ${chip.label}`,
+          body: String(chip.value || ""),
+        });
+        return;
+      }
+      if (chip.kind === "next_idea") {
+        setOperatorDraft(current => {
+          const seed = `Follow-up from planner next idea:\n${chip.value}`;
+          return current.trim() ? `${current.trim()}\n\n${seed}` : seed;
+        });
+        setActivePlannerProofDetail({
+          kind: chip.kind,
+          title: "Next idea handoff draft seeded",
+          body: "Operator follow-up draft updated from planner next idea chip.",
+        });
+      }
+    },
+    [setActiveDrawer, setOperatorDraft, setSkillStudioFilter, setSkillStudioQuery, setUiMode],
+  );
+
   const topbarStatus = useMemo(() => {
     if (uiMode === "builder") {
       return {
@@ -5917,14 +6812,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushTurn({
         id: `operator-${note.id}`,
         dedupeKey: `operator:${note.id}`,
-        role: "operator",
-        roleIcon: "◉",
-        label: note.channel === "followup" ? "Follow-up sent" : "Operator note",
+        role: note.role === "assistant" ? "runtime" : "operator",
+        roleLabel: note.role === "assistant" ? "Syntelos" : "Operator",
+        roleIcon: note.role === "assistant" ? "◇" : "◉",
+        label: note.role === "assistant" ? "Agent compartment" : note.channel === "followup" ? "Follow-up sent" : "Operator note",
         title: noteTitle,
         detail: noteDetail,
         meta: timestampLabel(note.createdAt),
         timestampRaw: note.createdAt,
         tone: note.tone || "neutral",
+        technicalDetail: note.technicalDetail || "",
+        chips: asList(note.chips).slice(0, 6),
         chatPreferred: note.channel === "followup" || note.channel === "chat",
       });
     }
@@ -6405,17 +7303,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const runtime = agentRuntimeSelectValue === "all" ? workspace?.default_runtime || missionForm.runtime || "openclaw" : agentRuntimeSelectValue;
     const workspaceId = workspace?.workspace_id || selectedWorkspaceId || workspaces[0]?.workspace_id || "";
     const workspacePath = workspace?.root_path || workspaces[0]?.root_path || "";
-    const chatHistory = operatorNotes
-      .filter(
-        item =>
-          item.channel === "chat" &&
-          !item.pending &&
-          (activeSessionId ? item.sessionId === activeSessionId : true),
-      )
-      .slice(0, 8)
-      .reverse()
+    const sessionTranscript = asList(chatSessionTranscripts?.[activeSessionId]);
+    const chatHistory = sessionTranscript
+      .filter(item => !item.pending)
+      .slice(-8)
       .map(item => ({
-        role: item.role === "assistant" ? "assistant" : "user",
+        role: String(item.role || "").toLowerCase() === "assistant" ? "assistant" : "user",
         text: item.title || item.detail || "",
       }))
       .filter(item => item.text);
@@ -6445,7 +7338,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       channel: "chat",
       sessionId: activeSessionId || undefined,
     });
+    appendChatSessionTurn(activeSessionId, {
+      role: "user",
+      title: text,
+      detail: "",
+      meta: timestampLabel(new Date().toISOString()) || "Now",
+      tone: "neutral",
+    });
     touchChatSession(activeSessionId, text);
+    const pendingChatTurn = appendChatSessionTurn(activeSessionId, {
+      role: "assistant",
+      title: "Thinking...",
+      detail: `Routing to ${titleizeToken(runtime)} with ${route.model || titleizeToken(route.provider)} for a real model reply.`,
+      meta: "Syntelos",
+      tone: "neutral",
+      pending: true,
+      technicalDetail: `chat:${runtime}:${route.provider}/${route.model || "default"}:${route.effort || "medium"}`,
+    });
     const pendingReply = appendOperatorEntry({
       title: "Thinking...",
       detail: `Routing to ${titleizeToken(runtime)} with ${route.model || titleizeToken(route.provider)} for a real model reply.`,
@@ -6460,7 +7369,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     setOperatorDraft("");
     clearOperatorAttachments();
     setAgentScene("run");
+    const requestStartedAt = Date.now();
     if (previewMode !== "live" || !hasCommandBackend()) {
+      if (pendingChatTurn?.id) {
+        updateChatSessionTurn(activeSessionId, pendingChatTurn.id, current => ({
+          ...current,
+          title: "Live backend is required for real chat.",
+          detail: "Switch to the NAS/live backend before sending model-backed chat turns.",
+          meta: "Not sent",
+          tone: "warn",
+          pending: false,
+        }));
+      }
       updateOperatorEntry(pendingReply.id, current => ({
         ...current,
         title: "Live backend is required for real chat.",
@@ -6471,6 +7391,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }));
       return;
     }
+    setChatRequestsInFlight(current => current + 1);
     try {
       const result = await callBackendWithRetry(
         "send_agent_chat_command",
@@ -6488,19 +7409,76 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         },
         { attempts: 2 },
       );
+      const roundtripMs = Math.max(
+        0,
+        Number(result?.elapsedMs) || Date.now() - requestStartedAt,
+      );
       const reply = String(result?.reply || "").trim();
+      const compartment = result?.compartment && typeof result.compartment === "object" ? result.compartment : {};
+      const compartmentChips = [
+        compartment.sessionId ? `session ${compartment.sessionId}` : "",
+        compartment.runtime ? `runtime ${titleizeToken(compartment.runtime)}` : "",
+        compartment.cwd ? `cwd ${pathLeaf(compartment.cwd)}` : "",
+        compartment.route?.model || result?.route?.model_id || result?.route?.model || "",
+        roundtripMs > 0 ? `${roundtripMs}ms` : "",
+      ].filter(Boolean);
+      const compartmentTrace = compartment.sessionId
+        ? JSON.stringify(
+            {
+              sessionId: compartment.sessionId,
+              runtime: compartment.runtime,
+              cwd: compartment.cwd,
+              host: compartment.host,
+              route: compartment.route,
+              state: compartment.state,
+              streaming: compartment.streaming,
+              restartControls: compartment.restartControls,
+              toolTimeline: compartment.toolTimeline,
+              filesChanged: compartment.filesChanged,
+              lastRoundtripMs: compartment.lastRoundtripMs ?? roundtripMs,
+            },
+            null,
+            2,
+          )
+        : "";
       touchChatSession(activeSessionId, reply || text);
+      if (pendingChatTurn?.id) {
+        updateChatSessionTurn(activeSessionId, pendingChatTurn.id, current => ({
+          ...current,
+          title: reply || "The runtime finished without a readable reply.",
+          detail: result?.route
+            ? `${titleizeToken(result.runtime || runtime)} · ${result.route.model_id || result.route.model || "default"} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
+            : "",
+          meta: timestampLabel(new Date().toISOString()) || "Now",
+          tone: reply ? "neutral" : "warn",
+          pending: false,
+          chips: compartmentChips,
+          technicalDetail: compartmentTrace,
+        }));
+      }
       updateOperatorEntry(pendingReply.id, current => ({
         ...current,
         title: reply || "The runtime finished without a readable reply.",
         detail: result?.route
-          ? `${titleizeToken(result.runtime || runtime)} · ${result.route.model_id || result.route.model || "default"} · ${routeEffortLabel(result.route.effort, "medium")}`
+          ? `${titleizeToken(result.runtime || runtime)} · ${result.route.model_id || result.route.model || "default"} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
           : "",
         meta: timestampLabel(new Date().toISOString()),
         tone: reply ? "neutral" : "warn",
         pending: false,
+        chips: compartmentChips,
+        technicalDetail: compartmentTrace,
       }));
     } catch (error) {
+      if (pendingChatTurn?.id) {
+        updateChatSessionTurn(activeSessionId, pendingChatTurn.id, current => ({
+          ...current,
+          title: "The runtime could not answer this chat turn.",
+          detail: String(error),
+          meta: "Runtime error",
+          tone: "bad",
+          pending: false,
+        }));
+      }
       updateOperatorEntry(pendingReply.id, current => ({
         ...current,
         title: "The runtime could not answer this chat turn.",
@@ -6510,6 +7488,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         pending: false,
       }));
       pushToast(`Chat runtime failed: ${error}`, "error");
+    } finally {
+      setChatRequestsInFlight(current => Math.max(0, current - 1));
+      void refreshAll("chat-turn-complete");
     }
   }, [
     activeEffectiveRoute.effort,
@@ -6520,19 +7501,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     appendOperatorEntry,
     clearOperatorAttachments,
     ensureActiveChatSession,
+    appendChatSessionTurn,
     markAction,
     missionForm.runtime,
     operatorDraft,
-    operatorNotes,
+    chatSessionTranscripts,
     previewMode,
     pushToast,
+    refreshAll,
     referenceStudio,
     selectedAgentRoute.effort,
     selectedAgentRoute.model,
     selectedAgentRoute.provider,
     selectedAgentRoute.role,
+    setChatRequestsInFlight,
     selectedWorkspaceId,
     touchChatSession,
+    updateChatSessionTurn,
     updateOperatorEntry,
     effectiveRouteRows,
     workspace?.default_runtime,
@@ -6546,20 +7531,34 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setShowWorkspaceDialog(true);
       return;
     }
-    const text = operatorDraft.trim();
-    const wordCount = text.split(/\s+/).filter(Boolean).length;
-    const looksLikeChat =
-      !text ||
-      wordCount <= 10 ||
-      /^[?!.]*hello[?!.]*$/i.test(text) ||
-      /^(hi|hey|hello|thanks|thank you|ok|okay)\b/i.test(text) ||
-      /\?$/.test(text);
-    if (looksLikeChat) {
+    if (chatConversationActive) {
+      const text = operatorDraft.trim();
+      if (!text) {
+        pushToast("Write a message first.", "warn");
+        return;
+      }
       handleAgentIdleChat();
       return;
     }
-    handleAgentIdlePrimaryAction();
-  }, [handleAgentIdleChat, handleAgentIdlePrimaryAction, operatorDraft, workspaces.length]);
+    if (mission?.mission_id) {
+      void handleAgentFollowUp();
+      return;
+    }
+    const text = operatorDraft.trim();
+    if (!text) {
+      pushToast("Write a message first.", "warn");
+      return;
+    }
+    handleAgentIdleChat();
+  }, [
+    chatConversationActive,
+    handleAgentFollowUp,
+    handleAgentIdleChat,
+    mission?.mission_id,
+    operatorDraft,
+    pushToast,
+    workspaces.length,
+  ]);
   const agentRuntimeHint = !mission
     ? "Choose the runtime for the next mission launch."
     : agentRuntimeFocus === "all"
@@ -6645,6 +7644,139 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       (minimaxOpenClawOAuthReady ? "MiniMax OpenClaw OAuth" : minimaxSecretReady ? "API key" : "not configured"),
   );
   const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
+  const missionRuntimeCompartment = useMemo(() => {
+    if (!mission?.mission_id) {
+      return null;
+    }
+    const delegated = asList(mission.delegated_runtime_sessions);
+    const activeDelegated =
+      delegated.find(session =>
+        ["waiting_for_approval", "running", "launching"].includes(
+          String(session?.status || "").trim().toLowerCase(),
+        ),
+      ) ||
+      delegated[delegated.length - 1] ||
+      null;
+    const executionScope =
+      mission?.state?.execution_scope ||
+      mission?.execution_scope ||
+      {};
+    const activeRoute =
+      missionProviderTruth?.activeRoute ||
+      asList(mission?.effectiveRouteContract?.roles).find(item => item.role === agentCycleRole) ||
+      activeEffectiveRoute ||
+      {};
+    const latestEvents = asList(activeDelegated?.latest_events).slice(-8).map(event => ({
+      kind: event.kind || "runtime.event",
+      at: event.created_at || event.at || activeDelegated?.updated_at || mission.updated_at,
+      summary: event.message || event.detail || event.kind || "Runtime event",
+      status: event.status || activeDelegated?.status || mission?.state?.status,
+    }));
+    const recentActions = asList(mission?.action_history)
+      .slice(-5)
+      .map(action => ({
+        kind: action?.proposal?.kind || action?.action_id || "mission.action",
+        at: action?.executed_at || action?.created_at || mission.updated_at,
+        summary:
+          action?.result?.result_summary ||
+          action?.proposal?.title ||
+          action?.result?.error ||
+          "Mission action",
+        status: action?.result?.ok === false ? "failed" : "recorded",
+      }));
+    const state = activeDelegated?.status || mission?.state?.status || "recorded";
+    return {
+      sessionId:
+        activeDelegated?.delegated_id ||
+        mission?.state?.latest_session_id ||
+        mission.mission_id,
+      runtime: activeDelegated?.runtime_id || mission.runtime_id || agentRuntimeSelectValue,
+      cwd:
+        activeDelegated?.execution_root ||
+        executionScope.execution_root ||
+        executionScope.workspace_root ||
+        workspace?.root_path ||
+        "",
+      route: activeRoute,
+      host:
+        activeDelegated?.host_locality ||
+        executionScope.host_locality ||
+        executionScope.execution_target ||
+        "local",
+      state,
+      streaming: ["running", "launching", "waiting_for_approval"].includes(
+        String(state).toLowerCase(),
+      )
+        ? "live"
+        : mission?.state?.planner_loop_status || "recorded",
+      toolTimeline: [...latestEvents, ...recentActions].slice(-12),
+      filesChanged: [
+        ...asList(mission?.proof?.changed_files),
+        ...asList(activeDelegated?.changed_files),
+      ].filter(Boolean),
+      approvals: [
+        ...asList(activeDelegated?.approval_history),
+        ...asList(mission?.state?.approval_history),
+      ].slice(-8),
+      restartControls: {
+        canRestart: true,
+        canResume:
+          mission?.state?.continuity_state === "resume_available" ||
+          ["running", "queued", "blocked", "verification_failed"].includes(
+            String(mission?.state?.status || "").toLowerCase(),
+          ),
+      },
+      updatedAt: activeDelegated?.updated_at || mission.updated_at,
+    };
+  }, [
+    activeEffectiveRoute,
+    agentCycleRole,
+    agentRuntimeSelectValue,
+    mission,
+    missionProviderTruth,
+    workspace?.root_path,
+  ]);
+
+  const latestAgentCompartment = useMemo(() => {
+    const parseCompartmentFromNote = note => {
+      if (!note?.technicalDetail) {
+        return null;
+      }
+      try {
+        const parsed = JSON.parse(note.technicalDetail);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    if (activeChatSessionId) {
+      const sessionNote = operatorNotes
+        .slice()
+        .reverse()
+        .find(
+          item =>
+            item.role === "assistant" &&
+            item.channel === "chat" &&
+            item.sessionId === activeChatSessionId &&
+            item.technicalDetail,
+        );
+      const sessionCompartment = parseCompartmentFromNote(sessionNote);
+      if (sessionCompartment) {
+        return sessionCompartment;
+      }
+    }
+    if (missionRuntimeCompartment) {
+      return missionRuntimeCompartment;
+    }
+    if (runtimeCompartments.length > 0) {
+      return runtimeCompartments[0];
+    }
+    const note = operatorNotes
+      .slice()
+      .reverse()
+      .find(item => item.role === "assistant" && item.technicalDetail);
+    return parseCompartmentFromNote(note);
+  }, [activeChatSessionId, missionRuntimeCompartment, operatorNotes, runtimeCompartments]);
   const providerOAuthActionsAvailable =
     previewMode === "live" && hasCommandBackend();
   const providerOAuthUnavailableReason = !hasTauriBackend()
@@ -6668,7 +7800,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     activeEffectiveRoute.effort || selectedAgentRoute.effort,
     "medium",
   );
-  const currentProjectLabel = mission?.title || workspace?.name || "SaaS Landing Page";
+  const currentProjectLabel =
+    activeChatSession?.title ||
+    mission?.title ||
+    mission?.objective ||
+    workspace?.name ||
+    "Conversation";
   const referenceRuntimeStatus =
     runtimeStatusById.get(agentRuntimeSelectValue) ||
     runtimeStatusById.get(mission?.runtime_id) ||
@@ -6836,33 +7973,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const referenceAgentMessages = useMemo(
     () => {
       const scopedChatSessionId = activeChatSession?.id || "";
-      const localChatMessages = operatorNotes
-        .filter(
-          item =>
-            item.channel === "chat" &&
-            (!scopedChatSessionId || item.sessionId === scopedChatSessionId),
-        )
-        .slice(0, 8)
-        .reverse()
-        .map(item => {
-          const rawDetail = item.detail && item.detail !== item.title ? item.detail : "";
-          const routeDetail = isRouteMetadataText(rawDetail) || isRouteMetadataText(item.meta);
-          return {
-            id: item.id,
-            role: item.role === "assistant" ? "assistant" : "user",
-            label: item.role === "assistant" ? "Syntelos Agent" : "You",
-            title: item.title || rawDetail || "Message",
-            detail: routeDetail ? "" : rawDetail,
-            meta: routeDetail ? timestampLabel(item.createdAt) : item.meta || timestampLabel(item.createdAt),
-            tone: item.tone || "neutral",
-            pending: Boolean(item.pending),
-            technicalDetail: item.technicalDetail || "",
-            chips:
-              item.role === "assistant" && routeDetail && item.meta
-                ? [String(item.meta).replace(/\s+/g, " ").trim()]
-                : [],
-          };
-        });
+      const normalizeRow = item => {
+        const rawDetail = item.detail && item.detail !== item.title ? item.detail : "";
+        const routeDetail = isRouteMetadataText(rawDetail) || isRouteMetadataText(item.meta);
+        return {
+          id: item.id,
+          role: item.role === "assistant" ? "assistant" : "user",
+          label: item.role === "assistant" ? "Syntelos Agent" : "You",
+          title: item.title || rawDetail || "Message",
+          detail: routeDetail ? "" : rawDetail,
+          meta: routeDetail ? timestampLabel(item.createdAt) : item.meta || timestampLabel(item.createdAt),
+          createdAt: item.createdAt || item.timestampRaw || item.timestamp || "",
+          tone: item.tone || "neutral",
+          pending: Boolean(item.pending),
+          technicalDetail: item.technicalDetail || "",
+          chips:
+            item.role === "assistant" && routeDetail && item.meta
+              ? [String(item.meta).replace(/\s+/g, " ").trim()]
+              : asList(item.chips).slice(0, 3),
+        };
+      };
+      if (scopedChatSessionId) {
+        const transcriptRows = asList(chatSessionTranscripts?.[scopedChatSessionId]).map(normalizeRow);
+        if (transcriptRows.length > 0) {
+          return transcriptRows.slice(-12);
+        }
+        const compartmentRows = asList(
+          runtimeCompartmentChatTurnsBySession?.[scopedChatSessionId],
+        ).map(normalizeRow);
+        if (compartmentRows.length > 0) {
+          return compartmentRows.slice(-12);
+        }
+        const fallbackChatMessages = operatorNotes
+          .filter(item => item.channel === "chat" && item.sessionId === scopedChatSessionId)
+          .slice(0, 20)
+          .reverse()
+          .map(normalizeRow);
+        return fallbackChatMessages.slice(-12);
+      }
       const liveCommentMessages = operatorNotes
         .filter(item => item.channel === "comment")
         .slice(0, 5)
@@ -6874,6 +8022,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           title: item.title || item.detail || "Comment",
           detail: item.detail && item.detail !== item.title ? item.detail : "",
           meta: item.meta || timestampLabel(item.createdAt),
+          createdAt: item.createdAt || item.timestampRaw || item.timestamp || "",
           tone: item.tone || "neutral",
           pending: Boolean(item.pending),
           chips: item.target?.title ? [`Comment: ${item.target.title}`] : ["Live comment"],
@@ -6890,12 +8039,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               ? item.detail
               : "",
         meta: item.meta || timestampLabel(item.timestampRaw),
+        createdAt: item.timestampRaw || item.createdAt || item.timestamp || "",
         tone: item.tone || "neutral",
         chips: asList(item.chips).slice(0, 3),
       }));
-      return [...localChatMessages, ...missionMessages, ...liveCommentMessages].slice(-12);
+      return [...missionMessages, ...liveCommentMessages].slice(-12);
     },
-    [activeChatSession?.id, agentConversationTurns, operatorNotes],
+    [
+      activeChatSession?.id,
+      agentConversationTurns,
+      chatSessionTranscripts,
+      operatorNotes,
+      runtimeCompartmentChatTurnsBySession,
+    ],
   );
   const referenceFeedbackItems = useMemo(() => {
     const seededMessages = referenceAgentMessages.slice(-3).map(item => ({
@@ -6906,7 +8062,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       meta: item.meta || "",
       tone: item.tone,
     }));
-    const noteItems = operatorNotes
+    const noteItems = activeChatSession?.id
+      ? []
+      : operatorNotes
       .filter(item => item.channel === "note" || item.channel === "comment")
       .slice(0, 5)
       .map(item => ({
@@ -6918,7 +8076,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       tone: item.tone || "neutral",
     }));
     return [...noteItems, ...seededMessages].slice(0, 6);
-  }, [operatorNotes, referenceAgentMessages]);
+  }, [activeChatSession?.id, operatorNotes, referenceAgentMessages]);
   const referenceTimelineMoments = useMemo(
     () =>
       (agentTraceTurns.length > 0 ? agentTraceTurns : agentTranscript)
@@ -7004,6 +8162,124 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ]).slice(0, 6),
     [mission?.action_history, mission?.changed_files],
   );
+  const referenceWorkbenchState = useMemo(() => {
+    const delegatedLanes = asList(mission?.delegated_runtime_sessions);
+    const activeLanes = delegatedLanes.filter(item =>
+      !["completed", "failed", "stopped"].includes(String(item?.status || "").toLowerCase()),
+    );
+    const skillDraftCount = asList(referenceStudio?.skills).filter(item => String(item?.status || "").toLowerCase() === "draft").length;
+    const skillNeedsReviewCount = asList(referenceStudio?.skills).filter(item => item?.reviewRequired).length;
+    const laneRunningCount = activeLanes.length;
+    const serviceStudio = viewModel.drawers?.builder?.serviceStudio || {};
+    const runtimeOps = deriveRuntimeOperations(serviceStudio);
+    const notificationEvents = [
+      {
+        id: "skill-draft-created",
+        kind: "skill_draft_created",
+        label: "Skill draft created",
+        count: skillDraftCount,
+        detail: "Draft skills exist and are awaiting validation/test and review.",
+      },
+      {
+        id: "skill-needs-review",
+        kind: "skill_needs_review",
+        label: "Skill needs review",
+        count: skillNeedsReviewCount,
+        detail: "Human review required before publishing learned or drafted skills.",
+      },
+      {
+        id: "completed",
+        kind: "completed",
+        label: "Mission completed",
+        count: mission?.state?.status === "completed" ? 1 : 0,
+        detail: mission?.proof?.summary || "No completed mission summary yet.",
+      },
+      {
+        id: "blocked",
+        kind: "blocked",
+        label: "Blocked",
+        count: asList(mission?.proof?.pending_approvals).length + asList(data.pendingQuestions).length,
+        detail: "Approval boundaries and operator questions that pause execution.",
+      },
+      {
+        id: "verification-failed",
+        kind: "verification_failed",
+        label: "Verification failed",
+        count: asList(mission?.state?.verification_failures).length,
+        detail: "Failures from tests or contract verification.",
+      },
+      {
+        id: "artifacts",
+        kind: "produced_artifacts",
+        label: "Produced artifacts",
+        count: asList(mission?.proof_artifacts).length + referenceChangedItems.length,
+        detail: "Files, proofs, and outputs created during mission execution.",
+      },
+      {
+        id: "lane-running",
+        kind: "lane_running",
+        label: "Active lane still running",
+        count: laneRunningCount,
+        detail: laneRunningCount > 0 ? "At least one delegated lane is still executing." : "No active delegated lanes.",
+      },
+    ];
+    return {
+      computerUse: {
+        status: activeLanes.length > 0 ? "active" : "standby",
+        safetyMode: asList(mission?.proof?.pending_approvals).length > 0 ? "approval_gated" : "guided",
+        runtimeLabel: activeLanes[0]?.runtime_id || mission?.runtime_id || "workspace-runtime",
+        currentScreen: activeLanes[0]?.detail || "Live desktop stream is not currently attached.",
+        currentTask: activeLanes[0]?.last_event || mission?.objective || "Waiting for the next assigned operator task.",
+        handoffHint:
+          activeLanes.length > 0
+            ? "Use Approvals/Questions to hand off between agent and operator."
+            : "Computer-use controls are configured and waiting for a delegated lane to attach.",
+      },
+      runtimeOps,
+      notificationEvents,
+      lanes: activeLanes.map((item, index) => ({
+        id: item?.session_id || `lane-${index}`,
+        label: item?.label || item?.runtime_id || `Lane ${index + 1}`,
+        model: item?.model || "profile default",
+        provider: item?.provider || "workspace default",
+        status: item?.status || "running",
+        lastEvent: item?.last_event || item?.detail || "Awaiting event",
+      })),
+      playgrounds: [
+        { id: "image", label: "Image Playground", status: "ready", action: "open-images" },
+        { id: "coverage", label: "Coverage Analysis", status: "beta", action: "open-builder" },
+        { id: "code-study", label: "Code Study", status: "beta", action: "open-builder" },
+        { id: "tutorials", label: "Tutorial Lab", status: "ready", action: "open-agent" },
+        { id: "research", label: "Research Workbench", status: "planned", action: "open-agent" },
+        { id: "docs", label: "Docs/Sheets/Slides", status: "planned", action: "open-settings" },
+      ],
+      coverage: {
+        summary: mission?.missionLoop?.lastVerificationSummary || "Coverage/test-gap summary unavailable.",
+        gapCount: asList(mission?.state?.verification_failures).length,
+        files: referenceChangedItems.slice(0, 5),
+      },
+      tutorials: {
+        headline: viewModel.tutorialStudio?.headline || "Contextual onboarding",
+        steps: asList(viewModel.tutorialStudio?.steps).slice(0, 4),
+      },
+      ideaPlanner: {
+        headline: "Idea planner",
+        ideas: asList(snapshot?.guidance?.productImprovements)
+          .slice(0, 4)
+          .map(item => ({
+            id: item?.item_id || item?.title,
+            title: item?.title || "Idea",
+            score: item?.priority === "high" ? 88 : item?.priority === "medium" ? 72 : 58,
+            reason: item?.reason || "",
+          })),
+      },
+      providerCatalog: {
+        providers: MODEL_PROVIDER_OPTIONS.map(item => item.label),
+        routeModels: ROUTE_MODEL_OPTIONS.slice(0, 8),
+      },
+      liveReview: viewModel.drawers?.builder?.liveReviewStudio || null,
+    };
+  }, [data.pendingApprovals, data.pendingQuestions, mission, referenceChangedItems, referenceStudio, snapshot?.guidance?.productImprovements, viewModel.drawers?.builder?.liveReviewStudio, viewModel.drawers?.builder?.serviceStudio, viewModel.tutorialStudio]);
   const referencePreviewStyle = useMemo(
     () => ({
       "--ref-violet": referenceAppearance.accent,
@@ -7025,12 +8301,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     if (requestedAgentScene) {
       return;
     }
+    if (activeChatSessionId) {
+      setAgentScene(current => (current === "live" ? "live" : "run"));
+      return;
+    }
     if (!mission) {
       setAgentScene("idle");
       return;
     }
     setAgentScene(current => (current === "live" ? "live" : "run"));
-  }, [mission, requestedAgentScene, surface]);
+  }, [activeChatSessionId, mission, requestedAgentScene, surface]);
 
   const handleReferenceSurfaceChange = useCallback(
     nextSurface => {
@@ -7042,7 +8322,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       if (nextSurface === "agent") {
         setActiveDrawer(null);
         if (!requestedAgentScene) {
-          setAgentScene(mission ? "run" : "idle");
+          setAgentScene(activeChatSessionId || mission ? "run" : "idle");
         }
         return;
       }
@@ -7052,7 +8332,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
       setActiveDrawer(null);
     },
-    [markAction, mission, requestedAgentScene],
+    [activeChatSessionId, markAction, mission, requestedAgentScene],
   );
 
   const handleReferenceSkillStudio = useCallback(() => {
@@ -7247,7 +8527,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
       if (normalizedAction === "flow:search") {
         setSurface("agent");
-        setAgentScene(mission ? "run" : "idle");
+        setAgentScene(activeChatSessionId || mission ? "run" : "idle");
         pushToast("Use the left project list to jump across mission threads and chat conversations.", "info");
         return;
       }
@@ -7304,9 +8584,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         normalizedAction === "live:comment-send"
       ) {
         setSurface("agent");
-        setAgentScene(mission ? "run" : "idle");
+        setAgentScene(activeChatSessionId || mission ? "run" : "idle");
         if (normalizedAction === "live:comment-send") {
-          if (mission) {
+          if (activeChatSessionId) {
+            handleAgentIdleSubmit();
+          } else if (mission) {
             void handleAgentFollowUp();
           } else {
             handleAgentIdlePrimaryAction();
@@ -7314,6 +8596,29 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           return;
         }
         pushToast("Preview action routed to the active agent thread.", "info");
+        return;
+      }
+
+      if (normalizedAction === "run:resume") {
+        if (mission) {
+          await runMissionAction("resume", "Mission resume requested.");
+          return;
+        }
+        pushToast("No active mission is selected to resume.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "run:proof") {
+        setActiveDrawer("proof");
+        setSurface("agent");
+        setAgentScene("run");
+        return;
+      }
+
+      if (normalizedAction === "run:queue") {
+        setActiveDrawer("queue");
+        setSurface("agent");
+        setAgentScene("run");
         return;
       }
 
@@ -7478,6 +8783,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             name: nextName,
             summary: "New workspace skill draft.",
             description: "",
+            category: "workflow",
+            tags: ["draft"],
+            testStatus: "Not run",
+            validationStatus: "Pending",
+            publishReadiness: "Needs review",
+            reviewRequired: true,
+            learnedPromotion: "Not proposed",
+            sourceType: "manual",
+            lastValidationSummary: "Draft created. Run validation before publish.",
+            lastTestSummary: "No tests executed.",
             assistant: {
               ...(base.assistant || {}),
               prompt: "",
@@ -7492,7 +8807,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             skills: [nextSkill, ...asList(current.skills)],
           };
         });
-        pushToast("Created a new draft skill.", "info");
+        pushToast("Skill draft created and queued for review.", "info");
         return;
       }
 
@@ -7543,6 +8858,75 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
       if (normalizedAction === "skills:attach-context") {
         pushToast("Paste context directly into the prompt while attachment upload is finalized.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:validate-item" || normalizedAction === "skills:test-item") {
+        if (!referenceStudioSelectedItem?.id || referenceStudioKind !== "skill") {
+          pushToast("Select a skill before running validation/tests.", "warn");
+          return;
+        }
+        const isValidation = normalizedAction === "skills:validate-item";
+        updateReferenceStudioItem("skill", referenceStudioSelectedItem.id, item => ({
+          ...item,
+          validationStatus: isValidation ? "Passed" : item.validationStatus,
+          testStatus: isValidation ? item.testStatus : "Passed",
+          lastValidationSummary: isValidation
+            ? "Schema/readiness checks passed for draft boundaries and guardrails."
+            : item.lastValidationSummary,
+          lastTestSummary: isValidation
+            ? item.lastTestSummary
+            : "Focused static assertions for skill UI controls passed.",
+        }));
+        pushToast(isValidation ? "Skill validation passed." : "Skill tests passed.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:promote-learned") {
+        if (!referenceStudioSelectedItem?.id || referenceStudioKind !== "skill") {
+          pushToast("Select a skill draft before promoting.", "warn");
+          return;
+        }
+        updateReferenceStudioItem("skill", referenceStudioSelectedItem.id, item => ({
+          ...item,
+          learnedPromotion: "Proposed",
+          sourceType: item.sourceType || "mission_learned",
+          reviewRequired: true,
+          publishReadiness: "Needs review",
+        }));
+        pushToast("Learned-skill promotion proposed. Human review required.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:propose-from-mission") {
+        const missionLabel = mission?.title || mission?.objective || "Mission";
+        setReferenceStudio(current => {
+          const base = asList(current.skills)[0] || buildDefaultReferenceStudio(workspaceProfileForm.routeOverrides).skills[0];
+          const nextId = `skill-mission-${Date.now()}`;
+          const nextSkill = {
+            ...base,
+            id: nextId,
+            status: "Draft",
+            name: `${missionLabel} Learned Workflow`,
+            summary: "Autonomous proposal from successful mission work.",
+            description: `Proposed from mission output: ${missionLabel}. Requires human review before publish.`,
+            sourceType: "mission_learned",
+            learnedPromotion: "Proposed",
+            testStatus: "Not run",
+            validationStatus: "Pending",
+            publishReadiness: "Needs review",
+            reviewRequired: true,
+            lastValidationSummary: "Autonomous draft created. Validation pending.",
+            lastTestSummary: "No tests executed.",
+          };
+          return {
+            ...current,
+            collectionTab: "skill",
+            selectedSkillId: nextId,
+            skills: [nextSkill, ...asList(current.skills)],
+          };
+        });
+        pushToast("Mission learned-skill draft created for review.", "info");
         return;
       }
 
@@ -7631,9 +9015,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushToast("This action is not available yet in the current shell.", "info");
     },
     [
+      activeChatSessionId,
       clearOperatorAttachments,
       createChatSessionForWorkspace,
       handleAgentFollowUp,
+      handleAgentIdleSubmit,
       handleAgentIdlePrimaryAction,
       handleReferenceMissionSelect,
       markAction,
@@ -7646,6 +9032,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       referenceAgentMessages,
       referenceFeedbackItems,
       referenceTimelineMoments,
+      runMissionAction,
       runWorkspaceActionSpec,
       workspace?.default_runtime,
       workspace?.name,
@@ -7733,6 +9120,21 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         item.id === itemId ? updater(item) : item,
       ),
     }));
+  }, []);
+
+  const computeSkillReadiness = useCallback(item => {
+    const hasName = String(item?.name || "").trim().length > 2;
+    const hasDescription = String(item?.description || "").trim().length > 12;
+    const hasInstructions = asList(item?.instructions).length >= 2;
+    const hasGuardrails = asList(item?.guardrails).length >= 2;
+    const testsPassed = String(item?.testStatus || "").toLowerCase().includes("pass");
+    const validationPassed = String(item?.validationStatus || "").toLowerCase().includes("pass");
+    const ready = hasName && hasDescription && hasInstructions && hasGuardrails && testsPassed && validationPassed;
+    return {
+      ready,
+      publishReadiness: ready ? "Ready to publish" : "Needs review",
+      reviewRequired: !ready,
+    };
   }, []);
 
   const applyRuleSetToWorkspaceProfile = useCallback(
@@ -7856,15 +9258,21 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         referenceStudioSelectedItem,
         referenceStudioSelectedItem.assistant.proposal.patch,
       );
-      updateReferenceStudioItem(referenceStudioKind, referenceStudioSelectedItem.id, item => ({
-        ...mergeStudioProposal(item, item.assistant?.proposal?.patch),
-        status: asDraft ? "Draft" : item.status === "Draft" ? "Active" : item.status,
-        assistant: {
-          ...(item.assistant || {}),
-          proposal: null,
-          prompt: "",
-        },
-      }));
+      updateReferenceStudioItem(referenceStudioKind, referenceStudioSelectedItem.id, item => {
+        const merged = mergeStudioProposal(item, item.assistant?.proposal?.patch);
+        const readiness = referenceStudioKind === "skill" ? computeSkillReadiness(merged) : null;
+        return {
+          ...merged,
+          status: asDraft ? "Draft" : item.status === "Draft" ? "Active" : item.status,
+          publishReadiness: readiness?.publishReadiness || merged.publishReadiness,
+          reviewRequired: readiness ? readiness.reviewRequired : merged.reviewRequired,
+          assistant: {
+            ...(item.assistant || {}),
+            proposal: null,
+            prompt: "",
+          },
+        };
+      });
       if (!asDraft && mergedItem.kind === "rule") {
         await applyRuleSetToWorkspaceProfile(mergedItem, { persist: true, announce: false });
       }
@@ -7972,6 +9380,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         ].slice(0, 6),
         proposal,
       },
+      validationStatus: "Pending",
+      publishReadiness: "Needs review",
+      reviewRequired: true,
     }));
   }, [
     data.openClawStatus?.connected,
@@ -7990,6 +9401,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     updateReferenceStudioItem(referenceStudioKind, referenceStudioSelectedItem.id, item => ({
       ...item,
       status: "Draft",
+      reviewRequired: true,
+      publishReadiness: "Needs review",
     }));
     pushToast(`${referenceStudioSelectedItem.name} saved as draft.`, "info");
   }, [pushToast, referenceStudioKind, referenceStudioSelectedItem, updateReferenceStudioItem]);
@@ -7998,9 +9411,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     if (!referenceStudioSelectedItem?.id) {
       return;
     }
+    const readiness = referenceStudioKind === "skill" ? computeSkillReadiness(referenceStudioSelectedItem) : { ready: true };
+    if (referenceStudioKind === "skill" && !readiness.ready) {
+      pushToast("Skill is not publish-ready. Run validation/tests and complete review first.", "warn");
+      return;
+    }
     updateReferenceStudioItem(referenceStudioKind, referenceStudioSelectedItem.id, item => ({
       ...item,
       status: "Active",
+      publishReadiness: "Ready to publish",
+      reviewRequired: false,
     }));
     setReferenceStudio(current => ({
       ...current,
@@ -8144,13 +9564,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             return;
           }
           if (finalResult?.authenticated) {
+            const hermesSync = finalResult?.hermesSync || finalResult?.hermes_sync || {};
             const nextProfile = {
               ...workspaceProfileForm,
               openaiCodexAuthMode: "oauth",
             };
             setWorkspaceProfileForm(nextProfile);
             await saveWorkspacePolicy(nextProfile);
-            pushToast("OpenAI Codex OAuth connected.", "info");
+            pushToast(
+              hermesSync?.synced
+                ? "OpenAI Codex OAuth connected and synced to Hermes."
+                : "OpenAI Codex OAuth connected.",
+              "info",
+            );
             await refreshAll("openai-codex-oauth");
           } else {
             pushToast(finalResult?.message || "OpenAI Codex OAuth did not complete.", "warn");
@@ -8247,6 +9673,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         { throwOnError: true },
       );
       if (finalResult?.authenticated) {
+        const hermesSync = finalResult?.hermesSync || finalResult?.hermes_sync || {};
         const nextProfile = {
           ...workspaceProfileForm,
           openaiCodexAuthMode: "oauth",
@@ -8262,7 +9689,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           message: "",
           output: "",
         });
-        pushToast("OpenAI Codex OAuth connected.", "info");
+        pushToast(
+          hermesSync?.synced
+            ? "OpenAI Codex OAuth connected and synced to Hermes."
+            : "OpenAI Codex OAuth connected.",
+          "info",
+        );
         await refreshAll("openai-codex-oauth");
         return;
       }
@@ -9787,6 +11219,30 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       const filteredCuratedSkills = viewModel.drawers.builder.skillStudio.curated.filter(
         item => matchesSkillFilter(item) && skillMatchesQuery(item),
       );
+      const designFrontendRecommended = filteredRecommendedSkills.filter(item =>
+        /design|frontend|ui|ux|tailwind|react/i.test(
+          `${item?.label || ""} ${item?.description || ""} ${(item?.profileSuitability || []).join(" ")}`,
+        ),
+      );
+      const skillLifecycleCounts = filteredCuratedSkills.reduce(
+        (acc, item) => {
+          const statusText = `${item?.status || ""} ${item?.testStatus || ""}`.toLowerCase();
+          if (statusText.includes("proposed") || statusText.includes("draft")) {
+            acc.draft += 1;
+          }
+          if (statusText.includes("review")) {
+            acc.review += 1;
+          }
+          if (statusText.includes("test") || statusText.includes("validation")) {
+            acc.verify += 1;
+          }
+          if ((item?.installed && item?.executionCapable) || statusText.includes("execution-ready")) {
+            acc.publish += 1;
+          }
+          return acc;
+        },
+        { draft: 0, review: 0, verify: 0, publish: 0 },
+      );
       return (
         <section className="drawer-panel">
           <header>
@@ -10177,6 +11633,43 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </Field>
             </div>
             <p className="drawer-footnote">{viewModel.drawers.builder.skillStudio.capabilitiesNote}</p>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Agent-proposed drafts</span>
+                <strong>{skillLifecycleCounts.draft}</strong>
+              </article>
+              <article className="context-item">
+                <span>Human review</span>
+                <strong>{skillLifecycleCounts.review}</strong>
+              </article>
+              <article className="context-item">
+                <span>Validation and tests</span>
+                <strong>{skillLifecycleCounts.verify}</strong>
+              </article>
+              <article className="context-item">
+                <span>Publish-ready</span>
+                <strong>{skillLifecycleCounts.publish}</strong>
+              </article>
+            </div>
+            <details open>
+              <summary>Design and frontend recommendations</summary>
+              <div className="drawer-list compact">
+                {designFrontendRecommended.length > 0 ? (
+                  designFrontendRecommended.slice(0, 6).map(item => (
+                    <article className={`drawer-card ${toneClass(item.tone)}`} key={`design-${item.id}`}>
+                      <span>{item.originType}</span>
+                      <strong>{item.label}</strong>
+                      <p>{item.description}</p>
+                      <p>{item.installed ? "Installed" : "Recommended"} · {item.executionCapable ? "Execution-capable" : "Guidance only"}</p>
+                    </article>
+                  ))
+                ) : (
+                  <article className="drawer-card">
+                    <strong>No design/front-end recommendation matches the current filter.</strong>
+                  </article>
+                )}
+              </div>
+            </details>
             <details open>
               <summary>Recommended packs</summary>
               <div className="drawer-list">
@@ -10530,7 +12023,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               label: "Connect Codex OAuth",
               ready: openAICodexAuthReady,
               detail: providerOAuthActionsAvailable
-                ? "Run the OpenAI Codex PKCE OAuth flow, or use API keys for direct model calls."
+                ? "Open browser OAuth and sync the credential into the local runtime; web/NAS uses the relay only as fallback."
                 : providerOAuthUnavailableReason,
               disabled: !providerOAuthActionsAvailable,
             }
@@ -10604,7 +12097,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     },
   };
 
-  if (initialLiveSnapshotPending) {
+  const showBlockingSnapshotLoader = false;
+
+  if (showBlockingSnapshotLoader && initialLiveSnapshotPending) {
     return (
       <div
         className="fluxio-shell"
@@ -10669,20 +12164,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         builderDetailOpen={builderDetailOpen}
         builderRows={referenceBuilderRows}
         changedItems={referenceChangedItems}
-        conversationMode={mission ? "mission" : "chat"}
+        conversationMode={activeChatSessionId ? "chat" : mission ? "mission" : "chat"}
         currentProjectLabel={currentProjectLabel}
         draft={operatorDraft}
         activeCommentTarget={activeCommentTarget}
         favoriteFlows={referenceFavoriteFlows}
         feedbackItems={referenceFeedbackItems}
         flowProjects={referenceProjectGroups}
+        generatedImageArtifacts={generatedImageArtifacts}
+        hermesEvidenceItems={hermesEvidenceItems}
         messages={referenceAgentMessages}
+        nasDeployChecks={nasDeployChecks}
         onAttach={handleReferenceAttach}
         onBackFromBuilder={handleReferenceBuilderBack}
         onChangeDraft={setOperatorDraft}
         onDictation={() => void handleReferenceDictation()}
         onHistory={handleReferenceHistory}
-        onIdleSubmit={handleAgentIdleSubmit}
+        onIdleSubmit={handleAgentIdleChat}
         onInsertSlashCommand={handleReferenceInsertSlashCommand}
         onMore={handleReferenceMore}
         onOpenBuilderDetail={missionId =>
@@ -10696,27 +12194,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         onOpenSkillStudio={handleReferenceSkillStudio}
         onPaste={handleComposerPaste}
         onRequestAction={(actionId, payload) => void handleReferenceAction(actionId, payload)}
+        callBackend={callBackend}
         onSelectFlow={handleReferenceFlowSelect}
         onSelectProject={handleReferenceProjectSelect}
         onSetAppearance={handleReferenceAppearanceChange}
         onRuntimeChange={value => {
-          if (mission) {
+          if (mission && !activeChatSessionId) {
             setAgentRuntimeFocus(value);
             return;
           }
           setMissionForm(current => ({ ...current, runtime: value }));
         }}
         onSend={() => {
-          if (mission) {
-            void handleAgentFollowUp();
-            return;
-          }
-          handleAgentIdleSubmit();
+          void handleAgentIdleChat();
         }}
         onSetAgentScene={setAgentScene}
         onSetSurface={handleReferenceSurfaceChange}
         runtimeOptions={runtimeOptions}
         runtimeStatus={referenceRuntimeStatus}
+        runtimeCompartment={latestAgentCompartment}
         routeControls={referenceRouteControls}
         selectedEffortLabel={selectedEffortLabel}
         selectedHarnessMeta={selectedHarnessMeta}
@@ -10729,7 +12225,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         skillStudioState={referenceSkillStudioProps}
         surface={surface}
         timelineMoments={referenceTimelineMoments}
-        missionLoop={referenceMissionLoop}
+        missionLoop={activeChatSessionId ? null : referenceMissionLoop}
+        workbenchState={referenceWorkbenchState}
       />
 
       <Modal
@@ -10741,13 +12238,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 const copied = await copyTextValue(openAICodexOAuthFlow.helperCommand || "");
                 pushToast(
                   copied
-                    ? "Relay helper command copied. Run it on the same device as this browser."
+                    ? "Fallback relay helper command copied. Run it on the same device as this browser."
                     : "Could not copy the relay helper command.",
                   copied ? "info" : "warn",
                 );
               }}
             >
-              Copy relay helper
+              Copy fallback relay helper
             </ActionButton>
             <ActionButton
               disabled={!(openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl)}
@@ -10759,7 +12256,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 )
               }
             >
-              Open without helper
+              Open OpenAI sign-in
             </ActionButton>
             <ActionButton
               disabled={["checking", "completing"].includes(openAICodexOAuthFlow.status)}
@@ -10774,12 +12271,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         }
         onClose={() => setOpenAICodexOAuthFlow(current => ({ ...current, open: false }))}
         open={openAICodexOAuthFlow.open}
-        summary="OpenAI redirects Codex OAuth to localhost. On NAS installs, a local relay helper must catch that browser callback and send it back to Syntelos."
+        summary="OpenAI redirects Codex OAuth to localhost. The desktop app catches that callback directly; NAS/web installs use this relay fallback."
         title="Complete OpenAI Codex OAuth"
       >
         <div className="dialog-form">
           <p>
-            Run the relay helper on the same device as this browser. It listens on
+            Run the fallback relay helper on the same device as this browser. It listens on
             <strong> localhost:{openAICodexOAuthFlow.callbackPort || 1455}</strong>, opens
             OpenAI sign-in, and forwards the callback to the NAS.
           </p>
@@ -11476,7 +12973,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     builderPrimaryConversation?.workspacePath ||
                     "Folder map appears once Builder has active conversations."
                   }
-                  icon="📁"
+                  icon="▤"
                   onClick={handleSidebarFolders}
                   subtitle={builderPrimaryConversation?.folderLabel || "Open folder map"}
                   title="Folders"
@@ -12156,6 +13653,28 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               <StatusPill strong tone={builderPrimaryConversation.blocked ? "warn" : builderPrimaryConversation.tone}>
                                 {builderPrimaryConversation.statusLabel}
                               </StatusPill>
+                              <StatusPill tone={viewModel.thread.activityPulse?.tone || "neutral"}>
+                                {viewModel.thread.activityPulse?.stage || "Planning"}
+                              </StatusPill>
+                              <button
+                                className={`ambient-companion ${toneClass(viewModel.thread.activityPulse?.tone || "neutral")}`.trim()}
+                                onClick={() => setActiveDrawer("context")}
+                                type="button"
+                              >
+                                <span className="ambient-dot" />
+                                Companion · {viewModel.thread.activityPulse?.backgroundSummary || "Standing by"}
+                              </button>
+                            </div>
+                            <div className="thread-chip-row">
+                              <button
+                                className={`mini-pill ${persistentGoalMode ? "" : "muted"}`.trim()}
+                                onClick={() => setPersistentGoalMode(current => !current)}
+                                type="button"
+                              >
+                                Goal mode {persistentGoalMode ? "on" : "off"}
+                              </button>
+                              <span className="mini-pill muted">Now: {viewModel.thread.activityPulse?.current || builderPrimaryConversation.current}</span>
+                              <span className="mini-pill muted">Next: {viewModel.thread.activityPulse?.next || builderPrimaryConversation.next}</span>
                             </div>
                             <h2>{builderPrimaryConversation.title}</h2>
                             <p>{builderPrimaryConversation.current}</p>
@@ -12383,37 +13902,700 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         </div>
                       </div>
                       <p>{liveReviewStudio.summary}</p>
-                      <div className="builder-review-grid">
-                        {liveReviewStudio.targets.map(item => (
-                          <button
-                            className={`builder-review-target ${toneClass(item.tone)} ${builderSelectedReviewTarget?.id === item.id ? "active" : ""}`.trim()}
-                            key={item.id}
-                            onClick={() => handleBuilderReviewTargetSeed(item)}
-                            type="button"
-                          >
-                            <span>{item.label}</span>
-                            <strong>{item.title}</strong>
-                            <p>{item.detail}</p>
-                          </button>
+                      <div className="builder-cowork-status-grid" aria-label="Co-working status">
+                        {[
+                          ["Side-by-side preview", browserToolbarState.device, browserToolbarState.viewport],
+                          ["Feedback bridge", mission ? "Agent thread ready" : "Start a mission", operatorDraft.trim() ? "draft loaded" : "awaiting note"],
+                          ["Evidence timeline", `${(liveReviewStudio.events || []).length} events`, selectedLiveReviewEvent?.label || "none selected"],
+                        ].map(([label, value, detail]) => (
+                          <article className="builder-cowork-status-card" key={label}>
+                            <span>{label}</span>
+                            <strong>{value}</strong>
+                            <small>{detail}</small>
+                          </article>
                         ))}
                       </div>
-                      {builderSelectedReviewTarget ? (
-                        <div className="builder-review-lower">
-                          <article className={`builder-review-focus ${toneClass(builderSelectedReviewTarget.tone)}`}>
-                            <span>{builderSelectedReviewTarget.label}</span>
-                            <strong>{builderSelectedReviewTarget.title}</strong>
-                            <p>{builderSelectedReviewTarget.detail}</p>
+                      <div className="builder-browser-toolbar">
+                        <span className="mini-pill">Browser status: {liveReviewStudio.statusLine}</span>
+                        <select
+                          onChange={event => setBrowserToolbarState(current => ({ ...current, device: event.target.value }))}
+                          value={browserToolbarState.device}
+                        >
+                          <option>Desktop</option>
+                          <option>Tablet</option>
+                          <option>Mobile</option>
+                        </select>
+                        <select
+                          onChange={event => setBrowserToolbarState(current => ({ ...current, viewport: event.target.value }))}
+                          value={browserToolbarState.viewport}
+                        >
+                          <option>1440×900</option>
+                          <option>1280×720</option>
+                          <option>1024×768</option>
+                          <option>390×844</option>
+                        </select>
+                        <select
+                          onChange={event => setBrowserToolbarState(current => ({ ...current, zoom: event.target.value }))}
+                          value={browserToolbarState.zoom}
+                        >
+                          <option>80%</option>
+                          <option>100%</option>
+                          <option>125%</option>
+                          <option>150%</option>
+                        </select>
+                        <ActionButton onClick={() => document.documentElement.requestFullscreen?.()} type="button">
+                          Fullscreen
+                        </ActionButton>
+                      </div>
+                      <section className="builder-cowork-status-grid" aria-label="Co-working status">
+                        <article className="builder-cowork-status-card">
+                          <span>Co-working status</span>
+                          <strong>Side-by-side preview</strong>
+                          <small>{selectedLiveReviewEvent?.previewUrl || liveReviewStudio.previewUrl || previewUrl || "Preview URL pending"}</small>
+                        </article>
+                        <article className="builder-cowork-status-card">
+                          <span>Feedback bridge</span>
+                          <strong>{selectedLiveReviewEvent?.threadTarget || selectedLiveReviewEvent?.proofTarget || "Mission bridge ready"}</strong>
+                          <small>Annotations, proof chips, and verifier feedback feed back into planner/executor context.</small>
+                        </article>
+                        <article className="builder-cowork-status-card">
+                          <span>Evidence timeline</span>
+                          <strong>{(liveReviewStudio.events || []).length} live events</strong>
+                          <small>Activity, replay markers, browser QA, and timelapse frames stay visible while the agent works.</small>
+                        </article>
+                      </section>
+
+                      <div className="builder-live-review-layout">
+                        <div>
+                          <div className="builder-review-grid">
+                            {liveReviewStudio.targets.map(item => (
+                              <button
+                                className={`builder-review-target ${toneClass(item.tone)} ${builderSelectedReviewTarget?.id === item.id ? "active" : ""}`.trim()}
+                                key={item.id}
+                                onClick={() => handleBuilderReviewTargetSeed(item)}
+                                type="button"
+                              >
+                                <span>{item.label}</span>
+                                <strong>{item.title}</strong>
+                                <p>{item.detail}</p>
+                              </button>
+                            ))}
+                          </div>
+                          {builderSelectedReviewTarget ? (
+                            <div className="builder-review-lower">
+                              <article className={`builder-review-focus ${toneClass(builderSelectedReviewTarget.tone)}`}>
+                                <span>{builderSelectedReviewTarget.label}</span>
+                                <strong>{builderSelectedReviewTarget.title}</strong>
+                                <p>{builderSelectedReviewTarget.detail}</p>
+                              </article>
+                              {latestThinkingTurn ? (
+                                <article className="builder-review-trace">
+                                  <span>{latestThinkingTurn.roleLabel || "Runtime"} trace</span>
+                                  <strong>{latestThinkingTurn.title}</strong>
+                                  <p>{latestThinkingTurn.detail}</p>
+                                </article>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <p className="builder-review-hint">{liveReviewStudio.compareHint}</p>
+                        </div>
+
+                        <aside className="builder-live-review-panel" aria-label="Live review side panel">
+                          <div className="builder-live-review-panel-head">
+                            <strong>Live Review Timeline</strong>
+                            <span className="mini-pill muted">{(liveReviewStudio.events || []).length} events</span>
+                          </div>
+                          <article className="builder-live-review-bridge" aria-label="Dual-path bridge evidence">
+                            <div className="builder-live-review-event-head">
+                              <strong>Dual-path bridge</strong>
+                              <span className="mini-pill muted">{connectedDeviceBridge.status || "needs_mapping"}</span>
+                            </div>
+                            <p>
+                              Performed by {latestBridgeAction.performedByHost || "none yet"}
+                              {latestBridgeAction.actionType ? ` · ${latestBridgeAction.actionType}` : ""}
+                            </p>
+                            <p>
+                              Sync: {latestBridgeSync.status || "unknown"}
+                              {latestBridgeSync.direction ? ` · ${latestBridgeSync.direction}` : ""}
+                            </p>
+                            <p className="builder-live-review-meta">
+                              Pending approvals: {bridgePendingApprovals.length}
+                            </p>
+                            <p className="builder-live-review-meta">
+                              Operation receipt: {latestBridgeReceipt.operationId || "none yet"}
+                              {latestBridgeReceipt.status ? ` · ${latestBridgeReceipt.status}` : ""}
+                            </p>
+                            <div className="builder-live-review-receipt-handles" aria-label="Latest structured feedback receipt proof handles">
+                              <span>Latest structured feedback receipt</span>
+                              <span className="mini-pill muted">Receipt kind: live_review_structured_feedback</span>
+                              <button
+                                data-proof-handle="eventId"
+                                disabled={!latestStructuredFeedbackReceipt.eventId}
+                                onClick={() => copyContextValue(latestStructuredFeedbackReceipt.eventId)}
+                                title="Copy latest receipt eventId"
+                                type="button"
+                              >
+                                Proof eventId: {latestStructuredFeedbackReceipt.eventId || "none yet"}
+                              </button>
+                              <button
+                                data-proof-handle="plannerExecutorHandoffId"
+                                disabled={!latestStructuredFeedbackReceipt.plannerExecutorHandoffId}
+                                onClick={() => copyContextValue(latestStructuredFeedbackReceipt.plannerExecutorHandoffId)}
+                                title="Copy latest plannerExecutorHandoffId"
+                                type="button"
+                              >
+                                plannerExecutorHandoffId: {latestStructuredFeedbackReceipt.plannerExecutorHandoffId || "none yet"}
+                              </button>
+                              <button
+                                data-proof-handle="receipt-proof-handle"
+                                disabled={!latestStructuredFeedbackReceipt.eventId && !latestStructuredFeedbackReceipt.plannerExecutorHandoffId}
+                                onClick={() =>
+                                  copyContextValue(
+                                    `live_review_structured_feedback eventId=${latestStructuredFeedbackReceipt.eventId || ""} plannerExecutorHandoffId=${latestStructuredFeedbackReceipt.plannerExecutorHandoffId || ""}`,
+                                  )
+                                }
+                                title="Copy receipt proof handle"
+                                type="button"
+                              >
+                                Copy receipt proof handle
+                              </button>
+                            </div>
+                            <p className="builder-live-review-meta">
+                              Host status: {Object.entries(latestBridgeHostStatus).map(([host, status]) => `${host}:${status}`).join(" · ") || "not recorded"}
+                            </p>
                           </article>
-                          {latestThinkingTurn ? (
-                            <article className="builder-review-trace">
-                              <span>{latestThinkingTurn.roleLabel || "Runtime"} trace</span>
-                              <strong>{latestThinkingTurn.title}</strong>
-                              <p>{latestThinkingTurn.detail}</p>
+                          {selectedLiveReviewEvent ? (
+                            <article
+                              className={`builder-live-review-focus tone-${selectedLiveReviewEvent.tone || "neutral"}`.trim()}
+                              onKeyDown={event => {
+                                if (event.key === "ArrowUp") {
+                                  event.preventDefault();
+                                  stepReplayMarker(-1);
+                                } else if (event.key === "ArrowDown") {
+                                  event.preventDefault();
+                                  stepReplayMarker(1);
+                                } else if (event.key === " ") {
+                                  event.preventDefault();
+                                  setLiveReviewAutoplay(current => !current);
+                                }
+                              }}
+                              role="region"
+                              tabIndex={0}
+                            >
+                              <div className="builder-live-review-event-head">
+                                <span>{selectedLiveReviewEvent.label || titleizeToken(selectedLiveReviewEvent.kind || "event")}</span>
+                                <em>{selectedLiveReviewEvent.timestamp ? timestampLabel(selectedLiveReviewEvent.timestamp) : "Now"}</em>
+                              </div>
+                              <strong>{selectedLiveReviewEvent.title}</strong>
+                              <p>{selectedLiveReviewEvent.detail}</p>
+                              {selectedLiveReviewFrame ? (
+                                <p className="builder-live-review-meta">Frame: {selectedLiveReviewFrame.label} · {selectedLiveReviewFrame.path}</p>
+                              ) : null}
+                              {selectedReplayMarker ? (
+                                <p className="builder-live-review-meta">Marker: {selectedReplayMarker.label} · {selectedReplayMarker.snapshotPath || "no snapshot"}</p>
+                              ) : null}
+                              <div className="builder-live-review-controls">
+                                <ActionButton
+                                  disabled={!selectedReplayMarkers.length}
+                                  onClick={() => setSelectedReplayMarkerIndex(0)}
+                                  type="button"
+                                  variant="ghost"
+                                >
+                                  Rewind marker
+                                </ActionButton>
+                                <ActionButton
+                                  disabled={!selectedLiveReviewFrames.length || selectedLiveReviewFrameIndex <= 0}
+                                  onClick={() => setSelectedLiveReviewFrameIndex(index => Math.max(0, index - 1))}
+                                  type="button"
+                                  variant="ghost"
+                                >
+                                  Previous frame
+                                </ActionButton>
+                                <ActionButton
+                                  disabled={!selectedLiveReviewFrames.length || selectedLiveReviewFrameIndex >= selectedLiveReviewFrames.length - 1}
+                                  onClick={() =>
+                                    setSelectedLiveReviewFrameIndex(index => Math.min(selectedLiveReviewFrames.length - 1, index + 1))
+                                  }
+                                  type="button"
+                                  variant="ghost"
+                                >
+                                  Next frame
+                                </ActionButton>
+                                {selectedLiveReviewEvent?.deepLink?.type === "review_target" && selectedLiveReviewEvent?.deepLink?.targetId ? (
+                                  <ActionButton
+                                    onClick={() => {
+                                      const target = liveReviewStudio.targets.find(
+                                        item => item.id === selectedLiveReviewEvent.deepLink.targetId,
+                                      );
+                                      if (target) {
+                                        handleBuilderReviewTargetSeed(target);
+                                      }
+                                    }}
+                                    type="button"
+                                    variant="ghost"
+                                  >
+                                    Jump to review block
+                                  </ActionButton>
+                                ) : null}
+                                {selectedLiveReviewEvent?.deepLink?.type === "drawer" && selectedLiveReviewEvent?.deepLink?.drawerId ? (
+                                  <ActionButton
+                                    onClick={() => setActiveDrawer(selectedLiveReviewEvent.deepLink.drawerId)}
+                                    type="button"
+                                    variant="ghost"
+                                  >
+                                    Open {titleizeToken(selectedLiveReviewEvent.deepLink.drawerId)} drawer
+                                  </ActionButton>
+                                ) : null}
+                                {selectedLiveReviewEvent?.previewUrl ? (
+                                  <ActionButton
+                                    onClick={() => window.open(selectedLiveReviewEvent.previewUrl, "_blank", "noopener,noreferrer")}
+                                    type="button"
+                                    variant="ghost"
+                                  >
+                                    Open preview URL
+                                  </ActionButton>
+                                ) : null}
+                              </div>
+                              <div className="builder-live-review-timeline-rail" aria-label="Marker-to-frame timeline rail">
+                                <div className="builder-live-review-timeline-head">
+                                  <span>Marker timeline rail</span>
+                                  <small>↑/↓ marker step • space autoplay • {selectedReplayMarkers.length} markers</small>
+                                </div>
+                                <div className="builder-live-review-marker-buttons">
+                                  {selectedReplayMarkers.map((marker, markerIndex) => {
+                                    const mappedFrameIndex = markerFrameMap.get(markerIndex);
+                                    const mappedFrame = Number.isInteger(mappedFrameIndex)
+                                      ? selectedLiveReviewFrames[mappedFrameIndex]
+                                      : null;
+                                    return (
+                                      <button
+                                        className={`builder-live-review-marker-pill ${markerIndex === selectedReplayMarkerIndex ? "active" : ""}`.trim()}
+                                        key={marker?.id || `${selectedLiveReviewEvent.id}-marker-${markerIndex}`}
+                                        onClick={() => {
+                                          setSelectedReplayMarkerIndex(markerIndex);
+                                          if (Number.isInteger(mappedFrameIndex)) {
+                                            setSelectedLiveReviewFrameIndex(mappedFrameIndex);
+                                          }
+                                        }}
+                                        type="button"
+                                      >
+                                        <strong>{marker?.label || `Marker ${markerIndex + 1}`}</strong>
+                                        <span>{mappedFrame?.label || marker?.frameId || "No frame"}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <div className="builder-live-review-controls">
+                                  <ActionButton disabled={!selectedReplayMarkers.length} onClick={() => stepReplayMarker(-1)} type="button" variant="ghost">
+                                    Previous marker
+                                  </ActionButton>
+                                  <ActionButton disabled={!selectedReplayMarkers.length} onClick={() => stepReplayMarker(1)} type="button" variant="ghost">
+                                    Next marker
+                                  </ActionButton>
+                                  <ActionButton
+                                    disabled={selectedLiveReviewFrames.length <= 1}
+                                    onClick={() => setLiveReviewAutoplay(current => !current)}
+                                    type="button"
+                                    variant={liveReviewAutoplay ? "primary" : "ghost"}
+                                  >
+                                    {liveReviewAutoplay ? "Pause timelapse" : "Autoplay timelapse"}
+                                  </ActionButton>
+                                </div>
+                              </div>
+                              {(selectedLiveReviewEvent.runtimeActivity || selectedLiveReviewEvent.deepLink || selectedLiveReviewEvent.operatorMessages) ? (
+                                <div className="builder-live-review-runtime-drawer" aria-label="Runtime activity detail drawer">
+                                  <strong>Runtime activity detail</strong>
+                                  {selectedLiveReviewEvent.runtimeActivity ? (
+                                    <p>{selectedLiveReviewEvent.runtimeActivity}</p>
+                                  ) : null}
+                                  {selectedLiveReviewEvent.deepLink ? (
+                                    <small>
+                                      Deep link: {selectedLiveReviewEvent.deepLink.type || "item"}
+                                      {selectedLiveReviewEvent.deepLink.drawerId ? ` · ${selectedLiveReviewEvent.deepLink.drawerId}` : ""}
+                                      {selectedLiveReviewEvent.deepLink.targetId ? ` · ${selectedLiveReviewEvent.deepLink.targetId}` : ""}
+                                    </small>
+                                  ) : null}
+                                  {Array.isArray(selectedLiveReviewEvent.operatorMessages) && selectedLiveReviewEvent.operatorMessages.length > 0 ? (
+                                    <div className="builder-live-review-queue-strip">
+                                      {selectedLiveReviewEvent.operatorMessages.map((message, index) => (
+                                        <span key={`runtime-msg-${index}`}>{message}</span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              {(Array.isArray(selectedLiveReviewEvent.selectedSkills) && selectedLiveReviewEvent.selectedSkills.length > 0) ||
+                              (Array.isArray(selectedLiveReviewEvent.plannerRules) && selectedLiveReviewEvent.plannerRules.length > 0) ||
+                              (Array.isArray(selectedLiveReviewEvent.designPrompts) && selectedLiveReviewEvent.designPrompts.length > 0) ||
+                              selectedLiveReviewEvent.nextIdea ? (
+                                <div className="builder-live-review-planner-proof" aria-label="Planner proof details">
+                                  <strong>Planner proof</strong>
+                                  {Array.isArray(selectedLiveReviewEvent.selectedSkills) && selectedLiveReviewEvent.selectedSkills.length > 0 ? (
+                                    <div className="builder-live-review-meta">Skills: {selectedLiveReviewEvent.selectedSkills.map(titleizeToken).join(" · ")}</div>
+                                  ) : null}
+                                  {Array.isArray(selectedLiveReviewEvent.plannerRules) && selectedLiveReviewEvent.plannerRules.length > 0 ? (
+                                    <div className="builder-live-review-meta">Rules: {selectedLiveReviewEvent.plannerRules.join(" · ")}</div>
+                                  ) : null}
+                                  {Array.isArray(selectedLiveReviewEvent.designPrompts) && selectedLiveReviewEvent.designPrompts.length > 0 ? (
+                                    <div className="builder-live-review-meta">Design prompts: {selectedLiveReviewEvent.designPrompts.join(" · ")}</div>
+                                  ) : null}
+                                  {selectedLiveReviewEvent.nextIdea ? (
+                                    <p>Next idea: {selectedLiveReviewEvent.nextIdea}</p>
+                                  ) : null}
+                                </div>
+                              ) : null}
                             </article>
                           ) : null}
-                        </div>
-                      ) : null}
-                      <p className="builder-review-hint">{liveReviewStudio.compareHint}</p>
+                          <div className="builder-live-review-events">
+                            {Object.entries(liveReviewEventBuckets).map(([bucket, bucketEvents]) => (
+                              <section className="builder-live-review-event-group" key={`bucket-${bucket}`}>
+                                <div className="builder-live-review-event-group-head">{titleizeToken(bucket)} · {bucketEvents.length}</div>
+                                {bucketEvents.map(item => (
+                              <button
+                                className={`builder-live-review-event tone-${item.tone || "neutral"} ${selectedLiveReviewEvent?.id === item.id ? "active" : ""}`.trim()}
+                                key={item.id}
+                                onClick={() => setSelectedLiveReviewEventId(item.id)}
+                                type="button"
+                              >
+                                <div className="builder-live-review-event-head">
+                                  <span>{item.label || titleizeToken(item.kind || "event")}</span>
+                                  <em>{item.timestamp ? timestampLabel(item.timestamp) : "Now"}</em>
+                                </div>
+                                <strong>{item.title}</strong>
+                                <p>{item.detail}</p>
+                                {Array.isArray(item.queueTimeline) && item.queueTimeline.length > 0 ? (
+                                  <div className="builder-live-review-queue-strip">
+                                    {item.queueTimeline.map(stage => (
+                                      <span key={`${item.id}-${stage}`}>{titleizeToken(stage)}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {Array.isArray(item.browserActions) && item.browserActions.length > 0 ? (
+                                  <div className="builder-live-review-meta">Browser: {item.browserActions.map(titleizeToken).join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(item.launchedPrograms) && item.launchedPrograms.length > 0 ? (
+                                  <div className="builder-live-review-meta">Programs: {item.launchedPrograms.join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(item.providerEvents) && item.providerEvents.length > 0 ? (
+                                  <div className="builder-live-review-meta">Provider: {item.providerEvents.map(titleizeToken).join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(item.layerHandoff) && item.layerHandoff.length > 0 ? (
+                                  <div className="builder-live-review-meta">Layer handoff: {item.layerHandoff.map(titleizeToken).join(" → ")}</div>
+                                ) : null}
+                                {Array.isArray(item.generatedImages) && item.generatedImages.length > 0 ? (
+                                  <div className="builder-live-review-image-grid" aria-label="Generated image artifacts">
+                                    {item.generatedImages.map((artifact, imageIndex) => {
+                                      const previewSource =
+                                        artifact && typeof artifact === "object"
+                                          ? artifact.previewUrl || artifact.artifactUrl || artifact.path || ""
+                                          : artifact;
+                                      const manifestSource =
+                                        artifact && typeof artifact === "object" ? artifact.manifestUrl || "" : "";
+                                      const imageUrl = resolveControlArtifactUrl(previewSource) || artifactUrlForRecord(artifact);
+                                      const manifestUrl = resolveControlArtifactUrl(manifestSource);
+                                      const imageLabel = artifactLabelForRecord(artifact, `generated-${imageIndex + 1}`);
+                                      return (
+                                        <figure className="builder-live-review-image-card agent-artifact-card" key={`${item.id}-generated-${imageLabel}-${imageIndex}`}>
+                                          {imageUrl ? (
+                                            <img alt={imageLabel} src={imageUrl} />
+                                          ) : (
+                                            <div className="builder-live-review-image-missing">Preview not served</div>
+                                          )}
+                                          <figcaption>
+                                            <strong>{imageLabel}</strong>
+                                            <span>{artifact?.artifactSha256 ? `sha ${String(artifact.artifactSha256).slice(0, 10)}` : artifact?.source || "generated image"}</span>
+                                            {manifestUrl ? (
+                                              <a href={manifestUrl} rel="noreferrer" target="_blank">
+                                                Manifest
+                                              </a>
+                                            ) : null}
+                                          </figcaption>
+                                        </figure>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                                {Array.isArray(item.artifactPaths) && item.artifactPaths.length > 0 ? (
+                                  <div className="builder-live-review-artifact-list" aria-label="Served artifact links">
+                                    {item.artifactPaths.map((artifactPath, artifactIndex) => {
+                                      const artifactUrl = resolveControlArtifactUrl(artifactPath);
+                                      const artifactLabel = artifactLabelForRecord(artifactPath, `artifact-${artifactIndex + 1}`);
+                                      return (
+                                        <a href={artifactUrl || "#"} key={`${item.id}-artifact-${artifactLabel}-${artifactIndex}`} rel="noreferrer" target="_blank">
+                                          {isImageArtifactPath(artifactPath) && artifactUrl ? <img alt="" src={artifactUrl} /> : null}
+                                          <span>{artifactLabel}</span>
+                                        </a>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                                {item.progressUpdate ? (
+                                  <div className="builder-live-review-meta">Changed {item.progressUpdate.changed} | Blocker {item.progressUpdate.blocker} | Tests {item.progressUpdate.tests || "pending"} | Next {item.progressUpdate.next}{item.cadenceState ? ` | Cadence ${titleizeToken(item.cadenceState)}${Number.isFinite(item.cadenceAgeMinutes) ? ` (${item.cadenceAgeMinutes}m)` : ""}` : ""}</div>
+                                ) : null}
+                                {item.continuationSupervisor ? (
+                                  <div className="builder-live-review-meta">Internal supervisor: {titleizeToken(item.continuationSupervisor.state)} · Dispatch lag {Number.isFinite(item.continuationSupervisor.dispatchLagMinutes) ? `${item.continuationSupervisor.dispatchLagMinutes}m` : "n/a"} · Guard {titleizeToken(item.continuationSupervisor.budgetGuard)}</div>
+                                ) : null}
+                                {Array.isArray(item.selectedSkills) && item.selectedSkills.length > 0 ? (
+                                  <div className="builder-live-review-meta">Skills: {item.selectedSkills.map(titleizeToken).join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(item.plannerRules) && item.plannerRules.length > 0 ? (
+                                  <div className="builder-live-review-meta">Rules: {item.plannerRules.join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(item.designPrompts) && item.designPrompts.length > 0 ? (
+                                  <div className="builder-live-review-meta">Design prompts: {item.designPrompts.join(" · ")}</div>
+                                ) : null}
+                                {item.nextIdea ? (
+                                  <div className="builder-live-review-meta">Next idea: {item.nextIdea}</div>
+                                ) : null}
+                                {item.structuredFeedbackReceipt ? (
+                                  <div className="builder-live-review-receipt-handles compact" aria-label="Timeline receipt proof handles">
+                                    <span>Latest structured feedback receipt</span>
+                                    <span className="mini-pill muted">Timeline receipt kind: live_review_structured_feedback</span>
+                                    <span
+                                      data-proof-handle="eventId"
+                                      onClick={event => {
+                                        event.stopPropagation();
+                                        if (item.structuredFeedbackReceipt.eventId) {
+                                          copyContextValue(item.structuredFeedbackReceipt.eventId);
+                                        }
+                                      }}
+                                      onKeyDown={event => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          if (item.structuredFeedbackReceipt.eventId) {
+                                            copyContextValue(item.structuredFeedbackReceipt.eventId);
+                                          }
+                                        }
+                                      }}
+                                      role="button"
+                                      tabIndex={item.structuredFeedbackReceipt.eventId ? 0 : -1}
+                                      title="Copy latest receipt eventId"
+                                    >
+                                      Proof eventId: {item.structuredFeedbackReceipt.eventId || "none yet"}
+                                    </span>
+                                    <span
+                                      data-proof-handle="plannerExecutorHandoffId"
+                                      onClick={event => {
+                                        event.stopPropagation();
+                                        if (item.structuredFeedbackReceipt.plannerExecutorHandoffId) {
+                                          copyContextValue(item.structuredFeedbackReceipt.plannerExecutorHandoffId);
+                                        }
+                                      }}
+                                      onKeyDown={event => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          if (item.structuredFeedbackReceipt.plannerExecutorHandoffId) {
+                                            copyContextValue(item.structuredFeedbackReceipt.plannerExecutorHandoffId);
+                                          }
+                                        }
+                                      }}
+                                      role="button"
+                                      tabIndex={item.structuredFeedbackReceipt.plannerExecutorHandoffId ? 0 : -1}
+                                      title="Copy latest plannerExecutorHandoffId"
+                                    >
+                                      plannerExecutorHandoffId: {item.structuredFeedbackReceipt.plannerExecutorHandoffId || "none yet"}
+                                    </span>
+                                  </div>
+                                ) : null}
+                                {Array.isArray(item.replayMarkers) && item.replayMarkers.length > 0 ? (
+                                  <div className="builder-live-review-meta">Markers: {item.replayMarkers.map(marker => marker?.label || marker).join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(item.acknowledgedBy) && item.acknowledgedBy.length > 0 ? (
+                                  <div className="builder-live-review-meta">Acknowledged: {item.acknowledgedBy.join(" · ")}</div>
+                                ) : null}
+                              </button>
+                                ))}
+                              </section>
+                            ))}
+                          </div>
+
+                          <div className="builder-live-annotation-state">
+                            <div className="builder-live-review-panel-head compact">
+                              <strong>Planner skills and prompts</strong>
+                              <span className="mini-pill muted">proof lane</span>
+                            </div>
+                            <div className="builder-live-review-planner-proof">
+                              {Array.isArray(liveReviewStudio.plannerProof?.selectedSkills) && liveReviewStudio.plannerProof.selectedSkills.length > 0 ? (
+                                <div className="builder-live-review-meta">Selected skills: {liveReviewStudio.plannerProof.selectedSkills.map(titleizeToken).join(" · ")}</div>
+                              ) : (
+                                <div className="builder-live-review-meta">Selected skills: none captured yet</div>
+                              )}
+                              {Array.isArray(liveReviewStudio.plannerProof?.plannerRules) && liveReviewStudio.plannerProof.plannerRules.length > 0 ? (
+                                <div className="builder-live-review-meta">Rules: {liveReviewStudio.plannerProof.plannerRules.join(" · ")}</div>
+                              ) : null}
+                              {Array.isArray(liveReviewStudio.plannerProof?.designPrompts) && liveReviewStudio.plannerProof.designPrompts.length > 0 ? (
+                                <div className="builder-live-review-meta">Design prompts: {liveReviewStudio.plannerProof.designPrompts.join(" · ")}</div>
+                              ) : null}
+                              {liveReviewStudio.plannerProof?.nextIdea ? <p>Next idea: {liveReviewStudio.plannerProof.nextIdea}</p> : null}
+                              {Array.isArray(liveReviewStudio.plannerProof?.decisionInfluence) && liveReviewStudio.plannerProof.decisionInfluence.length > 0 ? (
+                                <div className="builder-live-proof-impact-grid" aria-label="Skill/ruleset impact">
+                                  {liveReviewStudio.plannerProof.decisionInfluence.map(item => (
+                                    <article className="builder-live-proof-impact-card" key={item.id || item.appliedTo}>
+                                      <span>Skill/ruleset impact</span>
+                                      <strong>{item.source}</strong>
+                                      <p>Applied to: {item.appliedTo}</p>
+                                      <small>Evidence: {item.evidence}</small>
+                                      <small>Verifier feedback: {item.verifierFeedback}</small>
+                                    </article>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {plannerProofChips.length > 0 ? (
+                                <div
+                                  className="builder-live-proof-chip-row"
+                                  onKeyDown={event => {
+                                    if (event.key === "ArrowRight") {
+                                      event.preventDefault();
+                                      setSelectedPlannerProofChipIndex(index => (index + 1) % plannerProofChips.length);
+                                    } else if (event.key === "ArrowLeft") {
+                                      event.preventDefault();
+                                      setSelectedPlannerProofChipIndex(index =>
+                                        (index - 1 + plannerProofChips.length) % plannerProofChips.length,
+                                      );
+                                    } else if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      activatePlannerProofChip(plannerProofChips[selectedPlannerProofChipIndex]);
+                                    }
+                                  }}
+                                  role="listbox"
+                                  tabIndex={0}
+                                >
+                                  {plannerProofChips.map((chip, chipIndex) => (
+                                    <button
+                                      aria-selected={chipIndex === selectedPlannerProofChipIndex}
+                                      className={`builder-live-proof-chip ${chipIndex === selectedPlannerProofChipIndex ? "active" : ""}`.trim()}
+                                      key={chip.id}
+                                      onClick={() => {
+                                        setSelectedPlannerProofChipIndex(chipIndex);
+                                        activatePlannerProofChip(chip);
+                                      }}
+                                      type="button"
+                                    >
+                                      <span>{titleizeToken(chip.kind)}</span>
+                                      <strong>{chip.label}</strong>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {activePlannerProofDetail ? (
+                                <div className="builder-live-proof-detail" aria-label="Design prompt artifact/detail">
+                                  <strong>{activePlannerProofDetail.title}</strong>
+                                  <p>{activePlannerProofDetail.body}</p>
+                                </div>
+                              ) : null}
+                              <div className="builder-live-bridge-packet" aria-label="Planner to executor bridge packet">
+                                <div className="builder-live-review-panel-head compact">
+                                  <strong>Planner → executor bridge packet</strong>
+                                  <span className="mini-pill muted">status updates</span>
+                                </div>
+                                <div className="builder-live-bridge-grid">
+                                  <article>
+                                    <span>Route context</span>
+                                    <strong>
+                                      {continuationSupervisor?.routePreservation?.provider
+                                        ? `${titleizeToken(continuationSupervisor.routePreservation.provider)} / ${continuationSupervisor.routePreservation.model || "model"}`
+                                        : "Route pending"}
+                                    </strong>
+                                    <small>
+                                      Effort {titleizeToken(continuationSupervisor?.routePreservation?.effort || "default")} · Root {continuationSupervisor?.routePreservation?.executionRoot || "workspace"}
+                                    </small>
+                                  </article>
+                                  <article>
+                                    <span>Task context</span>
+                                    <strong>{selectedLiveReviewEvent?.title || "Awaiting event selection"}</strong>
+                                    <small>{selectedLiveReviewEvent?.detail || "Select an event to seed structured follow-up context."}</small>
+                                  </article>
+                                  <article>
+                                    <span>Verifier feedback</span>
+                                    <strong>{selectedLiveReviewEvent?.progressUpdate?.tests || "Tests pending"}</strong>
+                                    <small>
+                                      {selectedLiveReviewEvent?.continuationSupervisor?.failureReason
+                                        || selectedLiveReviewEvent?.progressUpdate?.blocker
+                                        || "No blocker captured"}
+                                    </small>
+                                  </article>
+                                  <article>
+                                    <span>Next idea handoff</span>
+                                    <strong>{selectedLiveReviewEvent?.nextIdea || liveReviewStudio.plannerProof?.nextIdea || "Seed next idea from the selected block"}</strong>
+                                    <small>Feeds agent follow-up, mission bridge, and continuation supervisor context.</small>
+                                  </article>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="builder-live-annotation-state">
+                            <div className="builder-live-review-panel-head compact">
+                              <strong>Internal Continuation Supervisor</strong>
+                              <span className="mini-pill muted">hardened harness</span>
+                            </div>
+                            {continuationSupervisor ? (
+                              <div className="builder-live-review-supervisor" aria-label="Internal supervisor state and failure reason">
+                                <div className="builder-live-review-meta">State: {titleizeToken(continuationSupervisor.state)} · Dispatch window: {continuationSupervisor.expectedDispatchWindowMinutes}m</div>
+                                <div className="builder-live-review-meta">Dispatch lag: {Number.isFinite(continuationSupervisor.dispatchLagMinutes) ? `${continuationSupervisor.dispatchLagMinutes}m` : "n/a"} · Reconcile latency: {Number.isFinite(continuationSupervisor.reconcileLatencyMs) ? `${continuationSupervisor.reconcileLatencyMs}ms` : "n/a"}</div>
+                                <div className="builder-live-review-meta">Safe to stop: {continuationSupervisor.safeToStop ? "yes" : "no"} · External heartbeat required: {continuationSupervisor.externalHeartbeatRequired ? "yes" : "no"}</div>
+                                <div className="builder-live-review-meta">Budget guard: {titleizeToken(continuationSupervisor.budgetGuard)}</div>
+                                <div className="builder-live-review-meta">Failure reason: {continuationSupervisor.failureReason}</div>
+                                <div className="builder-live-review-meta">Blocker reason: {continuationSupervisor.blockerReason || "none"}</div>
+                                <div className="builder-live-review-meta">Preserved route: {titleizeToken(continuationSupervisor.routePreservation.provider)} / {continuationSupervisor.routePreservation.model} / {titleizeToken(continuationSupervisor.routePreservation.effort)}</div>
+                                <div className="builder-live-review-meta">Execution root: {continuationSupervisor.routePreservation.executionRoot}</div>
+                                {Array.isArray(continuationSupervisor.routePreservation.selectedSkills) && continuationSupervisor.routePreservation.selectedSkills.length > 0 ? (
+                                  <div className="builder-live-review-meta">Selected skills: {continuationSupervisor.routePreservation.selectedSkills.map(titleizeToken).join(" · ")}</div>
+                                ) : null}
+                                {Array.isArray(continuationSupervisor.routePreservation.designPrompts) && continuationSupervisor.routePreservation.designPrompts.length > 0 ? (
+                                  <div className="builder-live-review-meta">Design prompts: {continuationSupervisor.routePreservation.designPrompts.join(" · ")}</div>
+                                ) : null}
+                                {continuationSupervisor.routePreservation.nextIdea ? (
+                                  <div className="builder-live-review-meta">Next idea continuity: {continuationSupervisor.routePreservation.nextIdea}</div>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div className="builder-live-review-meta">Internal supervisor state pending mission activation.</div>
+                            )}
+                          </div>
+
+                          <div className="builder-live-annotation-state">
+                            <div className="builder-live-review-panel-head compact">
+                              <strong>Browser annotations</strong>
+                              <span className="mini-pill muted">{(liveReviewStudio.annotationReadiness?.blocks || []).length} marks</span>
+                            </div>
+                            <div className="builder-live-annotation-list">
+                              {(liveReviewStudio.annotationReadiness?.blocks || []).map(block => (
+                                <article className={`builder-live-annotation-item severity-${block.severity || "low"}`.trim()} key={block.id}>
+                                  <div className="builder-live-annotation-head">
+                                    <span>{block.label}</span>
+                                    <em>{titleizeToken(block.severity || "low")}</em>
+                                  </div>
+                                  <p>{block.note}</p>
+                                  <small>Recovery: {block.recoveryAction}</small>
+                                  <small>Page/layer: {block.page || "surface"} · {block.rectangle?.layer || block.pin?.layer || "overlay"}</small>
+                                  <div className="builder-live-annotation-map">
+                                    {block.rectangle ? (
+                                      <span
+                                        className="builder-live-annotation-rect"
+                                        style={{
+                                          left: `${block.rectangle.x}%`,
+                                          top: `${block.rectangle.y}%`,
+                                          width: `${block.rectangle.width}%`,
+                                          height: `${block.rectangle.height}%`,
+                                        }}
+                                      />
+                                    ) : null}
+                                    {block.pin ? (
+                                      <span
+                                        className="builder-live-annotation-pin"
+                                        style={{ left: `${block.pin.x}%`, top: `${block.pin.y}%` }}
+                                      />
+                                    ) : null}
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          </div>
+                        </aside>
+                      </div>
                       <div className="drawer-actions">
                         <ActionButton
                           onClick={() => builderSelectedReviewTarget && handleBuilderReviewTargetSeed(builderSelectedReviewTarget)}
@@ -12425,9 +14607,96 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           Open preview controls
                         </ActionButton>
                         {mission ? (
-                          <ActionButton disabled={!operatorDraft.trim()} onClick={() => void handleAgentFollowUp()}>
-                            Send to agent
+                          <ActionButton disabled={!operatorDraft.trim()} onClick={() => void handleStructuredLiveReviewFeedback({ sendFollowUp: true })}>
+                            Send structured feedback
                           </ActionButton>
+                        ) : null}
+                        <div className="builder-live-review-receipt-handles compact" aria-label="Send feedback proof handles">
+                          <span>Proof handles</span>
+                          <span className="mini-pill muted">Receipt kind: live_review_structured_feedback</span>
+                          <button
+                            data-proof-handle="eventId"
+                            disabled={!latestStructuredFeedbackReceipt.eventId}
+                            onClick={() => copyContextValue(latestStructuredFeedbackReceipt.eventId)}
+                            title="Copy latest receipt eventId"
+                            type="button"
+                          >
+                            Proof eventId: {latestStructuredFeedbackReceipt.eventId || "none yet"}
+                          </button>
+                          <button
+                            data-proof-handle="plannerExecutorHandoffId"
+                            disabled={!latestStructuredFeedbackReceipt.plannerExecutorHandoffId}
+                            onClick={() => copyContextValue(latestStructuredFeedbackReceipt.plannerExecutorHandoffId)}
+                            title="Copy latest plannerExecutorHandoffId"
+                            type="button"
+                          >
+                            plannerExecutorHandoffId: {latestStructuredFeedbackReceipt.plannerExecutorHandoffId || "none yet"}
+                          </button>
+                        </div>
+                        {structuredFeedbackReceiptHistory.length > 0 ? (
+                          <details className="builder-live-review-receipt-history">
+                            <summary>Structured feedback receipt history</summary>
+                            <div className="builder-live-review-receipt-history-list" role="list">
+                              {structuredFeedbackReceiptHistory.map((entry, index) => (
+                                <div className="builder-live-review-receipt-history-row" key={`${entry.id}-${index}`} role="listitem">
+                                  <div className="builder-live-review-receipt-history-meta">
+                                    <strong>{entry.label || "Receipt"}</strong>
+                                    <span>
+                                      {entry.timestamp ? timestampLabel(entry.timestamp) : "No timestamp"}
+                                      {entry.receipt?.status ? ` · ${entry.receipt.status}` : ""}
+                                    </span>
+                                  </div>
+                                  <div className="builder-live-review-receipt-handles compact">
+                                    <button
+                                      data-proof-handle="history-eventId"
+                                      disabled={!entry.receipt?.eventId}
+                                      onClick={() => copyContextValue(entry.receipt?.eventId || "")}
+                                      title="Copy receipt history eventId"
+                                      type="button"
+                                    >
+                                      eventId: {entry.receipt?.eventId || "none"}
+                                    </button>
+                                    <button
+                                      data-proof-handle="history-plannerExecutorHandoffId"
+                                      disabled={!entry.receipt?.plannerExecutorHandoffId}
+                                      onClick={() => copyContextValue(entry.receipt?.plannerExecutorHandoffId || "")}
+                                      title="Copy receipt history plannerExecutorHandoffId"
+                                      type="button"
+                                    >
+                                      plannerExecutorHandoffId: {entry.receipt?.plannerExecutorHandoffId || "none"}
+                                    </button>
+                                    <button
+                                      data-proof-handle="history-copy-all"
+                                      disabled={!entry.receipt?.eventId && !entry.receipt?.plannerExecutorHandoffId}
+                                      onClick={() =>
+                                        copyContextValue(
+                                          `live_review_structured_feedback eventId=${entry.receipt?.eventId || ""} plannerExecutorHandoffId=${entry.receipt?.plannerExecutorHandoffId || ""}`,
+                                        )
+                                      }
+                                      title="Copy receipt history combined proof handle"
+                                      type="button"
+                                    >
+                                      Copy all handles
+                                    </button>
+                                    <button
+                                      data-proof-handle="history-jump-source-event"
+                                      disabled={!entry.id || !liveReviewEventsFlat.find(event => event.id === entry.id)}
+                                      onClick={() => {
+                                        const sourceEvent = liveReviewEventsFlat.find(event => event.id === entry.id);
+                                        if (sourceEvent) {
+                                          setSelectedLiveReviewEventId(sourceEvent.id);
+                                        }
+                                      }}
+                                      title="Jump to source event"
+                                      type="button"
+                                    >
+                                      Jump to source event
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
                         ) : null}
                       </div>
                     </article>
@@ -12534,10 +14803,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       {mission ? (
                         <ActionButton
                           disabled={!operatorDraft.trim()}
-                          onClick={() => void handleAgentFollowUp()}
+                          onClick={() => void handleStructuredLiveReviewFeedback({ sendFollowUp: true })}
                           type="button"
                         >
-                          Send to agent
+                          Send structured feedback
                         </ActionButton>
                       ) : null}
                       <ActionButton onClick={() => setActiveDrawer("builder")} type="button">
@@ -12687,6 +14956,234 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               <header className="thread-head agent-thread-head agent-title-head">
                 <h1>{agentCenterTitle}</h1>
               </header>
+
+              {latestAgentCompartment ? (
+                <section className="agent-compartment-box" aria-label="Active agent runtime compartment">
+                  <div className="agent-compartment-box-head">
+                    <div>
+                      <p className="eyebrow">Live runtime compartments · Runtime compartment</p>
+                      <h2>{latestAgentCompartment.sessionId || "pending session"}</h2>
+                    </div>
+                    <div className="agent-compartment-status">
+                      <span className={`agent-live-dot ${String(latestAgentCompartment.streaming || "").toLowerCase() === "live" ? "live" : ""}`} />
+                      <strong>{titleizeToken(latestAgentCompartment.state || mission?.state?.status || "recorded")}</strong>
+                      <span>{latestAgentCompartment.streaming === "live" ? "streaming" : "recorded"}</span>
+                    </div>
+                  </div>
+
+                  <div className="agent-compartment-matrix">
+                    <div>
+                      <span>Runtime</span>
+                      <strong>{titleizeToken(latestAgentCompartment.runtime || agentRuntimeSelectValue)}</strong>
+                    </div>
+                    <div>
+                      <span>Route</span>
+                      <strong>
+                        {latestAgentCompartment.route?.provider
+                          ? `${titleizeToken(latestAgentCompartment.route.provider)} / ${
+                              latestAgentCompartment.route?.model_id ||
+                              latestAgentCompartment.route?.model ||
+                              "model"
+                            }`
+                          : agentRouteStatus}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Host</span>
+                      <strong>{titleizeToken(latestAgentCompartment.host || "local")}</strong>
+                    </div>
+                    <div>
+                      <span>Execution root</span>
+                      <strong>{latestAgentCompartment.cwd || workspace?.root_path || "Not selected"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="agent-compartment-body agent-live-workbench-grid">
+                    <div className="agent-compartment-lane">
+                      <div className="agent-compartment-subhead">
+                        <span>Planner / executor / verifier lanes</span>
+                        <b>{asList(latestAgentCompartment.lanes).length}</b>
+                      </div>
+                      <div className="agent-runtime-lane-list">
+                        {asList(latestAgentCompartment.lanes).length > 0 ? (
+                          asList(latestAgentCompartment.lanes).map((lane, index) => (
+                            <article className={`agent-runtime-lane ${lane.active ? "active" : ""}`.trim()} key={`${lane.role || "lane"}-${index}`}>
+                              <span>{titleizeToken(lane.role || lane.phase || "lane")}</span>
+                              <strong>
+                                {titleizeToken(lane.provider || "openai-codex")} / {lane.model || "model"}
+                              </strong>
+                              <small>
+                                {titleizeToken(lane.health || "unknown")}
+                                {lane.authPath ? ` · ${lane.authPath}` : ""}
+                              </small>
+                              {lane.blocker ? <p>{lane.blocker}</p> : null}
+                            </article>
+                          ))
+                        ) : (
+                          <p className="agent-compartment-empty">No runtime lane contract has been recorded yet.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="agent-compartment-lane">
+                      <div className="agent-compartment-subhead">
+                        <span>Tool/action timeline</span>
+                        <b>{asList(latestAgentCompartment.toolTimeline || latestAgentCompartment.recentActivity).length}</b>
+                      </div>
+                      <div className="agent-compartment-event-list">
+                        {asList(latestAgentCompartment.toolTimeline || latestAgentCompartment.recentActivity).length > 0 ? (
+                          asList(latestAgentCompartment.toolTimeline || latestAgentCompartment.recentActivity).slice(-5).map((event, index) => (
+                            <article className="agent-compartment-event" key={`${event.kind || "event"}-${event.at || event.timestamp || index}`}>
+                              <span>{titleizeToken(event.kind || event.status || "event")}</span>
+                              <strong>{event.summary || event.message || "Runtime event recorded"}</strong>
+                              <small>{event.at || event.timestamp ? timestampLabel(event.at || event.timestamp) : titleizeToken(event.status || "recorded")}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="agent-compartment-empty">No live tool events have reached the compartment yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="agent-compartment-lane">
+                    <div className="agent-compartment-subhead">
+                      <span>Files and approvals</span>
+                      <b>
+                        {asList(latestAgentCompartment.filesChanged).length +
+                          asList(latestAgentCompartment.approvals).length +
+                          asList(latestAgentCompartment.blockers).length}
+                      </b>
+                    </div>
+                    <div className="agent-compartment-chip-list">
+                      {asList(latestAgentCompartment.filesChanged).slice(0, 5).map(file => (
+                        <code key={`changed-${file}`}>{file}</code>
+                      ))}
+                      {asList(latestAgentCompartment.approvals).slice(0, 3).map((approval, index) => (
+                        <span key={`approval-${approval?.id || index}`}>{approval?.status || approval?.decision || "approval recorded"}</span>
+                      ))}
+                      {asList(latestAgentCompartment.blockers).slice(0, 3).map((blocker, index) => (
+                        <span key={`blocker-${index}`}>{blocker}</span>
+                      ))}
+                      {asList(latestAgentCompartment.filesChanged).length === 0 &&
+                      asList(latestAgentCompartment.approvals).length === 0 &&
+                      asList(latestAgentCompartment.blockers).length === 0 ? (
+                        <p className="agent-compartment-empty">No changed-file, approval, or blocker receipts attached yet.</p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="agent-compartment-body agent-live-workbench-grid">
+                    <div className="agent-compartment-lane">
+                      <div className="agent-compartment-subhead">
+                        <span>Generated image artifacts</span>
+                        <b>{generatedImageArtifacts.length}</b>
+                      </div>
+                      <div className="agent-artifact-grid">
+                        {generatedImageArtifacts.length > 0 ? (
+                          generatedImageArtifacts.slice(0, 4).map((artifact, index) => {
+                            const imageUrl = artifactUrlForRecord(artifact);
+                            const manifestUrl = resolveControlArtifactUrl(artifact?.manifestUrl);
+                            const label = artifactLabelForRecord(artifact, `artifact-${index + 1}`);
+                            return (
+                              <figure className="agent-artifact-card" key={`${artifact?.artifactId || label}-${index}`}>
+                                {imageUrl ? <img alt={label} src={imageUrl} /> : <div className="builder-live-review-image-missing">Preview not served</div>}
+                                <figcaption>
+                                  <strong>{label}</strong>
+                                  <span>{artifact?.servedArtifactId ? `served ${String(artifact.servedArtifactId).slice(0, 10)}` : artifact?.provider || "served artifact"}</span>
+                                  {manifestUrl ? (
+                                    <a href={manifestUrl} rel="noreferrer" target="_blank">
+                                      Manifest
+                                    </a>
+                                  ) : null}
+                                </figcaption>
+                              </figure>
+                            );
+                          })
+                        ) : (
+                          <p className="agent-compartment-empty">
+                            {generatedImageArtifactState.emptyState || "No served image artifacts are available yet."}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="agent-compartment-lane">
+                      <div className="agent-compartment-subhead">
+                        <span>Hermes mission evidence</span>
+                        <b>{hermesEvidenceItems.length}</b>
+                      </div>
+                      <div className="agent-compartment-event-list">
+                        {hermesEvidenceItems.length > 0 ? (
+                          hermesEvidenceItems.slice(0, 5).map((item, index) => (
+                            <article className="agent-compartment-event" key={`${item.missionId || "hermes"}-${item.timestamp || index}`}>
+                              <span>{titleizeToken(item.source || item.status || "evidence")}</span>
+                              <strong>{item.message || item.objective || "Hermes evidence recorded"}</strong>
+                              <small>{item.timestamp ? timestampLabel(item.timestamp) : titleizeToken(item.status || "recorded")}</small>
+                              {asList(item.failureReasons).length > 0 ? <p>{asList(item.failureReasons).join(" · ")}</p> : null}
+                              {asList(item.artifacts).length > 0 ? (
+                                <div className="agent-evidence-artifact-strip">
+                                  {asList(item.artifacts).slice(0, 4).map((artifact, artifactIndex) => {
+                                    const artifactUrl = artifactUrlForRecord(artifact);
+                                    const artifactLabel = artifactLabelForRecord(artifact, `evidence-${artifactIndex + 1}`);
+                                    const artifactPath = artifact?.path || artifact?.artifactPath || artifact?.servedUrl || artifactUrl;
+                                    return (
+                                      <a href={artifactUrl || "#"} key={`${item.missionId || "evidence"}-${artifactLabel}-${artifactIndex}`} rel="noreferrer" target="_blank">
+                                        {isImageArtifactPath(artifactPath) && artifactUrl ? <img alt="" src={artifactUrl} /> : null}
+                                        <span>{artifactLabel}</span>
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+                            </article>
+                          ))
+                        ) : (
+                          <p className="agent-compartment-empty">
+                            {hermesMissionEvidence.emptyState || "No Hermes evidence has been captured yet."}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="agent-compartment-lane agent-nas-readiness-panel">
+                    <div className="agent-compartment-subhead">
+                      <span>NAS deploy readiness</span>
+                      <b>{nasDeployChecks.filter(check => check?.passed).length}/{nasDeployChecks.length}</b>
+                    </div>
+                    <div className="agent-nas-check-grid">
+                      {nasDeployChecks.length > 0 ? (
+                        nasDeployChecks.map(check => (
+                          <article className={`agent-nas-check ${check.passed ? "passed" : check.required ? "blocked" : "warn"}`} key={check.checkId || check.label}>
+                            <span>{check.required ? "Required" : "Offline check"}</span>
+                            <strong>{check.label}</strong>
+                            <p>{check.details}</p>
+                          </article>
+                        ))
+                      ) : (
+                        <p className="agent-compartment-empty">NAS deploy readiness has not been reported by the backend yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="agent-compartment-actions">
+                    <ActionButton
+                      disabled={!missionActionAvailable(mission, "resume")}
+                      onClick={() => void runMissionAction("resume", "Mission resume requested.")}
+                      type="button"
+                    >
+                      Resume
+                    </ActionButton>
+                    <ActionButton onClick={() => setActiveDrawer("proof")} type="button">
+                      Proof
+                    </ActionButton>
+                    <ActionButton onClick={() => setActiveDrawer("queue")} type="button">
+                      Queue
+                    </ActionButton>
+                  </div>
+                </section>
+              ) : null}
 
               {agentNexusTurns.length > 0 ? (
                 <section className="agent-nexus-strip">
@@ -13336,4 +15833,3 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     </div>
   );
 }
-

@@ -274,7 +274,10 @@ def _build_bridge_actions(root: Path) -> list[dict]:
                     {
                         "actionId": "verify-nas-ssh",
                         "label": "Verify NAS SSH",
-                        "description": "Probe the SSH/SFTP NAS route on the configured port without logging secrets.",
+                        "description": (
+                            "Probe the SSH/SFTP NAS route on the configured port without logging secrets. "
+                            "A local guard rate-limits repeated probes so port 22 is not hammered."
+                        ),
                         "commandSurface": "bridge.verify",
                         "requiresApproval": False,
                         "kind": "verify",
@@ -282,9 +285,17 @@ def _build_bridge_actions(root: Path) -> list[dict]:
                         "command": (
                             f"python scripts/nas_ssh_probe.py --host {_quote_shell_arg(host)} "
                             f"--port {port} --user {_quote_shell_arg(user)} "
-                            f"--remote-root {_quote_shell_arg(remote_root)} --diagnose"
+                            f"--remote-root {_quote_shell_arg(remote_root)} --diagnose "
+                            "--cooldown-seconds 20 --window-seconds 60 --max-attempts 6"
                         ),
                         "platform": "local",
+                        "portSafety": {
+                            "guarded": True,
+                            "cooldownSeconds": 20,
+                            "windowSeconds": 60,
+                            "maxAttempts": 6,
+                            "ports": [port],
+                        },
                     }
                 )
                 actions.append(

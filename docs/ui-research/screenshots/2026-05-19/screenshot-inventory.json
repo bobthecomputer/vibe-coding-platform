@@ -1,0 +1,162 @@
+[
+  {
+    "name": "t3-code-thread-list-dark",
+    "status": "saved",
+    "file": "t3-code-thread-list-dark.png",
+    "bodyChars": 5757,
+    "h1": "The open-sourcecontrol planefor coding agents.",
+    "overlay": false,
+    "title": "T3 Code",
+    "url": "https://t3.codes/"
+  },
+  {
+    "name": "openai-codex-product",
+    "status": "saved",
+    "file": "openai-codex-product.png",
+    "bodyChars": 6014,
+    "h1": "Codex",
+    "overlay": false,
+    "title": "Codex | Partenaire IA pour la programmation d’OpenAI | OpenAI",
+    "url": "https://openai.com/fr-FR/codex/"
+  },
+  {
+    "name": "codex-app-diff-review",
+    "status": "saved",
+    "file": "codex-app-diff-review.png",
+    "bodyChars": 6014,
+    "h1": "Codex",
+    "overlay": false,
+    "title": "Codex | Partenaire IA pour la programmation d’OpenAI | OpenAI",
+    "url": "https://openai.com/fr-FR/codex/"
+  },
+  {
+    "name": "cursor-agent-dashboard",
+    "status": "saved",
+    "file": "cursor-agent-dashboard.png",
+    "bodyChars": 13460,
+    "h1": "Transformez vos idées en code",
+    "overlay": false,
+    "title": "Cursor — Build Software with AI Agents",
+    "url": "https://cursor.com/fr/product"
+  },
+  {
+    "name": "cursor-background-agents",
+    "status": "saved",
+    "file": "cursor-background-agents.png",
+    "bodyChars": 2991,
+    "h1": "Documentation Cursor",
+    "overlay": false,
+    "title": "Documentation de Cursor — Agent, règles, MCP, compétences & CLI",
+    "url": "https://cursor.com/fr/docs"
+  },
+  {
+    "name": "claude-code-desktop-parallel-tasks",
+    "status": "saved",
+    "file": "claude-code-desktop-parallel-tasks.png",
+    "bodyChars": 51969,
+    "h1": "Desktop application",
+    "overlay": false,
+    "title": "Desktop application - Claude Code Docs",
+    "url": "https://code.claude.com/docs/en/desktop"
+  },
+  {
+    "name": "vscode-copilot-agent-sidebar",
+    "status": "saved",
+    "file": "vscode-copilot-agent-sidebar.png",
+    "bodyChars": 23524,
+    "h1": "Use the Agents window (Preview)",
+    "overlay": false,
+    "title": "Use the Agents window (Preview)",
+    "url": "https://code.visualstudio.com/docs/copilot/agents/agents-window"
+  },
+  {
+    "name": "replit-agent-workspace",
+    "status": "saved",
+    "file": "replit-agent-workspace.png",
+    "bodyChars": 5530,
+    "h1": "Replit Agent",
+    "overlay": false,
+    "title": "Replit Docs",
+    "url": "https://docs.replit.com/core-concepts/agent"
+  },
+  {
+    "name": "windsurf-cascade-agent",
+    "status": "saved",
+    "file": "windsurf-cascade-agent.png",
+    "bodyChars": 8158,
+    "h1": "Cascade Overview",
+    "overlay": false,
+    "title": "Windsurf - Cascade",
+    "url": "https://docs.windsurf.com/windsurf/cascade/cascade"
+  },
+  {
+    "name": "bolt-chat-preview",
+    "status": "saved",
+    "file": "bolt-chat-preview.png",
+    "bodyChars": 16907,
+    "h1": "Using the chatbox",
+    "overlay": false,
+    "title": "Using the chatbox - Bolt",
+    "url": "https://support.bolt.new/building/using-bolt/interacting-ai"
+  },
+  {
+    "name": "zed-agent-panel",
+    "status": "saved",
+    "file": "zed-agent-panel.png",
+    "bodyChars": 17324,
+    "h1": "Agent Panel",
+    "overlay": false,
+    "title": "Agent Panel | AI Coding Agent - Zed Agent Panel",
+    "url": "https://zed.dev/docs/ai/agent-panel"
+  },
+  {
+    "name": "blackcrab-parallel-agent-workspace",
+    "status": "saved",
+    "file": "blackcrab-parallel-agent-workspace.png",
+    "bodyChars": 6398,
+    "h1": "A native desktop GUIfor Claude Code",
+    "overlay": false,
+    "title": "Blackcrab - A Claude Code GUI",
+    "url": "https://www.blackcrab.app/"
+  },
+  {
+    "name": "raycast-command-density",
+    "status": "saved",
+    "file": "raycast-command-density.png",
+    "bodyChars": 9726,
+    "h1": "Your shortcut to everything.",
+    "overlay": false,
+    "title": "Raycast - Your shortcut to everything",
+    "url": "https://www.raycast.com/"
+  },
+  {
+    "name": "linear-issue-density",
+    "status": "saved",
+    "file": "linear-issue-density.png",
+    "bodyChars": 7828,
+    "h1": "The product development system for teams and agentsThe product developmentsystem for teams and agentsThe product development system for teams and agents",
+    "overlay": false,
+    "title": "Linear – The system for product development",
+    "url": "https://linear.app/"
+  },
+  {
+    "name": "superhuman-command-flow",
+    "status": "saved",
+    "file": "superhuman-command-flow.png",
+    "bodyChars": 3769,
+    "h1": "Your words go further than ever before.",
+    "overlay": false,
+    "title": "Superhuman: Docs, Mail, and AI That Work Everywhere",
+    "url": "https://superhuman.com/"
+  },
+  {
+    "name": "arc-browser-workspace",
+    "status": "saved",
+    "file": "arc-browser-workspace.png",
+    "bodyChars": 2081,
+    "h1": "Arc is the Chrome  replacement I've been  waiting for.",
+    "overlay": false,
+    "title": "Arc from The Browser Company",
+    "url": "https://arc.net/"
+  }
+]

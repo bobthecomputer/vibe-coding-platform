@@ -1,0 +1,57 @@
+{
+  "checkedAt": "2026-05-21T22:57:16.330233+00:00",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "type": "live CDP click interaction",
+  "passed": true,
+  "steps": [
+    {
+      "click": "Workbench",
+      "expected": [
+        "Runtime operations",
+        "OpenClaw",
+        "Hermes"
+      ],
+      "visibleTextMatched": true,
+      "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\interaction-workbench.png",
+      "excerpt": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nF\nFluxio\nHome\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nRECENT SESSIONS\nUser analytics panel\n2m ago\nStripe integration\n1h ago\nDashboard redesign\nYesterday\nLocal\nworktree clean check pending\nWORKSPACE\nStabilize skill studio management\nOpenAI\nOpenai default\nDefault\nFluxio hybrid\nAuto scoped\nFluxio Noir\nHistory\nPreview\nCommand\nlocalhost preview\nScreenshot\nClick target\nDiff region\nRUNTIME OPERATIONS\nOpenClaw and Hermes browser action timeline\n\nRuntime operations keep OpenClaw, Hermes, browser actions, screenshots, and replay evidence in one place.\n\n10:24:12\nOpen browser\n\npassed\n\n10:25:15\nNavigate to /control\n\npassed\n\n10:26:18\nClick Builder\n\npassed\n\n10:27:21\nCapture screenshot\n\nawaiting verification\n\n10:28:24\nCompare visual state\n\nawaiting verificat",
+      "passed": true
+    },
+    {
+      "click": "Rule Sets",
+      "expected": [
+        "Rule Sets",
+        "Core policy",
+        "Approval"
+      ],
+      "visibleTextMatched": true,
+      "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\interaction-rule-sets.png",
+      "excerpt": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nF\nFluxio\nHome\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nRECENT SESSIONS\nUser analytics panel\n2m ago\nStripe integration\n1h ago\nDashboard redesign\nYesterday\nLocal\nworktree clean check pending\nWORKSPACE\nStabilize skill studio management\nOpenAI\nOpenai default\nDefault\nFluxio hybrid\nAuto scoped\nFluxio Noir\nHistory\nPreview\nCommand\nRULE SETS\nCore policy and Approval gates\nFrontend polish\n\nVisual QA, responsive checks, no placeholder UI.\n\nHigh\nBrowser + Code\nReview bundle\n\nDiff, tests, screenshots, and approvals in one handoff.\n\nMedium\nGit + Tests\nImage direction\n\nReference capture, variants, and export-ready assets.\n\nHigh\nImages\nAutonomy guard\n\nScoped writes, permission gates, and recovery rules.\n\nMedium\nPolicy\nRULESET EDITOR\nFrontend merge policy\nname",
+      "passed": true
+    },
+    {
+      "click": "Settings",
+      "expected": [
+        "Settings",
+        "Rules & Routing",
+        "Workspace"
+      ],
+      "visibleTextMatched": true,
+      "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\interaction-settings.png",
+      "excerpt": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nF\nFluxio\nHome\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nRECENT SESSIONS\nUser analytics panel\n2m ago\nStripe integration\n1h ago\nDashboard redesign\nYesterday\nLocal\nworktree clean check pending\nWORKSPACE\nStabilize skill studio management\nOpenAI\nOpenai default\nDefault\nFluxio hybrid\nAuto scoped\nFluxio Noir\nHistory\nPreview\nCommand\nTHEME ENGINE\nOne layout, multiple operating moods\nFluxio Noir\nBest for Daily work\nDensity: Balanced\nMotion: Calm\nContrast: High\nGlass OS\nBest for AI workspace\nDensity: Balanced\nMotion: Fluid\nContrast: High\nTerminal Ops\nBest for Runs and logs\nDensity: Compact\nMotion: Minimal\nContrast: High\nBlueprint Lab\nBest for Builder maps\nDensity: Balanced\nMotion: Precise\nContrast: High\nSwiss Editorial\nBest for Research\nDensity: Spacious\nM",
+      "passed": true
+    },
+    {
+      "click": "Home",
+      "expected": [
+        "Fluxio",
+        "What will we build today?",
+        "Agent",
+        "Builder"
+      ],
+      "visibleTextMatched": true,
+      "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\interaction-home.png",
+      "excerpt": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nF\nFluxio\nHome\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nRECENT SESSIONS\nUser analytics panel\n2m ago\nStripe integration\n1h ago\nDashboard redesign\nYesterday\nLocal\nworktree clean check pending\nWORKSPACE\nStabilize skill studio management\nOpenAI\nOpenai default\nDefault\nFluxio hybrid\nAuto scoped\nFluxio Noir\nHistory\nPreview\nCommand\nFluxio control route\nWhat will we build today?\n\nChoose a mode to start or ask Fluxio anything.\n\nAgent\n\nChat with AI to plan, analyze, and build with real-time context.\n\nActive mode\nBuilder\n\nCreate and iterate on full-stack apps, APIs, and deployment flows.\n\nSkills\n\nUse and manage specialized AI skills, rules, and reusable workflows.\n\nImages\n\nGenerate, edit, and iterate on images with prompts and references.\n\nRecent sessions\n",
+      "passed": true
+    }
+  ]
+}

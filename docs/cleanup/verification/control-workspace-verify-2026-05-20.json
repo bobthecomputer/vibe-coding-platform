@@ -1,0 +1,492 @@
+{
+  "checkedAt": "2026-05-20T19:08:38.080489+00:00",
+  "goal": "non-void control workspace verification loop",
+  "passed": true,
+  "steps": [
+    {
+      "name": "python library import",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "-c",
+        "import grant_agent; print(','.join(grant_agent.__all__))"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 0.35,
+      "stdoutTail": "AutonomousEngine,AgentConstitution,PreflightPolicy,ContextWindowManager,MemoryStore,SessionStore\n",
+      "stderrTail": "",
+      "passed": true
+    },
+    {
+      "name": "python tests",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "-m",
+        "pytest",
+        "tests",
+        "-q"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 220.35,
+      "stdoutTail": "........................................................................ [ 30%]\n........................................................................ [ 60%]\n........................................................................ [ 90%]\n........................                                                 [100%]\n240 passed in 219.15s (0:03:39)\n",
+      "stderrTail": "",
+      "passed": true
+    },
+    {
+      "name": "rust cargo check",
+      "command": [
+        "cargo",
+        "check"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\src-tauri",
+      "returnCode": 0,
+      "durationSeconds": 1.26,
+      "stdoutTail": "",
+      "stderrTail": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.09s\n",
+      "passed": true
+    },
+    {
+      "name": "frontend build",
+      "command": [
+        "npm.cmd",
+        "run",
+        "frontend:build"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 13.15,
+      "stdoutTail": "\n> vibe-coding-platform-desktop@0.1.0 frontend:build\n> vite build --config vite.config.mjs\n\n\u001b[36mvite v7.3.1 \u001b[32mbuilding client environment for production...\u001b[36m\u001b[39m\ntransforming...\n\u001b[32m\u00e2\u0153\u201c\u001b[39m 6266 modules transformed.\nrendering chunks...\ncomputing gzip size...\n\u001b[2mdist/\u001b[22m\u001b[32mindex.html                       \u001b[39m\u001b[1m\u001b[2m  1.21 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m \u00e2\u201d\u201a gzip:   0.57 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[35massets/index-Bq3cTp6g.css        \u001b[39m\u001b[1m\u001b[2m308.02 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m \u00e2\u201d\u201a gzip:  49.57 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[36massets/vendor-tauri-Cp-cMRE5.js  \u001b[39m\u001b[1m\u001b[2m  1.05 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m \u00e2\u201d\u201a gzip:   0.54 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[36massets/vendor-icons-DClk3M-P.js  \u001b[39m\u001b[1m\u001b[2m 81.46 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m \u00e2\u201d\u201a gzip:  22.06 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[36massets/vendor-react-iLQ0ojkV.js  \u001b[39m\u001b[1m\u001b[2m192.48 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m \u00e2\u201d\u201a gzip:  60.34 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[36massets/index-B3u8_I5V.js         \u001b[39m\u001b[1m\u001b[33m614.08 kB\u001b[39m\u001b[22m\u001b[2m \u00e2\u201d\u201a gzip: 161.39 kB\u001b[22m\n\u001b[32m\u00e2\u0153\u201c built in 11.69s\u001b[39m\n",
+      "stderrTail": "\u001b[33m\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001b[39m\n",
+      "passed": true
+    },
+    {
+      "name": "control route dev-server probe",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "-c",
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:1420/control?preview-control=1', timeout=5).read(256)"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 0.22,
+      "stdoutTail": "",
+      "stderrTail": "",
+      "passed": true,
+      "startedServer": false
+    },
+    {
+      "name": "browser html smoke",
+      "command": [
+        "npm.cmd",
+        "run",
+        "verify:browser",
+        "--",
+        "http://127.0.0.1:1420/control?preview-control=1"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 0.78,
+      "stdoutTail": "\n> vibe-coding-platform-desktop@0.1.0 verify:browser\n> node scripts/control_route_smoke.mjs http://127.0.0.1:1420/control?preview-control=1\n\ncontrol route smoke passed: http://127.0.0.1:1420/control?preview-control=1\n",
+      "stderrTail": "",
+      "passed": true
+    },
+    {
+      "name": "browser click interaction smoke",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_interaction_smoke.py"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 7.01,
+      "stdoutTail": "Installed in WSL2 and aligned with the latest upstream release.\\n\\nImage tools\\nTooling\\nHealthy\\nCURRENT\\n4.10.0\\nLATEST\\nunknown\\n\\nReady for screensh\",\n      \"passed\": true\n    },\n    {\n      \"click\": \"Rule Sets\",\n      \"expected\": [\n        \"Rule Sets\",\n        \"Core policy\",\n        \"Approval\"\n      ],\n      \"visibleTextMatched\": true,\n      \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\interaction-rule-sets.png\",\n      \"excerpt\": \"Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\\nSYNTELOS\\nHome\\nWORKSPACE\\nAgent\\nBuilder\\nSkills\\nRule Sets\\nImages\\nWorkbench\\nSettings\\nOP\\nOrbit Pro\\nPro Plan\\n\\nWorkspace / Rule Sets\\n\\nRule Sets\\nCore policy\\nAudit permissions\\nNew rule set\\nPermission modes\\n1 active\\nWorkspace Access Policy\\n\\nAccess, approvals, and scope\\n\\nRisk-based\\nFrontend Sandbox\\n\\nAutonomy for sandbox envs\\n\\nLow risk auto-approve\\nProduction Deployments\\n\\nDeployment guardrails\\n\\nStrict\\nDocs Workspace\\n\\nDocs and content permissions\\n\\nRisk-based\\nBilling Restrictions\\n\\nBilling and secrets restrictions\\n\\nStrict\\nWorkspace Access Policy\\nDuplicate\\nEdit\\nApplies to\\nAutonomy\\nApproval mode\\nReviewer\\nAllowed\\nEdit files\\nCreate branches\\nRun tests\\nApproval required\\nMerge to main\\nDeploy to production\\nAccess shared data\\nRestricted\\nDelete repositories\\nBilling access\\nSecrets man\",\n      \"passed\": true\n    },\n    {\n      \"click\": \"Settings\",\n      \"expected\": [\n        \"Settings\",\n        \"Rules & Routing\",\n        \"Workspace\"\n      ],\n      \"visibleTextMatched\": true,\n      \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\interaction-settings.png\",\n      \"excerpt\": \"Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\\nSYNTELOS\\nHome\\nWORKSPACE\\nAgent\\nBuilder\\nSkills\\nRule Sets\\nImages\\nWorkbench\\nSettings\\nOP\\nOrbit Pro\\nPro Plan\\nSettings\\n\\nManage your workspace, models, setup, appearance, and privacy.\\n\\nGeneral\\nModels\\nStorage\\nTools & Ports\\nRules & Routing\\nMembers\\nData & Privacy\\nWorkspace\\nWorkspace Name\\nSyntelos Workspace\\nWorkspace ID\\nworkspace_primary\\nWorkspace profile\\nBeginner\\nBuilder\\nAdvanced\\nExperimental\\nPreferred work engine\\nSyntelos Hybrid\\nLegacy Autonomous Engine\\nNAS sync mode\\nManual\\nAuto NAS mirror\\nSynology Drive\\nComputer folder\\nNAS mirror folder\\nSync direction\\nBidirectional\\nLocal to NAS\\nNAS to local\\nSave changes\\nCodex projects and folders\\nBring over recent Codex folders, inspect recent threads, and add a project folder.\\nRefresh\\nAdd folder\\nImport all\\nCodex home\\nNot found\\nRecent\",\n      \"passed\": true\n    },\n    {\n      \"click\": \"Home\",\n      \"expected\": [\n        \"Syntelos\",\n        \"Agent\",\n        \"Builder\"\n      ],\n      \"visibleTextMatched\": true,\n      \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\interaction-home.png\",\n      \"excerpt\": \"Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\\nSYNTELOS\\nHome\\nWORKSPACE\\nAgent\\nBuilder\\nSkills\\nRule Sets\\nImages\\nWorkbench\\nSettings\\nOP\\nOrbit Pro\\nPro Plan\\nSyntelos\\n\\nTurn AI agents into second brains.\\n\\nAgent\\n\\nAsk Syntelos to plan, build, check, and keep progress visible.\\n\\nOpen\\nBuilder\\n\\nCreate and manage projects with powerful tools.\\n\\nOpen\\nSkills\\n\\nManage reusable procedures, trigger conditions, and agent behaviors.\\n\\nOpen\\nRule Sets\\n\\nControl approvals, file scope, commands, runtimes, and autonomy boundaries.\\n\\nOpen\\nImages\\n\\nLayer, edit, compare, and continue image generations from precise manual compositions.\\n\\nOpen\\nWorkbench\\n\\nComputer-use readiness, notifications, multi-lane missions, and cross-domain AI workflows.\\n\\nOpen\",\n      \"passed\": true\n    }\n  ]\n}\n",
+      "stderrTail": "",
+      "passed": true
+    },
+    {
+      "name": "visual smoke surface-home",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=home",
+        "--name",
+        "surface-home",
+        "--expect",
+        "Syntelos",
+        "--expect",
+        "Agent",
+        "--expect",
+        "Rule Sets"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 8.46,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:07:37.179890+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=home\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-home.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-home.html\",\n  \"expectedFragments\": [\n    \"Syntelos\",\n    \"Agent\",\n    \"Rule Sets\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 195,\n    \"averageLuma\": 12.8,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:07:37.179890+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=home",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-home.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-home.html",
+        "expectedFragments": [
+          "Syntelos",
+          "Agent",
+          "Rule Sets"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 195,
+          "averageLuma": 12.8,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke surface-agent",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=agent",
+        "--name",
+        "surface-agent",
+        "--expect",
+        "Agent Chat",
+        "--expect",
+        "Workspace",
+        "--expect",
+        "Model"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 6.77,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:07:43.957331+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=agent\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-agent.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-agent.html\",\n  \"expectedFragments\": [\n    \"Agent Chat\",\n    \"Workspace\",\n    \"Model\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 384,\n    \"averageLuma\": 19.87,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:07:43.957331+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=agent",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-agent.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-agent.html",
+        "expectedFragments": [
+          "Agent Chat",
+          "Workspace",
+          "Model"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 384,
+          "averageLuma": 19.87,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke surface-builder",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder",
+        "--name",
+        "surface-builder",
+        "--expect",
+        "Builder",
+        "--expect",
+        "Rule Set",
+        "--expect",
+        "Timeline"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 7.15,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:07:51.118777+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-builder.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-builder.html\",\n  \"expectedFragments\": [\n    \"Builder\",\n    \"Rule Set\",\n    \"Timeline\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 486,\n    \"averageLuma\": 18.19,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:07:51.118777+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-builder.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-builder.html",
+        "expectedFragments": [
+          "Builder",
+          "Rule Set",
+          "Timeline"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 486,
+          "averageLuma": 18.19,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke surface-skills",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=skills",
+        "--name",
+        "surface-skills",
+        "--expect",
+        "Skills",
+        "--expect",
+        "Scope",
+        "--expect",
+        "Trigger"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 14.6,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:08:05.732269+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=skills\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-skills.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-skills.html\",\n  \"expectedFragments\": [\n    \"Skills\",\n    \"Scope\",\n    \"Trigger\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 335,\n    \"averageLuma\": 21.11,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:08:05.732269+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=skills",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-skills.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-skills.html",
+        "expectedFragments": [
+          "Skills",
+          "Scope",
+          "Trigger"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 335,
+          "averageLuma": 21.11,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke surface-rule-sets",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=rule-sets",
+        "--name",
+        "surface-rule-sets",
+        "--expect",
+        "Rule Sets",
+        "--expect",
+        "Core policy",
+        "--expect",
+        "Approval"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 6.41,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:08:12.154711+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=rule-sets\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-rule-sets.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-rule-sets.html\",\n  \"expectedFragments\": [\n    \"Rule Sets\",\n    \"Core policy\",\n    \"Approval\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 330,\n    \"averageLuma\": 26.46,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:08:12.154711+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=rule-sets",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-rule-sets.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-rule-sets.html",
+        "expectedFragments": [
+          "Rule Sets",
+          "Core policy",
+          "Approval"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 330,
+          "averageLuma": 26.46,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke surface-settings",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=settings",
+        "--name",
+        "surface-settings",
+        "--expect",
+        "Settings",
+        "--expect",
+        "Manage your workspace",
+        "--expect",
+        "Routing"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 11.26,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:08:23.424911+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=settings\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-settings.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\surface-settings.html\",\n  \"expectedFragments\": [\n    \"Settings\",\n    \"Manage your workspace\",\n    \"Routing\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 233,\n    \"averageLuma\": 15.64,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:08:23.424911+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=settings",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-settings.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-settings.html",
+        "expectedFragments": [
+          "Settings",
+          "Manage your workspace",
+          "Routing"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 233,
+          "averageLuma": 15.64,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke runtime-workbench-visual-proof",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+        "--name",
+        "runtime-workbench-visual-proof",
+        "--expect",
+        "Runtime operations",
+        "--expect",
+        "Automatic verify",
+        "--expect",
+        "OpenClaw",
+        "--expect",
+        "Hermes"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 9.9,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:08:33.340244+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench\",\n  \"browser\": \"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\",\n  \"browserFamily\": \"chromium\",\n  \"domSupported\": true,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\runtime-workbench-visual-proof.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\runtime-workbench-visual-proof.html\",\n  \"expectedFragments\": [\n    \"Runtime operations\",\n    \"Automatic verify\",\n    \"OpenClaw\",\n    \"Hermes\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 726,\n    \"averageLuma\": 30.72,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:08:33.340244+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+        "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "browserFamily": "chromium",
+        "domSupported": true,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-visual-proof.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-visual-proof.html",
+        "expectedFragments": [
+          "Runtime operations",
+          "Automatic verify",
+          "OpenClaw",
+          "Hermes"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 726,
+          "averageLuma": 30.72,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "name": "visual smoke runtime-workbench-zen-proof",
+      "command": [
+        "C:\\Users\\paul\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+        "scripts/control_route_visual_smoke.py",
+        "--url",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+        "--name",
+        "runtime-workbench-zen-proof",
+        "--browser",
+        "zen",
+        "--expect",
+        "Runtime operations",
+        "--expect",
+        "Automatic verify",
+        "--expect",
+        "OpenClaw",
+        "--expect",
+        "Hermes"
+      ],
+      "cwd": "C:\\Users\\paul\\Projects\\vibe-coding-platform",
+      "returnCode": 0,
+      "durationSeconds": 4.7,
+      "stdoutTail": "{\n  \"checkedAt\": \"2026-05-20T19:08:38.049941+00:00\",\n  \"url\": \"http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench\",\n  \"browser\": \"C:\\\\Program Files\\\\Zen Browser\\\\zen.exe\",\n  \"browserFamily\": \"zen\",\n  \"domSupported\": false,\n  \"screenshotPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\runtime-workbench-zen-proof.png\",\n  \"domPath\": \"C:\\\\Users\\\\paul\\\\Projects\\\\vibe-coding-platform\\\\docs\\\\cleanup\\\\before-after\\\\2026-05-20\\\\runtime-workbench-zen-proof.html\",\n  \"expectedFragments\": [\n    \"Runtime operations\",\n    \"Automatic verify\",\n    \"OpenClaw\",\n    \"Hermes\"\n  ],\n  \"missingFragments\": [],\n  \"image\": {\n    \"width\": 1440,\n    \"height\": 1200,\n    \"sampleCount\": 8370,\n    \"uniqueSampleColors\": 468,\n    \"averageLuma\": 29.93,\n    \"nonBlank\": true\n  },\n  \"passed\": true\n}\n",
+      "stderrTail": "",
+      "passed": true,
+      "visualReport": {
+        "checkedAt": "2026-05-20T19:08:38.049941+00:00",
+        "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+        "browser": "C:\\Program Files\\Zen Browser\\zen.exe",
+        "browserFamily": "zen",
+        "domSupported": false,
+        "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-zen-proof.png",
+        "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-zen-proof.html",
+        "expectedFragments": [
+          "Runtime operations",
+          "Automatic verify",
+          "OpenClaw",
+          "Hermes"
+        ],
+        "missingFragments": [],
+        "image": {
+          "width": 1440,
+          "height": 1200,
+          "sampleCount": 8370,
+          "uniqueSampleColors": 468,
+          "averageLuma": 29.93,
+          "nonBlank": true
+        },
+        "passed": true
+      }
+    }
+  ]
+}

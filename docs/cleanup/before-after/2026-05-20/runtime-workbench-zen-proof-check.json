@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-05-20T19:08:38.049941+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Zen Browser\\zen.exe",
+  "browserFamily": "zen",
+  "domSupported": false,
+  "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-zen-proof.png",
+  "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-zen-proof.html",
+  "expectedFragments": [
+    "Runtime operations",
+    "Automatic verify",
+    "OpenClaw",
+    "Hermes"
+  ],
+  "missingFragments": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 468,
+    "averageLuma": 29.93,
+    "nonBlank": true
+  },
+  "passed": true
+}

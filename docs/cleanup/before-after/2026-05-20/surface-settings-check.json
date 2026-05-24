@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-05-20T19:08:23.424911+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=settings",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-settings.png",
+  "domPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\surface-settings.html",
+  "expectedFragments": [
+    "Settings",
+    "Manage your workspace",
+    "Routing"
+  ],
+  "missingFragments": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 233,
+    "averageLuma": 15.64,
+    "nonBlank": true
+  },
+  "passed": true
+}

@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-05-19T22:45:32.832Z",
+  "actionButtonCount": 0,
+  "hasAutoVerify": true,
+  "hasHermes": true,
+  "hasOpenClaw": true,
+  "hasRuntimePanel": true,
+  "hasUpdateActions": true,
+  "serviceCardCount": 4,
+  "title": "Syntelos | Turn AI agents into second brains",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "visibleExcerpt": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nSYNTELOS\nHome\nWORKSPACE\nAgent\nBuilder\nSkills\nRule Sets\nImages\nWorkbench\nSettings\nOP\nOrbit Pro\nPro Plan\nAI Workbench\n\nCross-domain mission control for computer use, notifications, tutorials, and parallel lanes.\n\nComputer-use status\nStandby\nSafety mode\nGuided\nRuntime\nworkspace-runtime\nActive lanes\n0\nRuntime operations\nInstall, update, verify, and lane health\nRuntime settings\nRefresh status\nManaged services\n8\n\n5 healthy\n\nNeeds attention\n3\n\n0 update candidate(s)\n\nAutomatic verify\n0\n\nAction(s) re-check setup after completion\n\nUpdate actions\n0\n\nOpenClaw, Hermes, and supporting tools\n\nHermes\nRuntime\nHealthy\nCURRENT\nv0.9.0\nLATEST\nunknown\n\nInstalled in WSL2 and aligned with the latest upstream release.\n\nImage tools\nTooling\nHealthy\nCURRENT\n4.10.0\nLATEST\nunknown\n\nReady for screenshot comparison, visual checks, and image features.\n\nOpenClaw\nRuntime\nHealthy\nCURRENT\n2026.4.14\nLATEST\nunknown\n\nInstalled and aligned with the latest npm release.\n\nWSL2\nRuntime Substrate\nHealthy\nCURRENT\nWSL2\nLATEST\nunknown\n\nWSL2 detected and ready.\n\nLive Review TimelineFixture preview · repeatable review\nFile changes\nnow\n\n2 staged\n\n2 staged · 1 unstaged · 0 untracked\n\nBrowser QA\n2026-05-19T22:45:32.461Z\n\nBrowser-use actions\n\nPreview URL: No preview URL captured\n\nComputer-use\n2026-05-19T22:45:32.461Z\n\nProgram launch and handoff\n\nNo runtime lane reported yet\n\nPreview refresh\n2026-05-19T22:45:32.461Z\n\nScreenshot and preview sync\n\nLatest screenshot artifact: screenshots/latest.png\n\nVerification\n2026-05-19T22:45:32.461Z\n\nTest and gate checks\n\nVerification checks in progress\n\nImage Playground\n2026-05-19T22:45:32.461Z\n\nProvider route, queue timeline, and layer handoff\n\nAwaiting genera",
+  "consoleErrors": [],
+  "screenshotPath": "C:\\Users\\paul\\Projects\\vibe-coding-platform\\docs\\cleanup\\before-after\\2026-05-20\\runtime-workbench-extracted-panel.png"
+}

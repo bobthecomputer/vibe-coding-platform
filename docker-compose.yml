@@ -1,0 +1,97 @@
+version: '3.8'
+
+# =============================================================================
+# Syntelos/Fluxio NAS Deployment
+# =============================================================================
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f syntelos-web
+#
+# Networks:
+#   - Both services communicate on the internal "fluxio" network.
+#   - The web backend reaches openclaw at ws://openclaw:8765
+#
+# Volumes:
+#   - ./data/agent_control: persists .agent_control state across restarts
+#   - openclaw_data: persists openclaw's own data
+#
+# Environment:
+#   - FLUXIO_WORKSPACE_ROOT: root directory for agent workspaces
+#   - FLUXIO_PUBLIC_URL: public URL for callbacks (e.g. http://your-nas:47880)
+#   - OPENCLAUNCHatURL: WebSocket URL for the openclaw service
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Syntelos Web Backend
+  # ---------------------------------------------------------------------------
+  syntelos-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: syntelos-web
+    restart: unless-stopped
+    ports:
+      - "47880:47880"
+    environment:
+      - FLUXIO_WORKSPACE_ROOT=/app/workspace
+      - FLUXIO_PUBLIC_URL=http://localhost:47880
+      - OPENCLAUNCHatURL=ws://openclaw:8765
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+    volumes:
+      # Persist .agent_control and workspace data
+      - ./data/agent_control:/app/workspace/.agent_control
+      # Mount for additional workspace persistence
+      - syntelos-workspace:/app/workspace
+    networks:
+      - fluxio
+    depends_on:
+      openclaw:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:47880/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # OpenClaw Agent Runtime
+  # ---------------------------------------------------------------------------
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: fluxio-openclaw
+    restart: unless-stopped
+    ports:
+      - "8765:8765"   # WebSocket port (expose to host if needed externally)
+    environment:
+      - OPENCLAUNCHatURL=ws://0.0.0.0:8765
+      - OPENCLAW_WORKSPACE_ROOT=/workspace
+      - LOG_LEVEL=info
+    volumes:
+      - openclaw_data:/workspace
+    networks:
+      - fluxio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+networks:
+  fluxio:
+    driver: bridge
+
+# -----------------------------------------------------------------------------
+# Volumes
+# -----------------------------------------------------------------------------
+volumes:
+  syntelos-workspace:
+    driver: local
+  openclaw_data:
+    driver: local

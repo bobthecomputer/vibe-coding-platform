@@ -52,9 +52,51 @@ PID_ALIVE_CACHE_MAX_SIZE = max(
 _PID_ALIVE_CACHE: dict[int, tuple[float, bool]] = {}
 
 
+def _path_candidates(path: Path) -> list[Path]:
+    candidates = [path]
+    raw = str(path)
+    if os.name != "nt" and len(raw) >= 3 and raw[1:3] in {":\\", ":/"}:
+        drive = raw[0].lower()
+        tail = raw[3:].replace("\\", "/").lstrip("/")
+        candidates.append(Path("/mnt") / drive / tail)
+    return candidates
+
+
+def _coerce_platform_path(value: str | Path, *, posix: bool | None = None) -> Path:
+    raw = str(value or "").strip()
+    is_posix = os.name != "nt" if posix is None else posix
+    if is_posix and len(raw) >= 3:
+        drive_index = -1
+        for index in range(len(raw) - 2):
+            if raw[index].isalpha() and raw[index + 1 : index + 3] in {":\\", ":/"}:
+                drive_index = index
+        if drive_index >= 0:
+            drive = raw[drive_index].lower()
+            tail = raw[drive_index + 3 :].replace("\\", "/").lstrip("/")
+            return Path("/mnt") / drive / tail
+    return Path(raw).expanduser()
+
+
+def _failed_unreadable_session(
+    session: DelegatedRuntimeSession | dict,
+    *,
+    detail: str,
+) -> DelegatedRuntimeSession:
+    if isinstance(session, DelegatedRuntimeSession):
+        payload = asdict(session)
+    else:
+        payload = dict(session)
+    payload["status"] = "failed"
+    payload["exit_code"] = -1
+    payload["detail"] = detail
+    payload["heartbeat_status"] = "inactive"
+    payload["updated_at"] = utc_now_iso()
+    return DelegatedRuntimeSession(**payload)
+
+
 class DelegatedRuntimeSupervisor:
     def __init__(self, root: Path) -> None:
-        self.root = root.resolve()
+        self.root = _coerce_platform_path(root).resolve()
         self.control_dir = self.root / ".agent_control" / "runtime_sessions"
         self.control_dir.mkdir(parents=True, exist_ok=True)
         self.worker_path = Path(__file__).with_name("runtime_worker.py")
@@ -82,11 +124,15 @@ class DelegatedRuntimeSupervisor:
         events_path = self.control_dir / f"{delegated_id}.events.jsonl"
         decision_path = self.control_dir / f"{delegated_id}.approval.json"
         mission_scope = getattr(mission, "execution_scope", None)
-        workspace_root = (
-            str(getattr(mission_scope, "workspace_root", "") or "")
-            or workspace.root_path
+        workspace_root = str(
+            _coerce_platform_path(
+                str(getattr(mission_scope, "workspace_root", "") or "")
+                or workspace.root_path
+            ).resolve()
         )
-        execution_root = str(launch.get("workspace") or workspace.root_path)
+        execution_root = str(
+            _coerce_platform_path(launch.get("workspace") or workspace.root_path).resolve()
+        )
         session = DelegatedRuntimeSession(
             delegated_id=delegated_id,
             runtime_id=runtime_id,
@@ -245,6 +291,28 @@ class DelegatedRuntimeSupervisor:
             if reloaded is not None and reloaded.exit_code is not None:
                 payload = self._sync_structured_state(reloaded)
             elif payload.exit_code is None:
+                if payload.heartbeat_status == "stale":
+                    payload.exit_code = -1
+                    payload.status = "failed"
+                    payload.detail = (
+                        "Delegated runtime process disappeared before reporting an exit code."
+                    )
+                    payload.updated_at = utc_now_iso()
+                    self._append_structured_event(
+                        payload,
+                        kind="session.failed",
+                        message=payload.detail,
+                        status="failed",
+                        data={
+                            "reason": "stale_heartbeat_without_live_process",
+                            "pid": payload.pid,
+                            "supervisor_pid": payload.supervisor_pid,
+                            "heartbeat_age_seconds": payload.heartbeat_age_seconds,
+                        },
+                    )
+                    _apply_heartbeat_truth(payload)
+                    self._write_session(payload)
+                    return payload
                 payload.detail = payload.last_event or payload.detail or "Delegated runtime state is settling."
                 _apply_heartbeat_truth(payload)
                 self._write_session(payload)
@@ -441,24 +509,56 @@ class DelegatedRuntimeSupervisor:
             handoff_count=payload.handoff_count,
             handoff_reason=payload.handoff_reason,
             source_delegated_id=payload.source_delegated_id,
+            changed_files=list(payload.changed_files or []),
         )
 
     def _load_session(self, session: DelegatedRuntimeSession | dict | str) -> DelegatedRuntimeSession | None:
+        acknowledged = False
         if isinstance(session, DelegatedRuntimeSession):
             path = Path(session.session_path) if session.session_path else self.control_dir / f"{session.delegated_id}.json"
+            acknowledged = bool(session.acknowledged)
         elif isinstance(session, dict):
             if session.get("session_path"):
                 path = Path(str(session["session_path"]))
             else:
                 path = self.control_dir / f"{session['delegated_id']}.json"
+            acknowledged = bool(session.get("acknowledged"))
         else:
             path = Path(session)
             if not path.suffix:
                 path = self.control_dir / f"{session}.json"
-        if not path.exists():
+        delegated_id = ""
+        if isinstance(session, DelegatedRuntimeSession):
+            delegated_id = session.delegated_id
+        elif isinstance(session, dict):
+            delegated_id = str(session.get("delegated_id") or "")
+        elif not path.suffix:
+            delegated_id = str(session)
+        existing_path = next((candidate for candidate in _path_candidates(path) if candidate.exists()), None)
+        if existing_path is None and delegated_id:
+            fallback = self.control_dir / f"{delegated_id}.json"
+            existing_path = fallback if fallback.exists() else None
+        if existing_path is None:
+            if isinstance(session, (DelegatedRuntimeSession, dict)):
+                return _failed_unreadable_session(
+                    session,
+                    detail="Delegated runtime session file is missing or inaccessible.",
+                )
             return None
-        payload = _read_json_with_retries(path)
-        return DelegatedRuntimeSession(**payload)
+        path = existing_path
+        try:
+            payload = _read_json_with_retries(path)
+        except OSError:
+            if isinstance(session, (DelegatedRuntimeSession, dict)):
+                return _failed_unreadable_session(
+                    session,
+                    detail="Delegated runtime session file is missing or inaccessible.",
+                )
+            raise
+        loaded = DelegatedRuntimeSession(**payload)
+        if acknowledged and not loaded.acknowledged:
+            loaded.acknowledged = True
+        return loaded
 
     def _write_session(self, session: DelegatedRuntimeSession) -> None:
         path = Path(session.session_path) if session.session_path else self.control_dir / f"{session.delegated_id}.json"

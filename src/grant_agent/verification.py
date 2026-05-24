@@ -79,6 +79,8 @@ def detect_default_verification_commands(workdir: Path) -> list[str]:
     commands: list[str] = []
     has_pyproject = (workdir / "pyproject.toml").exists()
     has_tests_dir = (workdir / "tests").exists()
+    if has_pyproject and (workdir / "src").exists():
+        commands.append("python -m compileall -q src")
     if has_pyproject and has_tests_dir:
         commands.append("python -m unittest discover -s tests")
     package_json_path = workdir / "package.json"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -23,6 +24,21 @@ HEARTBEAT_INTERVAL_SECONDS = max(
     float(os.environ.get("FLUXIO_HEARTBEAT_INTERVAL_SECONDS", "10")),
     0.05,
 )
+SNAPSHOT_EXCLUDED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".agent_control",
+    ".agent_runs",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    "target",
+}
+SNAPSHOT_MAX_FILES = max(int(os.environ.get("FLUXIO_DELEGATED_SNAPSHOT_MAX_FILES", "8000")), 100)
+CHANGED_FILE_LIMIT = max(int(os.environ.get("FLUXIO_DELEGATED_CHANGED_FILE_LIMIT", "240")), 20)
 
 
 def _load_state(path: Path) -> dict:
@@ -141,6 +157,9 @@ def _creationflags() -> int:
 def _runtime_env(session_path: Path, cwd: Path) -> dict[str, str]:
     payload = _load_state(session_path)
     env = os.environ.copy()
+    runtime_path_entries = _runtime_path_entries(cwd)
+    if runtime_path_entries:
+        env["PATH"] = os.pathsep.join([*runtime_path_entries, env.get("PATH", "")])
     env["FLUXIO_SESSION_FILE"] = str(session_path.resolve())
     env["FLUXIO_EVENTS_FILE"] = str(Path(payload.get("events_path", session_path.with_suffix(".events.jsonl"))).resolve())
     env["FLUXIO_LOG_FILE"] = str(Path(payload.get("log_path", session_path.with_suffix(".log"))).resolve())
@@ -148,6 +167,27 @@ def _runtime_env(session_path: Path, cwd: Path) -> dict[str, str]:
     env["FLUXIO_EXECUTION_ROOT"] = str(cwd.resolve())
     env["PYTHONUNBUFFERED"] = "1"
     return env
+
+
+def _runtime_path_entries(cwd: Path) -> list[str]:
+    candidates = [
+        cwd / ".venv" / "bin",
+        cwd / "venv" / "bin",
+        cwd / ".agent_control" / "runtime" / "bin",
+        cwd.parent / "runtime" / "bin",
+        cwd.parent / "syntelos" / "runtime" / "bin",
+    ]
+    entries: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        value = str(candidate.resolve())
+        if value in seen:
+            continue
+        entries.append(value)
+        seen.add(value)
+    return entries
 
 
 def _parse_structured_event(line: str) -> dict | None:
@@ -262,6 +302,7 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     events_path = Path(payload.get("events_path", session_path.with_suffix(".events.jsonl"))).resolve()
     decision_path = Path(payload.get("decision_path", session_path.with_suffix(".approval.json"))).resolve()
+    before_snapshot = _workspace_snapshot(cwd)
 
     _write_state(
         session_path,
@@ -288,9 +329,10 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
     )
 
     with log_path.open("a", encoding="utf-8") as handle:
+        popen_command = _popen_command(command)
         child = subprocess.Popen(  # noqa: S603
-            command,
-            shell=True,
+            popen_command,
+            shell=False,
             cwd=str(cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -401,6 +443,7 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
     return_code = child.wait()
     summary = _tail_summary(log_path)
     existing = _load_state(session_path)
+    changed_files = _changed_files_since(before_snapshot, _workspace_snapshot(cwd))
     try:
         decision_path.unlink(missing_ok=True)
     except OSError:
@@ -423,6 +466,7 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
                 else "Delegated runtime process failed."
             ),
             "last_event": summary or "runtime_finished",
+            "changed_files": changed_files,
             "heartbeat_status": "inactive",
         },
     )
@@ -431,9 +475,56 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
         kind="session.completed" if final_status == "completed" else "session.failed",
         message=summary or ("Delegated runtime completed." if final_status == "completed" else "Delegated runtime failed."),
         status=final_status,
-        data={"exit_code": return_code},
+        data={"exit_code": return_code, "changed_files": changed_files},
     )
     return return_code
+
+
+def _popen_command(command: str) -> list[str]:
+    try:
+        args = shlex.split(str(command or ""), posix=True)
+    except ValueError:
+        args = []
+    if not args:
+        raise ValueError("Delegated runtime command is empty or malformed.")
+    return args
+
+
+def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    if not root.exists():
+        return snapshot
+    scanned = 0
+    for current_root, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            dirname for dirname in dirnames if dirname not in SNAPSHOT_EXCLUDED_DIRS
+        ]
+        current = Path(current_root)
+        for filename in filenames:
+            if scanned >= SNAPSHOT_MAX_FILES:
+                return snapshot
+            path = current / filename
+            try:
+                relative_parts = path.relative_to(root).parts
+                stat = path.stat()
+            except OSError:
+                continue
+            snapshot["/".join(relative_parts)] = (stat.st_size, stat.st_mtime_ns)
+            scanned += 1
+    return snapshot
+
+
+def _changed_files_since(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+) -> list[str]:
+    changed = [
+        path
+        for path, signature in after.items()
+        if before.get(path) != signature
+    ]
+    changed.extend(path for path in before if path not in after)
+    return sorted(dict.fromkeys(changed))[:CHANGED_FILE_LIMIT]
 
 
 def _terminate_child(child: subprocess.Popen) -> None:
