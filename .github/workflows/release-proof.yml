@@ -47,6 +47,17 @@ jobs:
       - run: npm run verify:live-data
       - run: npm run verify:web-distribution -- --require-built-dist
       - run: npm run verify:self-improvement
+      - name: Start preview server
+        run: |
+          npx vite --config vite.config.mjs --host 127.0.0.1 --port 5173 > /tmp/fluxio-vite.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5173/control?preview-control=1 >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/fluxio-vite.log
+          exit 1
       - run: npm run verify:long-history
       - name: Record CI proof digest
         run: |
