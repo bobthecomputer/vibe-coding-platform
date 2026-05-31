@@ -602,6 +602,7 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             except Exception:
                 public_launch_text = ""
         public_launch_lower = public_launch_text.lower()
+        public_launch_ready = "data-public-launch-ready=\"true\"" in page_html
         record(
             "live-public-launch-proof-path-visible",
             (not is_builder_surface)
@@ -616,6 +617,7 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             "Builder renders the live public launch proof path as ordered verifier-backed steps instead of only a blocker paragraph.",
             publicLaunchStepCount=public_launch_step_count,
             publicLaunchText=public_launch_text[:520],
+            publicLaunchReady=public_launch_ready,
             skipped=not is_builder_surface,
         )
         public_launch_triage_count = await page.locator('[data-public-launch-dirty-source-triage="true"]').count()
@@ -636,6 +638,8 @@ async def _verify_async(args: argparse.Namespace) -> dict:
                     "commit" in public_launch_triage_lower
                     or "clean" in public_launch_triage_lower
                     or "exclude" in public_launch_triage_lower
+                    or "no dirty source sample" in public_launch_triage_lower
+                    or "rerun public web verification" in public_launch_triage_lower
                 )
             ),
             "Builder shows publication dirty-source triage so current-public-web blockers are actionable instead of a raw dirty-file count.",
@@ -656,17 +660,25 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             (not is_builder_surface)
             or (
                 public_launch_repair_count >= 1
-                and "launch repair packet" in public_launch_repair_lower
-                and "cannot claim public launch" in public_launch_repair_lower
+                and (
+                    "launch repair packet" in public_launch_repair_lower
+                    or "launch proof packet" in public_launch_repair_lower
+                )
+                and (
+                    "cannot claim public launch" in public_launch_repair_lower
+                    or "public launch proven" in public_launch_repair_lower
+                    or "public launch claim enabled" in public_launch_repair_lower
+                )
                 and "full_git_status" in public_launch_repair_lower
-                and "release-impacting paths" in public_launch_repair_lower
+                and "release-impacting path" in public_launch_repair_lower
                 and (
                     "verifier command" in public_launch_repair_lower
                     or "rerun public launch verifiers" in public_launch_repair_lower
+                    or "final public launch readiness check" in public_launch_repair_lower
                 )
                 and "receipt" in public_launch_repair_lower
             ),
-            "Builder shows a concrete launch repair packet with claim state, verifier commands, lanes, and receipt targets.",
+            "Builder shows a concrete launch proof/repair packet with claim state, verifier commands, lanes, and receipt targets.",
             publicLaunchRepairCount=public_launch_repair_count,
             publicLaunchRepairText=public_launch_repair_text[:520],
             skipped=not is_builder_surface,

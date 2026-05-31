@@ -642,7 +642,7 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
         if not item["passed"]
     ]
     next_action = (
-        "Publish or tag the current release candidate."
+        "Public launch is proven; keep the public web, release packet, and publication receipts current."
         if ok
         else "Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof."
         if "public_web_current" in missing and "external_publication_proven" in missing

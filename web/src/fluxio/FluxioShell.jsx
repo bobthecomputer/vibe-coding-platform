@@ -17720,21 +17720,30 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     </div>
                   </article>
 
-                  {livePublicLaunchReadiness.status &&
-                  livePublicLaunchReadiness.status !== "ready_for_public_launch" ? (
-                    <article className="builder-panel builder-panel-focus builder-public-launch-proof-path" data-public-launch-proof-path="true">
+                  {livePublicLaunchReadiness.status ? (
+                    <article
+                      className="builder-panel builder-panel-focus builder-public-launch-proof-path"
+                      data-public-launch-proof-path="true"
+                      data-public-launch-ready={livePublicLaunchReadiness.ok ? "true" : "false"}
+                    >
                       <div className="section-header">
                         <div className="section-title-block">
-                          <p className="eyebrow">Live public launch blocker</p>
+                          <p className="eyebrow">
+                            {livePublicLaunchReadiness.ok ? "Live public launch proof" : "Live public launch blocker"}
+                          </p>
                           <h2>{titleizeToken(livePublicLaunchReadiness.status)}</h2>
                         </div>
-                        <StatusPill tone="warn">
-                          {asList(livePublicLaunchReadiness.missing).length} missing
+                        <StatusPill tone={livePublicLaunchReadiness.ok ? "good" : "warn"}>
+                          {livePublicLaunchReadiness.ok
+                            ? "ready"
+                            : `${asList(livePublicLaunchReadiness.missing).length} missing`}
                         </StatusPill>
                       </div>
                       <p>
                         {livePublicLaunchReadiness.nextAction ||
-                          "Public launch is not proven until live web and publication evidence are current."}
+                          (livePublicLaunchReadiness.ok
+                            ? "Public launch is proven by current public web, release packet, and external publication receipts."
+                            : "Public launch is not proven until live web and publication evidence are current.")}
                       </p>
                       <div className="builder-public-launch-steps" aria-label="Public launch proof path">
                         {livePublicLaunchSteps.map((step, index) => (
@@ -17752,7 +17761,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             <span>Launch repair packet</span>
                             <strong>
                               {livePublicLaunchRepairPacket.canClaimPublicLaunch
-                                ? "Public launch claim enabled"
+                                ? "Public launch proven"
                                 : "Cannot claim public launch yet"}
                             </strong>
                             <p>
@@ -17824,7 +17833,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           </article>
                         ))}
                       </div>
-                      {asList(livePublicLaunchReadiness.publicWeb?.sourceDirtyPathSample).length > 0 ? (
+                      {livePublicLaunchReadiness.publicWeb?.dirtySourceTriage?.schema ||
+                      asList(livePublicLaunchReadiness.publicWeb?.sourceDirtyPathSample).length > 0 ? (
                         <div className="builder-thread-list builder-public-launch-dirty-source" aria-label="Public web dirty source sample">
                           <article className="builder-thread-item warn">
                             <span>Dirty source sample</span>

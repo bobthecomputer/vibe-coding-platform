@@ -7920,7 +7920,7 @@ function FluxioAgentSurface(props) {
 
       <section
           className="fluxos-preview-panel"
-          data-live-message-selection-version="v21"
+          data-live-message-selection-version="v22"
         data-preview-state={previewState}
         data-selected-message-id={resolvedSelectedMessageKey}
         data-selected-message-requested-id={selectedMessageId}
@@ -8759,16 +8759,22 @@ function FluxioBuilderSurface(props) {
             ) : null}
           </section>
         ) : null}
-        {publicLaunchReadiness.status &&
-        publicLaunchReadiness.status !== "ready_for_public_launch" ? (
-          <section className="fluxos-gap-radar fluxos-public-launch-proof-path" aria-label="Live public launch blocker" data-public-launch-proof-path="true">
+        {publicLaunchReadiness.status ? (
+          <section
+            className="fluxos-gap-radar fluxos-public-launch-proof-path"
+            aria-label={publicLaunchReadiness.ok ? "Live public launch proof" : "Live public launch blocker"}
+            data-public-launch-proof-path="true"
+            data-public-launch-ready={publicLaunchReadiness.ok ? "true" : "false"}
+          >
             <div className="fluxos-section-head">
-              <span>Live public launch blocker</span>
+              <span>{publicLaunchReadiness.ok ? "Live public launch proof" : "Live public launch blocker"}</span>
               <strong>{titleizeToken(publicLaunchReadiness.status)}</strong>
             </div>
             <p>
               {publicLaunchReadiness.nextAction ||
-                "Public launch is not proven until current web and external publication evidence are present."}
+                (publicLaunchReadiness.ok
+                  ? "Public launch is proven by current public web, release packet, and external publication receipts."
+                  : "Public launch is not proven until current web and external publication evidence are present.")}
             </p>
             <div className="fluxos-public-launch-steps" aria-label="Public launch proof path">
               {publicLaunchSteps.map((step, index) => (
@@ -8783,10 +8789,10 @@ function FluxioBuilderSurface(props) {
             {publicLaunchRepairPacket?.schema ? (
               <div className="fluxos-improvement-queue" aria-label="Public launch repair packet" data-public-launch-repair-packet="true">
                 <span>
-                  Launch repair packet · {publicLaunchRepairPacket.canClaimPublicLaunch ? "claim enabled" : "cannot claim public launch"}
+                  Launch repair packet / proof · {publicLaunchRepairPacket.canClaimPublicLaunch ? "public launch proven" : "cannot claim public launch"}
                 </span>
                 <button type="button">
-                  <strong>{titleizeToken(publicLaunchRepairPacket.primaryBlocker || publicLaunchReadiness.status || "Next blocker")}</strong>
+                  <strong>{titleizeToken(publicLaunchRepairPacket.primaryBlocker || publicLaunchReadiness.status || "Launch state")}</strong>
                   <em>
                     {`${publicLaunchRepairPacket.sourceCoverage || "source coverage unknown"} · ${publicLaunchRepairPacket.releaseBlockingPathCount ?? publicLaunchRepairPacket.releaseBlockingSampleCount ?? 0} release-impacting paths`}
                   </em>
@@ -8849,7 +8855,7 @@ function FluxioBuilderSurface(props) {
                 </article>
               ))}
             </div>
-            {asList(publicLaunchReadiness.publicWeb?.sourceDirtyPathSample).length > 0 ? (
+            {publicLaunchReadiness.publicWeb?.dirtySourceTriage?.schema || asList(publicLaunchReadiness.publicWeb?.sourceDirtyPathSample).length > 0 ? (
               <div className="fluxos-improvement-queue" aria-label="Public web dirty source sample">
                 <span>
                   Dirty source sample · {publicLaunchReadiness.publicWeb?.sourceDirtyPathCount || 0} paths

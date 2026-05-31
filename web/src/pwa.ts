@@ -3,7 +3,7 @@ type FluxioPwaStatus = {
   detail: string;
 };
 
-const FLUXIO_PWA_BUILD = "20260531-reference-agent-manual-selection-v21";
+const FLUXIO_PWA_BUILD = "20260531-reference-agent-proof-ready-v22";
 const FLUXIO_PWA_UPDATE_INTERVAL_MS = 60_000;
 const FLUXIO_PWA_BUILD_STORAGE_KEY = "fluxio:pwa-build";
 const FLUXIO_PWA_RELOAD_STORAGE_KEY = "fluxio:pwa-reloaded-build";
