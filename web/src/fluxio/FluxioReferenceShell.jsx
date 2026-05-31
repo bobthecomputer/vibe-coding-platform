@@ -7920,7 +7920,7 @@ function FluxioAgentSurface(props) {
 
       <section
           className="fluxos-preview-panel"
-          data-live-message-selection-version="v24"
+          data-live-message-selection-version="v25"
         data-preview-state={previewState}
         data-selected-message-id={resolvedSelectedMessageKey}
         data-selected-message-requested-id={selectedMessageId}

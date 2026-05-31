@@ -828,11 +828,11 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             readerText=selected_report_reader_text[:260],
             forbiddenMarkers=[marker for marker in bookkeeping_default_markers if marker in selected_report_reader_lower],
         )
-        selection_version_count = await page.locator('[data-live-message-selection-version="v24"]').count()
+        selection_version_count = await page.locator('[data-live-message-selection-version="v25"]').count()
         record(
             "live-message-selection-version-current",
             selection_version_count == 1,
-            "Agent is running the v24 message-selection bundle that preserves manual live-message selection across feed refreshes, resets stale preview caches, and never embeds live preview frames.",
+            "Agent is running the v25 message-selection bundle that preserves manual live-message selection across feed refreshes, resets stale preview caches, and never embeds live preview frames.",
             selectionVersionCount=selection_version_count,
         )
         raw_action_json_markers = [
