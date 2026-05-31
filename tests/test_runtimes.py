@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import json
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,8 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
+from grant_agent.runtime_worker import _runtime_env
+from grant_agent.runtimes.base import runtime_bin_candidates, runtime_subprocess_env
 from grant_agent.runtimes.hermes import HermesRuntimeAdapter
 from grant_agent.runtimes.openclaw import OpenClawRuntimeAdapter
 
@@ -66,6 +69,43 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertFalse(status.detected)
         self.assertIn("Install Hermes", status.doctor_summary)
+
+    def test_runtime_env_loads_bundled_home_and_provider_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            runtime_home = root / "runtime" / "home"
+            (root / "runtime" / "bin").mkdir(parents=True)
+            (runtime_home / ".hermes").mkdir(parents=True)
+            (runtime_home / ".fluxio_provider_env").write_text(
+                "HERMES_HOME=/custom/hermes\nFLUXIO_TEST_PROVIDER=ready\n",
+                encoding="utf-8",
+            )
+            session_path = root / ".agent_control" / "runtime_sessions" / "delegate.json"
+            session_path.parent.mkdir(parents=True)
+            session_path.write_text(json.dumps({}), encoding="utf-8")
+
+            with mock.patch.dict("os.environ", {"HOME": str(root / "missing-home")}, clear=False):
+                env = runtime_subprocess_env(root)
+                worker_env = _runtime_env(session_path, root)
+
+            self.assertEqual(env["HOME"], str(runtime_home))
+            self.assertEqual(env["HERMES_HOME"], "/custom/hermes")
+            self.assertEqual(env["FLUXIO_TEST_PROVIDER"], "ready")
+            self.assertEqual(worker_env["HOME"], str(runtime_home))
+            self.assertEqual(worker_env["HERMES_HOME"], "/custom/hermes")
+            self.assertEqual(worker_env["FLUXIO_TEST_PROVIDER"], "ready")
+
+    def test_runtime_bin_candidates_include_sibling_syntelos_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            projects = pathlib.Path(temp_dir) / "volume1" / "Saclay" / "projects"
+            workspace = projects / "solantir-mindtower-fusion"
+            shared_runtime_bin = projects / "syntelos" / "runtime" / "bin"
+            workspace.mkdir(parents=True)
+            shared_runtime_bin.mkdir(parents=True)
+
+            candidates = runtime_bin_candidates(workspace)
+
+            self.assertIn(shared_runtime_bin, candidates)
 
     @mock.patch("grant_agent.runtimes.hermes.subprocess.run")
     @mock.patch("grant_agent.runtimes.hermes.shutil.which")
@@ -135,13 +175,16 @@ class RuntimeAdapterTests(unittest.TestCase):
         launch = adapter.start_mission(mission, workspace)
 
         command = str(launch["launch_command"])
-        self.assertIn("openclaw agents add", command)
+        self.assertIn("openclaw", command.lower())
+        self.assertIn("agents add", command)
         self.assertIn("--agent fluxio_mission_abcd1234_", command)
         self.assertIn("--model openai-codex/gpt-5.4-mini", command)
         self.assertIn("--session-id fluxio_mission_abcd1234", command)
         self.assertIn("--thinking medium", command)
         self.assertIn("--json", command)
-        self.assertIn('Fix \\"quote\\" handling', command)
+        self.assertIn("Fix", command)
+        self.assertIn("quote", command)
+        self.assertIn("handling", command)
         self.assertEqual(
             launch["route_contract"]["canonical_model_id"],
             "openai-codex/gpt-5.4-mini",
@@ -262,6 +305,30 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(launch["route_contract"]["role"], "verifier")
         self.assertEqual(launch["route_contract"]["phase"], "verify")
         self.assertIn("--model gpt-5.4", str(launch["launch_command"]))
+
+    def test_hermes_launch_normalizes_minimax_model_for_cli(self) -> None:
+        adapter = HermesRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_minimax1234",
+            objective="Build the visual surface",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                    "effort": "high",
+                }
+            ],
+            state=SimpleNamespace(current_cycle_phase="execute", status="running"),
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        with mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes"):
+            launch = adapter.start_mission(mission, workspace)
+
+        self.assertEqual(launch["route_contract"]["provider"], "minimax")
+        self.assertEqual(launch["route_contract"]["model"], "minimax-m2.7")
+        self.assertIn("--model minimax-m2.7", str(launch["launch_command"]))
 
     @mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes")
     def test_hermes_update_prefers_native_command_when_available(

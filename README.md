@@ -34,6 +34,24 @@ Current product stop point:
 
 ## Quickstart
 
+Fast web launcher:
+
+```bash
+npm install
+npm run fluxio
+```
+
+That command builds missing web assets, starts the local Fluxio backend on `127.0.0.1:47880`, waits for `/health`, and opens `http://127.0.0.1:47880/control`.
+
+Package-style launcher:
+
+```bash
+npm exec -- fluxio --no-open
+npm run verify:launcher-package
+```
+
+The package exposes a `fluxio` bin for npx-style execution and verifies that the packed launcher includes the backend runner, built web app, and installable PWA assets.
+
 ```bash
 python -m pip install -e .
 python -m grant_agent.cli bootstrap

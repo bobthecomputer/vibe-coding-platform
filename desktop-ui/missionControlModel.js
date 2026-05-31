@@ -58,6 +58,36 @@ function scoreTone(score) {
   return "bad";
 }
 
+function flattenQuarantinedRoutes(value) {
+  const rows = [];
+  const source = value && typeof value === "object" ? value : {};
+  for (const [taskType, taskRows] of Object.entries(source)) {
+    if (!taskRows || typeof taskRows !== "object") {
+      continue;
+    }
+    for (const [role, roleRows] of Object.entries(taskRows)) {
+      for (const item of asList(roleRows)) {
+        if (!item || typeof item !== "object") {
+          continue;
+        }
+        rows.push({
+          ...item,
+          taskType: item.taskType || taskType,
+          role: item.role || role,
+          provider: item.provider || "",
+          model: item.model || "",
+          status: item.status || "quarantined_until_clean_value_sample",
+          quarantineReason: item.quarantineReason || "Low-value or failing route outcome trend.",
+          requiredAction:
+            item.requiredAction ||
+            "Run a clean value-scored route-trust sample before this lane can be selected automatically again.",
+        });
+      }
+    }
+  }
+  return rows;
+}
+
 function serviceStatusTone(status) {
   if (["healthy", "connected", "ready", "passed"].includes(status)) {
     return "good";
@@ -788,6 +818,41 @@ function skillPackTone(item) {
 
 function deriveSkillStudio(snapshot, workspace) {
   const skillLibrary = snapshot?.skillLibrary || {};
+  const routeTrustCoverage = snapshot?.harnessLab?.routeTrustCoverage || {};
+  const routeOutcomeTrends = snapshot?.harnessLab?.routeOutcomeTrends || {};
+  const quarantinedRoutes = flattenQuarantinedRoutes(
+    routeTrustCoverage?.quarantinedRoutes || routeOutcomeTrends?.quarantinedRoutes,
+  );
+  const auditRedTeam = snapshot?.systemAuditDigest?.redTeamEscalation || {};
+  const snapshotRedTeam = snapshot?.redTeamEscalation || {};
+  const redTeam =
+    asList(snapshotRedTeam?.history).length > 0 ||
+    asInt(snapshotRedTeam?.summary?.runCount) > 0 ||
+    asInt(snapshotRedTeam?.historyRows) > 0
+      ? snapshotRedTeam
+      : auditRedTeam;
+  const redTeamSummary = redTeam?.summary || {};
+  const redTeamTrend = redTeam?.trend || {};
+  const redTeamNextBenchmarkPlan = redTeam?.nextBenchmarkPlan || {};
+  const redTeamHistory = asList(redTeam?.history).slice(-6).map((item, index) => ({
+    id: `${item?.preset || "red-team"}-${item?.recordedAt || index}`,
+    preset: item?.preset || "red-team",
+    recordedAt: item?.recordedAt || "",
+    status: titleizeToken(item?.status || "unknown"),
+    resistanceScore: asInt(item?.resistance_score),
+    difficultyLevel: asInt(item?.difficultyLevel),
+    nextDifficultyLevel: asInt(item?.nextDifficultyLevel),
+    currentPressureIndex: asInt(item?.currentPressureIndex),
+    nextPressureIndex: asInt(item?.nextPressureIndex),
+    pressureDelta: asInt(item?.pressureDelta),
+    nextDifficultyLabel: item?.nextDifficultyLabel || "",
+    nextAttemptBudget: asInt(item?.nextAttemptBudget),
+    passStreak: asInt(item?.passStreak),
+    cleanPass: Boolean(item?.cleanPass),
+    shouldEscalate: Boolean(item?.shouldEscalate),
+    nextTactics: asList(item?.nextTactics).slice(0, 4),
+    tone: item?.shouldEscalate ? "good" : asInt(item?.resistance_score) >= 70 ? "warn" : "bad",
+  }));
   const summary = skillLibrary?.managementSummary || {};
   const curatedPacks = asList(skillLibrary?.curatedPacks);
   const recommendedPacks = asList(skillLibrary?.recommendedPacks);
@@ -810,6 +875,7 @@ function deriveSkillStudio(snapshot, workspace) {
       profileSuitability: asList(item?.profile_suitability).map(entry => titleizeToken(entry)),
       originType: titleizeToken(item?.originType || item?.source?.kind || "recommended"),
       testStatus: titleizeToken(item?.testStatus || "recommended"),
+      feedbackSummary: item?.feedbackSummary || {},
     }));
 
   const curated = curatedPacks.slice(0, 10).map(item => ({
@@ -826,6 +892,7 @@ function deriveSkillStudio(snapshot, workspace) {
     profileSuitability: asList(item?.profile_suitability).map(entry => titleizeToken(entry)),
     originType: titleizeToken(item?.originType || item?.source?.kind || "curated"),
     testStatus: titleizeToken(item?.testStatus || "active"),
+    feedbackSummary: item?.feedbackSummary || {},
   }));
 
   const allPacks = uniq([...recommended.map(item => item.id), ...curated.map(item => item.id)]);
@@ -853,6 +920,9 @@ function deriveSkillStudio(snapshot, workspace) {
     executionReadyCount < Math.max(1, Math.ceil(curated.length * 0.6))
       ? "Increase execution-capable reviewed packs to support broader operator workflows."
       : "",
+    asInt(summary?.repairCount) > 0
+      ? `Repair or hold ${asInt(summary?.repairCount)} skill pack(s) with high system-loss feedback before reuse.`
+      : "",
     asInt(summary?.learnedCount) === 0
       ? "Capture at least one learned skill event from a real mission cycle."
       : "",
@@ -865,6 +935,8 @@ function deriveSkillStudio(snapshot, workspace) {
       needsTestCount: asInt(summary?.needsTestCount),
       learnedCount: asInt(summary?.learnedCount),
       disabledCount: asInt(summary?.disabledCount),
+      feedbackSliceCount: asInt(summary?.feedbackSliceCount),
+      repairCount: asInt(summary?.repairCount),
       installedCount: curatedPacks.filter(item => item?.installed).length,
       executionReadyCount,
       uniquePackCount: allPacks.length,
@@ -874,6 +946,77 @@ function deriveSkillStudio(snapshot, workspace) {
     needsAttention: needsAttention.slice(0, 8),
     coverageByProfile,
     nextQualityActions,
+    feedbackLoop: skillLibrary?.feedbackLoop || { cadence: "mission_slice_end" },
+    routeTrustCoverage: {
+      schema: routeTrustCoverage?.schema || "fluxio.route_trust_coverage.v1",
+      provenTaskCount: asInt(routeTrustCoverage?.provenTaskCount),
+      samplingTaskCount: asInt(routeTrustCoverage?.samplingTaskCount),
+      activeSamplingMissionCount: asInt(routeTrustCoverage?.activeSamplingMissionCount),
+      lowValueCloseoutCount: asInt(routeTrustCoverage?.lowValueCloseoutCount),
+      quarantinedRouteCount: asInt(routeTrustCoverage?.quarantinedRouteCount, quarantinedRoutes.length),
+      quarantinedRoutes: quarantinedRoutes.slice(0, 8),
+      routeOutcomeTrendSchema: routeTrustCoverage?.routeOutcomeTrendSchema || routeOutcomeTrends?.schema || "",
+      operatorConfidenceScore: asInt(routeTrustCoverage?.operatorConfidenceScore),
+      repairPlanStatus: routeTrustCoverage?.repairPlanStatus || "clear",
+      nextRepairStep: routeTrustCoverage?.nextRepairStep || "",
+      requiredOperatorValueSamples: asInt(routeTrustCoverage?.requiredOperatorValueSamples, 2),
+      nextAction:
+        routeTrustCoverage?.nextAction ||
+        "Run value-scored missions per task category so route and skill trust can become reliable.",
+      nextSamplingPlan: asList(routeTrustCoverage?.nextSamplingPlan).slice(0, 6),
+      taskCoverage: asList(routeTrustCoverage?.taskCoverage).slice(0, 8),
+      repairPlan: asList(routeTrustCoverage?.repairPlan).slice(0, 5),
+    },
+    redTeamEscalation: {
+      schema: redTeam?.schema || "fluxio.red_team_escalation_snapshot.v1",
+      runCount: asInt(redTeamSummary?.runCount || redTeam?.historyRows, redTeamHistory.length),
+      status: titleizeToken(redTeamSummary?.status || redTeamTrend?.status || "empty"),
+      latestPreset: redTeamSummary?.latestPreset || redTeamHistory[redTeamHistory.length - 1]?.preset || "",
+      latestResistanceScore: asInt(redTeamSummary?.latestResistanceScore || redTeam?.latestResistanceScore),
+      latestDifficultyLevel: asInt(redTeamSummary?.latestDifficultyLevel || redTeam?.latestDifficultyLevel),
+      nextDifficultyLevel: asInt(redTeamSummary?.nextDifficultyLevel || redTeam?.nextDifficultyLevel),
+      currentPressureIndex: asInt(redTeamSummary?.currentPressureIndex || redTeam?.currentPressureIndex),
+      nextPressureIndex: asInt(redTeamSummary?.nextPressureIndex || redTeam?.nextPressureIndex),
+      pressureDelta: asInt(redTeamSummary?.pressureDelta || redTeam?.pressureDelta),
+      nextDifficultyLabel: redTeamSummary?.nextDifficultyLabel || redTeam?.nextDifficultyLabel || "",
+      nextAttemptBudget: asInt(redTeamSummary?.nextAttemptBudget || redTeam?.nextAttemptBudget),
+      passStreak: asInt(redTeamSummary?.passStreak || redTeam?.passStreak),
+      cleanPass: Boolean(redTeamSummary?.cleanPass),
+      shouldEscalate: Boolean(redTeamSummary?.shouldEscalate),
+      resistanceTrend: asInt(redTeamSummary?.resistanceTrend || redTeamTrend?.resistanceTrend),
+      difficultyTrend: asInt(redTeamSummary?.difficultyTrend || redTeamTrend?.difficultyTrend),
+      pressureTrend: asInt(redTeamSummary?.pressureTrend || redTeamTrend?.pressureTrend),
+      nextAction:
+        redTeamSummary?.nextAction ||
+        redTeamTrend?.nextAction ||
+        "Run the first red-team benchmark and record its escalation row.",
+      nextBenchmarkPlan: {
+        schema: redTeamNextBenchmarkPlan?.schema || "fluxio.red_team_next_benchmark_plan.v1",
+        status: redTeamNextBenchmarkPlan?.status || "",
+        preset: redTeamNextBenchmarkPlan?.preset || redTeamSummary?.latestPreset || "",
+        attemptBudget: asInt(redTeamNextBenchmarkPlan?.attemptBudget || redTeamSummary?.nextAttemptBudget),
+        targetResistanceScore: asInt(redTeamNextBenchmarkPlan?.targetResistanceScore),
+        targetDifficultyLevel: asInt(redTeamNextBenchmarkPlan?.targetDifficultyLevel || redTeamSummary?.nextDifficultyLevel),
+        difficultyLabel:
+          redTeamNextBenchmarkPlan?.difficultyLabel ||
+          redTeamSummary?.nextDifficultyLabel ||
+          (redTeamSummary?.nextDifficultyLevel ? `L${redTeamSummary.nextDifficultyLevel}` : ""),
+        levelCapReached: Boolean(redTeamNextBenchmarkPlan?.levelCapReached),
+        currentPressureIndex: asInt(
+          redTeamNextBenchmarkPlan?.currentPressureIndex || redTeamSummary?.currentPressureIndex,
+        ),
+        nextPressureIndex: asInt(redTeamNextBenchmarkPlan?.nextPressureIndex || redTeamSummary?.nextPressureIndex),
+        pressureDelta: asInt(redTeamNextBenchmarkPlan?.pressureDelta || redTeamSummary?.pressureDelta),
+        tactics: asList(redTeamNextBenchmarkPlan?.tactics).slice(0, 6),
+        operatorReviewRequired: Boolean(redTeamNextBenchmarkPlan?.operatorReviewRequired),
+        aggregateOnly: redTeamNextBenchmarkPlan?.aggregateOnly !== false,
+        rawPayloadExport: Boolean(redTeamNextBenchmarkPlan?.rawPayloadExport),
+        successCriteria: asList(redTeamNextBenchmarkPlan?.successCriteria).slice(0, 4),
+        commandShell: redTeamNextBenchmarkPlan?.command?.shell || "",
+        nextAction: redTeamNextBenchmarkPlan?.nextAction || redTeamSummary?.nextAction || "",
+      },
+      history: redTeamHistory,
+    },
     capabilitiesNote:
       "Skill CRUD is not exposed as a dedicated control-room command yet, so this studio is review-first.",
   };
@@ -945,6 +1088,168 @@ function deriveBuilderOps(workspace) {
       surface: "validate",
       tone: item?.requiresApproval ? "warn" : "good",
     })),
+  };
+}
+
+function parseWorkspaceSyncStatus(workspace) {
+  const entry = asList(workspace?.goals).find(item => String(item || "").startsWith("sync_status:"));
+  if (!entry) {
+    return {};
+  }
+  try {
+    const payload = JSON.parse(String(entry).slice("sync_status:".length));
+    return payload && typeof payload === "object" ? payload : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseWorkspaceSyncConflictResolutions(workspace) {
+  return asList(workspace?.goals)
+    .map(item => String(item || "").trim())
+    .filter(item => item.startsWith("sync_conflict_resolution:"))
+    .map(item => {
+      try {
+        const payload = JSON.parse(item.slice("sync_conflict_resolution:".length));
+        return payload && typeof payload === "object" ? payload : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .slice(-8);
+}
+
+function parseWorkspaceSyncConflictBatchResolutions(workspace) {
+  return asList(workspace?.goals)
+    .map(item => String(item || "").trim())
+    .filter(item => item.startsWith("sync_conflict_batch_resolution:"))
+    .map(item => {
+      try {
+        const payload = JSON.parse(item.slice("sync_conflict_batch_resolution:".length));
+        return payload && typeof payload === "object" ? payload : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .slice(-5);
+}
+
+function deriveMissionContextRoots(mission, workspace, snapshot) {
+  const payload = mission?.contextRoots || mission?.context_roots || {};
+  const payloadRoots = asList(payload?.roots);
+  const workspaces = asList(snapshot?.workspaces);
+  const workspaceById = new Map(workspaces.map(item => [item?.workspace_id, item]));
+  const missionWorkspace = workspaceById.get(mission?.workspace_id) || workspace || {};
+  const baseRoots =
+    payloadRoots.length > 0
+      ? payloadRoots
+      : [
+          {
+            role: "primary",
+            relationship: "mission_workspace",
+            rootPath: missionWorkspace?.root_path || "",
+            workspaceId: missionWorkspace?.workspace_id || mission?.workspace_id || "",
+            workspaceName: missionWorkspace?.name || "Workspace",
+            currentMission: true,
+            writableByMission: true,
+            detail: "Primary mission workspace.",
+          },
+        ];
+  const normalized = baseRoots
+    .filter(item => item?.rootPath || item?.root_path)
+    .slice(0, 10)
+    .map((item, index) => {
+      const owner = workspaceById.get(item?.workspaceId || item?.workspace_id) || missionWorkspace;
+      const role = item?.role || (index === 0 ? "primary" : "related_workspace");
+      const rootPath = item?.rootPath || item?.root_path || owner?.root_path || "";
+      const blockedCount = asInt(item?.blockedMissionCount || item?.blocked_count);
+      const activeCount = asInt(item?.activeMissionCount || item?.active_count);
+      return {
+        rootId: item?.rootId || `${item?.workspaceId || owner?.workspace_id || "root"}-${role}-${index}`,
+        workspaceId: item?.workspaceId || item?.workspace_id || owner?.workspace_id || "",
+        workspaceName: item?.workspaceName || item?.workspace_name || owner?.name || "Workspace",
+        role,
+        relationship: item?.relationship || "mission_workspace",
+        rootPath,
+        folderLabel: item?.folderLabel || pathLeafLabel(rootPath),
+        runtime: runtimeLabel(item?.runtime || owner?.default_runtime),
+        profile: titleizeToken(item?.profile || owner?.user_profile || "builder"),
+        harness: titleizeToken(item?.harness || owner?.preferred_harness || "fluxio_hybrid"),
+        syncMode: titleizeToken(item?.syncMode || owner?.sync_mode || "manual"),
+        syncDirection: titleizeToken(item?.syncDirection || owner?.sync_direction || "bidirectional"),
+        autoSyncToNas: Boolean(item?.autoSyncToNas || owner?.auto_sync_to_nas),
+        missionCount: asInt(item?.missionCount),
+        activeMissionCount: activeCount,
+        blockedMissionCount: blockedCount,
+        completedMissionCount: asInt(item?.completedMissionCount),
+        currentMission: Boolean(item?.currentMission || index === 0),
+        writableByMission: item?.writableByMission !== false,
+        detail: item?.detail || "",
+        tone: blockedCount > 0 ? "warn" : activeCount > 0 || item?.currentMission ? "good" : "neutral",
+      };
+    });
+  const related = normalized.filter(item => item.role === "related_workspace");
+  const dependencyEdges = asList(payload?.dependencyEdges || payload?.dependency_edges).map((item, index) => ({
+    edgeId: item?.edgeId || item?.edge_id || `edge-${index}`,
+    fromRootId: item?.fromRootId || item?.from_root_id || "",
+    toRootId: item?.toRootId || item?.to_root_id || "",
+    type: item?.type || "dependency",
+    direction: item?.direction || "read_only",
+    writePolicy: item?.writePolicy || item?.write_policy || "read_only_until_selected",
+    summary: item?.summary || "",
+  }));
+  const writeScopePreflight = payload?.writeScopePreflight || payload?.write_scope_preflight || {};
+  return {
+    schema: payload?.schema || "fluxio.mission.context_roots.v1",
+    missionId: payload?.missionId || mission?.mission_id || "",
+    mode: payload?.mode || (normalized.length > 1 ? "multi_root" : "single_root"),
+    primary: payload?.primary || normalized[0] || {},
+    roots: normalized,
+    related,
+    dependencyEdges,
+    writeScopePreflight: {
+      schema: writeScopePreflight?.schema || "fluxio.write_scope_preflight.v1",
+      status: writeScopePreflight?.status || "unknown",
+      writePolicy: writeScopePreflight?.writePolicy || writeScopePreflight?.write_policy || "read_only",
+      allowedRootIds: asList(writeScopePreflight?.allowedRootIds || writeScopePreflight?.allowed_root_ids),
+      readOnlyRootIds: asList(writeScopePreflight?.readOnlyRootIds || writeScopePreflight?.read_only_root_ids),
+      dependencyEdgeCount: asInt(writeScopePreflight?.dependencyEdgeCount, dependencyEdges.length),
+      warnings: asList(writeScopePreflight?.warnings),
+      nextAction:
+        writeScopePreflight?.nextAction ||
+        writeScopePreflight?.next_action ||
+        "Review write scope before cross-project edits.",
+    },
+    counts: {
+      totalRoots: asInt(payload?.counts?.totalRoots, normalized.length),
+      relatedWorkspaces: asInt(payload?.counts?.relatedWorkspaces, related.length),
+      writableRoots: asInt(
+        payload?.counts?.writableRoots,
+        normalized.filter(item => item.writableByMission).length,
+      ),
+      syncPairs: asInt(
+        payload?.counts?.syncPairs,
+        normalized.filter(item => item.relationship === "workspace_sync_pair").length,
+      ),
+      dependencyEdges: asInt(payload?.counts?.dependencyEdges, dependencyEdges.length),
+      preflightWarnings: asInt(
+        payload?.counts?.preflightWarnings,
+        asList(writeScopePreflight?.warnings).length,
+      ),
+    },
+    execution: payload?.execution || {},
+    policy: payload?.policy || {
+      writeScope: "primary_and_declared_mirrors",
+      relatedWorkspaceWritePolicy: "read_only_until_selected",
+      beginnerSafety: "Show every root before cross-project edits.",
+    },
+    recommendedAction:
+      payload?.recommendedAction ||
+      (related.length > 0
+        ? "Review related roots before planning cross-project edits."
+        : "Add related workspaces when this mission depends on another project."),
   };
 }
 
@@ -1135,9 +1440,12 @@ function classifyFeatureTruth({ mission, snapshot, setupHealth, previewMode }) {
 
   if (previewMode !== "live") {
     fixtureOnly.push("Fixture-backed snapshot review");
+    fixtureOnly.push("Builder review controls");
+    fixtureOnly.push("Live sync cadence controls");
+  } else {
+    realSecondary.push("Builder review controls");
+    realSecondary.push("Live sync cadence controls");
   }
-  fixtureOnly.push("Builder review controls");
-  fixtureOnly.push("Live sync cadence controls");
 
   for (const blocker of asList(setupHealth?.blockerExplanations)) {
     notReady.push(blocker);
@@ -1473,6 +1781,376 @@ function deriveMissionNexus(mission, workspace) {
   };
 }
 
+function routeRowsForMission(mission, workspace) {
+  const contract = mission?.effectiveRouteContract || mission?.effective_route_contract || {};
+  const contractRows = asList(contract?.roles || mission?.effectiveRouteContract || mission?.route_configs);
+  const routeReceipts = asList(contract?.mutationReceipts || contract?.mutation_receipts);
+  const workspaceRows = asList(workspace?.route_overrides);
+  const roles = ["planner", "executor", "verifier"];
+  return roles.map(role => {
+    const row =
+      contractRows.find(item => String(item?.role || "").toLowerCase() === role) ||
+      workspaceRows.find(item => String(item?.role || "").toLowerCase() === role) ||
+      {};
+      return {
+        role,
+        provider: row?.provider || "",
+        model: row?.model || "",
+        effort: row?.effort || row?.reasoningEffort || "",
+        source: row?.source || (row?.provider ? "workspace" : "profile_default"),
+        fallbackPolicy: row?.fallbackPolicy || row?.fallback_policy || "same_provider",
+        taskType: row?.taskType || row?.task_type || "general_coding",
+        routeIntent: row?.routeIntent || row?.route_intent || "",
+        fitScore: asInt(row?.fitScore || row?.fit_score),
+        outcomeSampleCount: asInt(row?.outcomeSampleCount || row?.outcome_sample_count),
+        outcomeSuccessRate: asInt(row?.outcomeSuccessRate || row?.outcome_success_rate),
+        outcomeTrend: row?.outcomeTrend || row?.outcome_trend || "",
+        reason: row?.reason || row?.explanation || "",
+        routeReceipt:
+          routeReceipts
+            .slice()
+            .reverse()
+            .find(receipt => String(receipt?.role || "").toLowerCase() === role) || {},
+    };
+  });
+}
+
+function deriveSubAgentLanes(missions, workspaceById, fallbackWorkspace, productionHarness) {
+  const recent = missions
+    .slice()
+    .sort((left, right) => timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left)))
+    .slice(0, 4);
+  const rows = [];
+  for (const mission of recent) {
+    const ownerWorkspace = workspaceById.get(mission?.workspace_id) || fallbackWorkspace || {};
+    const sessions = asList(mission?.delegated_runtime_sessions);
+    const activeSessionCount = sessions.filter(
+      session => !["completed", "failed", "stopped"].includes(String(session?.status || "").toLowerCase()),
+    ).length;
+    const status = String(mission?.state?.status || mission?.missionLoop?.continuityState || "idle").toLowerCase();
+    const missionBlocked = missionNeedsAttention(mission);
+    for (const route of routeRowsForMission(mission, ownerWorkspace)) {
+      const roleSession = sessions.find(session =>
+        [session?.target_role, session?.role, session?.source_step_id, session?.delegated_id]
+          .filter(Boolean)
+          .some(value => String(value).toLowerCase().includes(route.role)),
+      );
+      const sessionStatus = String(roleSession?.status || "").toLowerCase();
+      const active =
+        Boolean(roleSession && !["completed", "failed", "stopped"].includes(sessionStatus)) ||
+        (route.role === "executor" && activeSessionCount > 0);
+      const tone =
+        sessionStatus === "failed" || status === "failed"
+          ? "bad"
+          : missionBlocked
+            ? "warn"
+            : active || status === "running"
+              ? "good"
+              : "neutral";
+      const failedChecks = asList(mission?.proof?.failed_checks || mission?.failedChecks);
+      const pendingApprovals = asList(mission?.proof?.pending_approvals || mission?.pendingApprovals);
+      const laneProof = {
+        summary:
+          roleSession?.last_event ||
+          roleSession?.detail ||
+          mission?.proof?.summary ||
+          deriveVerificationSummary(mission),
+        sessionId: roleSession?.delegated_id || roleSession?.session_id || "",
+        heartbeatStatus: roleSession?.heartbeat_status || "",
+        heartbeatAgeSeconds: Number(roleSession?.heartbeat_age_seconds || 0),
+        passedChecks: Number(mission?.proof?.passed_checks?.length || mission?.passedChecks || 0),
+        failedChecks: failedChecks.length,
+        pendingApprovals: pendingApprovals.length,
+        changedFiles: asList(roleSession?.changed_files || mission?.changed_files).length,
+        routeReceipt: route.routeReceipt || {},
+      };
+      const laneControls = [
+        {
+          id: "inspect-events",
+          label: "Inspect",
+          action: "runtime",
+          enabled: true,
+          detail: "Open the runtime timeline and recent lane events.",
+        },
+        {
+          id: "proof-drilldown",
+          label: "Proof",
+          action: "proof",
+          enabled: true,
+          detail: "Open proof digest, checks, approvals, and artifacts for this lane.",
+        },
+        {
+          id: active ? "pause-lane" : "resume-lane",
+          label: active ? "Pause" : "Resume",
+          action: active ? "pause" : "resume",
+          enabled: Boolean(mission?.mission_id),
+          detail: active ? "Stop the supervised mission lane safely." : "Resume this mission from the latest checkpoint.",
+        },
+        {
+          id: "reroute-lane",
+          label: "Reroute",
+          action: "reroute",
+          enabled: true,
+          detail: "Open runtime routing context before changing provider/model choices.",
+        },
+      ];
+      rows.push({
+        id: `${mission?.mission_id || "mission"}-${route.role}`,
+        missionId: mission?.mission_id || "",
+        missionTitle: mission?.title || mission?.objective || "Mission",
+        workspaceName: ownerWorkspace?.name || "Workspace",
+        role: titleizeToken(route.role),
+        provider: route.provider ? titleizeToken(route.provider) : "Profile default",
+        model: route.model || "Profile default",
+        effort: route.effort ? titleizeToken(route.effort) : "Default",
+        runtime: runtimeLabel(mission?.runtime_id || ownerWorkspace?.default_runtime),
+        harness: titleizeToken(mission?.harness_id || ownerWorkspace?.preferred_harness || productionHarness),
+        statusLabel: active
+          ? "running"
+          : missionBlocked
+            ? "needs attention"
+            : status === "completed"
+              ? "complete"
+              : "ready",
+        fallbackPolicy: route.fallbackPolicy,
+        source: route.source,
+        taskType: route.taskType,
+        routeIntent: route.routeIntent,
+        fitScore: route.fitScore,
+        outcomeSampleCount: route.outcomeSampleCount,
+        outcomeSuccessRate: route.outcomeSuccessRate,
+        outcomeTrend: route.outcomeTrend,
+        routeReason: route.reason,
+        detail: roleSession?.detail || deriveNextCheckpoint(mission),
+        laneProof,
+        controls: laneControls,
+        tone,
+      });
+    }
+  }
+  return rows.slice(0, 12);
+}
+
+function deriveProjectProgressHistory(snapshot) {
+  const raw = snapshot?.projectProgressHistory || {};
+  const projects = asList(raw.projects);
+  const byWorkspace = new Map(projects.map(item => [item?.workspaceId, item]));
+  return {
+    schema: raw.schema || "",
+    source: raw.source || "",
+    eventLimit: asInt(raw.eventLimit),
+    projects,
+    byWorkspace,
+    schedulingQueue: asList(raw.schedulingQueue),
+    scheduler: raw.scheduler || {},
+    liveData: raw.schema === "fluxio.project_progress_history.v1",
+  };
+}
+
+function deriveWorkspaceHealth(workspaces, missions, activeConversations, workspaceById, projectProgressHistory) {
+  return workspaces.map(workspace => {
+    const rows = missions.filter(item => item?.workspace_id === workspace?.workspace_id);
+    const progress = projectProgressHistory?.byWorkspace?.get(workspace?.workspace_id) || null;
+    const artifactRows = rows.map(deriveMissionArtifactReadiness);
+    const readyArtifacts = artifactRows.filter(item => item.status === "ready").length;
+    const missingArtifacts = artifactRows.filter(item => ["missing", "partial"].includes(item.status)).length;
+    const latest = rows
+      .slice()
+      .sort((left, right) => timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left)))[0];
+    const active = activeConversations.filter(item => item.workspaceId === workspace?.workspace_id);
+    const blocked = rows.filter(item => missionNeedsAttention(item)).length;
+    const completed = rows.filter(item => isTerminalMissionStatus(item?.state?.status) && item?.state?.status === "completed").length;
+    const delegated = rows.reduce((total, item) => total + asList(item?.delegated_runtime_sessions).length, 0);
+    const nextAction =
+      active[0]?.next ||
+      deriveNextCheckpoint(latest) ||
+      "Launch a mission from this project.";
+    const syncStatus = parseWorkspaceSyncStatus(workspace);
+    const conflictSamples = asList(syncStatus?.conflictSamples || syncStatus?.syncReceipt?.conflictSamples);
+    const firstConflict = conflictSamples[0] || {};
+    const conflictResolutionReceipts = parseWorkspaceSyncConflictResolutions(workspace);
+    const conflictBatchResolutionReceipts = parseWorkspaceSyncConflictBatchResolutions(workspace);
+    const syncReceipt = syncStatus?.syncReceipt || {};
+    const conflictCount = asInt(syncStatus?.conflictsDetected || syncReceipt?.conflictsDetected);
+    const manualReviewRequired = Boolean(syncStatus?.manualReviewRequired || syncReceipt?.manualReviewRequired);
+    const syncLabel = syncReceipt?.receiptId
+      ? "NAS sync receipt"
+      : Object.keys(syncStatus).length > 0
+        ? "NAS sync recorded"
+        : workspace?.auto_sync_to_nas ? "NAS sync enabled" : "Manual sync";
+    return {
+      workspaceId: workspace?.workspace_id || "",
+      title: workspace?.name || "Workspace",
+      path: workspace?.root_path || "",
+      folderLabel: pathLeafLabel(workspace?.root_path),
+      runtime: runtimeLabel(workspace?.default_runtime),
+      missionCount: rows.length,
+      activeCount: active.length,
+      blockedCount: blocked,
+      completedCount: completed,
+      delegatedCount: delegated,
+      progressHistory: progress,
+      progressMilestones: asList(progress?.milestones),
+      progressBuckets: asList(progress?.buckets),
+      scheduleRecommendation: progress?.scheduleRecommendation || {},
+      syncAuthority: progress?.syncAuthority || {},
+      launchRehearsal: progress?.launchRehearsal || {},
+      liveProgressSource: progress?.source || projectProgressHistory?.source || "",
+      liveProgressEventCount: asInt(progress?.counts?.events),
+      artifactReadyCount: readyArtifacts,
+      artifactMissingCount: missingArtifacts,
+      latestMissionId: latest?.mission_id || "",
+      latestMissionTitle: latest?.title || latest?.objective || "No mission yet",
+      latestStatus: titleizeToken(latest?.state?.status || "not_started"),
+      latestUpdatedAt: deriveMissionLatestTimestamp(latest),
+      nextAction,
+      syncLabel,
+      syncStatus: {
+        schema: syncReceipt?.schema || syncStatus?.schema || "fluxio.workspace_sync_status.v1",
+        receiptId: syncReceipt?.receiptId || "",
+        generatedAt: syncReceipt?.generatedAt || "",
+        effectiveDirection: syncStatus?.effectiveDirection || syncReceipt?.effectiveDirection || "",
+        conflictPolicy: syncStatus?.sync_conflict_policy || syncReceipt?.conflictPolicy || workspace?.sync_conflict_policy || "",
+        filesCopied: asInt(syncStatus?.filesCopied || syncReceipt?.filesCopied),
+        filesSkipped: asInt(syncStatus?.filesSkipped || syncReceipt?.filesSkipped),
+        conflictCount,
+        manualReviewRequired,
+        conflictSamples,
+        conflictResolutionReceipts,
+        conflictBatchResolutionReceipts,
+        firstConflictRelativePath: firstConflict?.relativePath || "",
+        batchConflictRelativePaths: conflictSamples.map(item => item?.relativePath).filter(Boolean).slice(0, 20),
+        resolutionControls: conflictCount > 0
+          ? [
+              { id: "keep_newer", label: "Keep newer", resolution: "keep_newer" },
+              { id: "local_wins", label: "Use computer", resolution: "local_wins" },
+              { id: "nas_wins", label: "Use NAS", resolution: "nas_wins" },
+            ]
+          : [],
+        batchResolutionControls: conflictCount > 1
+          ? [
+              { id: "batch_keep_newer", label: "Batch keep newer", resolution: "keep_newer" },
+              { id: "batch_local_wins", label: "Batch use computer", resolution: "local_wins" },
+              { id: "batch_nas_wins", label: "Batch use NAS", resolution: "nas_wins" },
+            ]
+          : [],
+      },
+      tone: manualReviewRequired || blocked > 0 || missingArtifacts > 0 ? "warn" : active.length > 0 || completed > 0 || syncReceipt?.receiptId ? "good" : "neutral",
+      known: Boolean(workspaceById.get(workspace?.workspace_id)),
+    };
+  });
+}
+
+function deriveMissionArtifactReadiness(mission) {
+  const raw = mission?.plannedScopeArtifacts || mission?.planned_scope_artifacts || {};
+  const status = String(raw.status || "unplanned").toLowerCase();
+  const entries = asList(raw.entries);
+  const firstReady = entries.find(item => item?.previewable || item?.status === "ready") || entries[0] || {};
+  const counts = {
+    scopeCount: asInt(raw.scopeCount),
+    existingCount: asInt(raw.existingCount),
+    readyCount: asInt(raw.readyCount),
+    partialCount: asInt(raw.partialCount),
+    missingCount: asInt(raw.missingCount),
+    readmeCount: asInt(raw.readmeCount),
+    previewableCount: asInt(raw.previewableCount),
+  };
+  return {
+    status,
+    tone:
+      status === "ready"
+        ? "good"
+        : status === "missing" || status === "partial"
+          ? "warn"
+          : "neutral",
+    label:
+      status === "ready"
+        ? "Artifacts ready"
+        : status === "missing"
+          ? "Artifacts missing"
+          : status === "partial"
+            ? "Artifacts partial"
+            : "Artifacts unplanned",
+    counts,
+    path: firstReady?.path || firstReady?.resolvedPath || "",
+    readmePath: firstReady?.readmePath || "",
+    indexHtmlPath: firstReady?.indexHtmlPath || "",
+    previewFiles: asList(firstReady?.previewFiles).slice(0, 3),
+    sampleFiles: asList(firstReady?.sampleFiles).slice(0, 4),
+    nextAction: raw.nextAction || "",
+  };
+}
+
+function deriveMissionArtifactEntrypoints(mission) {
+  const raw = mission?.plannedScopeArtifacts || mission?.planned_scope_artifacts || {};
+  return asList(raw.entries)
+    .filter(item => item?.path || item?.resolvedPath || item?.readmePath || item?.indexHtmlPath)
+    .map((item, index) => {
+      const previewFiles = asList(item?.previewFiles).filter(Boolean);
+      const sampleFiles = asList(item?.sampleFiles).filter(Boolean);
+      const primaryPath =
+        item?.readmePath ||
+        item?.indexHtmlPath ||
+        previewFiles[0] ||
+        sampleFiles[0] ||
+        item?.path ||
+        item?.resolvedPath ||
+        "";
+      const path = item?.path || item?.resolvedPath || primaryPath;
+      return {
+        id: `${mission?.mission_id || "mission"}-artifact-${index}`,
+        missionId: mission?.mission_id || "",
+        missionTitle: mission?.title || mission?.objective || "Mission",
+        status: String(item?.status || raw.status || "unplanned").toLowerCase(),
+        label: pathLeafLabel(path) || `Artifact ${index + 1}`,
+        path,
+        readmePath: item?.readmePath || "",
+        indexHtmlPath: item?.indexHtmlPath || "",
+        primaryPath,
+        previewFiles: previewFiles.slice(0, 3),
+        sampleFiles: sampleFiles.slice(0, 4),
+        tone: item?.status === "ready" || raw.status === "ready" ? "good" : "warn",
+      };
+    })
+    .filter(item => item.primaryPath)
+    .slice(0, 12);
+}
+
+function deriveBuilderArtifactReadiness(snapshot, missions) {
+  const summary = snapshot?.missionWatchdog?.summary || {};
+  const missionArtifacts = asList(missions).map(deriveMissionArtifactReadiness);
+  const ready = asInt(summary.artifactReady, missionArtifacts.filter(item => item.status === "ready").length);
+  const partial = asInt(summary.artifactPartial, missionArtifacts.filter(item => item.status === "partial").length);
+  const missing = asInt(summary.artifactMissing, missionArtifacts.filter(item => item.status === "missing").length);
+  const unplanned = asInt(summary.artifactUnplanned, missionArtifacts.filter(item => item.status === "unplanned").length);
+  const issueRows = asList(snapshot?.missionWatchdog?.issues)
+    .filter(item => item?.kind === "planned_scope_artifacts_not_ready")
+    .slice(0, 4);
+  const entrypoints = asList(missions)
+    .flatMap(deriveMissionArtifactEntrypoints)
+    .filter(item => item.status === "ready" || item.readmePath || item.indexHtmlPath)
+    .slice(0, 8);
+  return {
+    schema: "fluxio.builder_artifact_readiness.v1",
+    ready,
+    partial,
+    missing,
+    unplanned,
+    total: ready + partial + missing + unplanned || asList(missions).length,
+    status: missing > 0 ? "missing" : partial > 0 ? "partial" : unplanned > 0 ? "unplanned" : "ready",
+    tone: missing > 0 || partial > 0 ? "warn" : "good",
+    issueRows,
+    entrypoints,
+    nextAction:
+      issueRows[0]?.firstStep ||
+      (missing > 0
+        ? "Repair missing planned artifact folders before marking those missions useful."
+        : entrypoints.length > 0
+          ? "Open a ready mission report or preview from Artifact entrypoints."
+          : "Open ready artifacts from the mission or project row."),
+  };
+}
+
 function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode = "agent" }) {
   const workspaceId = uiMode === "builder" ? "" : workspace?.workspace_id || "";
   const workspaces = asList(snapshot?.workspaces);
@@ -1510,7 +2188,9 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
     .map(item => {
       const ownerWorkspace = workspaceById.get(item?.workspace_id) || workspace;
       const status = item?.state?.status || item?.missionLoop?.continuityState || "active";
+      const artifactReadiness = deriveMissionArtifactReadiness(item);
       const executionPath = deriveMissionExecutionPath(item, ownerWorkspace);
+      const contextRoots = deriveMissionContextRoots(item, ownerWorkspace, snapshot);
       const providerTruth =
         item?.providerTruth ||
         item?.missionLoop?.providerTruth ||
@@ -1547,6 +2227,9 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
           session => !["completed", "failed", "stopped"].includes(session?.status || ""),
         ).length,
         executionPath,
+        contextRoots,
+        contextRootCount: contextRoots.counts.totalRoots,
+        relatedRootCount: contextRoots.counts.relatedWorkspaces,
         harnessLabel: titleizeToken(item?.harness_id || productionHarness),
         providerLabel: activeRoute?.provider ? titleizeToken(activeRoute.provider) : "Unresolved",
         modelLabel: activeRoute?.model || "Profile default",
@@ -1554,8 +2237,22 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
         blockerClass: blocker?.class || "",
         stuckReason,
         nextCheckpointPrediction: deriveNextCheckpoint(item),
+        artifactReadiness,
+        artifactStatus: artifactReadiness.status,
+        artifactLabel: artifactReadiness.label,
+        artifactPath: artifactReadiness.readmePath || artifactReadiness.indexHtmlPath || artifactReadiness.path,
       };
     });
+
+  const projectProgressHistory = deriveProjectProgressHistory(snapshot);
+  const workspaceHealth = deriveWorkspaceHealth(
+    workspaces,
+    missions,
+    activeConversations,
+    workspaceById,
+    projectProgressHistory,
+  );
+  const artifactReadiness = deriveBuilderArtifactReadiness(snapshot, missions);
 
   const roots = workspaces
     .filter(item => (workspaceId ? item?.workspace_id === workspaceId : true))
@@ -1563,6 +2260,7 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
       const workspaceConversations = activeConversations.filter(
         entry => entry.workspaceId === item?.workspace_id,
       );
+      const health = workspaceHealth.find(row => row.workspaceId === item?.workspace_id) || {};
       const blocked = workspaceConversations.filter(entry => entry.blocked).length;
       const delegated = workspaceConversations.reduce(
         (total, entry) => total + asInt(entry.delegatedSessions),
@@ -1576,8 +2274,10 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
         activeCount: workspaceConversations.length,
         blockedCount: blocked,
         delegatedCount: delegated,
+        artifactReadyCount: health.artifactReadyCount || 0,
+        artifactMissingCount: health.artifactMissingCount || 0,
         tone:
-          blocked > 0
+          blocked > 0 || health.artifactMissingCount > 0
             ? "warn"
             : workspaceConversations.length > 0 || item?.runtimeStatus?.detected
               ? "good"
@@ -1633,6 +2333,8 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
     detail: item.blocked ? item.lastMovement : item.current,
     routeLabel: `${item.providerLabel} · ${item.modelLabel}`,
     checkpoint: item.nextCheckpointPrediction,
+    artifactLabel: item.artifactLabel,
+    artifactPath: item.artifactPath,
     tone: item.blocked ? "warn" : item.tone,
     updatedAt: item.updatedAt,
     selected: item.selected,
@@ -1698,6 +2400,18 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
     activeConversations.length > 0
       ? `${activeConversations.length} active conversation${activeConversations.length === 1 ? "" : "s"} across ${Math.max(runtimeCount, 1)} runtime lane${Math.max(runtimeCount, 1) === 1 ? "" : "s"}. ${blockedCount > 0 ? `${blockedCount} need operator attention.` : "No operator block is active right now."} Top route: ${winningRoutes[0]?.label || "not resolved yet"}.`
       : "No active conversations. Builder stays ready for launch, runtime tuning, and review.";
+  const subAgentLanes = deriveSubAgentLanes(
+    missions,
+    workspaceById,
+    workspace,
+    productionHarness,
+  );
+  const selectedContextRoots =
+    (selectedMissionId
+      ? activeConversations.find(item => item.missionId === selectedMissionId)?.contextRoots
+      : null) ||
+    activeConversations[0]?.contextRoots ||
+    (mission ? deriveMissionContextRoots(mission, workspace, snapshot) : null);
 
   return {
     headline:
@@ -1728,6 +2442,16 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
         tone: delegatedLaneCount > 0 ? "neutral" : "warn",
       },
       {
+        id: "artifacts",
+        label: "Ready artifacts",
+        value: `${artifactReadiness.ready}`,
+        detail:
+          artifactReadiness.missing > 0 || artifactReadiness.partial > 0
+            ? `${artifactReadiness.missing} missing · ${artifactReadiness.partial} partial`
+            : `${artifactReadiness.ready}/${artifactReadiness.total} mission scopes ready`,
+        tone: artifactReadiness.tone,
+      },
+      {
         id: "harness",
         label: "Production harness",
         value: titleizeToken(productionHarness),
@@ -1736,7 +2460,18 @@ function deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode =
       },
     ],
     activeConversations,
+    artifactReadiness,
     roots,
+    workspaceHealth,
+    projectProgressHistory: {
+      schema: projectProgressHistory.schema,
+      source: projectProgressHistory.source,
+      eventLimit: projectProgressHistory.eventLimit,
+      liveData: projectProgressHistory.liveData,
+      projects: projectProgressHistory.projects,
+    },
+    subAgentLanes,
+    contextRoots: selectedContextRoots,
     nexuses,
     whileAway,
     nextUp,
@@ -2103,9 +2838,33 @@ function deriveLiveReviewStudio({
     });
   }
 
-  const previewUrl = mission?.state?.last_preview_url || mission?.state?.preview_url || "No preview URL captured";
+  const rawPreviewUrl = mission?.state?.last_preview_url || mission?.state?.preview_url || "";
+  const liveReviewMissionKey =
+    mission?.mission_id ||
+    mission?.id ||
+    workspace?.workspace_id ||
+    workspace?.id ||
+    "no-mission";
+  const liveReviewEventId = suffix => `mission:${liveReviewMissionKey}:${suffix}`;
+  const controlPreviewUrl = mission?.mission_id
+    ? `/control?mode=agent&surface=agent&agentScene=run&missionId=${encodeURIComponent(mission.mission_id)}`
+    : "/control?mode=builder&surface=builder";
+  const previewUrl = rawPreviewUrl || "No preview URL captured";
+  const hasServedLivePreview = previewMode === "live" && Boolean(rawPreviewUrl);
+  const previewSourceLabel = hasServedLivePreview
+    ? "Served live preview"
+    : previewMode === "live"
+      ? "Agent live surface"
+      : "Fixture review surface";
+  const previewSourceDetail = hasServedLivePreview
+    ? rawPreviewUrl
+    : previewMode === "live"
+      ? "No mission app preview has been captured yet; open the selected mission inside the live Agent surface."
+      : "Fixture mode is useful for repeatable layout review, but it is not production proof.";
   const screenshotPath =
-    mission?.proof?.latest_screenshot_path || mission?.state?.last_screenshot_path || "screenshots/latest.png";
+    mission?.proof?.latest_screenshot_path ||
+    mission?.state?.last_screenshot_path ||
+    (previewMode === "live" ? "" : "screenshots/latest.png");
   const verificationStep =
     asList(mission?.state?.verification_failures).length > 0 ? "Verification blocked by failing checks" : "Verification checks in progress";
   const imageArtifacts = asList(mission?.proof?.artifacts)
@@ -2260,10 +3019,79 @@ function deriveLiveReviewStudio({
         mission?.execution_scope?.execution_root || mission?.state?.execution_root || workspace?.root_path || "unrecorded",
     },
   };
+  const missionWatchdogRaw = snapshot?.missionWatchdog || {};
+  const missionWatchdogSummary = missionWatchdogRaw.summary || {};
+  const missionWatchdogIssues = asList(missionWatchdogRaw.issues);
+  const missionWatchdogSupervisor = missionWatchdogRaw.supervisor || {};
+  const missionWatchdogRegistry = missionWatchdogRaw.problemRegistry || {};
+  const missionWatchdogCadence = missionWatchdogSupervisor.cadencePolicy || {};
+  const missionWatchdog = {
+    enabled: true,
+    schema: missionWatchdogRaw.schema || "fluxio.mission_watchdog.v1",
+    supervisorSchema: missionWatchdogSupervisor.schema || "fluxio.mission_watchdog_supervisor.v1",
+    checkedAt: missionWatchdogRaw.checkedAt || nowTimestamp,
+    staleMinutes: asInt(missionWatchdogRaw.staleMinutes || 60),
+    loopStatus: missionWatchdogSupervisor.status || "missing",
+    loopMode: missionWatchdogSupervisor.loopMode || "none",
+    loopActive: Boolean(missionWatchdogSupervisor.supervisorActive),
+    loopStale: Boolean(missionWatchdogSupervisor.stale),
+    loopProcessAlive: Boolean(missionWatchdogSupervisor.processAlive),
+    loopPid: asInt(missionWatchdogSupervisor.processPid || 0),
+    loopLastRunAt: missionWatchdogSupervisor.lastRunAt || "",
+    loopNextRunAt: missionWatchdogSupervisor.nextRunAt || "",
+    loopIntervalSeconds: asInt(missionWatchdogSupervisor.intervalSeconds || 0),
+    loopRunsCompleted: asInt(missionWatchdogSupervisor.runsCompleted || 0),
+    loopNotificationStatus: missionWatchdogSupervisor.notificationStatus || "",
+    cadencePolicy: {
+      schema: missionWatchdogCadence.schema || "fluxio.mission_watchdog_cadence.v1",
+      activeIntervalSeconds: asInt(
+        missionWatchdogCadence.activeIntervalSeconds || missionWatchdogSupervisor.intervalSeconds || 0,
+      ),
+      staleMinutes: asInt(missionWatchdogCadence.staleMinutes || missionWatchdogSupervisor.staleMinutes || 60),
+      configureCommand:
+        missionWatchdogCadence.configureCommand ||
+        "python -m grant_agent.cli mission-watchdog --loop --max-runs 0 --interval-seconds <seconds>",
+      presets: asList(missionWatchdogCadence.presets).slice(0, 5),
+    },
+    issueCount: asInt(missionWatchdogSummary.issueCount || missionWatchdogIssues.length),
+    bad: asInt(missionWatchdogSummary.bad || 0),
+    warn: asInt(missionWatchdogSummary.warn || 0),
+    info: asInt(missionWatchdogSummary.info || 0),
+    queuePressure: asInt(missionWatchdogSummary.queuePressure || 0),
+    queuePressureSafe: asInt(missionWatchdogSummary.queuePressureSafe || 0),
+    queuePressureUnknown: asInt(missionWatchdogSummary.queuePressureUnknown || 0),
+    queuePressureOverlap: asInt(missionWatchdogSummary.queuePressureOverlap || 0),
+    artifactReady: asInt(missionWatchdogSummary.artifactReady || 0),
+    artifactPartial: asInt(missionWatchdogSummary.artifactPartial || 0),
+    artifactMissing: asInt(missionWatchdogSummary.artifactMissing || 0),
+    artifactUnplanned: asInt(missionWatchdogSummary.artifactUnplanned || 0),
+    missionCount: asInt(missionWatchdogSummary.missionCount || asList(snapshot?.missions).length),
+    activeWorkspaceCount: asInt(missionWatchdogSummary.activeWorkspaceCount || 0),
+    nextAction:
+      missionWatchdogSupervisor.nextAction && (missionWatchdogSupervisor.stale || !missionWatchdogSupervisor.supervisorActive)
+        ? missionWatchdogSupervisor.nextAction
+        : missionWatchdogRaw.nextAction ||
+          "No watchdog issues found. Keep the scheduled watchdog active.",
+    issues: missionWatchdogIssues.slice(0, 8),
+    problemRegistry: {
+      schema: missionWatchdogRegistry.schema || "fluxio.watchdog_problem_registry.v1",
+      status: missionWatchdogRegistry.status || "clear",
+      openProblemCount: asInt(missionWatchdogRegistry.openProblemCount || 0),
+      resolvedProblemCount: asInt(missionWatchdogRegistry.resolvedProblemCount || 0),
+      newProblemCount: asInt(missionWatchdogRegistry.newProblemCount || 0),
+      firstOpenProblem: missionWatchdogRegistry.firstOpenProblem || {},
+      nextAction:
+        missionWatchdogRegistry.nextAction ||
+        missionWatchdogRaw?.problemReport?.nextAction ||
+        "No open watchdog problems. Keep the external loop active.",
+      problems: asList(missionWatchdogRegistry.problems).slice(0, 8),
+    },
+    artifactEntryPoints: asList(builderBoard?.artifactReadiness?.entrypoints).slice(0, 8),
+  };
 
   const events = [
     {
-      id: "evt-file-change",
+      id: liveReviewEventId("file-change"),
       kind: "file_change",
       label: "File changes",
       title: missionFiles[0] || "No tracked file changes yet",
@@ -2272,21 +3100,25 @@ function deriveLiveReviewStudio({
       timestamp: progressWindow,
       artifactPaths: missionFiles,
       source: "workspace_diff",
+      liveEvidence: missionFiles.length > 0,
     },
     {
-      id: "evt-browser-qa",
+      id: liveReviewEventId("browser-qa"),
       kind: "browser_qa",
       label: "Browser QA",
-      title: "Browser-use actions",
+      title: hasServedLivePreview ? "Browser-use actions" : "Preview proof not captured",
       detail: `Preview URL: ${previewUrl}`,
-      tone: previewMode === "live" ? "good" : "neutral",
+      tone: hasServedLivePreview ? "good" : previewMode === "live" ? "warn" : "neutral",
       timestamp: nowTimestamp,
-      previewUrl,
+      previewUrl: rawPreviewUrl,
+      previewSourceLabel,
+      previewSourceDetail,
       browserActions: ["open_page", "audit_layout", "report_issue"],
       deepLink: { type: "review_target", targetId: reviewTargets[0]?.id || "" },
+      liveEvidence: Boolean(rawPreviewUrl),
     },
     {
-      id: "evt-computer-use",
+      id: liveReviewEventId("computer-use"),
       kind: "computer_use",
       label: "Computer-use",
       title: "Program launch and handoff",
@@ -2299,13 +3131,16 @@ function deriveLiveReviewStudio({
       launchedPrograms: asList(mission?.state?.launched_programs).slice(0, 3),
       runtimeActivity: runtimeActivitySignals,
       deepLink: { type: "drawer", drawerId: "runtime" },
+      liveEvidence: Boolean(mission?.state?.current_runtime_lane || mission?.runtime_id),
     },
     {
-      id: "evt-screenshot",
+      id: liveReviewEventId("screenshot"),
       kind: "preview_refresh",
       label: "Preview refresh",
       title: "Screenshot and preview sync",
-      detail: `Latest screenshot artifact: ${screenshotPath}`,
+      detail: screenshotPath
+        ? `Latest screenshot artifact: ${screenshotPath}`
+        : "No screenshot artifact captured by the live mission yet.",
       tone: liveSyncSuspended ? "warn" : "good",
       timestamp: mission?.state?.last_preview_refresh_at || nowTimestamp,
       screenshotFrames: [
@@ -2319,14 +3154,15 @@ function deriveLiveReviewStudio({
         {
           id: "frame-previous",
           label: "Previous",
-          path: mission?.state?.previous_screenshot_path || "screenshots/previous.png",
-          thumbnailPath: mission?.state?.previous_screenshot_path || "screenshots/previous.png",
+          path: mission?.state?.previous_screenshot_path || (previewMode === "live" ? "" : "screenshots/previous.png"),
+          thumbnailPath: mission?.state?.previous_screenshot_path || (previewMode === "live" ? "" : "screenshots/previous.png"),
           timestamp: mission?.state?.previous_preview_refresh_at || mission?.updated_at || nowTimestamp,
         },
       ],
+      liveEvidence: Boolean(screenshotPath),
     },
     {
-      id: "evt-verification",
+      id: liveReviewEventId("verification"),
       kind: "verification",
       label: "Verification",
       title: "Test and gate checks",
@@ -2338,9 +3174,15 @@ function deriveLiveReviewStudio({
           ? asList(mission?.proof?.passed_checks).slice(0, 4)
           : ["python -m compileall -q src", "frontend build pending"],
       deepLink: { type: "drawer", drawerId: "proof" },
+      liveEvidence: Boolean(
+        mission?.state?.last_verification_at ||
+          asList(mission?.state?.verification_failures).length > 0 ||
+          asList(mission?.proof?.passed_checks).length > 0 ||
+          asList(mission?.proof?.failed_checks).length > 0,
+      ),
     },
     {
-      id: "evt-image-playground",
+      id: liveReviewEventId("image-playground"),
       kind: "image_playground",
       label: "Image Playground",
       title: "Provider route, queue timeline, and layer handoff",
@@ -2353,11 +3195,14 @@ function deriveLiveReviewStudio({
       generatedImages:
         imageArtifacts.length > 0
           ? imageArtifacts.map(path => ({ path, label: path.split("/").slice(-1)[0] || "artifact" }))
-          : [{ path: "screenshots/latest.png", label: "latest.png" }],
+          : previewMode === "live"
+            ? []
+            : [{ path: "screenshots/latest.png", label: "latest.png" }],
       artifactPaths: imageArtifacts,
+      liveEvidence: imageArtifacts.length > 0,
     },
     {
-      id: "evt-operator-followup",
+      id: liveReviewEventId("operator-followup"),
       kind: "operator_followup",
       label: "Operator follow-up",
       title: "Messages and acknowledgements",
@@ -2369,9 +3214,10 @@ function deriveLiveReviewStudio({
       timestamp: mission?.state?.last_operator_note_at || nowTimestamp,
       operatorMessages: asList(mission?.state?.operator_notes).slice(0, 3),
       acknowledgedBy: asList(mission?.state?.operator_acks).slice(0, 3),
+      liveEvidence: asList(mission?.state?.operator_notes).length > 0,
     },
     {
-      id: "evt-progress-window",
+      id: liveReviewEventId("progress-window"),
       kind: "progress_update",
       label: "10-20 min update",
       title: "Periodic progress snapshot",
@@ -2398,9 +3244,10 @@ function deriveLiveReviewStudio({
       designPrompts: plannerDesignPrompts,
       nextIdea: plannerNextIdea,
       structuredFeedbackReceipt,
+      liveEvidence: Boolean(progressWindow),
     },
     {
-      id: "evt-runtime-activity",
+      id: liveReviewEventId("runtime-activity"),
       kind: "runtime_activity",
       label: "Runtime activity",
       title: "Recent tool and lane actions",
@@ -2412,9 +3259,10 @@ function deriveLiveReviewStudio({
       timestamp: asList(snapshot?.activity)[0]?.timestamp || nowTimestamp,
       runtimeActivity: runtimeActivitySignals,
       deepLink: { type: "drawer", drawerId: "context" },
+      liveEvidence: runtimeActivitySignals.length > 0,
     },
     {
-      id: "evt-continuation-supervisor",
+      id: liveReviewEventId("continuation-supervisor"),
       kind: "continuation_supervisor",
       label: "Internal supervisor",
       title: "Immediate continuation reconcile",
@@ -2432,9 +3280,25 @@ function deriveLiveReviewStudio({
       nextIdea: continuationSupervisor.routePreservation.nextIdea,
       structuredFeedbackReceipt,
       deepLink: { type: "drawer", drawerId: "context" },
+      liveEvidence: Boolean(mission),
     },
     {
-      id: "evt-replay",
+      id: liveReviewEventId("mission-watchdog"),
+      kind: "mission_watchdog",
+      label: "External watchdog",
+      title: "Cross-mission loop watchdog",
+      detail:
+      missionWatchdog.issueCount > 0
+          ? `${missionWatchdog.issueCount} issue(s) across ${missionWatchdog.missionCount} mission(s) · next: ${missionWatchdog.nextAction}`
+          : `All ${missionWatchdog.missionCount} mission(s) passed the external watchdog scan · loop ${missionWatchdog.loopActive ? "active" : "needs attention"} · ${missionWatchdog.artifactReady} artifact scope(s) ready.`,
+      tone: missionWatchdog.bad > 0 ? "bad" : missionWatchdog.warn > 0 ? "warn" : "good",
+      timestamp: missionWatchdog.checkedAt,
+      missionWatchdog,
+      deepLink: { type: "drawer", drawerId: "context" },
+      liveEvidence: Boolean(missionWatchdogRaw.schema || missionWatchdogRaw.checkedAt || missionWatchdogIssues.length),
+    },
+    {
+      id: liveReviewEventId("replay"),
       kind: "replay_marker",
       label: "Replay marker",
       title: "Rewind and timelapse snapshot",
@@ -2457,8 +3321,12 @@ function deriveLiveReviewStudio({
             threadTarget: item?.threadId || mission?.mission_id || mission?.id || "",
           },
         })),
+      liveEvidence: asList(builderBoard?.nexuses || builderBoard?.nexus).length > 0,
     },
   ];
+  const liveEvidenceEvents = previewMode === "live"
+    ? events.filter(item => item.liveEvidence)
+    : events;
 
   const annotationReadiness = {
     enabled: true,
@@ -2502,11 +3370,18 @@ function deriveLiveReviewStudio({
         ? `${isRefreshing ? "Refreshing" : "Live"} · ${liveSyncSeconds === "off" ? "manual sync" : `${liveSyncSeconds}s sync`}`
         : `${previewLabel(previewMode, snapshot?.previewMeta)} · repeatable review`,
     targets: reviewTargets.slice(0, 6),
+    previewUrl,
+    previewActionUrl: rawPreviewUrl || controlPreviewUrl,
+    previewSourceLabel,
+    previewSourceDetail,
+    hasServedLivePreview,
     compareHint:
       builderBoard.activeConversations.length > 0
         ? "Use live review targets to steer the active mission, then jump back through nexuses if the direction changes."
-        : "Use fixture review now, then launch the UI review loop once a real mission is active.",
-    events,
+        : previewMode === "live"
+          ? "No live review targets are available yet; the panel waits for current NAS mission evidence."
+          : "Use local review data now, then launch the UI review loop once a real mission is active.",
+    events: liveEvidenceEvents,
     annotationReadiness,
     plannerProof: {
       selectedSkills: plannerSelectedSkills,
@@ -2518,6 +3393,7 @@ function deriveLiveReviewStudio({
       decisionInfluence,
     },
     continuationSupervisor,
+    missionWatchdog,
   };
 }
 
@@ -2887,6 +3763,7 @@ export function buildMissionControlModel({
         diffSummary: deriveDiffSummary(workspace),
         sections: proofSections,
         itemsCount: proofSections.reduce((total, section) => total + section.items.length, 0),
+        operatorValueFeedback: mission?.state?.operator_value_feedback || {},
       },
       context: {
         label: "Context",

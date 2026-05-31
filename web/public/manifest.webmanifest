@@ -1,0 +1,42 @@
+{
+  "name": "Fluxio Mission Control",
+  "short_name": "Fluxio",
+  "description": "Private mission control for Fluxio workspaces, NAS runs, proofs, and phone alerts.",
+  "id": "/control",
+  "start_url": "/control",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "orientation": "any",
+  "background_color": "#f7f8f5",
+  "theme_color": "#10231f",
+  "categories": ["productivity", "developer", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/fluxio-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/fluxio-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Builder",
+      "short_name": "Builder",
+      "description": "Open the Builder mission view.",
+      "url": "/control?surface=builder"
+    },
+    {
+      "name": "Missions",
+      "short_name": "Missions",
+      "description": "Review active missions and proof.",
+      "url": "/control?surface=missions"
+    }
+  ]
+}

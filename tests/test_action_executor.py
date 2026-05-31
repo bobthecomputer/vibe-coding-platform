@@ -111,6 +111,39 @@ class ActionExecutorTests(unittest.TestCase):
             self.assertTrue(record.result.ok)
             self.assertIn("Fluxio Mission Note", readme.read_text(encoding="utf-8"))
 
+    def test_generated_write_without_explicit_path_uses_mission_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            readme = root / "README.md"
+            readme.write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_artifact_target_test",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            step = PlannedStep(
+                step_id="step_plan",
+                title="Draft implementation plan with milestones",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Improve one beginner-facing Fluxio workflow end to end.",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertEqual(proposal.kind, "file_write")
+            self.assertIn(".agent_control", proposal.target_path)
+            self.assertIn("mission_artifacts", proposal.target_path)
+            self.assertNotEqual(pathlib.Path(proposal.target_path), readme)
+            self.assertFalse(proposal.requires_approval)
+
     def test_verify_words_in_objective_do_not_turn_non_verify_step_into_test_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

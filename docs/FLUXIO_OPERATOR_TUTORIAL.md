@@ -17,6 +17,24 @@ If `Hermes` is not installed and usable, do not treat the machine as `1.0` ready
 
 ## First Mission Flow
 
+Fast local launch:
+
+```bash
+npm install
+npm run fluxio
+```
+
+`npm run fluxio` is the supported browser-first launcher. It builds missing web assets, starts the local backend, waits for `/health`, and opens the private control room at `http://127.0.0.1:47880/control`.
+
+For package-style launch checks, use:
+
+```bash
+npm exec -- fluxio --no-open
+npm run verify:launcher-package
+```
+
+The `fluxio` package bin delegates to the same browser-first launcher, so the npm script and npx-style path stay aligned.
+
 Use this exact first mission loop:
 
 1. Add a workspace that points at the real repo root.

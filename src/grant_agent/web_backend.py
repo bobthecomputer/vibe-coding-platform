@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -16,9 +18,12 @@ import string
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import webbrowser
 import zlib
+from dataclasses import asdict
+from datetime import datetime, timezone
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,8 +32,33 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .delivery_receipt import (
+    generate_web_push_vapid_config,
+    load_delivery_receipts,
+    record_delivery_receipt,
+    record_web_push_subscription,
+    send_web_push_delivery_receipts,
+    web_push_status,
+)
+from .mission_control import (
+    CONTROL_ROOM_DETAIL_DURATION_BUDGET_MS,
+    CONTROL_ROOM_DETAIL_PAYLOAD_BUDGET_BYTES,
+    CONTROL_ROOM_SUMMARY_DURATION_BUDGET_MS,
+    CONTROL_ROOM_SUMMARY_PAYLOAD_BUDGET_BYTES,
+    ControlRoomStore,
+    hermes_auth_store_candidates,
+)
+from .mission_watchdog import ensure_watchdog_supervisor_loop
 from .port_safety import tcp_port_accepts_connection
 from .subprocess_utils import hidden_windows_subprocess_kwargs
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(str(os.environ.get(name, default)).strip()))
+    except (TypeError, ValueError):
+        return max(minimum, default)
+
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47880
@@ -36,11 +66,32 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 PRODUCT_NAME = "Fluxio"
 ADMIN_CONFIG_RELATIVE_PATH = ".agent_control/grand_agent_web_admin.json"
 ADMIN_PASSWORD_RELATIVE_PATH = ".agent_control/grand_agent_admin_password.txt"
+BOOTSTRAP_SUMMARY_CACHE_TTL_SECONDS = 5.0
+FULL_SUMMARY_CACHE_TTL_SECONDS = 8.0
+FULL_SUMMARY_STALE_WHILE_REVALIDATE_SECONDS = 20.0
+PERSISTED_FULL_SUMMARY_CACHE_VERSION = "2026-05-31.live_progress.v1"
+PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION = "2026-05-31.bootstrap_signature.v1"
+MISSION_DETAIL_CACHE_MAX_ITEMS = 12
+MISSION_DETAIL_PREWARM_DELAY_SECONDS = _env_float(
+    "FLUXIO_MISSION_DETAIL_PREWARM_DELAY_SECONDS",
+    0.05,
+)
+MISSION_DETAIL_PREWARM_WAIT_SECONDS = _env_float(
+    "FLUXIO_MISSION_DETAIL_PREWARM_WAIT_SECONDS",
+    0.45,
+)
+MISSION_DETAIL_STALE_WHILE_REVALIDATE_SECONDS = float(
+    os.environ.get("FLUXIO_MISSION_DETAIL_STALE_WHILE_REVALIDATE_SECONDS", "60")
+)
+MISSION_DETAIL_PREWARM_ENABLED = str(
+    os.environ.get("FLUXIO_ENABLE_MISSION_DETAIL_PREWARM", "1")
+).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 MISSION_START_TIMEOUT_SECONDS = 1200
 MISSION_ACTION_TIMEOUT_SECONDS = 1200
 SESSION_COOKIE_NAME = "grand_agent_session"
 ACCOUNT_ROLES = {"account", "operator", "admin"}
 PASSWORD_ITERATIONS = 240_000
+TLS_HANDSHAKE_TIMEOUT_SECONDS = 10
 ARTIFACT_CONTENT_TYPES = {
     ".apng": "image/apng",
     ".avif": "image/avif",
@@ -56,6 +107,54 @@ ARTIFACT_CONTENT_TYPES = {
     ".txt": "text/plain; charset=utf-8",
     ".webp": "image/webp",
 }
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return default
+    return raw not in {"0", "false", "no", "off", "disabled"}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(str(os.environ.get(name, default)).strip()))
+    except (TypeError, ValueError):
+        return max(minimum, default)
+
+
+class _HandshakeSafeThreadingHTTPServer(ThreadingHTTPServer):
+    """Keep plain TCP probes from blocking the TLS accept loop."""
+
+    daemon_threads = True
+    request_queue_size = 64
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        request_handler_class: type[BaseHTTPRequestHandler],
+        *,
+        ssl_context: ssl.SSLContext | None = None,
+    ) -> None:
+        self.ssl_context = ssl_context
+        super().__init__(server_address, request_handler_class)
+
+    def get_request(self) -> tuple[Any, Any]:
+        raw_socket, client_address = self.socket.accept()
+        raw_socket.settimeout(TLS_HANDSHAKE_TIMEOUT_SECONDS)
+        if not self.ssl_context:
+            return raw_socket, client_address
+        try:
+            tls_socket = self.ssl_context.wrap_socket(
+                raw_socket,
+                server_side=True,
+                do_handshake_on_connect=False,
+            )
+        except Exception:
+            raw_socket.close()
+            raise
+        tls_socket.settimeout(TLS_HANDSHAKE_TIMEOUT_SECONDS)
+        return tls_socket, client_address
 PROVIDER_ENV = {
     "openai": ("OPENAI_API_KEY",),
     "openai-codex": ("OPENAI_API_KEY", "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"),
@@ -64,6 +163,14 @@ PROVIDER_ENV = {
     "minimax": ("MINIMAX_API_KEY",),
     "minimax-cn": ("MINIMAX_API_KEY",),
     "minimax-portal": ("MINIMAX_OAUTH_TOKEN", "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"),
+}
+PROVIDER_SECRET_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "openai-codex": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_API_KEY",
 }
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -113,6 +220,17 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object
     body = json.dumps(payload, indent=2).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    _apply_security_headers(handler)
+    _send_cors_headers(handler)
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _html_response(handler: BaseHTTPRequestHandler, status: int, markup: str) -> None:
+    body = markup.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     _apply_security_headers(handler)
     _send_cors_headers(handler)
@@ -794,6 +912,7 @@ def _provider_presence(
     minimax_oauth_file = Path.home() / ".minimax" / "oauth_creds.json"
     state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw")))
     openclaw_auth_store = state_root / "agents" / "main" / "agent" / "auth-profiles.json"
+    hermes_auth_stores = hermes_auth_store_candidates(Path.home())
     session_secrets = session_secrets or {}
     for provider_id in ids:
         env_names = PROVIDER_ENV.get(provider_id, (f"{provider_id.upper()}_API_KEY",))
@@ -807,11 +926,111 @@ def _provider_presence(
         )
         if provider_id == "openai-codex":
             present = present or _openclaw_auth_store_has_provider(openclaw_auth_store, "openai-codex")
+            present = present or any(
+                _openclaw_auth_store_has_provider(path, "openai-codex")
+                for path in hermes_auth_stores
+            )
         if provider_id == "minimax-portal":
             present = present or minimax_oauth_file.exists()
             present = present or _openclaw_auth_store_has_provider(openclaw_auth_store, "minimax-portal")
+            present = present or any(
+                _openclaw_auth_store_has_provider(path, hermes_provider)
+                for path in hermes_auth_stores
+                for hermes_provider in ("minimax-oauth", "minimax", "minimax-portal")
+            )
         output[provider_id] = present
     return output
+
+
+def _provider_secret_store_path(root: Path) -> Path:
+    return root / ".agent_control" / "provider_secrets.json"
+
+
+def _provider_runtime_env_path() -> Path | None:
+    home = str(os.environ.get("HOME") or "").strip()
+    if not home:
+        return None
+    return Path(home).expanduser() / ".fluxio_provider_env"
+
+
+def _load_persisted_provider_secrets(root: Path) -> dict[str, str]:
+    path = _provider_secret_store_path(root)
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    secrets_payload = payload.get("secrets") if isinstance(payload.get("secrets"), dict) else payload
+    loaded: dict[str, str] = {}
+    for provider_id in PROVIDER_SECRET_ENV:
+        value = str(secrets_payload.get(provider_id) or "").strip()
+        if value:
+            loaded[provider_id] = value
+    return loaded
+
+
+def _shell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _write_runtime_provider_env(provider_secrets: dict[str, str]) -> None:
+    path = _provider_runtime_env_path()
+    if path is None:
+        return
+    env_values: dict[str, str] = {}
+    for provider_id, value in provider_secrets.items():
+        env_name = PROVIDER_SECRET_ENV.get(provider_id)
+        cleaned = str(value or "").strip()
+        if env_name and cleaned:
+            env_values[env_name] = cleaned
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Generated by Fluxio. This file is sourced by the NAS web backend launcher.",
+        "# Do not commit or share it.",
+    ]
+    for env_name in sorted(env_values):
+        lines.append(f"export {env_name}={_shell_single_quote(env_values[env_name])}")
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _write_persisted_provider_secrets(root: Path, provider_secrets: dict[str, str]) -> None:
+    path = _provider_secret_store_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    filtered = {
+        provider_id: str(value).strip()
+        for provider_id, value in provider_secrets.items()
+        if provider_id in PROVIDER_SECRET_ENV and str(value).strip()
+    }
+    payload = {
+        "schema": "fluxio.provider_secrets.v1",
+        "updatedAt": _utc_now(),
+        "secrets": filtered,
+    }
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    _write_runtime_provider_env(filtered)
 
 
 def _openclaw_auth_store_has_provider(path: Path, provider_id: str) -> bool:
@@ -825,6 +1044,12 @@ def _openclaw_auth_store_has_provider(path: Path, provider_id: str) -> bool:
 
     def visit(value: object) -> bool:
         if isinstance(value, dict):
+            for key in ("providers", "credential_pool"):
+                nested = value.get(key)
+                if isinstance(nested, dict) and needle in {
+                    str(item).strip().lower() for item in nested.keys()
+                }:
+                    return True
             provider = str(
                 value.get("provider")
                 or value.get("providerId")
@@ -1635,7 +1860,110 @@ def _write_minimax_openclaw_auth_profile(tokens: dict[str, Any], *, region: str)
         os.chmod(path, 0o600)
     except OSError:
         pass
-    return {"profileId": profile_id, "region": region}
+    hermes_sync = _sync_minimax_openclaw_oauth_to_hermes(tokens, region=region)
+    return {"profileId": profile_id, "region": region, "hermesSync": hermes_sync}
+
+
+def _sync_minimax_openclaw_oauth_to_hermes(
+    tokens: dict[str, Any],
+    *,
+    region: str,
+) -> dict[str, Any]:
+    access = str(tokens.get("access") or "").strip()
+    refresh = str(tokens.get("refresh") or "").strip()
+    if not access or not refresh:
+        return {"synced": False, "error": "missing_token"}
+    expires_ms = _normalize_epoch_millis(tokens.get("expires"), default_ttl_ms=86_400_000)
+    now = datetime.now(timezone.utc)
+    expires_at = datetime.fromtimestamp(expires_ms / 1000, tz=timezone.utc)
+    portal_base_url = _minimax_base_url(region)
+    inference_base_url = (
+        "https://api.minimaxi.com/anthropic"
+        if _normalize_minimax_region(region) == "cn"
+        else "https://api.minimax.io/anthropic"
+    )
+    auth_state = {
+        "provider": "minimax-oauth",
+        "region": _normalize_minimax_region(region),
+        "portal_base_url": portal_base_url,
+        "inference_base_url": inference_base_url,
+        "client_id": MINIMAX_OAUTH_CLIENT_ID,
+        "scope": MINIMAX_OAUTH_SCOPE,
+        "token_type": "Bearer",
+        "access_token": access,
+        "refresh_token": refresh,
+        "resource_url": tokens.get("resourceUrl"),
+        "obtained_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "expires_in": max(0, int(expires_at.timestamp() - now.timestamp())),
+    }
+    credential = {
+        "id": "minimax-oauth-openclaw",
+        "label": "minimax-oauth-openclaw",
+        "auth_type": "oauth",
+        "priority": 0,
+        "source": "openclaw:oauth",
+        "access_token": access,
+        "refresh_token": refresh,
+        "base_url": inference_base_url,
+        "expires_at": expires_at.isoformat(),
+        "last_status": "ok",
+        "last_status_at": None,
+        "last_error_code": None,
+        "last_error_reason": None,
+        "last_error_message": None,
+        "last_error_reset_at": None,
+        "request_count": 0,
+        "token_type": "Bearer",
+        "scope": MINIMAX_OAUTH_SCOPE,
+        "client_id": MINIMAX_OAUTH_CLIENT_ID,
+        "portal_base_url": portal_base_url,
+        "obtained_at": now.isoformat(),
+        "expires_in": auth_state["expires_in"],
+    }
+    hermes_home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
+    auth_path = hermes_home / "auth.json"
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        store = json.loads(auth_path.read_text(encoding="utf-8")) if auth_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        store = {}
+    if not isinstance(store, dict):
+        store = {}
+    providers = store.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        store["providers"] = providers
+    providers["minimax-oauth"] = auth_state
+    pool = store.setdefault("credential_pool", {})
+    if not isinstance(pool, dict):
+        pool = {}
+        store["credential_pool"] = pool
+    entries = pool.get("minimax-oauth")
+    if not isinstance(entries, list):
+        entries = []
+    entries = [entry for entry in entries if not (isinstance(entry, dict) and entry.get("source") == "openclaw:oauth")]
+    pool["minimax-oauth"] = [credential, *entries]
+    store["active_provider"] = store.get("active_provider") or "minimax-oauth"
+    store["version"] = 1
+    store["updated_at"] = now.isoformat()
+    tmp_path = auth_path.with_name(f"{auth_path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+    tmp_path.write_text(json.dumps(store, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(auth_path)
+    try:
+        os.chmod(auth_path, 0o600)
+    except OSError:
+        pass
+    return {
+        "synced": True,
+        "providerId": "minimax-oauth",
+        "authPath": str(auth_path),
+        "expiresAt": expires_at.isoformat(),
+    }
 
 
 def _complete_openclaw_codex_oauth(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1712,6 +2040,7 @@ def _minimax_openclaw_auth_status(
     credentials_path = Path.home() / ".minimax" / "oauth_creds.json"
     state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw")))
     auth_store_path = state_root / "agents" / "main" / "agent" / "auth-profiles.json"
+    hermes_auth_stores = hermes_auth_store_candidates(Path.home())
     authenticated = _provider_presence(
         ["minimax-portal"],
         session_secrets=session_secrets,
@@ -1723,6 +2052,12 @@ def _minimax_openclaw_auth_status(
         source = "minimax-cli-credentials"
     elif _openclaw_auth_store_has_provider(auth_store_path, "minimax-portal"):
         source = "openclaw-auth-profile"
+    elif any(
+        _openclaw_auth_store_has_provider(path, provider_id)
+        for path in hermes_auth_stores
+        for provider_id in ("minimax-oauth", "minimax", "minimax-portal")
+    ):
+        source = "hermes-auth-profile"
     return {
         "authenticated": authenticated,
         "providerId": "minimax-portal",
@@ -1730,6 +2065,7 @@ def _minimax_openclaw_auth_status(
         "expires": None,
         "credentialsPath": str(credentials_path),
         "authStorePath": str(auth_store_path),
+        "hermesAuthStorePaths": [str(path) for path in hermes_auth_stores],
         "source": source,
         "message": (
             "MiniMax OpenClaw OAuth credentials are visible to the web backend."
@@ -1994,6 +2330,103 @@ def _minimax_openclaw_auth_complete(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _minimax_openclaw_connect_page(region: object = None) -> str:
+    result = _minimax_openclaw_auth_start(region)
+    verification_url = str(result.get("verificationUrl") or "")
+    user_code = str(result.get("userCode") or "")
+    session_id = str(result.get("sessionId") or "")
+    command = str(result.get("command") or "")
+    message = str(result.get("message") or "")
+    error = str(result.get("error") or "")
+    status = result.get("status") if isinstance(result.get("status"), dict) else {}
+    already_connected = bool(result.get("authenticated") or status.get("authenticated"))
+    safe_json = json.dumps(
+        {
+            "sessionId": session_id,
+            "verificationUrl": verification_url,
+            "userCode": user_code,
+        }
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect MiniMax OpenClaw OAuth</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101417; color: #eef3f5; }}
+    main {{ width: min(720px, calc(100vw - 32px)); border: 1px solid #2b383d; background: #182126; border-radius: 10px; padding: 28px; box-shadow: 0 24px 80px rgba(0,0,0,.35); }}
+    h1 {{ margin: 0 0 12px; font-size: 28px; letter-spacing: 0; }}
+    p {{ color: #b9c7cc; line-height: 1.55; }}
+    .code {{ display: inline-block; margin: 8px 0 16px; padding: 10px 14px; border: 1px solid #3b5158; border-radius: 8px; background: #0f171a; font: 700 22px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; color: #ffffff; }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }}
+    a, button {{ border: 0; border-radius: 8px; padding: 11px 15px; font-weight: 700; cursor: pointer; text-decoration: none; }}
+    a.primary {{ background: #46d39a; color: #07110d; }}
+    button {{ background: #2f4249; color: #eef3f5; }}
+    pre {{ overflow: auto; padding: 12px; border-radius: 8px; background: #0d1417; border: 1px solid #2b383d; color: #d4e2e6; }}
+    .ok {{ color: #46d39a; }}
+    .err {{ color: #ff8f8f; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Connect MiniMax OpenClaw OAuth</h1>
+    <p>This is the Syntelos connect step. Open MiniMax from here, approve the OpenClaw connection, then return to this page and verify the NAS session.</p>
+    {"<p class='ok'>MiniMax OpenClaw OAuth is already connected.</p>" if already_connected else ""}
+    {"<p class='err'>" + html.escape(error) + "</p>" if error else ""}
+    {"<p>MiniMax code:</p><div class='code'>" + html.escape(user_code) + "</div>" if user_code else ""}
+    <div class="actions">
+      {"<a class='primary' target='_blank' rel='noopener noreferrer' href='" + html.escape(verification_url, quote=True) + "'>Open MiniMax Connect</a>" if verification_url else ""}
+      <button type="button" id="verify" {"disabled" if not session_id else ""}>Verify NAS Session</button>
+      <button type="button" id="copy" {"disabled" if not user_code else ""}>Copy Code</button>
+    </div>
+    <p id="status">{html.escape(message)}</p>
+    {"<pre>" + html.escape(command) + "</pre>" if command else ""}
+  </main>
+  <script>
+    const flow = {safe_json};
+    const statusEl = document.getElementById('status');
+    document.getElementById('copy')?.addEventListener('click', async () => {{
+      await navigator.clipboard.writeText(flow.userCode || '');
+      statusEl.textContent = 'MiniMax code copied.';
+    }});
+    let verifyTimer = null;
+    async function verifyMiniMax() {{
+      statusEl.textContent = 'Checking MiniMax approval on the NAS runtime...';
+      try {{
+        const response = await fetch('/api/minimax/openclaw/complete', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ sessionId: flow.sessionId }})
+        }});
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) throw new Error(payload.error || 'Verification failed.');
+        const data = payload.data || {{}};
+        statusEl.textContent = data.message || (data.authenticated ? 'MiniMax OpenClaw OAuth connected.' : 'MiniMax approval is still pending.');
+        statusEl.className = data.authenticated ? 'ok' : '';
+        if (data.authenticated && verifyTimer) {{
+          clearInterval(verifyTimer);
+          verifyTimer = null;
+        }}
+      }} catch (error) {{
+        statusEl.textContent = String(error?.message || error);
+        statusEl.className = 'err';
+      }}
+    }}
+    document.getElementById('verify')?.addEventListener('click', () => void verifyMiniMax());
+    document.querySelector('a.primary')?.addEventListener('click', () => {{
+      statusEl.textContent = 'MiniMax opened. After authorization succeeds, this page will verify the NAS session automatically.';
+      if (!verifyTimer) {{
+        verifyTimer = setInterval(() => void verifyMiniMax(), 3000);
+      }}
+      setTimeout(() => void verifyMiniMax(), 5000);
+    }});
+  </script>
+</body>
+</html>"""
+
+
 def _codex_import_snapshot() -> dict[str, Any]:
     candidates = [
         Path.home() / ".codex",
@@ -2024,7 +2457,7 @@ class FluxioWebBackend:
     ) -> None:
         self.root = root.resolve()
         self.static_root = static_root.resolve()
-        self.provider_secrets: dict[str, str] = {}
+        self.provider_secrets: dict[str, str] = _load_persisted_provider_secrets(self.root)
         self.admin_config, self.generated_admin_password = ensure_admin_config(
             self.root,
             reset_password=reset_admin_password,
@@ -2033,6 +2466,19 @@ class FluxioWebBackend:
         self.public_url = public_url or ""
         self.secure_cookies = self.public_url.startswith("https://")
         self.sessions: dict[str, dict[str, str]] = {}
+        self._summary_cache_lock = threading.Lock()
+        self._bootstrap_summary_cache: dict[
+            str,
+            tuple[tuple[tuple[str, int, int], ...], float, dict[str, Any]],
+        ] = {}
+        self._full_summary_cache: dict[
+            str,
+            tuple[tuple[tuple[str, int, int], ...], float, dict[str, Any]],
+        ] = {}
+        self._full_summary_revalidation_keys: set[str] = set()
+        self._mission_detail_cache_lock = threading.Lock()
+        self._mission_detail_cache: dict[str, tuple[tuple[tuple[str, int, int], ...], float, dict[str, Any]]] = {}
+        self._mission_detail_prewarm_keys: set[str] = set()
 
     @property
     def username(self) -> str:
@@ -2148,7 +2594,7 @@ class FluxioWebBackend:
         if time.time() - session.created_at > 900:
             _OPENAI_CODEX_OAUTH_SESSIONS.pop(session_id, None)
             raise RuntimeError("OpenAI Codex OAuth relay expired. Start sign-in again.")
-        token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
+        token = authorization[len("Bearer ") :].strip() if authorization.startswith("Bearer ") else ""
         if not token or not hmac.compare_digest(_sha256_hex(token), session.relay_token_hash):
             raise PermissionError("Invalid OpenAI Codex OAuth relay token.")
         callback_path = str(payload.get("callbackPath") or payload.get("callback_path") or "").strip()
@@ -2219,6 +2665,19 @@ class FluxioWebBackend:
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax-cn"]
         return env
 
+    def _with_provider_env(self, callback):
+        env = self._provider_env()
+        previous = {key: os.environ.get(key) for key in env}
+        try:
+            os.environ.update(env)
+            return callback()
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def _run_cli(
         self,
         root: Path,
@@ -2232,6 +2691,670 @@ class FluxioWebBackend:
         if fast_control_room:
             env["FLUXIO_CONTROL_ROOM_FAST"] = "1"
         return _run_cli(root, command, args, timeout=timeout, extra_env=env)
+
+    def _build_control_room_summary(self, root: Path) -> dict[str, Any]:
+        return self._with_provider_env(lambda: ControlRoomStore(root).build_summary_snapshot())
+
+    def _build_control_room_bootstrap_summary(self, root: Path) -> dict[str, Any]:
+        return self._with_provider_env(lambda: ControlRoomStore(root).build_bootstrap_summary_snapshot())
+
+    def _build_control_room_mission_detail(
+        self,
+        root: Path,
+        *,
+        mission_id: str,
+        event_limit: int,
+        freshness: str = "control-files-matched",
+    ) -> dict[str, Any]:
+        return self._with_provider_env(
+            lambda: ControlRoomStore(root).build_mission_detail_snapshot(
+                mission_id,
+                event_limit=event_limit,
+            )
+        )
+
+    def _control_room_freshness_signature(self, root: Path) -> tuple[tuple[str, int, int], ...]:
+        store = ControlRoomStore(root)
+        rows: list[tuple[str, int, int]] = []
+        for path in (
+            store.missions_path,
+            store.events_path,
+            store.workspaces_path,
+            store.workspace_actions_path,
+            root / ".agent_control" / "mission_watchdog.json",
+            root / ".agent_control" / "mission_watchdog_problems.json",
+            root / ".agent_control" / "mission_watchdog_supervisor.json",
+        ):
+            try:
+                stat = path.stat()
+            except OSError:
+                rows.append((str(path), 0, 0))
+            else:
+                rows.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
+        return tuple(rows)
+
+    @staticmethod
+    def _mission_detail_cache_key(root: Path, mission_id: str, event_limit: int) -> str:
+        return f"{root.resolve()}::{mission_id}::{event_limit}"
+
+    @staticmethod
+    def _mission_detail_item_limits(event_limit: int) -> dict[str, int]:
+        return {
+            "events": event_limit,
+            "action_history": 60,
+            "plan_revisions": 12,
+            "derived_tasks": 80,
+            "improvement_queue": 80,
+            "routing_decisions": 40,
+            "skill_usage": 80,
+            "learned_skill_events": 80,
+            "delegated_session_events": 20,
+        }
+
+    def _annotate_mission_detail_cache(
+        self,
+        payload: dict[str, Any],
+        *,
+        status: str,
+        started: float,
+        cached_at: float | None,
+        event_limit: int,
+        freshness: str = "control-files-matched",
+    ) -> dict[str, Any]:
+        annotated = dict(payload)
+        annotated["performance"] = dict(payload.get("performance", {}))
+        performance = annotated.setdefault("performance", {})
+        previous_duration = performance.get("durationMs")
+        served_duration = round((time.perf_counter() - started) * 1000, 2)
+        performance["durationMs"] = served_duration
+        performance["missionDetailCache"] = {
+            "schema": "fluxio.control_room.mission_detail_cache.v1",
+            "status": status,
+            "ageMs": round((time.monotonic() - cached_at) * 1000, 2) if cached_at else 0,
+            "freshness": freshness,
+            "generationDurationMs": previous_duration,
+            "maxItems": MISSION_DETAIL_CACHE_MAX_ITEMS,
+        }
+        performance["payloadBytes"] = len(
+            json.dumps(annotated, separators=(",", ":")).encode("utf-8")
+        )
+        performance["budget"] = ControlRoomStore._performance_budget_payload(
+            source="control_room_mission_detail",
+            duration_ms=served_duration,
+            payload_bytes=performance["payloadBytes"],
+            duration_budget_ms=CONTROL_ROOM_DETAIL_DURATION_BUDGET_MS,
+            payload_budget_bytes=CONTROL_ROOM_DETAIL_PAYLOAD_BUDGET_BYTES,
+            item_limits=self._mission_detail_item_limits(event_limit),
+        )
+        return annotated
+
+    def _cached_control_room_mission_detail(
+        self,
+        root: Path,
+        *,
+        mission_id: str,
+        event_limit: int,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        cache_key = self._mission_detail_cache_key(root, mission_id, event_limit)
+        signature = self._control_room_freshness_signature(root)
+        with self._mission_detail_cache_lock:
+            cached = self._mission_detail_cache.get(cache_key)
+            if cached:
+                cached_age = time.monotonic() - cached[1]
+            else:
+                cached_age = 0.0
+            if cached and (
+                cached[0] == signature
+                or cached_age <= MISSION_DETAIL_STALE_WHILE_REVALIDATE_SECONDS
+            ):
+                if cached[0] != signature:
+                    self._queue_mission_detail_cache_refresh(
+                        root,
+                        mission_id=mission_id,
+                        event_limit=event_limit,
+                        cache_key=cache_key,
+                    )
+                return self._annotate_mission_detail_cache(
+                    cached[2],
+                    status="hit",
+                    started=started,
+                    cached_at=cached[1],
+                    event_limit=event_limit,
+                    freshness=(
+                        "control-files-matched"
+                        if cached[0] == signature
+                        else "stale-while-revalidate"
+                    ),
+                )
+            prewarm_in_progress = cache_key in self._mission_detail_prewarm_keys
+
+        if prewarm_in_progress:
+            deadline = time.monotonic() + MISSION_DETAIL_PREWARM_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                time.sleep(0.025)
+                with self._mission_detail_cache_lock:
+                    cached = self._mission_detail_cache.get(cache_key)
+                    if cached:
+                        cached_age = time.monotonic() - cached[1]
+                    else:
+                        cached_age = 0.0
+                    if cached and (
+                        cached[0] == signature
+                        or cached_age <= MISSION_DETAIL_STALE_WHILE_REVALIDATE_SECONDS
+                    ):
+                        if cached[0] != signature:
+                            self._queue_mission_detail_cache_refresh(
+                                root,
+                                mission_id=mission_id,
+                                event_limit=event_limit,
+                                cache_key=cache_key,
+                            )
+                        return self._annotate_mission_detail_cache(
+                            cached[2],
+                            status="hit",
+                            started=started,
+                            cached_at=cached[1],
+                            event_limit=event_limit,
+                            freshness=(
+                                "control-files-matched"
+                                if cached[0] == signature
+                                else "stale-while-revalidate"
+                            ),
+                        )
+            with self._mission_detail_cache_lock:
+                self._mission_detail_prewarm_keys.discard(cache_key)
+        else:
+            with self._mission_detail_cache_lock:
+                self._mission_detail_prewarm_keys.discard(cache_key)
+
+        payload = self._build_control_room_mission_detail(
+            root,
+            mission_id=mission_id,
+            event_limit=event_limit,
+        )
+        self._store_mission_detail_cache(cache_key, signature, payload)
+        return self._annotate_mission_detail_cache(
+            payload,
+            status="miss",
+            started=started,
+            cached_at=None,
+            event_limit=event_limit,
+        )
+
+    def _store_mission_detail_cache(
+        self,
+        cache_key: str,
+        signature: tuple[tuple[str, int, int], ...],
+        payload: dict[str, Any],
+    ) -> None:
+        with self._mission_detail_cache_lock:
+            self._mission_detail_cache[cache_key] = (
+                signature,
+                time.monotonic(),
+                dict(payload, performance=dict(payload.get("performance", {}))),
+            )
+            if len(self._mission_detail_cache) > MISSION_DETAIL_CACHE_MAX_ITEMS:
+                oldest_key = min(
+                    self._mission_detail_cache,
+                    key=lambda key: self._mission_detail_cache[key][1],
+                )
+                self._mission_detail_cache.pop(oldest_key, None)
+
+    def _queue_mission_detail_cache_refresh(
+        self,
+        root: Path,
+        *,
+        mission_id: str,
+        event_limit: int,
+        cache_key: str,
+    ) -> None:
+        if cache_key in self._mission_detail_prewarm_keys:
+            return
+        self._mission_detail_prewarm_keys.add(cache_key)
+        timer = threading.Timer(
+            0.01,
+            self._refresh_control_room_mission_detail_cache,
+            args=(root, mission_id, event_limit, cache_key),
+        )
+        timer.daemon = True
+        timer.start()
+
+    def _prewarm_control_room_mission_details(self, root: Path, summary: dict[str, Any]) -> None:
+        if not MISSION_DETAIL_PREWARM_ENABLED:
+            return
+        missions = summary.get("missions") if isinstance(summary.get("missions"), list) else []
+        mission_ids = [
+            str(item.get("mission_id") or item.get("missionId") or "").strip()
+            for item in missions
+            if isinstance(item, dict)
+            and str(item.get("status") or "").strip().lower() == "running"
+            and str(item.get("mission_id") or item.get("missionId") or "").strip()
+        ][:4]
+        if not mission_ids:
+            return
+        for index, mission_id in enumerate(mission_ids):
+            prewarm_key = f"{root.resolve()}::{mission_id}::80"
+            with self._mission_detail_cache_lock:
+                if prewarm_key in self._mission_detail_prewarm_keys:
+                    continue
+                self._mission_detail_prewarm_keys.add(prewarm_key)
+            self._start_mission_detail_prewarm_timer(
+                root,
+                mission_id,
+                prewarm_key,
+                delay_seconds=MISSION_DETAIL_PREWARM_DELAY_SECONDS * (index + 1),
+            )
+
+    def _start_mission_detail_prewarm_timer(
+        self,
+        root: Path,
+        mission_id: str,
+        prewarm_key: str,
+        *,
+        delay_seconds: float = MISSION_DETAIL_PREWARM_DELAY_SECONDS,
+    ) -> None:
+        timer = threading.Timer(
+            delay_seconds,
+            self._run_mission_detail_prewarm,
+            args=(root, mission_id, prewarm_key),
+        )
+        timer.daemon = True
+        timer.start()
+
+    def _run_mission_detail_prewarm(self, root: Path, mission_id: str, prewarm_key: str) -> None:
+        try:
+            signature = self._control_room_freshness_signature(root)
+            with self._mission_detail_cache_lock:
+                if prewarm_key not in self._mission_detail_prewarm_keys:
+                    return
+                cached = self._mission_detail_cache.get(prewarm_key)
+                if cached and cached[0] == signature:
+                    return
+            payload = self._build_control_room_mission_detail(
+                root,
+                mission_id=mission_id,
+                event_limit=80,
+            )
+            self._store_mission_detail_cache(prewarm_key, signature, payload)
+        except Exception:
+            pass
+        finally:
+            with self._mission_detail_cache_lock:
+                self._mission_detail_prewarm_keys.discard(prewarm_key)
+
+    def _refresh_control_room_mission_detail_cache(
+        self,
+        root: Path,
+        mission_id: str,
+        event_limit: int,
+        cache_key: str,
+    ) -> None:
+        try:
+            signature = self._control_room_freshness_signature(root)
+            payload = self._build_control_room_mission_detail(
+                root,
+                mission_id=mission_id,
+                event_limit=event_limit,
+            )
+            self._store_mission_detail_cache(cache_key, signature, payload)
+        except Exception:
+            pass
+        finally:
+            with self._mission_detail_cache_lock:
+                self._mission_detail_prewarm_keys.discard(cache_key)
+
+    def _annotate_control_room_summary_cache(
+        self,
+        payload: dict[str, Any],
+        *,
+        status: str,
+        cached_at: float | None,
+        freshness: str,
+        ttl_seconds: float,
+    ) -> dict[str, Any]:
+        annotated = copy.deepcopy(payload)
+        annotated["summaryCache"] = {
+            "schema": "fluxio.control_room.summary_cache.v1",
+            "mode": "full",
+            "status": status,
+            "freshness": freshness,
+            "ttlSeconds": ttl_seconds,
+            "staleWhileRevalidateSeconds": FULL_SUMMARY_STALE_WHILE_REVALIDATE_SECONDS,
+            "ageMs": round((time.monotonic() - cached_at) * 1000, 2) if cached_at else 0,
+        }
+        return annotated
+
+    @staticmethod
+    def _persisted_control_room_summary_cache_path(root: Path) -> Path:
+        return root / ".agent_control" / "control_room_summary_cache.json"
+
+    @staticmethod
+    def _persisted_control_room_bootstrap_summary_cache_path(root: Path) -> Path:
+        return root / ".agent_control" / "control_room_bootstrap_summary_cache.json"
+
+    @staticmethod
+    def _serializable_control_room_signature(
+        signature: tuple[tuple[str, int, int], ...],
+    ) -> list[list[object]]:
+        return [[path, mtime_ns, size] for path, mtime_ns, size in signature]
+
+    @staticmethod
+    def _signature_from_serialized(value: object) -> tuple[tuple[str, int, int], ...]:
+        if not isinstance(value, list):
+            return ()
+        rows: list[tuple[str, int, int]] = []
+        for item in value:
+            if not isinstance(item, (list, tuple)) or len(item) != 3:
+                return ()
+            try:
+                rows.append((str(item[0]), int(item[1]), int(item[2])))
+            except (TypeError, ValueError):
+                return ()
+        return tuple(rows)
+
+    def _load_persisted_control_room_summary(
+        self,
+        root: Path,
+        signature: tuple[tuple[str, int, int], ...],
+    ) -> dict[str, Any] | None:
+        path = self._persisted_control_room_summary_cache_path(root)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("cacheVersion") != PERSISTED_FULL_SUMMARY_CACHE_VERSION:
+            return None
+        if self._signature_from_serialized(payload.get("signature")) != signature:
+            return None
+        summary = payload.get("summary")
+        if not isinstance(summary, dict):
+            return None
+        return summary
+
+    def _write_persisted_control_room_summary(
+        self,
+        root: Path,
+        signature: tuple[tuple[str, int, int], ...],
+        payload: dict[str, Any],
+    ) -> None:
+        path = self._persisted_control_room_summary_cache_path(root)
+        cache_payload = {
+            "schema": "fluxio.control_room.persisted_summary_cache.v1",
+            "cacheVersion": PERSISTED_FULL_SUMMARY_CACHE_VERSION,
+            "writtenAt": _utc_now(),
+            "signature": self._serializable_control_room_signature(signature),
+            "summary": copy.deepcopy(payload),
+        }
+        cache_payload["summary"].pop("summaryCache", None)
+        cache_payload["summary"].pop("webBackend", None)
+        cache_payload["summary"].pop("providerSecretPresence", None)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+        try:
+            tmp_path.write_text(json.dumps(cache_payload, separators=(",", ":")), encoding="utf-8")
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            tmp_path.replace(path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    def _load_persisted_control_room_bootstrap_summary(
+        self,
+        root: Path,
+        signature: tuple[tuple[str, int, int], ...],
+    ) -> dict[str, Any] | None:
+        path = self._persisted_control_room_bootstrap_summary_cache_path(root)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("cacheVersion") != PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION:
+            return None
+        if self._signature_from_serialized(payload.get("signature")) != signature:
+            return None
+        summary = payload.get("summary")
+        if not isinstance(summary, dict):
+            return None
+        return summary
+
+    def _write_persisted_control_room_bootstrap_summary(
+        self,
+        root: Path,
+        signature: tuple[tuple[str, int, int], ...],
+        payload: dict[str, Any],
+    ) -> None:
+        path = self._persisted_control_room_bootstrap_summary_cache_path(root)
+        cache_payload = {
+            "schema": "fluxio.control_room.persisted_bootstrap_summary_cache.v1",
+            "cacheVersion": PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION,
+            "writtenAt": _utc_now(),
+            "signature": self._serializable_control_room_signature(signature),
+            "summary": copy.deepcopy(payload),
+        }
+        cache_payload["summary"].pop("summaryCache", None)
+        cache_payload["summary"].pop("webBackend", None)
+        cache_payload["summary"].pop("providerSecretPresence", None)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+        try:
+            tmp_path.write_text(json.dumps(cache_payload, separators=(",", ":"), default=str), encoding="utf-8")
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            tmp_path.replace(path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    def _cached_control_room_summary(self, root: Path) -> dict[str, Any]:
+        cache_key = str(root.resolve())
+        signature = self._control_room_freshness_signature(root)
+        now = time.monotonic()
+        should_revalidate = False
+        with self._summary_cache_lock:
+            cached = self._full_summary_cache.get(cache_key)
+            cached_age = now - cached[1] if cached else 0.0
+            if cached and cached_age <= FULL_SUMMARY_CACHE_TTL_SECONDS:
+                return self._annotate_control_room_summary_cache(
+                    cached[2],
+                    status="hit",
+                    cached_at=cached[1],
+                    freshness=(
+                        "control-files-matched"
+                        if cached[0] == signature
+                        else "control-files-changed"
+                    ),
+                    ttl_seconds=FULL_SUMMARY_CACHE_TTL_SECONDS,
+                )
+            if cached and cached_age <= FULL_SUMMARY_STALE_WHILE_REVALIDATE_SECONDS:
+                if cache_key not in self._full_summary_revalidation_keys:
+                    self._full_summary_revalidation_keys.add(cache_key)
+                    should_revalidate = True
+                payload = self._annotate_control_room_summary_cache(
+                    cached[2],
+                    status="stale-while-revalidate",
+                    cached_at=cached[1],
+                    freshness=(
+                        "control-files-matched"
+                        if cached[0] == signature
+                        else "control-files-changed"
+                    ),
+                    ttl_seconds=FULL_SUMMARY_CACHE_TTL_SECONDS,
+                )
+            else:
+                payload = None
+        if payload is not None:
+            if should_revalidate:
+                self._start_control_room_summary_revalidate(root, cache_key)
+            return payload
+
+        persisted_payload = self._load_persisted_control_room_summary(root, signature)
+        if persisted_payload is not None:
+            cached_at = time.monotonic()
+            with self._summary_cache_lock:
+                self._full_summary_cache[cache_key] = (
+                    signature,
+                    cached_at,
+                    copy.deepcopy(persisted_payload),
+                )
+            return self._annotate_control_room_summary_cache(
+                persisted_payload,
+                status="disk-hit",
+                cached_at=cached_at,
+                freshness="control-files-matched",
+                ttl_seconds=FULL_SUMMARY_CACHE_TTL_SECONDS,
+            )
+
+        payload = self._build_control_room_summary(root)
+        refreshed_signature = self._control_room_freshness_signature(root)
+        with self._summary_cache_lock:
+            self._full_summary_cache[cache_key] = (
+                refreshed_signature,
+                time.monotonic(),
+                copy.deepcopy(payload),
+            )
+        self._write_persisted_control_room_summary(root, refreshed_signature, payload)
+        return self._annotate_control_room_summary_cache(
+            payload,
+            status="miss",
+            cached_at=None,
+            freshness="rebuilt",
+            ttl_seconds=FULL_SUMMARY_CACHE_TTL_SECONDS,
+        )
+
+    def _start_control_room_summary_revalidate(self, root: Path, cache_key: str) -> None:
+        worker = threading.Thread(
+            target=self._run_control_room_summary_revalidate,
+            args=(root, cache_key),
+            daemon=True,
+        )
+        worker.start()
+
+    def _run_control_room_summary_revalidate(self, root: Path, cache_key: str) -> None:
+        try:
+            payload = self._build_control_room_summary(root)
+            signature = self._control_room_freshness_signature(root)
+            with self._summary_cache_lock:
+                self._full_summary_cache[cache_key] = (
+                    signature,
+                    time.monotonic(),
+                    copy.deepcopy(payload),
+                )
+            self._write_persisted_control_room_summary(root, signature, payload)
+        except Exception:
+            pass
+        finally:
+            with self._summary_cache_lock:
+                self._full_summary_revalidation_keys.discard(cache_key)
+
+    def _cached_control_room_bootstrap_summary(self, root: Path) -> dict[str, Any]:
+        started = time.perf_counter()
+        cache_key = str(root.resolve())
+        signature = self._control_room_freshness_signature(root)
+        now = time.monotonic()
+        with self._summary_cache_lock:
+            cached = self._bootstrap_summary_cache.get(cache_key)
+            if cached and cached[0] == signature:
+                return self._annotate_control_room_bootstrap_cache(
+                    cached[2],
+                    status="hit",
+                    started=started,
+                    cached_at=cached[1],
+                    freshness="control-files-matched",
+                )
+
+        persisted_payload = self._load_persisted_control_room_bootstrap_summary(root, signature)
+        if persisted_payload is not None:
+            cached_at = time.monotonic()
+            with self._summary_cache_lock:
+                self._bootstrap_summary_cache[cache_key] = (
+                    signature,
+                    cached_at,
+                    copy.deepcopy(persisted_payload),
+                )
+            return self._annotate_control_room_bootstrap_cache(
+                persisted_payload,
+                status="disk-hit",
+                started=started,
+                cached_at=cached_at,
+                freshness="control-files-matched",
+            )
+
+        payload = self._build_control_room_bootstrap_summary(root)
+        refreshed_signature = self._control_room_freshness_signature(root)
+        with self._summary_cache_lock:
+            self._bootstrap_summary_cache[cache_key] = (
+                refreshed_signature,
+                time.monotonic(),
+                copy.deepcopy(payload),
+            )
+        self._write_persisted_control_room_bootstrap_summary(root, refreshed_signature, payload)
+        return self._annotate_control_room_bootstrap_cache(
+            payload,
+            status="miss",
+            started=started,
+            cached_at=None,
+            freshness="rebuilt",
+        )
+
+    def _annotate_control_room_bootstrap_cache(
+        self,
+        payload: dict[str, Any],
+        *,
+        status: str,
+        started: float,
+        cached_at: float | None,
+        freshness: str,
+    ) -> dict[str, Any]:
+        annotated = copy.deepcopy(payload)
+        performance = dict(annotated.get("performance", {}))
+        generation_duration = performance.get("durationMs")
+        served_duration = round((time.perf_counter() - started) * 1000, 2)
+        annotated["summaryCache"] = {
+            "schema": "fluxio.control_room.summary_cache.v1",
+            "status": status,
+            "freshness": freshness,
+            "ttlSeconds": BOOTSTRAP_SUMMARY_CACHE_TTL_SECONDS,
+            "ageMs": round((time.monotonic() - cached_at) * 1000, 2) if cached_at else 0,
+            "generationDurationMs": generation_duration,
+        }
+        performance["durationMs"] = served_duration
+        performance["payloadBytes"] = len(
+            json.dumps(annotated, separators=(",", ":"), default=str).encode("utf-8")
+        )
+        previous_budget = performance.get("budget") if isinstance(performance.get("budget"), dict) else {}
+        previous_limits = previous_budget.get("itemLimits") if isinstance(previous_budget.get("itemLimits"), dict) else {}
+        performance["budget"] = ControlRoomStore._performance_budget_payload(
+            source="control_room_summary_bootstrap",
+            duration_ms=served_duration,
+            payload_bytes=performance["payloadBytes"],
+            duration_budget_ms=CONTROL_ROOM_SUMMARY_DURATION_BUDGET_MS,
+            payload_budget_bytes=CONTROL_ROOM_SUMMARY_PAYLOAD_BUDGET_BYTES,
+            item_limits=dict(previous_limits),
+        )
+        annotated["performance"] = performance
+        return annotated
 
     def _workspace_roots(self) -> list[str]:
         candidates = [self.root, Path.home()]
@@ -2311,9 +3434,10 @@ class FluxioWebBackend:
             if embedded_windows:
                 candidates.append(_platform_path_for_windows_drive(embedded_windows.group(1)).expanduser())
             if normalized.startswith("/volume1/"):
-                candidates.append(Path("C:/volume1") / normalized.removeprefix("/volume1/"))
+                volume_relative = normalized[len("/volume1/") :]
+                candidates.append(Path("C:/volume1") / volume_relative)
                 if os.name != "nt":
-                    candidates.append(Path("/mnt/c/volume1") / normalized.removeprefix("/volume1/"))
+                    candidates.append(Path("/mnt/c/volume1") / volume_relative)
             embedded_normalized = re.search(r"([A-Za-z]:/[^\r\n]+)$", normalized)
             if embedded_normalized:
                 candidates.append(_platform_path_for_windows_drive(embedded_normalized.group(1)).expanduser())
@@ -2825,7 +3949,7 @@ class FluxioWebBackend:
                     "phase": "plan" if role == "planner" else ("verify" if role == "verifier" else "execute"),
                     "provider": route.get("provider") or "openai-codex",
                     "model": route.get("model") or OPENAI_CODEX_DEFAULT_MODEL,
-                    "effort": route.get("effort") or "medium",
+                    "effort": route.get("effort") or "high",
                     "health": "ready",
                     "active": role == active_role,
                     "authPath": "OpenAI Codex OAuth" if route.get("provider") == "openai-codex" else "provider route",
@@ -2943,14 +4067,14 @@ class FluxioWebBackend:
         route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
         provider = self._openclaw_provider_for_route(route.get("provider") or payload.get("provider") or "openai-codex")
         model = str(route.get("model") or payload.get("model") or OPENAI_CODEX_DEFAULT_MODEL).strip()
-        effort = str(route.get("effort") or payload.get("effort") or "medium").strip().lower()
+        effort = str(route.get("effort") or payload.get("effort") or "high").strip().lower()
         role = str(route.get("role") or payload.get("role") or "executor").strip().lower()
         model_id = model if "/" in model else f"{provider}/{model}" if provider and model else model
         return {
             "provider": provider,
             "model": model,
             "model_id": model_id,
-            "effort": effort if effort and effort != "default" else "medium",
+            "effort": effort if effort and effort != "default" else "high",
             "role": role,
         }
 
@@ -3158,7 +4282,7 @@ class FluxioWebBackend:
         payload = _as_payload(raw_payload)
         if command == "get_control_room_snapshot_command":
             root = Path(payload.get("root") or self.root).resolve()
-            snapshot = self._run_cli(root, "control-room", [], timeout=180, fast_control_room=True)
+            snapshot = self._run_cli(root, "control-room", [], timeout=180, fast_control_room=False)
             snapshot["providerSecretPresence"] = _provider_presence(
                 session_secrets=self.provider_secrets,
             )
@@ -3168,6 +4292,108 @@ class FluxioWebBackend:
                 "root": str(root),
             }
             return snapshot
+        if command == "get_control_room_summary_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            bootstrap = bool(payload.get("bootstrap") or payload.get("summaryBootstrap"))
+            summary_mode = str(payload.get("summaryMode") or "").strip().lower()
+            summary = (
+                self._cached_control_room_bootstrap_summary(root)
+                if bootstrap or summary_mode == "bootstrap"
+                else self._cached_control_room_summary(root)
+            )
+            summary["providerSecretPresence"] = _provider_presence(
+                session_secrets=self.provider_secrets,
+            )
+            summary["webBackend"] = {
+                "available": True,
+                "commandSurface": "http",
+                "root": str(root),
+            }
+            self._prewarm_control_room_mission_details(root, summary)
+            return summary
+        if command == "get_control_room_mission_detail_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            mission_id = str(payload.get("missionId") or payload.get("mission_id") or "").strip()
+            if not mission_id:
+                raise RuntimeError("missionId is required")
+            event_limit = max(1, int(payload.get("eventLimit") or payload.get("event_limit") or 80))
+            detail = self._cached_control_room_mission_detail(
+                root,
+                mission_id=mission_id,
+                event_limit=event_limit,
+            )
+            detail["webBackend"] = {
+                "available": True,
+                "commandSurface": "http",
+                "root": str(root),
+            }
+            return detail
+        if command == "export_control_room_data_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return self._run_cli(root, "control-room-export", [], timeout=180)
+        if command == "export_mission_proof_digest_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            mission_id = str(payload.get("missionId") or payload.get("mission_id") or "").strip()
+            if not mission_id:
+                raise RuntimeError("missionId is required")
+            args = ["--mission-id", mission_id]
+            output = str(payload.get("output") or "").strip()
+            if output:
+                args.extend(["--output", output])
+            return self._run_cli(root, "mission-proof-digest", args, timeout=120)
+        if command == "record_delivery_receipt_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            receipt = record_delivery_receipt(
+                root,
+                mission_id=str(payload.get("missionId") or payload.get("mission_id") or "control_room"),
+                channel=str(payload.get("channel") or "browser_notification"),
+                destination=str(payload.get("destination") or "current_browser"),
+                event_kind=str(payload.get("eventKind") or payload.get("event_kind") or "notification.sent"),
+                event_message=str(payload.get("eventMessage") or payload.get("event_message") or ""),
+                status=str(payload.get("status") or "delivered"),
+                error_message=str(payload.get("errorMessage") or payload.get("error_message") or ""),
+                delivery_url=str(payload.get("deliveryUrl") or payload.get("delivery_url") or ""),
+            )
+            return asdict(receipt)
+        if command == "get_web_push_status_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return web_push_status(root)
+        if command == "generate_web_push_vapid_config_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return generate_web_push_vapid_config(
+                root,
+                subject=str(payload.get("subject") or payload.get("sub") or ""),
+            )
+        if command == "record_web_push_subscription_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            subscription = payload.get("subscription")
+            if not isinstance(subscription, dict):
+                raise RuntimeError("subscription is required")
+            return record_web_push_subscription(
+                root,
+                subscription=subscription,
+                user_agent=str(payload.get("userAgent") or payload.get("user_agent") or ""),
+                status=str(payload.get("status") or "subscribed"),
+            )
+        if command == "send_web_push_notification_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            receipts = send_web_push_delivery_receipts(
+                root=root,
+                mission_id=str(payload.get("missionId") or payload.get("mission_id") or "control_room"),
+                title=str(payload.get("title") or "Fluxio mission update"),
+                body=str(payload.get("body") or payload.get("eventMessage") or payload.get("event_message") or ""),
+                target_url=str(payload.get("targetUrl") or payload.get("target_url") or "/control?mode=agent&surface=agent"),
+                event_kind=str(payload.get("eventKind") or payload.get("event_kind") or "notification.web_push"),
+                dry_run=bool(payload.get("dryRun") or payload.get("dry_run")),
+            )
+            return {
+                "schema": "fluxio.web_push_delivery.v1",
+                "ok": any(receipt.status == "delivered" for receipt in receipts),
+                "receipts": [asdict(receipt) for receipt in receipts],
+                "deliveredCount": sum(1 for receipt in receipts if receipt.status == "delivered"),
+                "errorCount": sum(1 for receipt in receipts if receipt.status == "error"),
+                "skippedCount": sum(1 for receipt in receipts if receipt.status == "skipped"),
+            }
         if command == "get_nas_deploy_readiness_command":
             from .mission_control import build_nas_deploy_readiness_snapshot
 
@@ -3215,6 +4441,19 @@ class FluxioWebBackend:
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
         if command == "image_playground_operation_command":
             return self._write_image_playground_artifact(payload)
+        if command == "apply_skill_repair_command":
+            args = []
+            for key, flag in (
+                ("proposalId", "--proposal-id"),
+                ("skillId", "--skill-id"),
+                ("reviewer", "--reviewer"),
+                ("validationMissionId", "--validation-mission-id"),
+                ("validationStepId", "--validation-step-id"),
+            ):
+                value = payload.get(key) or payload.get(_camel_to_snake(key))
+                if value:
+                    args.extend([flag, str(value)])
+            return self._run_cli(self.root, "skill-repair-apply", args, timeout=120)
         if command == "save_workspace_profile_command":
             args = [
                 "--workspace-id",
@@ -3224,7 +4463,7 @@ class FluxioWebBackend:
                 "--path",
                 str(payload.get("path") or ""),
                 "--default-runtime",
-                str(payload.get("defaultRuntime") or payload.get("default_runtime") or "openclaw"),
+                str(payload.get("defaultRuntime") or payload.get("default_runtime") or "hermes"),
                 "--user-profile",
                 str(payload.get("userProfile") or payload.get("user_profile") or "builder"),
                 "--preferred-harness",
@@ -3256,6 +4495,38 @@ class FluxioWebBackend:
             if payload.get("autoSyncToNas") or payload.get("auto_sync_to_nas"):
                 args.extend(["--auto-sync-to-nas", "true"])
             return self._run_cli(self.root, "workspace-save", args, timeout=180)
+        if command == "resolve_workspace_sync_conflict_command":
+            return self._run_cli(
+                self.root,
+                "workspace-sync-conflict-resolve",
+                [
+                    "--workspace-id",
+                    str(payload.get("workspaceId") or payload.get("workspace_id") or ""),
+                    "--relative-path",
+                    str(payload.get("relativePath") or payload.get("relative_path") or ""),
+                    "--resolution",
+                    str(payload.get("resolution") or "manual_review"),
+                ],
+                timeout=120,
+            )
+        if command == "resolve_workspace_sync_conflict_batch_command":
+            relative_paths = payload.get("relativePaths") or payload.get("relative_paths") or []
+            if not isinstance(relative_paths, list):
+                relative_paths = [relative_paths]
+            args = [
+                "--workspace-id",
+                str(payload.get("workspaceId") or payload.get("workspace_id") or ""),
+                "--resolution",
+                str(payload.get("resolution") or "manual_review"),
+            ]
+            for relative_path in relative_paths:
+                args.extend(["--relative-path", str(relative_path or "")])
+            return self._run_cli(
+                self.root,
+                "workspace-sync-conflict-resolve-batch",
+                args,
+                timeout=180,
+            )
         if command == "start_control_room_mission_command":
             args = [
                 "--workspace-id",
@@ -3305,20 +4576,118 @@ class FluxioWebBackend:
                 args,
                 timeout=MISSION_START_TIMEOUT_SECONDS,
             )
+        if command == "quickstart_control_room_mission_command":
+            args = [
+                "--objective",
+                str(payload.get("objective") or ""),
+                "--runtime",
+                str(payload.get("runtime") or "auto"),
+                "--mode",
+                str(payload.get("mode") or "Autopilot"),
+                "--budget-hours",
+                str(payload.get("budgetHours") or payload.get("budget_hours") or 4),
+            ]
+            workspace_id = str(payload.get("workspaceId") or payload.get("workspace_id") or "").strip()
+            if workspace_id:
+                args.extend(["--workspace-id", workspace_id])
+            for check in payload.get("successChecks") or payload.get("success_checks") or []:
+                args.extend(["--success-check", str(check)])
+            if payload.get("foreground"):
+                args.append("--foreground")
+            return self._run_cli(
+                self.root,
+                "mission-quickstart",
+                args,
+                timeout=MISSION_START_TIMEOUT_SECONDS,
+            )
         if command == "apply_control_room_mission_action_command":
+            action = str(payload.get("action") or "").strip().lower()
             args = [
                 "--mission-id",
                 str(payload.get("missionId") or payload.get("mission_id") or ""),
                 "--action",
-                str(payload.get("action") or ""),
+                action,
             ]
-            if str(payload.get("action") or "").strip().lower() == "resume":
+            if action == "resume":
+                args.append("--launch-async")
+            if action == "extend-budget":
+                args.extend([
+                    "--budget-hours",
+                    str(payload.get("budgetHours") or payload.get("budget_hours") or 12),
+                ])
+                if (
+                    payload.get("launchAsync")
+                    or payload.get("launch_async")
+                    or payload.get("launch")
+                    or payload.get("resume")
+                ):
+                    args.append("--launch-async")
+            if action == "complete":
+                if payload.get("operatorValueScore") is not None or payload.get("operator_value_score") is not None:
+                    args.extend([
+                        "--operator-value-score",
+                        str(payload.get("operatorValueScore", payload.get("operator_value_score"))),
+                    ])
+                operator_outcome = str(payload.get("operatorOutcome") or payload.get("operator_outcome") or "").strip()
+                if operator_outcome:
+                    args.extend(["--operator-outcome", operator_outcome])
+                operator_note = str(payload.get("operatorCloseoutNote") or payload.get("operator_closeout_note") or "").strip()
+                if operator_note:
+                    args.extend(["--operator-closeout-note", operator_note])
+            if (
+                action == "parallelize-worktree"
+                and (
+                    payload.get("launchAsync")
+                    or payload.get("launch_async")
+                    or payload.get("launch")
+                )
+            ):
                 args.append("--launch-async")
             return self._run_cli(
                 self.root,
                 "mission-action",
                 args,
                 timeout=MISSION_ACTION_TIMEOUT_SECONDS,
+            )
+        if command == "apply_control_room_mission_route_command":
+            args = [
+                "--mission-id",
+                str(payload.get("missionId") or payload.get("mission_id") or ""),
+                "--role",
+                str(payload.get("role") or ""),
+                "--provider",
+                str(payload.get("provider") or ""),
+                "--model",
+                str(payload.get("model") or ""),
+                "--effort",
+                str(payload.get("effort") or "high"),
+                "--budget-class",
+                str(payload.get("budgetClass") or payload.get("budget_class") or "balanced"),
+                "--reason",
+                str(payload.get("reason") or "Builder lane reroute requested."),
+            ]
+            return self._run_cli(
+                self.root,
+                "mission-route",
+                args,
+                timeout=MISSION_ACTION_TIMEOUT_SECONDS,
+            )
+        if command == "record_control_room_lane_control_command":
+            args = [
+                "--mission-id",
+                str(payload.get("missionId") or payload.get("mission_id") or ""),
+                "--role",
+                str(payload.get("role") or ""),
+                "--action",
+                str(payload.get("action") or ""),
+                "--reason",
+                str(payload.get("reason") or "Agent lane control requested from the web UI."),
+            ]
+            return self._run_cli(
+                self.root,
+                "mission-lane-control",
+                args,
+                timeout=120,
             )
         if command == "send_control_room_mission_follow_up_command":
             args = [
@@ -3348,12 +4717,16 @@ class FluxioWebBackend:
             secret = str(payload.get("secret") or "").strip()
             if not provider_id or not secret:
                 raise RuntimeError("Provider id and secret are required.")
+            if provider_id not in PROVIDER_SECRET_ENV:
+                raise RuntimeError(f"Unsupported provider secret id: {provider_id}")
             self.provider_secrets[provider_id] = secret
+            _write_persisted_provider_secrets(self.root, self.provider_secrets)
             return True
         if command == "clear_provider_secret_command":
             provider_id = str(payload.get("providerId") or payload.get("provider_id") or "").strip()
             if provider_id:
                 self.provider_secrets.pop(provider_id, None)
+                _write_persisted_provider_secrets(self.root, self.provider_secrets)
             return True
         if command in {
             "connect_openclaw_gateway",
@@ -3394,13 +4767,20 @@ class FluxioWebBackend:
             content_type = "text/css; charset=utf-8"
         elif target.suffix == ".svg":
             content_type = "image/svg+xml"
+        elif target.suffix == ".webmanifest":
+            content_type = "application/manifest+json; charset=utf-8"
+        elif target.suffix == ".json":
+            content_type = "application/json; charset=utf-8"
         elif target.suffix == ".png":
             content_type = "image/png"
         body = target.read_bytes()
         handler.send_response(200)
         handler.send_header("Content-Type", content_type)
         handler.send_header("Content-Length", str(len(body)))
-        _apply_security_headers(handler, cache_control="public, max-age=300")
+        cache_control = "public, max-age=300"
+        if target.name in {"index.html", "service-worker.js"} or target.suffix in {".html", ".js", ".css"}:
+            cache_control = "no-store"
+        _apply_security_headers(handler, cache_control=cache_control)
         handler.end_headers()
         handler.wfile.write(body)
         return True
@@ -3430,9 +4810,33 @@ class FluxioWebBackend:
         handler.wfile.write(body)
         return True
 
+    def serve_delivery_receipts(self, handler: BaseHTTPRequestHandler) -> bool:
+        parsed = urlparse(handler.path)
+        if not self.is_authenticated(handler):
+            _json_response(
+                handler,
+                401,
+                {
+                    "ok": False,
+                    "error": f"{PRODUCT_NAME} login is required.",
+                    "loginRequired": True,
+                },
+            )
+            return True
+        query = parse_qs(parsed.query)
+        try:
+            limit = int((query.get("limit") or ["50"])[0])
+        except (TypeError, ValueError):
+            limit = 50
+        receipts = [asdict(item) for item in load_delivery_receipts(self.root, limit=max(1, min(limit, 200)))]
+        _json_response(handler, 200, {"ok": True, "data": {"receipts": receipts}})
+        return True
+
 
 def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
         def do_OPTIONS(self) -> None:  # noqa: N802
             _json_response(self, 204, {})
 
@@ -3449,11 +4853,30 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                     },
                 )
                 return
+            if parsed.path == "/auth/minimax-openclaw":
+                try:
+                    query = parse_qs(parsed.query)
+                    region = (query.get("region") or ["global"])[0]
+                    _html_response(self, 200, _minimax_openclaw_connect_page(region))
+                except Exception as exc:
+                    _html_response(
+                        self,
+                        500,
+                        (
+                            "<!doctype html><title>MiniMax Connect Error</title>"
+                            "<h1>MiniMax Connect Error</h1>"
+                            f"<pre>{html.escape(str(exc))}</pre>"
+                        ),
+                    )
+                return
             if parsed.path == "/api/auth/status":
                 _json_response(self, 200, {"ok": True, "data": backend.session_status(self)})
                 return
             if parsed.path == "/api/artifact":
                 backend.serve_artifact(self)
+                return
+            if parsed.path == "/api/delivery-receipts":
+                backend.serve_delivery_receipts(self)
                 return
             backend.serve_file(self)
 
@@ -3516,6 +4939,14 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                     _send_cors_headers(self)
                     self.end_headers()
                     self.wfile.write(body)
+                except Exception as exc:
+                    _json_response(self, 500, {"ok": False, "error": str(exc)})
+                return
+            if path == "/api/minimax/openclaw/complete":
+                try:
+                    payload = _read_json_body(self)
+                    result = _minimax_openclaw_auth_complete(payload)
+                    _json_response(self, 200, {"ok": True, "data": result})
                 except Exception as exc:
                     _json_response(self, 500, {"ok": False, "error": str(exc)})
                 return
@@ -3625,14 +5056,45 @@ def main(argv: list[str] | None = None) -> int:
         reset_admin_password=args.reset_admin_password,
         public_url=args.public_url or None,
     )
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(backend))
+    watchdog_autostart = _env_flag("FLUXIO_WATCHDOG_AUTOSTART", True)
+    if watchdog_autostart:
+        try:
+            watchdog_status = ensure_watchdog_supervisor_loop(
+                backend.root,
+                stale_minutes=_env_int("FLUXIO_WATCHDOG_STALE_MINUTES", 60, minimum=1),
+                interval_seconds=_env_int("FLUXIO_WATCHDOG_INTERVAL_SECONDS", 1200, minimum=0),
+                notify_telegram=_env_flag("FLUXIO_WATCHDOG_NOTIFY_TELEGRAM", True),
+            )
+            if watchdog_status.get("started"):
+                print(
+                    f"{PRODUCT_NAME} external mission watchdog started as pid {watchdog_status.get('pid')}",
+                    flush=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "watchdog_autostart_failed",
+                        "message": str(exc)[:300],
+                    },
+                    indent=2,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
     tls_enabled = bool(args.tls_cert_file or args.tls_key_file)
+    ssl_context: ssl.SSLContext | None = None
     if tls_enabled:
         if not args.tls_cert_file or not args.tls_key_file:
             raise SystemExit("--tls-cert-file and --tls-key-file must be provided together.")
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=args.tls_cert_file, keyfile=args.tls_key_file)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(certfile=args.tls_cert_file, keyfile=args.tls_key_file)
+    server = _HandshakeSafeThreadingHTTPServer(
+        (args.host, args.port),
+        make_handler(backend),
+        ssl_context=ssl_context,
+    )
     password_path = backend.root / ADMIN_PASSWORD_RELATIVE_PATH
     if backend.generated_admin_password:
         print(

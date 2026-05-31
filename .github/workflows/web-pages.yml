@@ -32,6 +32,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run frontend:build
+      - run: npm run verify:web-distribution -- --require-built-dist
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist
@@ -45,3 +46,36 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Record public web deployment evidence
+        run: |
+          mkdir -p .agent_control/deployment_evidence
+          cat > .agent_control/deployment_evidence/public-web.json <<EOF
+          {
+            "schema": "fluxio.public_web_deployment.v1",
+            "provider": "github_pages",
+            "url": "${{ steps.deployment.outputs.page_url }}",
+            "workflowRun": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "sha": "${{ github.sha }}",
+            "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          mkdir -p .agent_control/release_candidates/public-web
+          cat > .agent_control/release_candidates/public-web/release-candidate.json <<EOF
+          {
+            "schema": "fluxio.release_candidate.v1",
+            "candidateId": "public-web-${{ github.run_id }}",
+            "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "publicWebDeploymentAttached": true,
+            "publicWebDeploymentReceipt": ".agent_control/deployment_evidence/public-web.json",
+            "publicWebUrl": "${{ steps.deployment.outputs.page_url }}",
+            "workflowRun": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "sha": "${{ github.sha }}",
+            "nextAction": "Publish or tag this release candidate with the attached public web deployment receipt."
+          }
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fluxio-public-web-release-candidate
+          path: |
+            .agent_control/deployment_evidence/public-web.json
+            .agent_control/release_candidates/public-web/release-candidate.json

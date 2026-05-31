@@ -5,6 +5,7 @@ import io
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -19,10 +20,18 @@ from grant_agent.web_backend import (
     MiniMaxOAuthSession,
     _platform_path_for_windows_drive,
     add_or_reset_admin_user,
+    make_handler,
 )
 
 
 class FluxioWebBackendTests(unittest.TestCase):
+    def test_web_handler_uses_http_11_keep_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            handler = make_handler(FluxioWebBackend(root, root))
+
+            self.assertEqual(handler.protocol_version, "HTTP/1.1")
+
     def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -319,7 +328,6 @@ class FluxioWebBackendTests(unittest.TestCase):
                     {"providerIds": ["openai", "openai-codex", "minimax"]},
                 )
                 self.assertFalse(before["openai"])
-                self.assertFalse(before["openai-codex"])
 
                 self.assertTrue(
                     backend.dispatch(
@@ -336,14 +344,32 @@ class FluxioWebBackendTests(unittest.TestCase):
                 self.assertFalse(after["minimax"])
 
                 self.assertTrue(
+                    backend.dispatch(
+                        "save_provider_secret_command",
+                        {"providerId": "minimax", "secret": "test-minimax-key"},
+                    )
+                )
+                runtime_env = root / "home" / ".fluxio_provider_env"
+                self.assertTrue(runtime_env.is_file())
+                self.assertIn("MINIMAX_API_KEY=", runtime_env.read_text(encoding="utf-8"))
+
+                restarted_backend = FluxioWebBackend(root, root)
+                persisted = restarted_backend.dispatch(
+                    "get_provider_secret_presence_command",
+                    {"providerIds": ["openai", "openai-codex", "minimax"]},
+                )
+                self.assertTrue(persisted["openai"])
+                self.assertTrue(persisted["openai-codex"])
+                self.assertTrue(persisted["minimax"])
+
+                self.assertTrue(
                     backend.dispatch("clear_provider_secret_command", {"providerId": "openai"})
                 )
                 cleared = backend.dispatch(
                     "get_provider_secret_presence_command",
-                    {"providerIds": ["openai", "openai-codex"]},
+                    {"providerIds": ["openai"]},
                 )
                 self.assertFalse(cleared["openai"])
-                self.assertFalse(cleared["openai-codex"])
 
     def test_web_backend_prepends_packaged_runtime_bin_to_cli_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -946,12 +972,802 @@ class FluxioWebBackendTests(unittest.TestCase):
             completed.stdout = "{}"
             completed.stderr = ""
             with mock.patch("grant_agent.web_backend.subprocess.run", return_value=completed) as run_mock:
-                backend = FluxioWebBackend(root, root)
-                backend.dispatch("get_control_room_snapshot_command", {"root": str(root)})
+                from grant_agent import web_backend
+
+                web_backend._run_cli(root, "control-room", [], timeout=1)
 
             called_env = run_mock.call_args.kwargs["env"]
             self.assertIn("PYTHONPATH", called_env)
             self.assertTrue(str(root / "src") in called_env["PYTHONPATH"])
+
+    def test_control_room_summary_command_uses_in_process_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_summary",
+                return_value={"schema": "fluxio.control_room.summary.v1"},
+            ) as build_summary:
+                result = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+
+            self.assertEqual(result["schema"], "fluxio.control_room.summary.v1")
+            self.assertEqual(result["webBackend"]["commandSurface"], "http")
+            self.assertEqual(result["summaryCache"]["mode"], "full")
+            self.assertEqual(result["summaryCache"]["status"], "miss")
+            self.assertEqual(build_summary.call_args.args[0], root.resolve())
+
+    def test_control_room_summary_command_caches_full_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_summary",
+                return_value={
+                    "schema": "fluxio.control_room.summary.v1",
+                    "missions": [{"mission_id": "mission_live", "status": "running"}],
+                },
+            ) as build_summary:
+                with mock.patch.object(backend, "_start_mission_detail_prewarm_timer"):
+                    result = backend.dispatch(
+                        "get_control_room_summary_command",
+                        {"root": str(root)},
+                    )
+                    cached_result = backend.dispatch(
+                        "get_control_room_summary_command",
+                        {"root": str(root)},
+                    )
+
+            self.assertEqual(result["summaryCache"]["status"], "miss")
+            self.assertEqual(cached_result["summaryCache"]["status"], "hit")
+            self.assertEqual(cached_result["summaryCache"]["mode"], "full")
+            self.assertEqual(build_summary.call_count, 1)
+
+    def test_control_room_summary_command_loads_matching_persisted_full_snapshot_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_summary",
+                return_value={
+                    "schema": "fluxio.control_room.summary.v1",
+                    "missions": [{"mission_id": "mission_live", "status": "running"}],
+                },
+            ):
+                first = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+
+            restarted_backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                restarted_backend,
+                "_build_control_room_summary",
+                side_effect=AssertionError("persisted matching summary should avoid rebuild"),
+            ):
+                persisted = restarted_backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+
+            self.assertEqual(first["summaryCache"]["status"], "miss")
+            self.assertEqual(persisted["summaryCache"]["status"], "disk-hit")
+            self.assertEqual(persisted["summaryCache"]["freshness"], "control-files-matched")
+            self.assertEqual(persisted["missions"][0]["mission_id"], "mission_live")
+
+    def test_control_room_summary_cache_signature_includes_watchdog_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            backend = FluxioWebBackend(root, root)
+            before = backend._control_room_freshness_signature(root)
+            (control_dir / "mission_watchdog.json").write_text(
+                '{"schema":"fluxio.mission_watchdog.v1"}',
+                encoding="utf-8",
+            )
+            after = backend._control_room_freshness_signature(root)
+
+            self.assertNotEqual(before, after)
+            self.assertTrue(any("mission_watchdog.json" in row[0] and row[2] > 0 for row in after))
+
+    def test_bootstrap_summary_cache_uses_live_signature_instead_of_short_ttl(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            backend = FluxioWebBackend(root, root)
+            build_count = 0
+
+            def build_summary(active: int = 1) -> dict[str, object]:
+                nonlocal build_count
+                build_count += 1
+                return {
+                    "schema": "fluxio.control_room.summary.v1",
+                    "summaryMode": "bootstrap",
+                    "counts": {"activeMissions": active},
+                    "missions": [{"mission_id": f"mission_{build_count}", "status": "running"}],
+                    "performance": {
+                        "durationMs": 300,
+                        "payloadBytes": 64,
+                        "budget": {"itemLimits": {"missions": active}},
+                    },
+                }
+
+            with (
+                mock.patch("grant_agent.web_backend.BOOTSTRAP_SUMMARY_CACHE_TTL_SECONDS", 0.0),
+                mock.patch.object(backend, "_build_control_room_bootstrap_summary", side_effect=build_summary),
+            ):
+                first = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root), "summaryMode": "bootstrap"},
+                )
+                second = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root), "summaryMode": "bootstrap"},
+                )
+                (control_dir / "mission_events.jsonl").write_text(
+                    '{"kind":"mission.updated"}\n',
+                    encoding="utf-8",
+                )
+                third = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root), "summaryMode": "bootstrap"},
+                )
+
+            self.assertEqual(first["summaryCache"]["status"], "miss")
+            self.assertEqual(second["summaryCache"]["status"], "hit")
+            self.assertEqual(second["summaryCache"]["freshness"], "control-files-matched")
+            self.assertEqual(second["missions"][0]["mission_id"], "mission_1")
+            self.assertEqual(third["summaryCache"]["status"], "miss")
+            self.assertEqual(third["missions"][0]["mission_id"], "mission_2")
+            self.assertEqual(build_count, 2)
+
+    def test_bootstrap_summary_cache_persists_across_backend_restart_when_signature_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / ".agent_control").mkdir(parents=True)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_bootstrap_summary",
+                return_value={
+                    "schema": "fluxio.control_room.summary.v1",
+                    "summaryMode": "bootstrap",
+                    "missions": [{"mission_id": "mission_live", "status": "running"}],
+                    "performance": {
+                        "durationMs": 300,
+                        "payloadBytes": 64,
+                        "budget": {"itemLimits": {"missions": 1}},
+                    },
+                },
+            ):
+                first = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root), "summaryMode": "bootstrap"},
+                )
+
+            restarted_backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                restarted_backend,
+                "_build_control_room_bootstrap_summary",
+                side_effect=AssertionError("matching persisted bootstrap summary should avoid rebuild"),
+            ):
+                persisted = restarted_backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root), "summaryMode": "bootstrap"},
+                )
+
+            self.assertEqual(first["summaryCache"]["status"], "miss")
+            self.assertEqual(persisted["summaryCache"]["status"], "disk-hit")
+            self.assertEqual(persisted["summaryCache"]["freshness"], "control-files-matched")
+            self.assertEqual(persisted["missions"][0]["mission_id"], "mission_live")
+            self.assertLess(float(persisted["performance"]["durationMs"]), 50)
+
+    def test_control_room_summary_command_serves_stale_full_snapshot_while_revalidating(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_summary",
+                return_value={"schema": "fluxio.control_room.summary.v1", "missions": []},
+            ):
+                result = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+            with (
+                mock.patch("grant_agent.web_backend.FULL_SUMMARY_CACHE_TTL_SECONDS", 0.0),
+                mock.patch("grant_agent.web_backend.FULL_SUMMARY_STALE_WHILE_REVALIDATE_SECONDS", 30.0),
+                mock.patch.object(backend, "_start_control_room_summary_revalidate") as start_revalidate,
+            ):
+                stale_result = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+
+            self.assertEqual(result["summaryCache"]["status"], "miss")
+            self.assertEqual(stale_result["summaryCache"]["status"], "stale-while-revalidate")
+            self.assertEqual(stale_result["summaryCache"]["mode"], "full")
+            self.assertIn(stale_result["summaryCache"]["freshness"], {"control-files-matched", "control-files-changed"})
+            start_revalidate.assert_called_once()
+
+    def test_control_room_summary_command_supports_bootstrap_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_bootstrap_summary",
+                return_value={
+                    "schema": "fluxio.control_room.summary.v1",
+                    "summaryMode": "bootstrap",
+                    "missions": [{"mission_id": "mission_live", "title": "Live mission", "status": "running"}],
+                    "notifications": [{"kind": "mission_slice_completed", "title": "Slice completed"}],
+                },
+            ) as build_bootstrap:
+                with (
+                    mock.patch("grant_agent.web_backend.MISSION_DETAIL_PREWARM_ENABLED", True),
+                    mock.patch.object(backend, "_start_mission_detail_prewarm_timer") as start_prewarm,
+                ):
+                    result = backend.dispatch(
+                        "get_control_room_summary_command",
+                        {"root": str(root), "summaryMode": "bootstrap"},
+                    )
+                    cached_result = backend.dispatch(
+                        "get_control_room_summary_command",
+                        {"root": str(root), "summaryMode": "bootstrap"},
+                    )
+
+            self.assertEqual(result["schema"], "fluxio.control_room.summary.v1")
+            self.assertEqual(result["summaryMode"], "bootstrap")
+            self.assertEqual(result["missions"][0]["title"], "Live mission")
+            self.assertEqual(result["summaryCache"]["status"], "miss")
+            self.assertEqual(cached_result["summaryCache"]["status"], "hit")
+            self.assertEqual(cached_result["missions"][0]["title"], "Live mission")
+            self.assertEqual(result["webBackend"]["commandSurface"], "http")
+            self.assertEqual(build_bootstrap.call_args.args[0], root.resolve())
+            self.assertEqual(build_bootstrap.call_count, 1)
+            self.assertEqual(start_prewarm.call_count, 1)
+            self.assertEqual(start_prewarm.call_args.args[1], "mission_live")
+
+    def test_control_room_summary_prewarm_is_delayed_not_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(backend, "_cached_control_room_mission_detail") as build_detail:
+                with mock.patch("grant_agent.web_backend.threading.Timer") as timer:
+                    with mock.patch("grant_agent.web_backend.MISSION_DETAIL_PREWARM_ENABLED", True):
+                        timer.return_value = mock.Mock()
+                        backend._prewarm_control_room_mission_details(
+                            root,
+                            {
+                                "missions": [
+                                    {"mission_id": "mission_a", "status": "running"},
+                                    {"mission_id": "mission_b", "status": "completed"},
+                                ]
+                            },
+                        )
+
+            build_detail.assert_not_called()
+            timer.assert_called_once()
+            self.assertGreater(timer.call_args.args[0], 0)
+            self.assertEqual(timer.call_args.kwargs["args"][1], "mission_a")
+            timer.return_value.start.assert_called_once()
+
+    def test_control_room_summary_prewarm_is_enabled_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(backend, "_cached_control_room_mission_detail") as build_detail:
+                with mock.patch("grant_agent.web_backend.threading.Timer") as timer:
+                    timer.return_value = mock.Mock()
+                    backend._prewarm_control_room_mission_details(
+                        root,
+                        {"missions": [{"mission_id": "mission_a", "status": "running"}]},
+                    )
+
+            build_detail.assert_not_called()
+            timer.assert_called_once()
+            timer.return_value.start.assert_called_once()
+
+    def test_control_room_summary_prewarm_can_be_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(backend, "_cached_control_room_mission_detail") as build_detail:
+                with mock.patch("grant_agent.web_backend.threading.Timer") as timer:
+                    with mock.patch("grant_agent.web_backend.MISSION_DETAIL_PREWARM_ENABLED", False):
+                        backend._prewarm_control_room_mission_details(
+                            root,
+                            {"missions": [{"mission_id": "mission_a", "status": "running"}]},
+                        )
+
+            build_detail.assert_not_called()
+            timer.assert_not_called()
+
+    def test_control_room_snapshot_command_uses_full_live_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_run_cli",
+                return_value={"schema": "fluxio.control_room.snapshot.v1", "skillLibrary": {"items": ["live"]}},
+            ) as run_cli:
+                result = backend.dispatch(
+                    "get_control_room_snapshot_command",
+                    {"root": str(root)},
+                )
+
+            self.assertEqual(result["skillLibrary"]["items"], ["live"])
+            self.assertEqual(result["webBackend"]["commandSurface"], "http")
+            self.assertEqual(run_cli.call_args.args[1], "control-room")
+            self.assertEqual(run_cli.call_args.kwargs["timeout"], 180)
+            self.assertFalse(run_cli.call_args.kwargs["fast_control_room"])
+
+    def test_control_room_mission_detail_command_uses_in_process_live_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_cached_control_room_mission_detail",
+                return_value={"schema": "fluxio.control_room.mission_detail.v1"},
+            ) as build_detail:
+                with mock.patch.object(backend, "_run_cli") as run_cli:
+                    result = backend.dispatch(
+                        "get_control_room_mission_detail_command",
+                        {"root": str(root), "missionId": "mission_123", "eventLimit": 12},
+                    )
+
+            self.assertEqual(result["schema"], "fluxio.control_room.mission_detail.v1")
+            self.assertEqual(result["webBackend"]["commandSurface"], "http")
+            self.assertEqual(build_detail.call_args.args[0], root.resolve())
+            self.assertEqual(build_detail.call_args.kwargs["mission_id"], "mission_123")
+            self.assertEqual(build_detail.call_args.kwargs["event_limit"], 12)
+            run_cli.assert_not_called()
+
+    def test_control_room_mission_detail_command_rejects_missing_mission_id_before_store_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(backend, "_cached_control_room_mission_detail") as build_detail:
+                with self.assertRaises(RuntimeError):
+                    backend.dispatch(
+                        "get_control_room_mission_detail_command",
+                        {"root": str(root), "eventLimit": 12},
+                    )
+
+            build_detail.assert_not_called()
+
+    def test_control_room_mission_detail_command_normalizes_event_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_cached_control_room_mission_detail",
+                return_value={"schema": "fluxio.control_room.mission_detail.v1"},
+            ) as build_detail:
+                result = backend.dispatch(
+                    "get_control_room_mission_detail_command",
+                    {"root": str(root), "missionId": "mission_123", "eventLimit": 0},
+                )
+
+            self.assertEqual(result["schema"], "fluxio.control_room.mission_detail.v1")
+            self.assertEqual(build_detail.call_args.kwargs["event_limit"], 80)
+
+    def test_control_room_mission_detail_cache_reuses_matching_live_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            payload = {
+                "schema": "fluxio.control_room.mission_detail.v1",
+                "performance": {
+                    "source": "control_room_mission_detail",
+                    "durationMs": 310.0,
+                    "payloadBytes": 64,
+                },
+            }
+            with mock.patch.object(
+                backend,
+                "_control_room_freshness_signature",
+                return_value=(("missions.json", 1, 10),),
+            ):
+                with mock.patch.object(
+                    backend,
+                    "_build_control_room_mission_detail",
+                    return_value=payload,
+                ) as build_detail:
+                    first = backend._cached_control_room_mission_detail(
+                        root,
+                        mission_id="mission_123",
+                        event_limit=12,
+                    )
+                    second = backend._cached_control_room_mission_detail(
+                        root,
+                        mission_id="mission_123",
+                        event_limit=12,
+                    )
+
+            self.assertEqual(build_detail.call_count, 1)
+            self.assertEqual(first["performance"]["missionDetailCache"]["status"], "miss")
+            self.assertEqual(second["performance"]["missionDetailCache"]["status"], "hit")
+            self.assertEqual(second["performance"]["budget"]["status"], "pass")
+            self.assertEqual(second["performance"]["budget"]["itemLimits"]["events"], 12)
+
+    def test_control_room_mission_detail_cache_invalidates_when_live_signature_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            signatures = [
+                (("missions.json", 1, 10),),
+                (("missions.json", 2, 10),),
+            ]
+            with mock.patch.object(
+                backend,
+                "_control_room_freshness_signature",
+                side_effect=signatures,
+            ):
+                with mock.patch("grant_agent.web_backend.MISSION_DETAIL_STALE_WHILE_REVALIDATE_SECONDS", 0):
+                    with mock.patch.object(
+                        backend,
+                        "_build_control_room_mission_detail",
+                        return_value={"schema": "fluxio.control_room.mission_detail.v1"},
+                    ) as build_detail:
+                        backend._cached_control_room_mission_detail(
+                            root,
+                            mission_id="mission_123",
+                            event_limit=12,
+                        )
+                        backend._cached_control_room_mission_detail(
+                            root,
+                            mission_id="mission_123",
+                            event_limit=12,
+                        )
+
+            self.assertEqual(build_detail.call_count, 2)
+
+    def test_control_room_mission_detail_cache_serves_short_stale_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            signatures = [
+                (("events.jsonl", 1, 10),),
+                (("events.jsonl", 2, 11),),
+            ]
+            with mock.patch.object(
+                backend,
+                "_control_room_freshness_signature",
+                side_effect=signatures,
+            ):
+                with mock.patch.object(
+                    backend,
+                    "_build_control_room_mission_detail",
+                    return_value={"schema": "fluxio.control_room.mission_detail.v1"},
+                ) as build_detail:
+                    first = backend._cached_control_room_mission_detail(
+                        root,
+                        mission_id="mission_123",
+                        event_limit=12,
+                    )
+                    with mock.patch.object(
+                        backend,
+                        "_queue_mission_detail_cache_refresh",
+                    ) as refresh_detail:
+                        second = backend._cached_control_room_mission_detail(
+                            root,
+                            mission_id="mission_123",
+                            event_limit=12,
+                        )
+
+            self.assertEqual(build_detail.call_count, 1)
+            self.assertEqual(first["performance"]["missionDetailCache"]["status"], "miss")
+            self.assertEqual(second["performance"]["missionDetailCache"]["status"], "hit")
+            self.assertEqual(
+                second["performance"]["missionDetailCache"]["freshness"],
+                "stale-while-revalidate",
+            )
+            refresh_detail.assert_called_once()
+
+    def test_control_room_mission_detail_waits_for_active_prewarm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            signature = (("missions.json", 1, 10),)
+            prewarm_key = backend._mission_detail_cache_key(root, "mission_123", 80)
+            payload = {
+                "schema": "fluxio.control_room.mission_detail.v1",
+                "missionId": "mission_123",
+                "performance": {
+                    "source": "control_room_mission_detail",
+                    "durationMs": 42.0,
+                    "payloadBytes": 64,
+                },
+            }
+            backend._mission_detail_prewarm_keys.add(prewarm_key)
+
+            def store_prewarmed_payload() -> None:
+                backend._store_mission_detail_cache(prewarm_key, signature, payload)
+                with backend._mission_detail_cache_lock:
+                    backend._mission_detail_prewarm_keys.discard(prewarm_key)
+
+            timer = threading.Timer(0.03, store_prewarmed_payload)
+            timer.daemon = True
+            timer.start()
+            try:
+                with mock.patch.object(
+                    backend,
+                    "_control_room_freshness_signature",
+                    return_value=signature,
+                ):
+                    with mock.patch.object(
+                        backend,
+                        "_build_control_room_mission_detail",
+                    ) as build_detail:
+                        with mock.patch("grant_agent.web_backend.MISSION_DETAIL_PREWARM_WAIT_SECONDS", 0.2):
+                            detail = backend._cached_control_room_mission_detail(
+                                root,
+                                mission_id="mission_123",
+                                event_limit=80,
+                            )
+            finally:
+                timer.join(0.2)
+
+            build_detail.assert_not_called()
+            self.assertEqual(detail["missionId"], "mission_123")
+            self.assertEqual(detail["performance"]["missionDetailCache"]["status"], "hit")
+
+    def test_control_room_mission_detail_request_cancels_pending_prewarm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            prewarm_key = backend._mission_detail_cache_key(root, "mission_123", 80)
+            backend._mission_detail_prewarm_keys.add(prewarm_key)
+            with mock.patch.object(
+                backend,
+                "_control_room_freshness_signature",
+                return_value=(("missions.json", 1, 10),),
+            ):
+                with mock.patch.object(
+                    backend,
+                    "_build_control_room_mission_detail",
+                    return_value={"schema": "fluxio.control_room.mission_detail.v1"},
+                ) as build_detail:
+                    with mock.patch("grant_agent.web_backend.MISSION_DETAIL_PREWARM_WAIT_SECONDS", 0):
+                        backend._cached_control_room_mission_detail(
+                            root,
+                            mission_id="mission_123",
+                            event_limit=80,
+                        )
+                        backend._run_mission_detail_prewarm(root, "mission_123", prewarm_key)
+
+            self.assertEqual(build_detail.call_count, 1)
+            self.assertNotIn(prewarm_key, backend._mission_detail_prewarm_keys)
+
+    def test_export_mission_proof_digest_command_writes_reviewable_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_run_cli",
+                return_value={"ok": True, "missionId": "mission_123", "reportPath": "digest.md"},
+            ) as run_cli:
+                result = backend.dispatch(
+                    "export_mission_proof_digest_command",
+                    {"root": str(root), "missionId": "mission_123"},
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["reportPath"], "digest.md")
+            self.assertEqual(run_cli.call_args.args[1], "mission-proof-digest")
+            self.assertEqual(run_cli.call_args.args[2], ["--mission-id", "mission_123"])
+            self.assertEqual(run_cli.call_args.kwargs["timeout"], 120)
+
+    def test_export_control_room_data_command_is_available_on_web_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_run_cli",
+                return_value={"ok": True, "exportPath": "control-room.json"},
+            ) as run_cli:
+                result = backend.dispatch("export_control_room_data_command", {"root": str(root)})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["exportPath"], "control-room.json")
+            self.assertEqual(run_cli.call_args.args[1], "control-room-export")
+            self.assertEqual(run_cli.call_args.kwargs["timeout"], 180)
+
+    def test_apply_skill_repair_command_is_available_on_web_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_run_cli",
+                return_value={"ok": True, "receipt": {"status": "applied"}},
+            ) as run_cli:
+                result = backend.dispatch(
+                    "apply_skill_repair_command",
+                    {
+                        "proposalId": "skill_repair:learned_risky_runner",
+                        "skillId": "learned_risky_runner",
+                        "reviewer": "operator",
+                    },
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(run_cli.call_args.args[1], "skill-repair-apply")
+            self.assertIn("--proposal-id", run_cli.call_args.args[2])
+            self.assertIn("--skill-id", run_cli.call_args.args[2])
+            self.assertEqual(run_cli.call_args.kwargs["timeout"], 120)
+
+    def test_record_delivery_receipt_command_persists_browser_notification_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "record_delivery_receipt_command",
+                {
+                    "missionId": "mission_123",
+                    "channel": "browser_notification",
+                    "destination": "current_browser",
+                    "eventKind": "overnight_progress_digest",
+                    "eventMessage": "One mission can continue hands-free.",
+                    "status": "delivered",
+                },
+            )
+
+            self.assertEqual(result["mission_id"], "mission_123")
+            self.assertEqual(result["channel"], "browser_notification")
+            self.assertEqual(result["status"], "delivered")
+            receipt_path = root / ".agent_control" / "delivery_receipts.jsonl"
+            self.assertTrue(receipt_path.exists())
+            self.assertIn("overnight_progress_digest", receipt_path.read_text(encoding="utf-8"))
+
+    def test_web_push_status_and_subscription_are_exposed_for_browser_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            subscription = {
+                "endpoint": "https://push.example.test/subscription/123",
+                "keys": {"p256dh": "client-public-key", "auth": "client-auth-secret"},
+            }
+
+            with mock.patch.dict(
+                "os.environ",
+                {"FLUXIO_WEB_PUSH_PUBLIC_KEY": "BFluxioPublicKey"},
+                clear=False,
+            ):
+                status = backend.dispatch("get_web_push_status_command", {})
+
+            self.assertTrue(status["configured"])
+            self.assertFalse(status["senderConfigured"])
+            self.assertEqual(status["publicKey"], "BFluxioPublicKey")
+
+            receipt = backend.dispatch(
+                "record_web_push_subscription_command",
+                {
+                    "subscription": subscription,
+                    "userAgent": "Fluxio test browser",
+                },
+            )
+
+            self.assertEqual(receipt["schema"], "fluxio.web_push_subscription.v1")
+            self.assertEqual(receipt["endpoint"], subscription["endpoint"])
+            self.assertTrue(receipt["subscription"]["keysPresent"])
+            subscription_path = root / ".agent_control" / "web_push_subscriptions.jsonl"
+            self.assertTrue(subscription_path.exists())
+            self.assertIn("Fluxio test browser", subscription_path.read_text(encoding="utf-8"))
+
+    def test_generate_web_push_vapid_config_command_provisions_local_sender_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "generate_web_push_vapid_config_command",
+                {"subject": "mailto:operator@example.test"},
+            )
+            status = backend.dispatch("get_web_push_status_command", {})
+
+            self.assertEqual(result["schema"], "fluxio.web_push_vapid_provisioning.v1")
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["privateKeyConfigured"])
+            self.assertTrue(status["configured"])
+            self.assertTrue(status["privateKeyConfigured"])
+            self.assertTrue(status["localKeyConfigured"])
+            self.assertEqual(status["configuredSource"], "local_agent_control")
+            self.assertEqual(status["publicKey"], result["publicKey"])
+            self.assertIn("web_push_vapid.json", status["setupPath"])
+            vapid_path = root / ".agent_control" / "web_push_vapid.json"
+            self.assertTrue(vapid_path.exists())
+            self.assertIn("BEGIN PRIVATE KEY", vapid_path.read_text(encoding="utf-8"))
+
+    def test_send_web_push_notification_command_records_real_sender_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            backend.dispatch(
+                "record_web_push_subscription_command",
+                {
+                    "subscription": {
+                        "endpoint": "https://push.example.test/subscription/123",
+                        "keys": {"p256dh": "client-public-key", "auth": "client-auth-secret"},
+                    },
+                    "userAgent": "Fluxio test browser",
+                },
+            )
+
+            result = backend.dispatch(
+                "send_web_push_notification_command",
+                {
+                    "missionId": "mission_123",
+                    "title": "Slice complete",
+                    "body": "Mission slice completed.",
+                    "eventKind": "mission_slice_completed",
+                },
+            )
+
+            self.assertEqual(result["schema"], "fluxio.web_push_delivery.v1")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["skippedCount"], 1)
+            self.assertEqual(result["receipts"][0]["channel"], "web_push")
+            self.assertIn(
+                result["receipts"][0]["error_message"],
+                {"web_push_vapid_keys_not_configured", "web_push_sender_dependency_missing"},
+            )
+
+    def test_send_web_push_notification_command_supports_dry_run_delivery_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            backend.dispatch(
+                "record_web_push_subscription_command",
+                {
+                    "subscription": {
+                        "endpoint": "https://push.example.test/subscription/123",
+                        "keys": {"p256dh": "client-public-key", "auth": "client-auth-secret"},
+                    },
+                    "userAgent": "Fluxio test browser",
+                },
+            )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "FLUXIO_WEB_PUSH_PUBLIC_KEY": "BFluxioPublicKey",
+                    "FLUXIO_WEB_PUSH_PRIVATE_KEY": "FluxioPrivateKey",
+                },
+                clear=False,
+            ):
+                with mock.patch("grant_agent.delivery_receipt._web_push_dependency_available", return_value=True):
+                    result = backend.dispatch(
+                        "send_web_push_notification_command",
+                        {
+                            "missionId": "mission_123",
+                            "title": "Slice complete",
+                            "body": "Mission slice completed.",
+                            "eventKind": "mission_slice_completed",
+                            "dryRun": True,
+                        },
+                    )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["deliveredCount"], 1)
+            self.assertEqual(result["receipts"][0]["status"], "delivered")
+            self.assertEqual(result["receipts"][0]["delivery_url"].split("/", 1)[0], "dry_run:")
 
     def test_start_control_room_mission_command_uses_async_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1002,6 +1818,114 @@ class FluxioWebBackendTests(unittest.TestCase):
                 MISSION_ACTION_TIMEOUT_SECONDS,
             )
 
+    def test_apply_control_room_mission_action_extend_budget_can_resume_async(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                result = backend.dispatch(
+                    "apply_control_room_mission_action_command",
+                    {
+                        "missionId": "mission_budget",
+                        "action": "extend-budget",
+                        "budgetHours": 18,
+                        "launchAsync": True,
+                    },
+                )
+
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(run_cli.call_args.args[1], "mission-action")
+            command_args = run_cli.call_args.args[2]
+            self.assertIn("extend-budget", command_args)
+            self.assertIn("--budget-hours", command_args)
+            self.assertIn("18", command_args)
+            self.assertIn("--launch-async", command_args)
+            self.assertEqual(
+                run_cli.call_args.kwargs["timeout"],
+                MISSION_ACTION_TIMEOUT_SECONDS,
+            )
+
+    def test_apply_control_room_mission_action_parallelize_worktree_can_launch_async(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                result = backend.dispatch(
+                    "apply_control_room_mission_action_command",
+                    {
+                        "missionId": "mission_queue",
+                        "action": "parallelize-worktree",
+                        "launchAsync": True,
+                    },
+                )
+
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(run_cli.call_args.args[1], "mission-action")
+            command_args = run_cli.call_args.args[2]
+            self.assertIn("parallelize-worktree", command_args)
+            self.assertIn("--launch-async", command_args)
+            self.assertEqual(
+                run_cli.call_args.kwargs["timeout"],
+                MISSION_ACTION_TIMEOUT_SECONDS,
+            )
+
+    def test_apply_control_room_mission_action_complete_forwards_operator_closeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                result = backend.dispatch(
+                    "apply_control_room_mission_action_command",
+                    {
+                        "missionId": "mission_done",
+                        "action": "complete",
+                        "operatorValueScore": 91,
+                        "operatorOutcome": "useful",
+                        "operatorCloseoutNote": "The artifact is ready to reuse.",
+                    },
+                )
+
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(run_cli.call_args.args[1], "mission-action")
+            command_args = run_cli.call_args.args[2]
+            self.assertIn("--operator-value-score", command_args)
+            self.assertIn("91", command_args)
+            self.assertIn("--operator-outcome", command_args)
+            self.assertIn("useful", command_args)
+            self.assertIn("--operator-closeout-note", command_args)
+            self.assertIn("The artifact is ready to reuse.", command_args)
+
+    def test_record_control_room_lane_control_uses_cli_receipt_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                result = backend.dispatch(
+                    "record_control_room_lane_control_command",
+                    {
+                        "missionId": "mission_lane",
+                        "role": "executor",
+                        "action": "open-proof",
+                        "reason": "Operator opened proof.",
+                    },
+                )
+
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(run_cli.call_args.args[1], "mission-lane-control")
+            command_args = run_cli.call_args.args[2]
+            self.assertIn("--mission-id", command_args)
+            self.assertIn("mission_lane", command_args)
+            self.assertIn("--role", command_args)
+            self.assertIn("executor", command_args)
+            self.assertIn("--action", command_args)
+            self.assertIn("open-proof", command_args)
+            self.assertIn("--reason", command_args)
+            self.assertIn("Operator opened proof.", command_args)
+
     def test_health_response_includes_security_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -1034,6 +1958,76 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(handler.headers_out.get("X-Frame-Options"), "DENY")
             self.assertEqual(handler.headers_out.get("Referrer-Policy"), "no-referrer")
             self.assertEqual(handler.headers_out.get("Cache-Control"), "no-store")
+
+    def test_static_manifest_uses_installable_pwa_content_type(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "manifest.webmanifest").write_text(
+                '{"display":"standalone"}',
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            class DummyHandler:
+                path = "/manifest.webmanifest"
+
+                def __init__(self) -> None:
+                    self.headers_out: dict[str, str] = {}
+                    self.wfile = io.BytesIO()
+
+                def send_response(self, status: int) -> None:
+                    self.headers_out["Status"] = str(status)
+
+                def send_header(self, key: str, value: str) -> None:
+                    self.headers_out[key] = value
+
+                def end_headers(self) -> None:
+                    return
+
+            handler = DummyHandler()
+            self.assertTrue(backend.serve_file(handler))
+            self.assertEqual(handler.headers_out.get("Status"), "200")
+            self.assertEqual(
+                handler.headers_out.get("Content-Type"),
+                "application/manifest+json; charset=utf-8",
+            )
+            self.assertIn(b"standalone", handler.wfile.getvalue())
+
+    def test_static_shell_and_service_worker_are_not_browser_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "index.html").write_text("<html></html>", encoding="utf-8")
+            (root / "service-worker.js").write_text("self.skipWaiting();", encoding="utf-8")
+            (root / "assets").mkdir()
+            (root / "assets" / "app.js").write_text("console.log('ok');", encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            class DummyHandler:
+                def __init__(self, path: str) -> None:
+                    self.path = path
+                    self.headers_out: dict[str, str] = {}
+                    self.wfile = io.BytesIO()
+
+                def send_response(self, status: int) -> None:
+                    self.headers_out["Status"] = str(status)
+
+                def send_header(self, key: str, value: str) -> None:
+                    self.headers_out[key] = value
+
+                def end_headers(self) -> None:
+                    return
+
+            index_handler = DummyHandler("/control")
+            self.assertTrue(backend.serve_file(index_handler))
+            self.assertEqual(index_handler.headers_out.get("Cache-Control"), "no-store")
+
+            worker_handler = DummyHandler("/service-worker.js")
+            self.assertTrue(backend.serve_file(worker_handler))
+            self.assertEqual(worker_handler.headers_out.get("Cache-Control"), "no-store")
+
+            asset_handler = DummyHandler("/assets/app.js")
+            self.assertTrue(backend.serve_file(asset_handler))
+            self.assertEqual(asset_handler.headers_out.get("Cache-Control"), "no-store")
 
     def test_main_refuses_duplicate_backend_port(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

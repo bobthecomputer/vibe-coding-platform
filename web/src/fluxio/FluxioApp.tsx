@@ -29,6 +29,7 @@ import { buildLiveReviewWorkbench, getSnapshot } from "./fluxioBridge.ts";
 
 const PRODUCT_NAME = "Fluxio";
 const PRODUCT_TAGLINE = "Agent operating system for workspaces.";
+const PRIVATE_NAS_CONTROL_URL = "https://sysnology.tail602108.ts.net:47880/control";
 const PUBLIC_ROADMAP_EVENTS = [
   {
     id: "nas-bridge",
@@ -152,6 +153,14 @@ function isDevControlPreview(): boolean {
       isConsolePath() &&
       new URLSearchParams(window.location.search).get("preview-control") === "1",
   );
+}
+
+function shouldOfferPrivateNasControl(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const host = window.location.hostname.toLowerCase();
+  return ["localhost", "127.0.0.1", "::1", ""].includes(host);
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 1800) {
@@ -1204,6 +1213,7 @@ function GrandAgentLogin({
         .filter(item => item.username),
     [auth.accountHints],
   );
+  const showNasFallback = !auth.backendAvailable && shouldOfferPrivateNasControl();
 
   React.useEffect(() => {
     if (username.trim() || accountHints.length === 0) {
@@ -1370,6 +1380,27 @@ function GrandAgentLogin({
               value={password}
             />
           </label>
+          {showNasFallback ? (
+            <div className="grand-login-connect-panel" aria-label="Live NAS connection fallback">
+              <span>Backend connection</span>
+              <strong>Use the live NAS control room</strong>
+              <p>
+                This local page cannot reach a backend. The private NAS endpoint is the running
+                control room for missions, notification tests, and slice-completion updates.
+              </p>
+              <div className="grand-login-connect-actions">
+                <a href={PRIVATE_NAS_CONTROL_URL}>Open live NAS control</a>
+                <button
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(PRIVATE_NAS_CONTROL_URL);
+                  }}
+                  type="button"
+                >
+                  Copy link
+                </button>
+              </div>
+            </div>
+          ) : null}
           {error ? <p className="grand-login-error">{error}</p> : null}
           <button disabled={submitting || !username.trim() || !password} type="submit">
             {submitting ? "Signing in..." : "Sign in"}
@@ -1429,9 +1460,13 @@ export function FluxioApp() {
     let cancelled = false;
     const checkAuth = async () => {
       try {
-        const response = await fetchWithTimeout(`${webBackendBaseUrl()}/api/auth/status`, {
-          credentials: "include",
-        });
+        const response = await fetchWithTimeout(
+          `${webBackendBaseUrl()}/api/auth/status`,
+          {
+            credentials: "include",
+          },
+          8000,
+        );
         const payload = await response.json().catch(() => ({}));
         if (cancelled) {
           return;

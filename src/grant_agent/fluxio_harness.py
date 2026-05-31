@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import time
 import uuid
 from dataclasses import asdict
@@ -19,6 +21,7 @@ from .context_manager import ContextWindowManager
 from .doc_ingestion import ingest_docs
 from .engine import AutonomousEngine
 from .handoff import create_handoff_packet, save_handoff_packet
+from .mission_control import hermes_auth_store_candidates
 from .models import (
     ActionExecutionRecord,
     ActionProposal,
@@ -56,6 +59,143 @@ DELEGATED_FOLLOW_BUDGET_SECONDS = 12
 AUTONOMY_HISTORY_LIMIT = 12
 PREMIUM_OPENAI_MODEL = "gpt-5.5"
 EFFICIENT_OPENAI_MODEL = "gpt-5.4-mini"
+CODEX_PLANNING_PROVIDER = "openai-codex"
+CODEX_PLANNING_MODEL = "gpt-5.5"
+CODEX_EFFICIENT_PLANNING_MODEL = "gpt-5.5"
+FRONTEND_MINIMAX_MODEL = "MiniMax-M2.7"
+TASK_AWARE_ROUTE_PROFILES = {
+    "frontend_design": {
+        "keywords": (
+            "frontend",
+            "front-end",
+            "ui",
+            "ux",
+            "interface",
+            "design",
+            "react",
+            "css",
+            "web app",
+            "website",
+            "visual",
+            "prototype",
+            "mobile",
+            "tablet",
+        ),
+        "executorProvider": "minimax",
+        "executorModel": FRONTEND_MINIMAX_MODEL,
+        "executorEffort": "high",
+        "executorBudgetClass": "specialist",
+        "routeIntent": "visual_interface_execution",
+        "reason": "Frontend/UI/design work routes execution to MiniMax while keeping Codex/OpenAI on planning and verification.",
+    },
+    "hardware_electrical": {
+        "keywords": (
+            "hardware",
+            "electrical",
+            "electronics",
+            "pcb",
+            "circuit",
+            "sensor",
+            "embedded",
+            "microcontroller",
+            "firmware",
+            "mechatronic",
+            "simulator",
+            "simulation",
+            "digital twin",
+        ),
+        "executorProvider": "openai",
+        "executorModel": PREMIUM_OPENAI_MODEL,
+        "executorEffort": "high",
+        "executorBudgetClass": "premium",
+        "routeIntent": "engineering_simulation_execution",
+        "reason": "Hardware/electrical engineering missions use a premium execution lane for constraints, units, simulation reasoning, and verifier-friendly artifacts.",
+    },
+    "data_f1_analytics": {
+        "keywords": (
+            "f1",
+            "formula 1",
+            "formula one",
+            "telemetry",
+            "lap time",
+            "racing",
+            "analytics",
+            "dataset",
+            "dashboard",
+            "visualization",
+            "data app",
+        ),
+        "executorProvider": "openai",
+        "executorModel": PREMIUM_OPENAI_MODEL,
+        "executorEffort": "high",
+        "executorBudgetClass": "premium",
+        "routeIntent": "analytics_dashboard_execution",
+        "reason": "F1/data analytics missions favor a premium high-effort execution lane for dashboards, datasets, and repeatable analysis while preserving premium verification.",
+    },
+    "research_analysis": {
+        "keywords": (
+            "research",
+            "report",
+            "analysis",
+            "geoint",
+            "rf",
+            "wireless",
+            "maritime",
+            "forensics",
+            "investigation",
+            "intelligence",
+        ),
+        "executorProvider": "openai",
+        "executorModel": PREMIUM_OPENAI_MODEL,
+        "executorEffort": "high",
+        "executorBudgetClass": "premium",
+        "routeIntent": "research_synthesis_execution",
+        "reason": "Research/report work keeps execution high-effort and leaves high-confidence planning and verification on Codex/OpenAI.",
+    },
+    "security_red_team": {
+        "keywords": (
+            "red team",
+            "red-team",
+            "defensive",
+            "threat",
+            "security",
+            "vulnerability",
+            "exploit",
+            "hardening",
+            "offensive",
+            "attack surface",
+        ),
+        "executorProvider": "openai",
+        "executorModel": PREMIUM_OPENAI_MODEL,
+        "executorEffort": "high",
+        "executorBudgetClass": "premium",
+        "routeIntent": "adversarial_verification_execution",
+        "reason": "Security/red-team missions use premium execution and verification so difficulty can escalate without losing defensive proof quality.",
+    },
+}
+TASK_AWARE_ROUTE_KEYWORDS = {
+    task_type: tuple(profile["keywords"])
+    for task_type, profile in TASK_AWARE_ROUTE_PROFILES.items()
+}
+TASK_AWARE_ROUTE_PRIORITY = (
+    "frontend_design",
+    "hardware_electrical",
+    "data_f1_analytics",
+    "security_red_team",
+    "research_analysis",
+)
+TASK_AWARE_ROUTE_LABELS = {
+    "frontend_design": "Frontend/UI/design",
+    "hardware_electrical": "Hardware/electrical engineering",
+    "data_f1_analytics": "F1/data analytics",
+    "research_analysis": "Research/OSINT analysis",
+    "security_red_team": "Security/red-team",
+    "general_coding": "General coding",
+}
+OUTCOME_TREND_MIN_SAMPLES = 2
+OUTCOME_TREND_MIN_SUCCESS_RATE = 60
+OUTCOME_TREND_QUARANTINE_SUCCESS_RATE = 50
+OUTCOME_TREND_QUARANTINE_OPERATOR_VALUE = 55
 RUNTIME_CONSTITUTION_TEXT = (
     "Fluxio hybrid harness coordinates planning, execution, verification, delegated runtimes, "
     "and resumable continuity. Prefer small grounded actions, preserve proof, compact context "
@@ -89,7 +229,7 @@ def guided_profile_defaults(name: str) -> dict:
             "delegation_aggressiveness": "balanced",
             "repeated_failure_broadening_threshold": 2,
             "learned_skill_aggressiveness": "medium",
-            "routing_strategy": "planner_premium_executor_efficient",
+            "routing_strategy": "uniform_quality",
             "harness_experimentation_visibility": "visible",
         },
         "advanced": {
@@ -122,7 +262,7 @@ def guided_profile_defaults(name: str) -> dict:
     if normalized in defaults:
         return defaults[normalized]
     legacy_mapping = {
-        "hands_free_builder": "builder",
+        "hands_free_builder": "experimental",
         "minimal_focus": "beginner",
         "research_sprint": "advanced",
         "safety_gate": "beginner",
@@ -276,10 +416,356 @@ def _budget_class_for_model(model: str, override_value: str = "") -> str:
     return "premium"
 
 
+def infer_task_route_profile(objective: str | None = None) -> dict[str, object]:
+    normalized = f" {objective or ''} ".lower()
+    match_rows = []
+    for task_type in TASK_AWARE_ROUTE_PRIORITY:
+        keywords = TASK_AWARE_ROUTE_KEYWORDS.get(task_type, ())
+        matched = [keyword for keyword in keywords if keyword in normalized]
+        if matched:
+            match_rows.append((task_type, matched))
+    if match_rows:
+        task_type, matched_keywords = max(
+            match_rows,
+            key=lambda item: (len(item[1]), -TASK_AWARE_ROUTE_PRIORITY.index(item[0])),
+        )
+        profile = dict(TASK_AWARE_ROUTE_PROFILES[task_type])
+        profile["taskType"] = task_type
+        profile["taskLabel"] = TASK_AWARE_ROUTE_LABELS.get(task_type, task_type)
+        profile["matchedKeywords"] = matched_keywords[:6]
+        profile["matchCount"] = len(matched_keywords)
+        profile["fitScore"] = min(100, 58 + len(matched_keywords) * 14)
+        return profile
+    return {
+        "taskType": "general_coding",
+        "taskLabel": TASK_AWARE_ROUTE_LABELS["general_coding"],
+        "matchedKeywords": [],
+        "matchCount": 0,
+        "fitScore": 0,
+        "routeIntent": "workspace_strategy_execution",
+        "reason": "No task-specific model advantage was detected; workspace strategy controls the route.",
+    }
+
+
+def _operator_feedback_signal(feedback: object) -> dict[str, object]:
+    if not isinstance(feedback, dict):
+        return {}
+    try:
+        score = int(feedback.get("score"))
+    except (TypeError, ValueError):
+        score = -1
+    outcome = str(feedback.get("outcome") or "").strip().lower()
+    trust_signal = str(feedback.get("trustSignal") or feedback.get("trust_signal") or "").strip().lower()
+    if score < 0 and not outcome and not trust_signal:
+        return {}
+    promoted = trust_signal == "promote" or outcome == "useful" or score >= 80
+    deprioritized = trust_signal == "deprioritize" or outcome == "not_useful" or (0 <= score < 50)
+    reviewed = trust_signal == "review" or outcome == "mixed" or (50 <= score < 80)
+    return {
+        "score": score,
+        "outcome": outcome,
+        "trustSignal": trust_signal,
+        "promoted": promoted,
+        "deprioritized": deprioritized,
+        "reviewed": reviewed,
+    }
+
+
+def _append_route_outcome_sample(
+    stats: dict[tuple[str, str, str, str], dict[str, object]],
+    *,
+    task_type: str,
+    route_configs: object,
+    succeeded: bool,
+    failed: bool,
+    source_id: str,
+    source_kind: str,
+    operator_signal: dict[str, object] | None = None,
+) -> bool:
+    if not isinstance(route_configs, list):
+        return False
+    appended = False
+    for route in route_configs:
+        if not isinstance(route, dict):
+            continue
+        role = str(route.get("role") or "").strip().lower()
+        if role not in {"planner", "executor", "verifier"}:
+            continue
+        provider = str(route.get("provider") or "").strip()
+        model = str(route.get("model") or "").strip()
+        if not provider or not model:
+            continue
+        key = (task_type, role, provider, model)
+        row = stats.setdefault(
+            key,
+            {
+                "taskType": task_type,
+                "role": role,
+                "provider": provider,
+                "model": model,
+                "sampleCount": 0,
+                "completedCount": 0,
+                "failedCount": 0,
+                "operatorValueSampleCount": 0,
+                "operatorValueScoreTotal": 0,
+                "operatorPromoteCount": 0,
+                "operatorReviewCount": 0,
+                "operatorDeprioritizeCount": 0,
+                "latestSessionId": source_id,
+                "latestSourceKind": source_kind,
+            },
+        )
+        row["sampleCount"] = int(row["sampleCount"]) + 1
+        row["completedCount"] = int(row["completedCount"]) + (1 if succeeded else 0)
+        row["failedCount"] = int(row["failedCount"]) + (1 if failed else 0)
+        row["latestSessionId"] = source_id
+        row["latestSourceKind"] = source_kind
+        if operator_signal:
+            score = int(operator_signal.get("score", -1) or -1)
+            if score >= 0:
+                row["operatorValueSampleCount"] = int(row["operatorValueSampleCount"]) + 1
+                row["operatorValueScoreTotal"] = int(row["operatorValueScoreTotal"]) + score
+            if operator_signal.get("promoted"):
+                row["operatorPromoteCount"] = int(row["operatorPromoteCount"]) + 1
+            elif operator_signal.get("deprioritized"):
+                row["operatorDeprioritizeCount"] = int(row["operatorDeprioritizeCount"]) + 1
+            elif operator_signal.get("reviewed"):
+                row["operatorReviewCount"] = int(row["operatorReviewCount"]) + 1
+        appended = True
+    return appended
+
+
+def build_route_outcome_trends(root: Path, limit: int = AUTONOMY_HISTORY_LIMIT) -> dict:
+    runs_root = root / ".agent_runs"
+    session_paths = sorted(
+        [path for path in runs_root.glob("session_*") if path.is_dir()],
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    ) if runs_root.exists() else []
+    stats: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    scanned = 0
+    for session_path in session_paths[: max(1, int(limit))]:
+        state_path = session_path / "state.json"
+        if not state_path.exists():
+            continue
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        status = str(payload.get("autopilot_status") or "").strip().lower()
+        pause_reason = str(payload.get("autopilot_pause_reason") or "").strip().lower()
+        succeeded = status == "completed"
+        failed = status in {"failed", "blocked"} or pause_reason in {
+            "verification_failed",
+            "runtime_budget",
+            "delegated_runtime_failed",
+        }
+        if not succeeded and not failed:
+            continue
+        task_profile = infer_task_route_profile(str(payload.get("objective") or ""))
+        task_type = str(task_profile.get("taskType") or "general_coding")
+        if _append_route_outcome_sample(
+            stats,
+            task_type=task_type,
+            route_configs=payload.get("route_configs", []),
+            succeeded=succeeded,
+            failed=failed,
+            source_id=session_path.name,
+            source_kind="agent_run",
+        ):
+            scanned += 1
+
+    missions_path = root / ".agent_control" / "missions.json"
+    mission_scanned = 0
+    try:
+        missions_payload = json.loads(missions_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        missions_payload = []
+    if isinstance(missions_payload, list):
+        mission_rows = [
+            item for item in missions_payload
+            if isinstance(item, dict)
+        ]
+        mission_rows.sort(
+            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+            reverse=True,
+        )
+        for mission in mission_rows[: max(1, int(limit))]:
+            state = mission.get("state") if isinstance(mission.get("state"), dict) else {}
+            operator_signal = _operator_feedback_signal(
+                state.get("operator_value_feedback")
+            )
+            status = str(state.get("status") or mission.get("status") or "").strip().lower()
+            succeeded = bool(operator_signal.get("promoted")) or status == "completed"
+            failed = bool(operator_signal.get("deprioritized")) or status in {"failed", "blocked"}
+            if not operator_signal and not succeeded and not failed:
+                continue
+            task_profile = infer_task_route_profile(str(mission.get("objective") or ""))
+            task_type = str(task_profile.get("taskType") or "general_coding")
+            if _append_route_outcome_sample(
+                stats,
+                task_type=task_type,
+                route_configs=mission.get("route_configs", []),
+                succeeded=succeeded,
+                failed=failed,
+                source_id=str(mission.get("mission_id") or ""),
+                source_kind="mission_closeout",
+                operator_signal=operator_signal,
+            ):
+                scanned += 1
+                mission_scanned += 1
+    route_stats = []
+    for row in stats.values():
+        sample_count = int(row["sampleCount"])
+        completed_count = int(row["completedCount"])
+        row["successRate"] = int(round((completed_count / sample_count) * 100)) if sample_count else 0
+        operator_samples = int(row.get("operatorValueSampleCount", 0) or 0)
+        operator_total = int(row.get("operatorValueScoreTotal", 0) or 0)
+        row["operatorValueAverage"] = (
+            int(round(operator_total / operator_samples)) if operator_samples else 0
+        )
+        row.pop("operatorValueScoreTotal", None)
+        route_stats.append(row)
+    route_stats.sort(
+        key=lambda item: (
+            str(item["taskType"]),
+            str(item["role"]),
+            -int(item["sampleCount"]),
+            -int(item["successRate"]),
+            -int(item.get("operatorValueAverage", 0) or 0),
+            str(item["provider"]),
+            str(item["model"]),
+        )
+    )
+    recommendations: dict[str, dict[str, dict[str, object]]] = {}
+    quarantined_routes: dict[str, dict[str, list[dict[str, object]]]] = {}
+    for row in route_stats:
+        sample_count = int(row["sampleCount"])
+        success_rate = int(row.get("successRate", 0) or 0)
+        operator_samples = int(row.get("operatorValueSampleCount", 0) or 0)
+        operator_average = int(row.get("operatorValueAverage", 0) or 0)
+        operator_deprioritize = int(row.get("operatorDeprioritizeCount", 0) or 0)
+        operator_promote = int(row.get("operatorPromoteCount", 0) or 0)
+        quarantine_reason = ""
+        if operator_samples and (
+            operator_average < OUTCOME_TREND_QUARANTINE_OPERATOR_VALUE
+            or operator_deprioritize > operator_promote
+        ):
+            quarantine_reason = (
+                f"operator value {operator_average}/100 across {operator_samples} closeout(s); "
+                f"{operator_deprioritize} deprioritize vs {operator_promote} promote"
+            )
+        elif sample_count >= OUTCOME_TREND_MIN_SAMPLES and success_rate < OUTCOME_TREND_QUARANTINE_SUCCESS_RATE:
+            quarantine_reason = (
+                f"{success_rate}% success across {sample_count} similar run(s), below "
+                f"{OUTCOME_TREND_QUARANTINE_SUCCESS_RATE}% quarantine threshold"
+            )
+        if quarantine_reason:
+            quarantined_routes.setdefault(str(row["taskType"]), {}).setdefault(str(row["role"]), []).append(
+                {
+                    **dict(row),
+                    "schema": "fluxio.route_outcome_quarantine.v1",
+                    "status": "quarantined_until_clean_value_sample",
+                    "quarantineReason": quarantine_reason,
+                    "requiredAction": (
+                        "Run a clean value-scored route-trust sample before this provider/model lane "
+                        "can be selected automatically again."
+                    ),
+                }
+            )
+        if int(row["sampleCount"]) < OUTCOME_TREND_MIN_SAMPLES:
+            continue
+        if int(row["successRate"]) < OUTCOME_TREND_MIN_SUCCESS_RATE:
+            continue
+        operator_samples = int(row.get("operatorValueSampleCount", 0) or 0)
+        if operator_samples and int(row.get("operatorValueAverage", 0) or 0) < 70:
+            continue
+        task_rows = recommendations.setdefault(str(row["taskType"]), {})
+        role = str(row["role"])
+        current = task_rows.get(role)
+        if current is None or (
+            int(row["successRate"]),
+            int(row.get("operatorValueAverage", 0) or 0),
+            int(row["sampleCount"]),
+        ) > (
+            int(current.get("successRate", 0)),
+            int(current.get("operatorValueAverage", 0) or 0),
+            int(current.get("sampleCount", 0)),
+        ):
+            task_rows[role] = dict(row)
+    return {
+        "schema": "fluxio.route_outcome_trends.v1",
+        "scannedRuns": scanned,
+        "scannedMissionCloseouts": mission_scanned,
+        "sampleLimit": max(1, int(limit)),
+        "minimumSamples": OUTCOME_TREND_MIN_SAMPLES,
+        "minimumSuccessRate": OUTCOME_TREND_MIN_SUCCESS_RATE,
+        "quarantineOperatorValueThreshold": OUTCOME_TREND_QUARANTINE_OPERATOR_VALUE,
+        "quarantineSuccessRateThreshold": OUTCOME_TREND_QUARANTINE_SUCCESS_RATE,
+        "routeStats": route_stats[:60],
+        "recommendations": recommendations,
+        "quarantinedRoutes": quarantined_routes,
+    }
+
+
+def _route_outcome_recommendation(
+    trends: dict | None,
+    *,
+    task_type: str,
+    role: str,
+) -> dict[str, object]:
+    if not isinstance(trends, dict):
+        return {}
+    recommendations = trends.get("recommendations")
+    if not isinstance(recommendations, dict):
+        return {}
+    task_rows = recommendations.get(task_type)
+    if not isinstance(task_rows, dict):
+        return {}
+    row = task_rows.get(role)
+    return dict(row) if isinstance(row, dict) else {}
+
+
+def _route_outcome_quarantine(
+    trends: dict | None,
+    *,
+    task_type: str,
+    role: str,
+    provider: str,
+    model: str,
+) -> dict[str, object]:
+    if not isinstance(trends, dict):
+        return {}
+    quarantined = trends.get("quarantinedRoutes")
+    if not isinstance(quarantined, dict):
+        return {}
+    task_rows = quarantined.get(task_type)
+    if not isinstance(task_rows, dict):
+        return {}
+    role_rows = task_rows.get(role)
+    if not isinstance(role_rows, list):
+        return {}
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip().lower()
+    for row in role_rows:
+        if not isinstance(row, dict):
+            continue
+        if (
+            str(row.get("provider") or "").strip().lower() == normalized_provider
+            and str(row.get("model") or "").strip().lower() == normalized_model
+        ):
+            return dict(row)
+    return {}
+
+
 def recommended_model_routes(
     profile_name: str,
     routing_strategy_override: str | None = None,
     route_overrides: list[dict] | None = None,
+    objective: str | None = None,
+    route_outcome_trends: dict | None = None,
 ) -> list[ModelRouteConfig]:
     defaults = guided_profile_defaults(profile_name)
     strategy = (routing_strategy_override or "profile_default").strip().lower()
@@ -291,46 +777,197 @@ def recommended_model_routes(
         item["role"]: item for item in normalize_route_overrides(route_overrides or [])
     }
     if strategy == "uniform_quality":
-        planner = ("openai", PREMIUM_OPENAI_MODEL)
+        planner = (CODEX_PLANNING_PROVIDER, CODEX_PLANNING_MODEL)
         executor = ("openai", PREMIUM_OPENAI_MODEL)
     elif strategy == "budget_first":
-        planner = ("openai", EFFICIENT_OPENAI_MODEL)
+        planner = (CODEX_PLANNING_PROVIDER, CODEX_EFFICIENT_PLANNING_MODEL)
         executor = ("openai", EFFICIENT_OPENAI_MODEL)
     else:
-        planner = ("openai", PREMIUM_OPENAI_MODEL)
+        planner = (CODEX_PLANNING_PROVIDER, CODEX_PLANNING_MODEL)
         executor = ("openai", EFFICIENT_OPENAI_MODEL)
+    task_profile = infer_task_route_profile(objective)
+    task_type = str(task_profile.get("taskType") or "general_coding")
+    fit_score = int(task_profile.get("fitScore") or 0)
+    executor_outcome = _route_outcome_recommendation(
+        route_outcome_trends,
+        task_type=task_type,
+        role="executor",
+    )
+    verifier_outcome = _route_outcome_recommendation(
+        route_outcome_trends,
+        task_type=task_type,
+        role="verifier",
+    )
+    if (
+        task_profile.get("executorProvider")
+        and "executor" not in override_map
+        and strategy != "budget_first"
+    ):
+        executor = (
+            str(task_profile["executorProvider"]),
+            str(task_profile["executorModel"]),
+        )
+    if executor_outcome and "executor" not in override_map and strategy_source == "profile_default":
+        executor = (
+            str(executor_outcome.get("provider") or executor[0]),
+            str(executor_outcome.get("model") or executor[1]),
+        )
+    executor_quarantine = _route_outcome_quarantine(
+        route_outcome_trends,
+        task_type=task_type,
+        role="executor",
+        provider=executor[0],
+        model=executor[1],
+    )
+    if executor_quarantine and "executor" not in override_map:
+        executor = (CODEX_PLANNING_PROVIDER, CODEX_PLANNING_MODEL)
+    verifier = (
+        str(task_profile.get("verifierProvider") or "openai"),
+        str(task_profile.get("verifierModel") or PREMIUM_OPENAI_MODEL),
+    )
+    if verifier_outcome and "verifier" not in override_map and strategy_source == "profile_default":
+        verifier = (
+            str(verifier_outcome.get("provider") or verifier[0]),
+            str(verifier_outcome.get("model") or verifier[1]),
+        )
+    verifier_quarantine = _route_outcome_quarantine(
+        route_outcome_trends,
+        task_type=task_type,
+        role="verifier",
+        provider=verifier[0],
+        model=verifier[1],
+    )
+    if verifier_quarantine and "verifier" not in override_map:
+        verifier = (CODEX_PLANNING_PROVIDER, CODEX_PLANNING_MODEL)
+    executor_outcome_summary = (
+        f"outcome trend: {executor_outcome.get('successRate')}% success across "
+        f"{executor_outcome.get('sampleCount')} similar {task_type} executor run(s)"
+        + (
+            f", operator value {executor_outcome.get('operatorValueAverage')}/100 across "
+            f"{executor_outcome.get('operatorValueSampleCount')} closeout(s)"
+            if int(executor_outcome.get("operatorValueSampleCount", 0) or 0) > 0
+            else ""
+        )
+        if executor_outcome
+        else ""
+    )
+    verifier_outcome_summary = (
+        f"outcome trend: {verifier_outcome.get('successRate')}% success across "
+        f"{verifier_outcome.get('sampleCount')} similar {task_type} verifier run(s)"
+        + (
+            f", operator value {verifier_outcome.get('operatorValueAverage')}/100 across "
+            f"{verifier_outcome.get('operatorValueSampleCount')} closeout(s)"
+            if int(verifier_outcome.get("operatorValueSampleCount", 0) or 0) > 0
+            else ""
+        )
+        if verifier_outcome
+        else ""
+    )
     routes = [
         ModelRouteConfig(
             role="planner",
             provider=planner[0],
             model=planner[1],
             effort="high",
-            budget_class="premium" if planner[1] == PREMIUM_OPENAI_MODEL else "efficient",
+            budget_class="specialist" if planner[0] == CODEX_PLANNING_PROVIDER else "premium",
             explanation=(
-                "Planner route resolved from workspace strategy."
+                "Planner route resolved from workspace strategy; the Codex planning lane stays responsible for decomposition, model choice, and route changes."
                 if strategy_source == "strategy"
-                else "Planner route resolved from profile default strategy."
+                else "Planner route resolved from profile default strategy; the Codex planning lane stays responsible for decomposition, model choice, and route changes."
             ),
+            task_type=task_type,
+            route_intent="mission_planning_and_route_control",
+            fit_score=fit_score,
         ),
         ModelRouteConfig(
             role="executor",
             provider=executor[0],
             model=executor[1],
-            effort="medium",
-            budget_class="premium" if executor[1] == PREMIUM_OPENAI_MODEL else "efficient",
+            effort=str(task_profile.get("executorEffort") or "high"),
+            budget_class=str(
+                task_profile.get("executorBudgetClass")
+                or ("premium" if executor[1] == PREMIUM_OPENAI_MODEL else "efficient")
+            ),
             explanation=(
-                "Executor route resolved from workspace strategy."
-                if strategy_source == "strategy"
-                else "Executor route resolved from profile default strategy."
+                (
+                    "Executor route rerouted by route-outcome quarantine: "
+                    f"{executor_quarantine.get('provider')}/{executor_quarantine.get('model')} is held because "
+                    f"{executor_quarantine.get('quarantineReason')}. Codex gpt-5.5 high is used until a clean value-scored sample clears the lane."
+                )
+                if executor_quarantine and "executor" not in override_map
+                else (
+                    f"Executor route selected from mission outcome history ({executor_outcome_summary})."
+                    if executor_outcome
+                    and "executor" not in override_map
+                    and strategy_source == "profile_default"
+                    else (
+                    task_profile["reason"]
+                    if task_profile.get("executorProvider")
+                    and "executor" not in override_map
+                    and strategy != "budget_first"
+                    else (
+                        "Executor route resolved from workspace strategy."
+                        if strategy_source == "strategy"
+                        else "Executor route resolved from profile default strategy."
+                    ))
+                )
+            ),
+            task_type=task_type,
+            route_intent=(
+                "route_outcome_quarantine_reroute"
+                if executor_quarantine and "executor" not in override_map
+                else (
+                    "outcome_trend_execution"
+                    if executor_outcome
+                    and "executor" not in override_map
+                    and strategy_source == "profile_default"
+                    else str(task_profile.get("routeIntent") or "workspace_strategy_execution")
+                )
+            ),
+            fit_score=max(fit_score, int(executor_outcome.get("successRate", 0) or 0)),
+            outcome_sample_count=int(executor_outcome.get("sampleCount", 0) or 0),
+            outcome_success_rate=int(executor_outcome.get("successRate", 0) or 0),
+            outcome_trend=(
+                str(executor_quarantine.get("quarantineReason") or "")
+                if executor_quarantine
+                else executor_outcome_summary
             ),
         ),
         ModelRouteConfig(
             role="verifier",
-            provider="openai",
-            model=PREMIUM_OPENAI_MODEL,
+            provider=verifier[0],
+            model=verifier[1],
             effort="high",
             budget_class="premium",
-            explanation="Verifier route resolved from profile confidence defaults.",
+            explanation=(
+                (
+                    "Verifier route rerouted by route-outcome quarantine: "
+                    f"{verifier_quarantine.get('provider')}/{verifier_quarantine.get('model')} is held because "
+                    f"{verifier_quarantine.get('quarantineReason')}. Codex gpt-5.5 high is used until a clean value-scored sample clears the lane."
+                )
+                if verifier_quarantine and "verifier" not in override_map
+                else (
+                    f"Verifier route selected from mission outcome history ({verifier_outcome_summary})."
+                    if verifier_outcome
+                    and "verifier" not in override_map
+                    and strategy_source == "profile_default"
+                    else "Verifier route resolved from profile confidence defaults."
+                )
+            ),
+            task_type=task_type,
+            route_intent=(
+                "route_outcome_quarantine_reroute"
+                if verifier_quarantine and "verifier" not in override_map
+                else "outcome_trend_verification" if verifier_outcome else "independent_verification"
+            ),
+            fit_score=max(fit_score, int(verifier_outcome.get("successRate", 0) or 0)),
+            outcome_sample_count=int(verifier_outcome.get("sampleCount", 0) or 0),
+            outcome_success_rate=int(verifier_outcome.get("successRate", 0) or 0),
+            outcome_trend=(
+                str(verifier_quarantine.get("quarantineReason") or "")
+                if verifier_quarantine
+                else verifier_outcome_summary
+            ),
         ),
         ModelRouteConfig(
             role="summarizer",
@@ -339,6 +976,9 @@ def recommended_model_routes(
             effort="medium",
             budget_class="efficient",
             explanation="Summaries stay efficient unless overridden.",
+            task_type=task_type,
+            route_intent="operator_summary",
+            fit_score=fit_score,
         ),
         ModelRouteConfig(
             role="skill_curator",
@@ -347,6 +987,9 @@ def recommended_model_routes(
             effort="medium",
             budget_class="efficient",
             explanation="Skill curation is efficient and reviewable by default.",
+            task_type=task_type,
+            route_intent="skill_feedback_and_reuse",
+            fit_score=fit_score,
         ),
         ModelRouteConfig(
             role="guide_author",
@@ -355,6 +998,9 @@ def recommended_model_routes(
             effort="medium",
             budget_class="efficient",
             explanation="Guidance and onboarding copy stay concise and adaptive to the selected profile.",
+            task_type=task_type,
+            route_intent="beginner_guidance",
+            fit_score=fit_score,
         ),
     ]
     for index, route in enumerate(routes):
@@ -372,6 +1018,12 @@ def recommended_model_routes(
             ),
             fallback_policy="same_provider",
             explanation="Route override from workspace runtime contract.",
+            task_type=route.task_type,
+            route_intent="manual_workspace_override",
+            fit_score=route.fit_score,
+            outcome_sample_count=route.outcome_sample_count,
+            outcome_success_rate=route.outcome_success_rate,
+            outcome_trend=route.outcome_trend,
         )
     return routes
 
@@ -472,10 +1124,13 @@ class FluxioHarness:
             if requested_merge_policy in VALID_MERGE_POLICIES
             else DEFAULT_FLUXIO_MERGE_POLICY
         )
+        route_outcome_trends = build_route_outcome_trends(repo_path)
         route_configs = recommended_model_routes(
             profile_name,
             routing_strategy_override=routing_strategy_override,
             route_overrides=route_overrides,
+            objective=objective,
+            route_outcome_trends=route_outcome_trends,
         )
         execution_policy = normalize_execution_policy(build_execution_policy(profile_name))
         execution_scope = prepare_execution_scope(
@@ -618,6 +1273,9 @@ class FluxioHarness:
         learned_skill_events = (
             list(resumed_state.get("learned_skill_events", [])) if resumed_state else []
         )
+        skill_feedback_events = (
+            list(resumed_state.get("skill_feedback_events", [])) if resumed_state else []
+        )
         delegated_runtime_sessions = (
             list(resumed_state.get("delegated_runtime_sessions", []))
             if resumed_state
@@ -741,6 +1399,12 @@ class FluxioHarness:
                             model=route.model,
                             reason=route.explanation,
                             budget_class=route.budget_class,
+                            task_type=route.task_type,
+                            route_intent=route.route_intent,
+                            fit_score=route.fit_score,
+                            outcome_sample_count=route.outcome_sample_count,
+                            outcome_success_rate=route.outcome_success_rate,
+                            outcome_trend=route.outcome_trend,
                         )
                     )
                 )
@@ -766,6 +1430,8 @@ class FluxioHarness:
             parallel_agents=resolved_parallel_agents,
             merge_policy=resolved_merge_policy,
             max_tokens=resolved_max_tokens,
+            objective=objective,
+            workspace_root=repo_path,
         )
         if autonomy_changed:
             for route in route_configs:
@@ -779,6 +1445,12 @@ class FluxioHarness:
                             model=route.model,
                             reason=runtime_autonomy["reason"],
                             budget_class=route.budget_class,
+                            task_type=route.task_type,
+                            route_intent=route.route_intent,
+                            fit_score=route.fit_score,
+                            outcome_sample_count=route.outcome_sample_count,
+                            outcome_success_rate=route.outcome_success_rate,
+                            outcome_trend=route.outcome_trend,
                         )
                     )
                 )
@@ -928,6 +1600,8 @@ class FluxioHarness:
                 parallel_agents=resolved_parallel_agents,
                 merge_policy=resolved_merge_policy,
                 max_tokens=resolved_max_tokens,
+                objective=objective,
+                workspace_root=repo_path,
             )
             if autonomy_changed:
                 for route in route_configs:
@@ -941,6 +1615,12 @@ class FluxioHarness:
                                 model=route.model,
                                 reason=runtime_autonomy["reason"],
                                 budget_class=route.budget_class,
+                                task_type=route.task_type,
+                                route_intent=route.route_intent,
+                                fit_score=route.fit_score,
+                                outcome_sample_count=route.outcome_sample_count,
+                                outcome_success_rate=route.outcome_success_rate,
+                                outcome_trend=route.outcome_trend,
                             )
                         )
                     )
@@ -1235,6 +1915,26 @@ class FluxioHarness:
                 "system",
                 self._verification_summary(last_verification_results),
             )
+            slice_feedback = self.skill_library.record_slice_feedback(
+                mission_id=execution_context.mission_id,
+                step_id=next_step.step_id,
+                selected_skills=selected_skills,
+                execution_ok=execution_record.result.ok and not verification_failures,
+                verification_failures=verification_failures,
+                changed_files=execution_record.result.changed_files,
+            )
+            skill_feedback_events.extend(slice_feedback)
+            learned_skill_events.extend(
+                {
+                    "kind": "skill.slice_feedback",
+                    "label": item.get("label", ""),
+                    "system_loss": item.get("systemLoss"),
+                    "improvement_score": item.get("improvementScore"),
+                    "next_action": item.get("nextAction"),
+                    "timestamp": item.get("createdAt"),
+                }
+                for item in slice_feedback
+            )
             if verification_failures:
                 improvement_queue.extend(
                     [
@@ -1517,6 +2217,8 @@ class FluxioHarness:
             parallel_agents=resolved_parallel_agents,
             merge_policy=resolved_merge_policy,
             max_tokens=resolved_max_tokens,
+            objective=objective,
+            workspace_root=repo_path,
         )
         if autonomy_changed:
             for route in route_configs:
@@ -1530,6 +2232,12 @@ class FluxioHarness:
                             model=route.model,
                             reason=runtime_autonomy["reason"],
                             budget_class=route.budget_class,
+                            task_type=route.task_type,
+                            route_intent=route.route_intent,
+                            fit_score=route.fit_score,
+                            outcome_sample_count=route.outcome_sample_count,
+                            outcome_success_rate=route.outcome_success_rate,
+                            outcome_trend=route.outcome_trend,
                         )
                     )
                 )
@@ -1622,6 +2330,7 @@ class FluxioHarness:
             "improvement_queue": [asdict(item) for item in improvement_queue],
             "skill_usage": skill_usage,
             "learned_skill_events": learned_skill_events,
+            "skill_feedback_events": skill_feedback_events[-120:],
             "action_history": action_history,
             "delegated_runtime_sessions": delegated_runtime_sessions,
             "repeated_failure_count": repeated_failure_count,
@@ -1694,6 +2403,7 @@ class FluxioHarness:
             "improvement_queue": [asdict(item) for item in improvement_queue],
             "skill_usage": skill_usage,
             "learned_skill_events": learned_skill_events,
+            "skill_feedback_events": skill_feedback_events[-120:],
             "action_history": action_history,
             "delegated_runtime_sessions": delegated_runtime_sessions,
             "harness_id": self.harness_id,
@@ -1917,6 +2627,77 @@ class FluxioHarness:
         active_provider = active_route.provider if active_route is not None else ""
         active_model = active_route.model if active_route is not None else ""
         active_role = active_route.role if active_route is not None else role_for_phase(phase)
+
+        def auth_store_has_provider(path: Path, provider_id: str) -> bool:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return False
+            needle = provider_id.strip().lower()
+
+            def walk(value: object) -> bool:
+                if isinstance(value, dict):
+                    for key in ("providers", "credential_pool"):
+                        nested = value.get(key)
+                        if isinstance(nested, dict) and needle in {
+                            str(item).strip().lower() for item in nested.keys()
+                        }:
+                            return True
+                    provider = str(
+                        value.get("provider")
+                        or value.get("providerId")
+                        or value.get("provider_id")
+                        or ""
+                    ).strip().lower()
+                    if provider == needle:
+                        return True
+                    return any(walk(item) for item in value.values())
+                if isinstance(value, list):
+                    return any(walk(item) for item in value)
+                return False
+
+            return walk(payload)
+
+        def provider_auth_status(provider_id: str) -> tuple[bool, str, str]:
+            home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+            openclaw_state = Path(
+                os.environ.get("OPENCLAW_STATE_DIR", str(home / ".openclaw"))
+            ).expanduser()
+            openclaw_auth = openclaw_state / "agents" / "main" / "agent" / "auth-profiles.json"
+            hermes_auth_stores = hermes_auth_store_candidates(home)
+            if provider_id in {"openai", "openai-codex"}:
+                api_present = bool(os.environ.get("OPENAI_API_KEY"))
+                oauth_present = bool(
+                    os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT")
+                    or (home / ".codex" / "auth.json").exists()
+                    or auth_store_has_provider(openclaw_auth, "openai-codex")
+                    or any(auth_store_has_provider(path, "openai-codex") for path in hermes_auth_stores)
+                )
+                if api_present:
+                    return True, "api", "API key"
+                if oauth_present:
+                    return True, "oauth", "OpenAI Codex OAuth"
+                return False, "none", "not configured"
+            if provider_id in {"minimax", "minimax-cn", "minimax-portal", "minimax-oauth"}:
+                api_present = bool(os.environ.get("MINIMAX_API_KEY"))
+                oauth_present = bool(
+                    os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT")
+                    or (home / ".minimax" / "oauth_creds.json").exists()
+                    or auth_store_has_provider(openclaw_auth, "minimax-portal")
+                    or any(
+                        auth_store_has_provider(path, hermes_provider)
+                        for path in hermes_auth_stores
+                        for hermes_provider in ("minimax-oauth", "minimax", "minimax-portal")
+                    )
+                )
+                if api_present:
+                    return True, "minimax-api", "API key"
+                if oauth_present:
+                    return True, "minimax-portal-oauth", "MiniMax OpenClaw OAuth"
+                return False, "none", "not configured"
+            return bool(provider_id), "", ""
+
+        auth_present, auth_mode, auth_path = provider_auth_status(active_provider)
         last_success: dict = {}
         last_failure: dict = {}
         for row in reversed(action_history):
@@ -1973,7 +2754,14 @@ class FluxioHarness:
                 "model": active_model,
                 "effort": active_route.effort if active_route is not None else "",
                 "budgetClass": active_route.budget_class if active_route is not None else "",
+                "taskType": active_route.task_type if active_route is not None else "general_coding",
+                "routeIntent": active_route.route_intent if active_route is not None else "",
+                "fitScore": active_route.fit_score if active_route is not None else 0,
             },
+            "authPresent": auth_present,
+            "authKnown": bool(active_provider),
+            "authMode": auth_mode,
+            "authPath": auth_path,
             "codeExecutionEnabled": bool(code_execution.get("enabled", False)),
             "codeExecutionContainerId": str(code_execution_state.get("container_id", "")),
             "lastSuccessfulCall": last_success,
@@ -1983,7 +2771,7 @@ class FluxioHarness:
         }
 
     @staticmethod
-    def _route_signature(route_configs: list[ModelRouteConfig]) -> list[tuple[str, str, str, str, str]]:
+    def _route_signature(route_configs: list[ModelRouteConfig]) -> list[tuple[str, str, str, str, str, str, str, int]]:
         return [
             (
                 item.role,
@@ -1991,6 +2779,9 @@ class FluxioHarness:
                 item.model,
                 item.effort,
                 item.budget_class,
+                item.task_type,
+                item.route_intent,
+                item.fit_score,
             )
             for item in route_configs
         ]
@@ -2012,11 +2803,19 @@ class FluxioHarness:
         executor = next((item for item in route_configs if item.role == "executor"), None)
         if not planner or not executor:
             return "profile_default"
-        if planner.model == PREMIUM_OPENAI_MODEL and executor.model == PREMIUM_OPENAI_MODEL:
+        planner_is_codex = (
+            planner.provider == CODEX_PLANNING_PROVIDER
+            and planner.model == CODEX_PLANNING_MODEL
+        )
+        planner_is_efficient_codex = (
+            planner.provider == CODEX_PLANNING_PROVIDER
+            and planner.model == CODEX_EFFICIENT_PLANNING_MODEL
+        )
+        if planner_is_codex and executor.model == PREMIUM_OPENAI_MODEL:
             return "uniform_quality"
-        if planner.model == EFFICIENT_OPENAI_MODEL and executor.model == EFFICIENT_OPENAI_MODEL:
+        if planner_is_efficient_codex and executor.model == EFFICIENT_OPENAI_MODEL:
             return "budget_first"
-        if planner.model == PREMIUM_OPENAI_MODEL and executor.model == EFFICIENT_OPENAI_MODEL:
+        if planner_is_codex and executor.model == EFFICIENT_OPENAI_MODEL:
             return "planner_premium_executor_efficient"
         return "custom"
 
@@ -2036,6 +2835,8 @@ class FluxioHarness:
         parallel_agents: int,
         merge_policy: str,
         max_tokens: int,
+        objective: str | None = None,
+        workspace_root: Path | None = None,
     ) -> tuple[list[ModelRouteConfig], ExecutionPolicy, dict, bool, int]:
         current_strategy = FluxioHarness._routing_strategy_for_routes(route_configs)
         target_strategy = current_strategy
@@ -2072,6 +2873,8 @@ class FluxioHarness:
                 profile_name,
                 routing_strategy_override=target_strategy,
                 route_overrides=route_overrides,
+                objective=objective,
+                route_outcome_trends=build_route_outcome_trends(workspace_root or Path.cwd()),
             )
 
         updated_policy = ExecutionPolicy(
@@ -2558,11 +3361,31 @@ class FluxioHarness:
     ) -> list[ModelRouteConfig]:
         if not resumed_state:
             return []
-        return [
-            ModelRouteConfig(**item)
-            for item in resumed_state.get("route_configs", [])
-            if isinstance(item, dict) and item.get("role")
-        ]
+        routes: list[ModelRouteConfig] = []
+        allowed = set(ModelRouteConfig.__dataclass_fields__.keys())
+        aliases = {
+            "budgetClass": "budget_class",
+            "fallbackPolicy": "fallback_policy",
+            "taskType": "task_type",
+            "routeIntent": "route_intent",
+            "fitScore": "fit_score",
+            "outcomeSampleCount": "outcome_sample_count",
+            "outcomeSuccessRate": "outcome_success_rate",
+            "outcomeTrend": "outcome_trend",
+        }
+        for item in resumed_state.get("route_configs", []):
+            if not isinstance(item, dict) or not item.get("role"):
+                continue
+            normalized = dict(item)
+            for source, target in aliases.items():
+                if source in normalized and target not in normalized:
+                    normalized[target] = normalized[source]
+            routes.append(
+                ModelRouteConfig(
+                    **{key: value for key, value in normalized.items() if key in allowed}
+                )
+            )
+        return routes
 
     @staticmethod
     def _next_pending_step(revision: PlanRevision) -> PlannedStep | None:
@@ -2651,6 +3474,26 @@ class FluxioHarness:
         record.replayed = bool(last.get("replayed", False))
         record.executed_at = last.get("executed_at")
 
+        if (
+            record.gate.status == "pending"
+            and FluxioHarness._proposal_auto_allowed_under_policy(
+                record.proposal,
+                execution_policy,
+            )
+        ):
+            record.proposal.requires_approval = False
+            record.proposal.policy_decision = "auto_run"
+            rerun = execute_action(
+                record.proposal,
+                workspace_root,
+                execution_scope=execution_scope,
+                execution_policy=execution_policy,
+            )
+            rerun.gate.reason = (
+                "Stale approval gate auto-cleared under the current mission policy."
+            )
+            return rerun
+
         if record.gate.status == "approved" and record.result.ok:
             return None
         if record.gate.status == "approved" and not record.result.ok:
@@ -2665,3 +3508,21 @@ class FluxioHarness:
             rerun.gate.resolved_at = utc_now_iso()
             return rerun
         return record
+
+    @staticmethod
+    def _proposal_auto_allowed_under_policy(
+        proposal: ActionProposal,
+        policy: ExecutionPolicy,
+    ) -> bool:
+        if (
+            proposal.kind == "runtime_delegate"
+            and os.environ.get("FLUXIO_RUNTIME_DELEGATION_MODE") == "local_shim"
+        ):
+            return proposal.risk_level != "high" and proposal.mutability_class != "destructive"
+        if proposal.risk_level == "high" or proposal.mutability_class == "destructive":
+            return False
+        if proposal.kind in policy.approval_required_kinds:
+            return False
+        if proposal.kind in policy.auto_allowed_kinds:
+            return True
+        return policy.approval_mode == "hands_free"

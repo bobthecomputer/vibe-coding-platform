@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Fluxio">
+  <rect width="512" height="512" fill="#10231f"/>
+  <circle cx="256" cy="256" r="196" fill="#f7f8f5"/>
+  <path fill="#10231f" d="M155 148h225v58H224v59h126v56H224v98h-69z"/>
+  <path fill="#53b788" d="M300 246h80v58h-80z"/>
+</svg>

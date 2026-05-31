@@ -15,9 +15,11 @@ from pathlib import Path
 
 try:
     from .subprocess_utils import background_creationflags
+    from .runtimes.base import _apply_runtime_home_env
 except ImportError:  # pragma: no cover - direct script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from grant_agent.subprocess_utils import background_creationflags
+    from grant_agent.runtimes.base import _apply_runtime_home_env
 
 STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
 HEARTBEAT_INTERVAL_SECONDS = max(
@@ -160,6 +162,7 @@ def _runtime_env(session_path: Path, cwd: Path) -> dict[str, str]:
     runtime_path_entries = _runtime_path_entries(cwd)
     if runtime_path_entries:
         env["PATH"] = os.pathsep.join([*runtime_path_entries, env.get("PATH", "")])
+    _apply_runtime_home_env(env, cwd)
     env["FLUXIO_SESSION_FILE"] = str(session_path.resolve())
     env["FLUXIO_EVENTS_FILE"] = str(Path(payload.get("events_path", session_path.with_suffix(".events.jsonl"))).resolve())
     env["FLUXIO_LOG_FILE"] = str(Path(payload.get("log_path", session_path.with_suffix(".log"))).resolve())
@@ -175,6 +178,7 @@ def _runtime_path_entries(cwd: Path) -> list[str]:
         cwd / "venv" / "bin",
         cwd / ".agent_control" / "runtime" / "bin",
         cwd.parent / "runtime" / "bin",
+        cwd.parent.parent / "runtime" / "bin",
         cwd.parent / "syntelos" / "runtime" / "bin",
     ]
     entries: list[str] = []

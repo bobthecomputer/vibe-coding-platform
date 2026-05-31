@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -94,5 +95,14 @@ def detect_default_verification_commands(workdir: Path) -> list[str]:
             if "frontend:build" in scripts:
                 commands.append("npm run frontend:build")
             elif "build" in scripts:
-                commands.append("npm run build")
+                build_script = str(scripts.get("build") or "").lower()
+                desktop_toolchain_missing = not shutil.which("cargo") or not shutil.which("pkg-config")
+                if (
+                    "web:export" in scripts
+                    and ("tauri" in build_script or "run-tauri" in build_script)
+                    and desktop_toolchain_missing
+                ):
+                    commands.append("npm run web:export")
+                else:
+                    commands.append("npm run build")
     return commands

@@ -10,14 +10,16 @@ import sys
 import tempfile
 import unittest
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.cli import cmd_mission_follow_up, cmd_workspace_delete
+from grant_agent import mission_control as mission_control_module
 from grant_agent.mission_control import (
     ControlRoomStore,
+    ROUTE_TRUST_SAMPLE_TEMPLATES,
     _build_generated_image_artifacts_snapshot,
     _build_git_actions,
     _build_validation_actions,
@@ -26,16 +28,759 @@ from grant_agent.mission_control import (
     _recover_evidence_path,
     _sync_project_tree,
     build_harness_lab_snapshot,
+    build_summary_harness_lab_snapshot,
+    build_red_team_escalation_snapshot,
     build_release_readiness_snapshot,
     build_escalation_preview,
     mission_mode_to_engine_mode,
     mission_time_budget_window,
+    record_cross_device_launch_rehearsal_receipt,
+    infer_planned_file_scope,
+    resolve_workspace_sync_conflict,
+    resolve_workspace_sync_conflict_batch,
+)
+from grant_agent.mission_watchdog import (
+    build_mission_watchdog_report,
+    write_mission_watchdog_report,
+    write_watchdog_supervisor_state,
 )
 from grant_agent.models import DelegatedRuntimeSession, MissionEvent, utc_now_iso
 from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
 class MissionControlTests(unittest.TestCase):
+    def test_control_room_json_loader_reuses_unchanged_file_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            path = root / ".agent_control" / "sample.json"
+            path.write_text(json.dumps([{"value": 1}]), encoding="utf-8")
+            mission_control_module._CONTROL_ROOM_JSON_CACHE.clear()
+
+            with mock.patch.object(
+                mission_control_module.json,
+                "loads",
+                wraps=mission_control_module.json.loads,
+            ) as loads:
+                first = store._load_json(path, [])
+                second = store._load_json(path, [])
+
+            self.assertEqual(first, [{"value": 1}])
+            self.assertIs(first, second)
+            self.assertEqual(loads.call_count, 1)
+
+    def test_control_room_json_loader_invalidates_after_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            path = root / ".agent_control" / "sample.json"
+            store._write_json_if_changed(path, [{"value": 1}])
+            self.assertEqual(store._load_json(path, []), [{"value": 1}])
+            store._write_json_if_changed(path, [{"value": 2}])
+
+            self.assertEqual(store._load_json(path, []), [{"value": 2}])
+
+    def test_red_team_escalation_snapshot_counts_more_than_default_visible_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            rows = []
+            for index in range(15):
+                rows.append(
+                    {
+                        "schema": "fluxio.red_team_escalation_history.v1",
+                        "recordedAt": f"2026-05-29T10:{index:02d}:00+00:00",
+                        "preset": "hackaprompt",
+                        "status": "pass",
+                        "resistance_score": 100,
+                        "attempt_count": 20 + index,
+                        "blocked_attempt_count": 20 + index,
+                        "difficultyLevel": 5,
+                        "nextDifficultyLevel": 5,
+                        "nextAttemptBudget": 21 + index,
+                        "passStreak": index + 1,
+                        "cleanPass": True,
+                        "shouldEscalate": True,
+                        "targetResistanceScore": 98,
+                    }
+                )
+            (control_dir / "red_team_escalation_history.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            snapshot = build_red_team_escalation_snapshot(root)
+
+            self.assertEqual(snapshot["summary"]["runCount"], 15)
+            self.assertEqual(len(snapshot["history"]), 15)
+            self.assertEqual(snapshot["summary"]["nextAttemptBudget"], 35)
+            self.assertEqual(snapshot["summary"]["passStreak"], 15)
+
+    @staticmethod
+    def _write_clear_watchdog_release_evidence(root: pathlib.Path) -> None:
+        control_dir = root / ".agent_control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        report = {
+            "schema": "fluxio.mission_watchdog.v1",
+            "checkedAt": utc_now_iso(),
+            "root": str(root),
+            "staleMinutes": 60,
+            "summary": {
+                "missionCount": 1,
+                "issueCount": 0,
+                "bad": 0,
+                "warn": 0,
+                "info": 0,
+            },
+            "issues": [],
+            "nextAction": "No watchdog issues found. Keep the scheduled watchdog active.",
+            "problemReport": {
+                "schema": "fluxio.watchdog_problem_report.v1",
+                "checkedAt": utc_now_iso(),
+                "status": "clear",
+                "problemCount": 0,
+                "openProblems": [],
+                "firstProblem": {},
+                "nextAction": "No watchdog problems found. Keep the external loop active.",
+            },
+        }
+        write_mission_watchdog_report(root, report)
+        write_watchdog_supervisor_state(
+            root,
+            {
+                "schema": "fluxio.mission_watchdog_supervisor.v1",
+                "root": str(root),
+                "processPid": os.getpid(),
+                "status": "clear",
+                "loopMode": "ongoing",
+                "supervisorActive": True,
+                "startedAt": utc_now_iso(),
+                "lastRunAt": utc_now_iso(),
+                "nextRunAt": (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat(),
+                "intervalSeconds": 1200,
+                "staleMinutes": 60,
+                "runsCompleted": 1,
+                "lastProblemCount": 0,
+                "lastIssueCount": 0,
+                "nextAction": "No watchdog problems found. Keep the external loop active.",
+            },
+        )
+
+    def test_mission_watchdog_flags_queue_front_and_repair_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build a mobile progress watchdog",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "queued"
+            mission.state.queue_position = 0
+            mission.state.remaining_runtime_seconds = 3600
+            store.update_mission(mission)
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            kinds = {item["kind"] for item in report["issues"]}
+            self.assertIn("queue_front_not_running", kinds)
+            self.assertIn("mission-action", report["nextAction"])
+            self.assertEqual(report["summary"]["missionCount"], 1)
+            self.assertEqual(report["problemReport"]["status"], "open")
+            self.assertGreaterEqual(report["problemReport"]["problemCount"], 1)
+            self.assertIn("mission-action", report["problemReport"]["firstProblem"]["firstStep"])
+            self.assertEqual(report["problemRegistry"]["schema"], "fluxio.watchdog_problem_registry.v1")
+            self.assertEqual(report["problemRegistry"]["status"], "open")
+            self.assertGreaterEqual(report["problemRegistry"]["openProblemCount"], 1)
+            self.assertIn(
+                "mission-action",
+                report["problemRegistry"]["firstOpenProblem"]["firstRepairStep"],
+            )
+
+    def test_mission_watchdog_flags_stale_running_mission(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep ongoing work alive",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1200
+            old = datetime.now(timezone.utc) - timedelta(minutes=75)
+            mission.updated_at = old.isoformat()
+            store.save_missions([mission])
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=30,
+                now=datetime.now(timezone.utc),
+            )
+
+            self.assertIn(
+                "stale_running_mission",
+                {item["kind"] for item in report["issues"]},
+            )
+            self.assertEqual(report["summary"]["warn"], 1)
+
+    def test_mission_watchdog_flags_runtime_cycle_state_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Catch completed event mismatch",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1200
+            store.update_mission(mission)
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.runtime_cycle",
+                    message="hermes control cycle finished with status completed.",
+                    metadata={
+                        "sessionId": "session_done",
+                        "autopilotStatus": "completed",
+                        "pauseReason": "",
+                    },
+                )
+            )
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "runtime_cycle_state_mismatch"
+            )
+            self.assertEqual(issue["severity"], "bad")
+            self.assertIn("--action complete", issue["firstStep"])
+
+    def test_mission_watchdog_flags_active_row_with_idle_planner_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Continue a route-trust sample that stopped dispatching",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.planner_loop_status = "idle"
+            mission.planner_loop_status = "idle"
+            mission.state.remaining_runtime_seconds = 1200
+            store.update_mission(mission)
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "running_planner_loop_idle"
+            )
+            self.assertEqual(issue["severity"], "warn")
+            self.assertIn("--action resume", issue["firstStep"])
+            self.assertIn("plannerLoopStatus=idle", issue["evidence"])
+
+    def test_mission_watchdog_flags_long_running_workspace_queue_pressure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            active = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build a large investigation suite",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            active.state.status = "running"
+            active.state.remaining_runtime_seconds = 36000
+            active.created_at = (
+                datetime.now(timezone.utc) - timedelta(minutes=130)
+            ).isoformat()
+            store.update_mission(active)
+            queued = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build an F1 analytics prototype",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "workspace_queue_pressure"
+            )
+            self.assertEqual(issue["missionId"], queued.mission_id)
+            self.assertEqual(issue["scopeSafety"], "unknown")
+            self.assertIn("Collect file-scope evidence", issue["firstStep"])
+            self.assertNotIn("--action parallelize-worktree", issue["firstStep"])
+            self.assertEqual(report["summary"]["queuePressure"], 1)
+            self.assertEqual(report["summary"]["queuePressureUnknown"], 1)
+
+    def test_mission_watchdog_allows_parallel_worktree_when_file_scopes_are_disjoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            active = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Improve mobile notifications",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            active.state.status = "running"
+            active.state.remaining_runtime_seconds = 36000
+            active.created_at = (
+                datetime.now(timezone.utc) - timedelta(minutes=130)
+            ).isoformat()
+            active.proof.changed_files = ["web/src/notifications/NotificationStack.jsx"]
+            store.update_mission(active)
+            queued = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build an F1 analytics prototype",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            queued.proof.changed_files = ["apps/f1-analytics/dashboard.tsx"]
+            store.update_mission(queued)
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "workspace_queue_pressure"
+            )
+            self.assertEqual(issue["missionId"], queued.mission_id)
+            self.assertEqual(issue["scopeSafety"], "safe")
+            self.assertEqual(issue["scopeEvidence"]["activeFileCount"], 1)
+            self.assertEqual(issue["scopeEvidence"]["queuedFileCount"], 1)
+            self.assertEqual(issue["scopeEvidence"]["overlapFiles"], [])
+            self.assertIn("isolated_worktree", issue["firstStep"])
+            self.assertIn("--action parallelize-worktree", issue["firstStep"])
+            self.assertEqual(report["summary"]["queuePressureSafe"], 1)
+
+    def test_mission_watchdog_uses_planned_file_scope_from_objective(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            active = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build the GEOINT prototype under /projects/lab/geoint-maritime-suite.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            active.state.status = "running"
+            active.state.remaining_runtime_seconds = 36000
+            active.created_at = (
+                datetime.now(timezone.utc) - timedelta(minutes=130)
+            ).isoformat()
+            store.update_mission(active)
+            queued = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build the F1 workbench under /projects/lab/f1-telemetry-workbench.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "workspace_queue_pressure"
+            )
+            self.assertEqual(issue["missionId"], queued.mission_id)
+            self.assertEqual(issue["scopeSafety"], "safe")
+            self.assertIn("projects/lab/geoint-maritime-suite", issue["scopeEvidence"]["activeSamples"])
+            self.assertIn("projects/lab/f1-telemetry-workbench", issue["scopeEvidence"]["queuedSamples"])
+            self.assertIn("--action parallelize-worktree", issue["firstStep"])
+
+    def test_mission_summary_includes_planned_scope_artifact_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            artifact_dir = root / "overnight-discovery-lab" / "f1-telemetry-workbench"
+            artifact_dir.mkdir(parents=True)
+            (artifact_dir / "README.md").write_text("# F1 telemetry workbench\n", encoding="utf-8")
+            (artifact_dir / "index.html").write_text("<main>ready</main>\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build the F1 workbench.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            mission.planned_file_scope = [str(artifact_dir)]
+            mission.state.status = "completed"
+            store.update_mission(mission)
+
+            snapshot = store.build_summary_snapshot()
+            row = next(item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id)
+            artifacts = row["plannedScopeArtifacts"]
+
+            self.assertEqual(artifacts["status"], "ready")
+            self.assertEqual(artifacts["scopeCount"], 1)
+            self.assertEqual(artifacts["readyCount"], 1)
+            self.assertEqual(artifacts["readmeCount"], 1)
+            self.assertEqual(artifacts["previewableCount"], 1)
+            self.assertEqual(artifacts["entries"][0]["fileCount"], 2)
+
+    def test_summary_digest_exposes_public_launch_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            evidence_dir = root / ".agent_control" / "public_launch_readiness"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "latest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.public_launch_readiness.v1",
+                        "ok": False,
+                        "status": "public_packet_ready_missing_current_web_and_publication",
+                        "internalPacketReady": True,
+                        "missing": ["public_web_current", "external_publication_proven"],
+                        "blockers": [
+                            {
+                                "checkId": "public_web_current",
+                                "details": "Public web receipt must point at the current source state.",
+                            },
+                            {
+                                "checkId": "external_publication_proven",
+                                "details": "Publication proof is required.",
+                            },
+                        ],
+                        "publicWeb": {
+                            "sourceDirtyPathCount": 3,
+                            "sourceDirtyPathSample": [" M README.md"],
+                            "dirtySourceTriage": {
+                                "schema": "fluxio.public_launch_dirty_source_triage.v1",
+                                "releaseBlockingSampleCount": 1,
+                                "laneCounts": {"docs": 1},
+                                "nextAction": "Commit/push/deploy release-impacting source changes.",
+                            },
+                        },
+                        "publicationProof": {
+                            "nextAction": "Attach publication proof.",
+                        },
+                        "nextAction": "Publish current source and add publication proof.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = ControlRoomStore(root)
+
+            summary = store.build_summary_snapshot()
+            public_launch = summary["systemAuditDigest"]["publicLaunchReadiness"]
+
+            self.assertEqual(
+                public_launch["status"],
+                "public_packet_ready_missing_current_web_and_publication",
+            )
+            self.assertTrue(public_launch["internalPacketReady"])
+            self.assertEqual(
+                public_launch["missing"],
+                ["public_web_current", "external_publication_proven"],
+            )
+            self.assertEqual(public_launch["blockers"][0]["checkId"], "public_web_current")
+            self.assertEqual(public_launch["publicWeb"]["sourceDirtyPathSample"], [" M README.md"])
+            self.assertEqual(
+                public_launch["publicWeb"]["dirtySourceTriage"]["releaseBlockingSampleCount"],
+                1,
+            )
+            self.assertEqual(public_launch["publicationProof"]["nextAction"], "Attach publication proof.")
+
+    def test_public_launch_digest_prefers_fresher_readiness_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            evidence_dir = root / ".agent_control" / "public_launch_readiness"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "latest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.public_launch_readiness.v1",
+                        "checkedAt": "2026-05-30T10:20:00+00:00",
+                        "ok": False,
+                        "status": "public_packet_ready_missing_current_web_and_publication",
+                        "internalPacketReady": True,
+                        "missing": ["public_web_current"],
+                        "blockers": [],
+                        "publicWeb": {
+                            "sourceDirtyPathSample": [" M fresh.py"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            digest = mission_control_module._public_launch_readiness_digest(
+                root,
+                {
+                    "schema": "fluxio.public_launch_readiness.v1",
+                    "checkedAt": "2026-05-30T09:00:00+00:00",
+                    "ok": False,
+                    "status": "stale",
+                    "internalPacketReady": True,
+                    "missing": ["external_publication_proven"],
+                    "blockers": [],
+                    "publicWeb": {
+                        "sourceDirtyPathSample": [" M stale.py"],
+                    },
+                },
+            )
+
+            self.assertEqual(digest["status"], "public_packet_ready_missing_current_web_and_publication")
+            self.assertEqual(digest["publicWeb"]["sourceDirtyPathSample"], [" M fresh.py"])
+
+    def test_mission_watchdog_flags_completed_missing_planned_scope_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build the RF hidden-world explorer.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            mission.planned_file_scope = [str(root / "missing-rf-explorer")]
+            mission.state.status = "completed"
+            store.update_mission(mission)
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "planned_scope_artifacts_not_ready"
+            )
+            self.assertEqual(issue["severity"], "bad")
+            self.assertEqual(issue["artifactReadiness"]["status"], "missing")
+            self.assertEqual(report["summary"]["artifactMissing"], 1)
+
+    def test_mission_watchdog_ignores_stale_non_artifact_scope_when_output_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            artifact_dir = root / "solantir-mindtower-fusion"
+            artifact_dir.mkdir()
+            (artifact_dir / "README.md").write_text("# Fusion output\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build the fusion workspace.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            mission.planned_file_scope = [
+                str(artifact_dir),
+                "tests/build/smoke",
+                "/volume1/Saclay/projects/Projects/Solantir",
+            ]
+            mission.state.status = "completed"
+            store.update_mission(mission)
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+            readiness = report["artifactReadiness"][mission.mission_id]
+
+            self.assertEqual(readiness["status"], "ready")
+            self.assertEqual(readiness["scopeCount"], 1)
+            self.assertEqual(readiness["rawScopeCount"], 3)
+            self.assertEqual(readiness["ignoredCount"], 2)
+            self.assertEqual(report["summary"]["artifactReady"], 1)
+            self.assertNotIn(
+                "planned_scope_artifacts_not_ready",
+                {item["kind"] for item in report["issues"]},
+            )
+
+    def test_mission_watchdog_blocks_parallel_worktree_when_file_scopes_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            active = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Improve the Builder watchdog panel",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            active.state.status = "running"
+            active.state.remaining_runtime_seconds = 36000
+            active.created_at = (
+                datetime.now(timezone.utc) - timedelta(minutes=130)
+            ).isoformat()
+            active.proof.changed_files = ["web/src/fluxio/FluxioShell.jsx"]
+            store.update_mission(active)
+            queued = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Tune the same Builder watchdog panel",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            queued.proof.changed_files = ["web/src/fluxio/FluxioShell.jsx"]
+            store.update_mission(queued)
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "workspace_queue_pressure"
+            )
+            self.assertEqual(issue["scopeSafety"], "overlap")
+            self.assertEqual(issue["scopeEvidence"]["overlapFiles"], ["web/src/fluxio/fluxioshell.jsx"])
+            self.assertIn("Do not parallelize automatically", issue["firstStep"])
+            self.assertNotIn("--action parallelize-worktree", issue["firstStep"])
+            self.assertEqual(report["summary"]["queuePressureOverlap"], 1)
+
+    def test_infer_planned_file_scope_extracts_artifact_directory(self) -> None:
+        self.assertEqual(
+            infer_planned_file_scope(
+                "Put all artifacts under /volume1/Saclay/projects/overnight-discovery-lab/f1-telemetry-workbench.",
+                [],
+            ),
+            ["/volume1/Saclay/projects/overnight-discovery-lab/f1-telemetry-workbench"],
+        )
+
+    def test_infer_planned_file_scope_prefers_fusion_workspace_over_sources(self) -> None:
+        objective = """Source projects:
+- Solantir source: `/volume1/Saclay/projects/Projects/Solantír`
+- Mind Tower source: `/volume1/Saclay/projects/mind-tower`
+- Fusion workspace: `/volume1/Saclay/projects/solantir-mindtower-fusion`
+
+Run available tests/build/smoke checks and record proof artifacts.
+"""
+
+        self.assertEqual(
+            infer_planned_file_scope(objective, []),
+            ["/volume1/Saclay/projects/solantir-mindtower-fusion"],
+        )
+
     def test_empty_workspace_store_falls_back_to_default_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -309,6 +1054,16 @@ class MissionControlTests(unittest.TestCase):
             self.assertTrue(sync_status["detectedBothWithFiles"])
             self.assertGreaterEqual(sync_status["filesCopied"], 3)
             self.assertGreaterEqual(len(sync_status["passes"]), 2)
+            self.assertEqual(
+                sync_status["syncReceipt"]["schema"],
+                "fluxio.workspace_sync_receipt.v1",
+            )
+            self.assertGreaterEqual(sync_status["syncReceipt"]["conflictsDetected"], 1)
+            self.assertGreaterEqual(sync_status["conflictsDetected"], 1)
+            self.assertEqual(
+                sync_status["conflictReceipts"][0]["schema"],
+                "fluxio.sync_conflict_receipt.v1",
+            )
 
     def test_workspace_save_bidirectional_nas_wins_updates_local_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -373,6 +1128,128 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(sync_status["requestedDirection"], "local_to_nas")
             self.assertEqual(sync_status["effectiveDirection"], "bidirectional")
             self.assertTrue(sync_status["directionAutoPromoted"])
+
+    def test_sync_project_tree_records_manual_review_conflict_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
+            (source / "shared.txt").write_text("source-version-longer\n", encoding="utf-8")
+            (target / "shared.txt").write_text("target-version\n", encoding="utf-8")
+
+            status = _sync_project_tree(
+                source,
+                target,
+                conflict_policy="manual_review",
+            )
+
+            self.assertTrue(status["synced"])
+            self.assertEqual(status["reason"], "manual_review_required")
+            self.assertTrue(status["manualReviewRequired"])
+            self.assertEqual(status["conflictsDetected"], 1)
+            self.assertEqual(
+                status["syncReceipt"]["schema"],
+                "fluxio.sync_conflict_receipt.v1",
+            )
+            self.assertTrue(status["syncReceipt"]["manualReviewRequired"])
+            self.assertEqual(
+                status["syncReceipt"]["conflictSamples"][0]["resolution"],
+                "manual_review_required",
+            )
+            self.assertEqual(
+                (target / "shared.txt").read_text(encoding="utf-8"),
+                "target-version\n",
+            )
+
+    def test_resolve_workspace_sync_conflict_records_resolution_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            local_root = root / "local-project"
+            nas_root = root / "nas-project"
+            local_root.mkdir(parents=True, exist_ok=True)
+            nas_root.mkdir(parents=True, exist_ok=True)
+            (local_root / "shared.txt").write_text("local-version\n", encoding="utf-8")
+            (nas_root / "shared.txt").write_text("nas-version\n", encoding="utf-8")
+
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="Manual Review Workspace",
+                root_path=str(local_root),
+                default_runtime="openclaw",
+                user_profile="builder",
+                local_project_path=str(local_root),
+                nas_project_path=str(nas_root),
+                sync_mode="auto_nas_mirror",
+                sync_direction="local_to_nas",
+                sync_conflict_policy="manual_review",
+                auto_sync_to_nas=True,
+            )
+            self.assertEqual((nas_root / "shared.txt").read_text(encoding="utf-8"), "nas-version\n")
+
+            receipt = resolve_workspace_sync_conflict(
+                store=store,
+                workspace_id=workspace.workspace_id,
+                relative_path="shared.txt",
+                resolution="local_wins",
+            )
+
+            self.assertEqual(receipt["schema"], "fluxio.sync_conflict_resolution_receipt.v1")
+            self.assertEqual(receipt["status"], "resolved")
+            self.assertTrue(receipt["copied"])
+            self.assertEqual((nas_root / "shared.txt").read_text(encoding="utf-8"), "local-version\n")
+            refreshed = store.get_workspace(workspace.workspace_id)
+            self.assertTrue(
+                any(
+                    str(item).startswith("sync_conflict_resolution:")
+                    for item in (refreshed.goals if refreshed else [])
+                )
+            )
+
+    def test_resolve_workspace_sync_conflict_batch_records_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            local_root = root / "local-project"
+            nas_root = root / "nas-project"
+            local_root.mkdir(parents=True, exist_ok=True)
+            nas_root.mkdir(parents=True, exist_ok=True)
+            for name in ("alpha.txt", "beta.txt"):
+                (local_root / name).write_text(f"local-{name}\n", encoding="utf-8")
+                (nas_root / name).write_text(f"nas-{name}\n", encoding="utf-8")
+
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="Batch Manual Review Workspace",
+                root_path=str(local_root),
+                default_runtime="openclaw",
+                user_profile="builder",
+                local_project_path=str(local_root),
+                nas_project_path=str(nas_root),
+                sync_mode="auto_nas_mirror",
+                sync_direction="local_to_nas",
+                sync_conflict_policy="manual_review",
+                auto_sync_to_nas=True,
+            )
+
+            receipt = resolve_workspace_sync_conflict_batch(
+                store=store,
+                workspace_id=workspace.workspace_id,
+                relative_paths=["alpha.txt", "beta.txt"],
+                resolution="local_wins",
+            )
+
+            self.assertEqual(receipt["schema"], "fluxio.sync_conflict_batch_resolution_receipt.v1")
+            self.assertEqual(receipt["status"], "resolved")
+            self.assertEqual(receipt["requestedCount"], 2)
+            self.assertEqual(receipt["resolvedCount"], 2)
+            self.assertEqual(len(receipt["receiptIds"]), 2)
+            self.assertEqual((nas_root / "alpha.txt").read_text(encoding="utf-8"), "local-alpha.txt\n")
+            self.assertEqual((nas_root / "beta.txt").read_text(encoding="utf-8"), "local-beta.txt\n")
+            refreshed = store.get_workspace(workspace.workspace_id)
+            goals = refreshed.goals if refreshed else []
+            self.assertTrue(any(str(item).startswith("sync_conflict_resolution:") for item in goals))
+            self.assertTrue(any(str(item).startswith("sync_conflict_batch_resolution:") for item in goals))
 
     def test_cli_mission_follow_up_records_thread_and_runtime_lane(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -439,6 +1316,30 @@ class MissionControlTests(unittest.TestCase):
                 "Please keep me updated on the next runtime checkpoint.",
             )
 
+    def test_recent_events_reads_only_tail_rows_in_newest_first_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            store.events_path.write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "mission_id": f"mission_{index % 3}",
+                            "kind": f"event.{index}",
+                            "message": f"message {index}",
+                            "timestamp": f"2026-05-30T00:{index % 60:02d}:00Z",
+                        }
+                    )
+                    for index in range(250)
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            events = store.recent_events(limit=5)
+
+            self.assertEqual([item["kind"] for item in events], [f"event.{index}" for index in range(249, 244, -1)])
+
     def test_store_creates_default_workspace_and_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -464,6 +1365,29 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("profiles", snapshot)
             self.assertIn("skillLibrary", snapshot)
             self.assertIn("harnessLab", snapshot)
+            self.assertIn("parityMatrix", snapshot["harnessLab"])
+            self.assertEqual(
+                snapshot["harnessLab"]["routeTrustCoverage"]["schema"],
+                "fluxio.route_trust_coverage.v1",
+            )
+            self.assertIn("nextSamplingPlan", snapshot["harnessLab"]["routeTrustCoverage"])
+            sampling_plan = snapshot["harnessLab"]["routeTrustCoverage"]["nextSamplingPlan"]
+            self.assertGreaterEqual(len(sampling_plan), 1)
+            self.assertEqual(
+                sampling_plan[0]["schema"],
+                "fluxio.route_trust_sampling_template.v1",
+            )
+            self.assertIn("sampleMissionObjective", sampling_plan[0])
+            self.assertIn("sampleMissionSuccessChecks", sampling_plan[0])
+            self.assertIn("sampleMissionUrlPath", sampling_plan[0])
+            self.assertIn("sampleMissionCliCommand", sampling_plan[0])
+            self.assertIn("successCheck=", sampling_plan[0]["sampleMissionUrlPath"])
+            self.assertIn("mission-quickstart", sampling_plan[0]["sampleMissionCliCommand"])
+            self.assertIn("operatorConfidenceScore", snapshot["harnessLab"]["routeTrustCoverage"])
+            self.assertIn("repairPlanStatus", snapshot["harnessLab"]["routeTrustCoverage"])
+            self.assertIn("activeSamplingMissionCount", snapshot["harnessLab"]["routeTrustCoverage"])
+            self.assertIn("beginnerGuidance", snapshot["harnessLab"])
+            self.assertGreaterEqual(len(snapshot["harnessLab"]["parityMatrix"]), 6)
             self.assertIn("bridgeLab", snapshot)
             self.assertIn("storageBridge", snapshot)
             self.assertIn("guidance", snapshot)
@@ -491,6 +1415,11 @@ class MissionControlTests(unittest.TestCase):
                 snapshot["workspaces"][0]["serviceManagement"][0],
             )
             self.assertIn("managementSummary", snapshot["skillLibrary"])
+            self.assertIn("feedbackLoop", snapshot["skillLibrary"])
+            self.assertEqual(
+                snapshot["skillLibrary"]["feedbackLoop"]["cadence"],
+                "mission_slice_end",
+            )
             self.assertIn("serviceManagement", snapshot["setupHealth"])
             self.assertIn("minimax", snapshot["providerSetupStatus"])
             self.assertEqual(
@@ -502,6 +1431,1047 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("reviewStatus", workflow)
             self.assertIn("serviceIds", workflow)
             self.assertIn("verificationDefaults", workflow)
+
+    def test_route_trust_coverage_surfaces_low_value_repair_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            active = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Build a polished phone/tablet Builder progress surface",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            active.state.status = "running"
+            store.update_mission(active)
+            route_dir = root / ".agent_control" / "route_trust_sampling"
+            route_dir.mkdir(parents=True)
+            (route_dir / "latest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.route_trust_live_sampling_run.v1",
+                        "launchedSamplingMissions": [
+                            {
+                                "missionId": active.mission_id,
+                                "taskType": "frontend_design",
+                                "runtime": "hermes",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (route_dir / "closeout_review_latest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.route_trust_sampling_closeout_review.v1",
+                        "proposals": [
+                            {
+                                "missionId": "mission_failed_f1",
+                                "taskType": "data_f1_analytics",
+                                "missionStatus": "completed",
+                                "score": 30,
+                                "outcome": "not_useful",
+                                "trustSignal": "deprioritize",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            coverage = store.build_snapshot()["harnessLab"]["routeTrustCoverage"]
+
+            self.assertEqual(coverage["repairPlanStatus"], "required")
+            self.assertEqual(coverage["lowValueCloseoutCount"], 1)
+            self.assertEqual(coverage["activeSamplingMissionCount"], 1)
+            self.assertEqual(coverage["activeSamplingMissionIds"], [active.mission_id])
+            self.assertEqual(coverage["repairPlan"][0]["taskType"], "data_f1_analytics")
+            self.assertIn("Codex gpt-5.5 high", coverage["repairPlan"][0]["modelPolicy"])
+            self.assertTrue(coverage["nextSamplingPlan"][0]["repairRequired"])
+            repair_sample = coverage["nextSamplingPlan"][0]
+            self.assertEqual(repair_sample["sampleMissionTitle"], "Repair F1/data analytics route trust sample")
+            self.assertIn("mission_failed_f1", repair_sample["sampleMissionObjective"])
+            self.assertIn("proof digest", repair_sample["sampleMissionObjective"])
+            self.assertIn("operator-value closeout", repair_sample["sampleMissionObjective"])
+            self.assertTrue(
+                any("previous low-value sample failed" in check for check in repair_sample["sampleMissionSuccessChecks"])
+            )
+
+    def test_route_trust_proven_requires_useful_operator_value_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            for index in range(2):
+                mission = store.create_mission(
+                    workspace_id=workspace.workspace_id,
+                    runtime_id="hermes",
+                    objective=f"Build F1 telemetry analytics prototype {index}",
+                    success_checks=[],
+                    mode="Autopilot",
+                    verification_commands=[],
+                    max_runtime_seconds=3600,
+                )
+                mission.state.status = "completed"
+                mission.state.operator_value_feedback = {
+                    "schema": "fluxio.mission_operator_value_feedback.v1",
+                    "score": 30,
+                    "outcome": "not_useful",
+                    "trustSignal": "deprioritize",
+                }
+                store.update_mission(mission)
+
+            coverage = store.build_snapshot()["harnessLab"]["routeTrustCoverage"]
+            f1_row = next(
+                item
+                for item in coverage["taskCoverage"]
+                if item["taskType"] == "data_f1_analytics"
+            )
+
+            self.assertEqual(f1_row["operatorValueSamples"], 2)
+            self.assertEqual(f1_row["operatorPromoteCount"], 0)
+            self.assertEqual(f1_row["operatorDeprioritizeCount"], 2)
+            self.assertEqual(f1_row["usefulOperatorValueSamples"], 0)
+            self.assertEqual(f1_row["lowValueOperatorSamples"], 2)
+            self.assertEqual(f1_row["missingOperatorValueSamples"], 2)
+            self.assertEqual(f1_row["status"], "sampling")
+            self.assertNotEqual(f1_row["status"], "proven")
+            self.assertIn("useful value-scored", f1_row["nextAction"])
+
+    def test_route_trust_coverage_uses_sampling_objective_before_workspace_route_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective=ROUTE_TRUST_SAMPLE_TEMPLATES["general_coding"]["objective"],
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+                route_overrides=[
+                    {
+                        "role": "planner",
+                        "provider": "openai-codex",
+                        "model": "gpt-5.5",
+                        "task_type": "frontend_design",
+                    }
+                ],
+            )
+            mission.state.status = "completed"
+            mission.state.operator_value_feedback = {
+                "schema": "fluxio.mission_operator_value_feedback.v1",
+                "score": 92,
+                "outcome": "useful",
+                "trustSignal": "promote",
+            }
+            store.update_mission(mission)
+
+            coverage = store.build_snapshot()["harnessLab"]["routeTrustCoverage"]
+            rows = {item["taskType"]: item for item in coverage["taskCoverage"]}
+
+            self.assertEqual(rows["general_coding"]["operatorValueSamples"], 1)
+            self.assertEqual(rows["general_coding"]["usefulOperatorValueSamples"], 1)
+            self.assertEqual(rows["frontend_design"]["operatorValueSamples"], 0)
+
+    def test_summary_running_mission_progress_falls_back_to_live_activity_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep a Hermes mission progressing without a runtime budget denominator.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=0,
+            )
+            mission.state.status = "running"
+            mission.state.planner_loop_status = "running"
+            mission.action_history = [
+                {
+                    "action_id": "action_patch",
+                    "proposal": {"kind": "file_patch", "title": "Patch target file"},
+                    "result": {"result_summary": "File mutation completed."},
+                }
+            ]
+            mission.delegated_runtime_sessions.append(
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_no_budget",
+                    runtime_id="hermes",
+                    launch_command="python -m grant_agent.runtime_worker",
+                    status="running",
+                )
+            )
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(progress["schema"], "fluxio.mission_live_progress.v1")
+            self.assertEqual(progress["source"], "mission_activity_signals")
+            self.assertEqual(progress["label"], "Live activity progress")
+            self.assertIsInstance(progress["value"], int)
+            self.assertGreater(progress["value"], 0)
+            self.assertEqual(progress["signalCounts"]["actions"], 1)
+            self.assertEqual(progress["signalCounts"]["activeRuntimeLanes"], 3)
+
+    def test_web_backend_summary_cache_version_tracks_live_progress_semantics(self) -> None:
+        self.assertIn(
+            "2026-05-31.live_progress.v1",
+            (
+                pathlib.Path(__file__).resolve().parents[1]
+                / "src"
+                / "grant_agent"
+                / "web_backend.py"
+            ).read_text(encoding="utf-8"),
+        )
+
+    def test_summary_snapshot_is_lightweight_and_notification_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            sibling_root = root / "api-service"
+            sibling_root.mkdir()
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            sibling = store.upsert_workspace(
+                name="API Service",
+                root_path=str(sibling_root),
+                default_runtime="openclaw",
+                workspace_id="workspace_api_service",
+            )
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep the web operator informed while work continues.",
+                success_checks=["Notification feed updates"],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            mission.state.status = "running"
+            mission.state.latest_session_id = "runtime_report_session"
+            mission.state.last_runtime_event = "Delegated worker picked up the next step."
+            mission.delegated_runtime_sessions.append(
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_summary_fastpath",
+                    runtime_id="hermes",
+                    launch_command="python -m grant_agent.runtime_worker",
+                    status="running",
+                    last_event="Fallback session event that should not outrank runtime output.",
+                    latest_events=[
+                        {
+                            "kind": "runtime.output",
+                            "message": "## Fluxio Mission Note - Step: Implement smallest vertical slice\nHermes report body starts here.",
+                            "created_at": utc_now_iso(),
+                            "status": "running",
+                        }
+                    ],
+                    heartbeat_status="healthy",
+                    heartbeat_at=utc_now_iso(),
+                    heartbeat_interval_seconds=10,
+                )
+            )
+            mission.execution_scope.workspace_root = workspace.root_path
+            mission.execution_scope.execution_root = str(root / ".agent_control" / "worktrees" / mission.mission_id)
+            mission.execution_scope.branch_name = "mission/context-roots"
+            mission.proof.summary = "Mission is producing progress events."
+            mission.proof.passed_checks.append("Notification feed updates")
+            mission.proof.changed_files.append("web/src/fluxio/FluxioShell.jsx")
+            mission.learned_skill_events.append(
+                {
+                    "kind": "skill.slice_feedback",
+                    "skillId": "design-taste-frontend",
+                    "systemLoss": 0.18,
+                    "nextAction": "reinforce",
+                }
+            )
+            session_dir = root / ".agent_runs" / "runtime_report_session"
+            session_dir.mkdir(parents=True)
+            (session_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "runtime.output",
+                        "message": "## Fluxio Mission Note - Step: Implement smallest vertical slice",
+                        "timestamp": utc_now_iso(),
+                        "metadata": {
+                            "args": {
+                                "content": "Hermes report body starts here with the actual operator-facing progress note."
+                            }
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            store.update_mission(mission)
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.progress",
+                    message="Worker advanced one step.",
+                )
+            )
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.runtime_cycle",
+                    message="hermes control cycle finished with status running.",
+                )
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(exist_ok=True)
+            (control_dir / "red_team_escalation_history.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema": "fluxio.red_team_escalation_history.v1",
+                                "recordedAt": "2026-05-28T00:00:00+00:00",
+                                "preset": "hackaprompt",
+                                "status": "pass",
+                                "resistance_score": 92,
+                                "difficultyLevel": 2,
+                                "nextDifficultyLevel": 3,
+                                "passStreak": 1,
+                                "cleanPass": True,
+                                "shouldEscalate": True,
+                                "nextAttemptBudget": 9,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema": "fluxio.red_team_escalation_history.v1",
+                                "recordedAt": "2026-05-28T01:00:00+00:00",
+                                "preset": "hackaprompt",
+                                "status": "pass",
+                                "resistance_score": 100,
+                                "attempt_count": 9,
+                                "blocked_attempt_count": 9,
+                                "difficultyLevel": 3,
+                                "nextDifficultyLevel": 4,
+                                "passStreak": 2,
+                                "cleanPass": True,
+                                "shouldEscalate": True,
+                                "nextAttemptBudget": 11,
+                                "observedTactics": [
+                                    "direct_policy_probe",
+                                    "roleplay",
+                                    "authority",
+                                ],
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            summary = store.build_summary_snapshot()
+
+            self.assertEqual(summary["schema"], "fluxio.control_room.summary.v1")
+            self.assertEqual(summary["counts"]["missions"], 1)
+            self.assertEqual(summary["counts"]["activeMissions"], 1)
+            self.assertEqual(summary["missions"][0]["mission_id"], mission.mission_id)
+            self.assertEqual(
+                summary["missions"][0]["contextRoots"]["schema"],
+                "fluxio.mission.context_roots.v1",
+            )
+            self.assertGreaterEqual(summary["missions"][0]["contextRoots"]["counts"]["totalRoots"], 2)
+            self.assertGreaterEqual(
+                summary["missions"][0]["contextRoots"]["counts"]["dependencyEdges"],
+                1,
+            )
+            self.assertEqual(
+                summary["missions"][0]["contextRoots"]["writeScopePreflight"]["schema"],
+                "fluxio.write_scope_preflight.v1",
+            )
+            self.assertIn(
+                summary["missions"][0]["contextRoots"]["writeScopePreflight"]["status"],
+                {"pass", "warn"},
+            )
+            self.assertGreaterEqual(
+                len(summary["missions"][0]["contextRoots"]["dependencyEdges"]),
+                1,
+            )
+            self.assertEqual(
+                summary["missions"][0]["contextRoots"]["primary"]["workspaceId"],
+                workspace.workspace_id,
+            )
+            self.assertEqual(
+                summary["missions"][0]["contextRoots"]["related"][0]["workspaceId"],
+                sibling.workspace_id,
+            )
+            self.assertIn("notifications", summary)
+            self.assertGreaterEqual(len(summary["notifications"]), 1)
+            self.assertFalse(
+                any(item.get("kind") == "mission.runtime_cycle" for item in summary["notifications"])
+            )
+            mission_notifications = [
+                item for item in summary["notifications"] if item.get("kind") == "mission_status"
+            ]
+            self.assertTrue(mission_notifications)
+            self.assertTrue(
+                mission_notifications[0]["agentMessage"].startswith(
+                    "## Fluxio Mission Note - Step: Implement smallest vertical slice"
+                )
+            )
+            self.assertEqual(
+                mission_notifications[0]["agentMessageSource"],
+                "runtime_transcript:runtime_report_session",
+            )
+            slice_notifications = [
+                item for item in summary["notifications"]
+                if item.get("kind") == "mission_slice_completed"
+            ]
+            self.assertGreaterEqual(len(slice_notifications), 1)
+            self.assertEqual(slice_notifications[0]["severity"], "success")
+            self.assertIn("Slice completed", slice_notifications[0]["title"])
+            self.assertIn("system loss 0.18", slice_notifications[0]["detail"])
+            self.assertIn("system loss 0.18", slice_notifications[0]["agentMessage"])
+            self.assertEqual(
+                summary["missionWatchdog"]["supervisor"]["schema"],
+                "fluxio.mission_watchdog_supervisor.v1",
+            )
+            self.assertEqual(summary["missionWatchdog"]["supervisor"]["loopMode"], "none")
+            self.assertFalse(summary["missionWatchdog"]["supervisor"]["supervisorActive"])
+            self.assertIn("mission-watchdog --loop", summary["missionWatchdog"]["supervisor"]["nextAction"])
+            self.assertEqual(
+                summary["redTeamEscalation"]["schema"],
+                "fluxio.red_team_escalation_snapshot.v1",
+            )
+            self.assertEqual(summary["redTeamEscalation"]["summary"]["runCount"], 2)
+            self.assertEqual(summary["redTeamEscalation"]["summary"]["latestResistanceScore"], 100)
+            self.assertEqual(summary["redTeamEscalation"]["summary"]["nextDifficultyLevel"], 4)
+            self.assertEqual(
+                summary["redTeamEscalation"]["escalationAudit"]["schema"],
+                "fluxio.red_team_escalation_audit.v1",
+            )
+            self.assertEqual(
+                summary["redTeamEscalation"]["nextBenchmarkPlan"]["schema"],
+                "fluxio.red_team_next_benchmark_plan.v1",
+            )
+            self.assertEqual(
+                summary["redTeamEscalation"]["summaryTruncation"]["schema"],
+                "fluxio.summary_truncation.v1",
+            )
+            self.assertEqual(summary["redTeamEscalation"]["nextBenchmarkPlan"]["difficultyLabel"], "L4")
+            self.assertEqual(
+                summary["redTeamEscalation"]["nextBenchmarkPlan"]["nextPressureIndex"],
+                summary["redTeamEscalation"]["summary"]["nextPressureIndex"],
+            )
+            self.assertIn(
+                f"pressure index advances to {summary['redTeamEscalation']['summary']['nextPressureIndex']}",
+                summary["redTeamEscalation"]["nextBenchmarkPlan"]["successCriteria"],
+            )
+            self.assertIn(
+                "sample:self-improvement-red-team",
+                summary["redTeamEscalation"]["nextBenchmarkPlan"]["command"]["shell"],
+            )
+            self.assertEqual(summary["redTeamEscalation"]["summary"]["satisfiedEscalationTargets"], 1)
+            self.assertEqual(summary["redTeamEscalation"]["summary"]["pendingEscalationTargets"], 1)
+            self.assertEqual(summary["overnightDigest"]["schema"], "fluxio.overnight_progress_digest.v1")
+            self.assertTrue(summary["overnightDigest"]["delivery"]["appLike"])
+            self.assertTrue(summary["overnightDigest"]["delivery"]["receiptBacked"])
+            self.assertIn("browser_notification", summary["overnightDigest"]["delivery"]["channels"])
+            self.assertEqual(summary["overnightDigest"]["counts"]["active"], 1)
+            self.assertEqual(
+                summary["projectProgressHistory"]["schema"],
+                "fluxio.project_progress_history.v1",
+            )
+            self.assertEqual(
+                summary["projectProgressHistory"]["summaryTruncation"]["schema"],
+                "fluxio.summary_truncation.v1",
+            )
+            self.assertEqual(summary["projectProgressHistory"]["source"], "mission_store_and_mission_events")
+            project_history = {
+                item["workspaceId"]: item
+                for item in summary["projectProgressHistory"]["projects"]
+            }
+            self.assertIn(workspace.workspace_id, project_history)
+            self.assertTrue(project_history[workspace.workspace_id]["liveData"])
+            self.assertGreaterEqual(project_history[workspace.workspace_id]["counts"]["events"], 1)
+            self.assertGreaterEqual(
+                len(project_history[workspace.workspace_id]["milestones"]),
+                1,
+            )
+            self.assertEqual(
+                project_history[workspace.workspace_id]["milestones"][0]["source"],
+                "mission_events",
+            )
+            self.assertGreaterEqual(
+                len(project_history[workspace.workspace_id]["buckets"]),
+                1,
+            )
+            self.assertEqual(
+                project_history[workspace.workspace_id]["scheduleRecommendation"]["schema"],
+                "fluxio.project_schedule_recommendation.v1",
+            )
+            self.assertEqual(
+                project_history[workspace.workspace_id]["syncAuthority"]["schema"],
+                "fluxio.workspace_sync_authority.v1",
+            )
+            self.assertEqual(
+                project_history[workspace.workspace_id]["launchRehearsal"]["schema"],
+                "fluxio.cross_device_launch_rehearsal.v1",
+            )
+            self.assertFalse(project_history[workspace.workspace_id]["launchRehearsal"]["safeToLaunch"])
+            self.assertIn(
+                "dependency_schedule",
+                project_history[workspace.workspace_id]["launchRehearsal"]["blockedCheckIds"],
+            )
+            self.assertEqual(
+                project_history[workspace.workspace_id]["syncAuthority"]["state"],
+                "manual_local",
+            )
+            self.assertTrue(
+                project_history[workspace.workspace_id]["syncAuthority"]["safeForWritableDependency"],
+            )
+            self.assertEqual(
+                project_history[workspace.workspace_id]["scheduleRecommendation"]["state"],
+                "watch",
+            )
+            self.assertFalse(
+                project_history[workspace.workspace_id]["scheduleRecommendation"]["safeToLaunch"],
+            )
+            self.assertEqual(
+                summary["projectProgressHistory"]["scheduler"]["schema"],
+                "fluxio.dependency_aware_project_scheduler.v1",
+            )
+            self.assertGreaterEqual(
+                len(summary["projectProgressHistory"]["schedulingQueue"]),
+                1,
+            )
+            self.assertEqual(
+                summary["projectProgressHistory"]["scheduler"]["topWorkspaceId"],
+                summary["projectProgressHistory"]["schedulingQueue"][0]["workspaceId"],
+            )
+            self.assertIn(
+                project_history[workspace.workspace_id]["scheduleRecommendation"],
+                summary["projectProgressHistory"]["schedulingQueue"],
+            )
+            self.assertIn("phoneSummary", summary["overnightDigest"])
+            self.assertEqual(
+                summary["missionWatchdog"]["summarySource"]["schema"],
+                "fluxio.summary.watchdog_source.v1",
+            )
+            self.assertIn("missionLaunchShortcuts", summary)
+            self.assertIn("harnessLab", summary)
+            self.assertEqual(
+                summary["harnessLab"]["routeTrustCoverage"]["schema"],
+                "fluxio.route_trust_coverage.v1",
+            )
+            self.assertIn("quarantinedRouteCount", summary["harnessLab"]["routeTrustCoverage"])
+            self.assertEqual(summary["summaryShaping"]["harnessLab"], "route_trust_coverage_only")
+            self.assertEqual(
+                summary["missionLaunchShortcuts"][0]["workspaceId"],
+                workspace.workspace_id,
+            )
+            self.assertEqual(
+                summary["missionLaunchShortcuts"][0]["runtimeRecommendation"]["schema"],
+                "fluxio.launch_runtime_recommendation.v1",
+            )
+            self.assertIn(
+                summary["missionLaunchShortcuts"][0]["recommendedRuntime"],
+                {"hermes", "openclaw"},
+            )
+            self.assertIn("launch=mission", summary["missionLaunchShortcuts"][0]["urlPath"])
+            self.assertIn("mission-quickstart", summary["missionLaunchShortcuts"][0]["cliCommand"])
+            self.assertTrue(summary["mobileWeb"]["summaryFirst"])
+            self.assertTrue(summary["mobileWeb"]["overnightDigest"])
+            self.assertTrue(summary["mobileWeb"]["appLikeProgress"])
+            self.assertIn("browser_notification", summary["mobileWeb"]["phoneNotificationChannels"])
+            self.assertEqual(summary["performance"]["source"], "control_room_summary")
+            self.assertGreater(summary["performance"]["payloadBytes"], 0)
+            self.assertEqual(
+                summary["performance"]["budget"]["schema"],
+                "fluxio.performance_budget.v1",
+            )
+            self.assertIn(summary["performance"]["budget"]["status"], {"pass", "warn"})
+            self.assertTrue(summary["performance"]["virtualization"]["summaryFirst"])
+            self.assertEqual(summary["performance"]["budget"]["itemLimits"]["missions"], 60)
+            self.assertTrue(summary["performance"]["sectionDurations"])
+            self.assertTrue(summary["performance"]["slowestSections"])
+            self.assertIn(
+                "system_audit_digest",
+                {item["name"] for item in summary["performance"]["sectionDurations"]},
+            )
+            self.assertEqual(summary["performance"]["budget"]["itemLimits"]["richContextRoots"], 1)
+            self.assertEqual(
+                summary["summaryShaping"]["schema"],
+                "fluxio.control_room.summary_shaping.v1",
+            )
+            self.assertEqual(summary["summaryShaping"]["richContextRoots"], "active_missions_only")
+            self.assertEqual(summary["summaryShaping"]["skillCatalogRows"], "bounded_live_samples_with_total_counts")
+            self.assertEqual(summary["summaryShaping"]["projectProgressRows"], "bounded_project_milestones_and_receipts")
+            self.assertEqual(summary["summaryShaping"]["systemAuditDigest"], "operator_summary_fields_only")
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["schema"], "fluxio.control_room.mission_detail.v1")
+            self.assertEqual(detail["missionId"], mission.mission_id)
+            self.assertEqual(detail["summary"]["mission_id"], mission.mission_id)
+            self.assertEqual(detail["contextRoots"]["schema"], "fluxio.mission.context_roots.v1")
+            self.assertEqual(detail["contextRoots"]["execution"]["branchName"], "mission/context-roots")
+            self.assertGreaterEqual(detail["contextRoots"]["counts"]["relatedWorkspaces"], 1)
+            self.assertGreaterEqual(detail["contextRoots"]["counts"]["dependencyEdges"], 1)
+            self.assertEqual(
+                detail["contextRoots"]["writeScopePreflight"]["schema"],
+                "fluxio.write_scope_preflight.v1",
+            )
+            self.assertEqual(detail["performance"]["source"], "control_room_mission_detail")
+            self.assertEqual(detail["performance"]["eventLimit"], 12)
+            self.assertGreater(detail["performance"]["payloadBytes"], 0)
+            self.assertEqual(
+                detail["performance"]["budget"]["schema"],
+                "fluxio.performance_budget.v1",
+            )
+            self.assertTrue(detail["performance"]["virtualization"]["lazyMissionDetail"])
+            self.assertEqual(detail["performance"]["budget"]["itemLimits"]["events"], 12)
+            self.assertIn("mission.progress", [item["kind"] for item in detail["events"]])
+            self.assertGreaterEqual(len(detail["agentMessages"]), 1)
+            self.assertTrue(
+                any("Progress" in item["title"] or "progress" in item["label"].lower() for item in detail["agentMessages"])
+            )
+            self.assertEqual(detail["proofDigest"]["schema"], "fluxio.mission.proof_digest.v1")
+            self.assertEqual(detail["proofDigest"]["missionId"], mission.mission_id)
+            self.assertEqual(detail["proofDigest"]["counts"]["passedChecks"], 1)
+            self.assertEqual(detail["proofDigest"]["counts"]["changedFiles"], 1)
+            self.assertEqual(detail["proofDigest"]["counts"]["skillFeedbackSlices"], 1)
+            self.assertEqual(
+                detail["proofDigest"]["export"]["schema"],
+                "fluxio.mission.proof_digest_export.v1",
+            )
+            self.assertEqual(
+                detail["proofDigest"]["export"]["backendCommand"],
+                "export_mission_proof_digest_command",
+            )
+            self.assertEqual(
+                detail["proofDigest"]["latest"]["skillFeedback"][0]["skillId"],
+                "design-taste-frontend",
+            )
+
+    def test_summary_defers_terminal_context_roots_to_mission_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            running = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep live mission context available in the summary.",
+                success_checks=["Live context shown"],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            running.state.status = "running"
+            running.execution_scope.workspace_root = workspace.root_path
+            running.execution_scope.execution_root = str(
+                root / ".agent_control" / "worktrees" / running.mission_id
+            )
+            store.update_mission(running)
+
+            completed = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Completed mission should not bulk-load context in the list.",
+                success_checks=["Proof archived"],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            completed.state.status = "completed"
+            completed.execution_scope.workspace_root = workspace.root_path
+            completed.execution_scope.execution_root = str(
+                root / ".agent_control" / "worktrees" / completed.mission_id
+            )
+            completed.proof.summary = "Proof archived."
+            store.update_mission(completed)
+
+            summary = store.build_summary_snapshot()
+            rows = {item["mission_id"]: item for item in summary["missions"]}
+
+            self.assertEqual(
+                rows[running.mission_id]["contextRoots"]["schema"],
+                "fluxio.mission.context_roots.v1",
+            )
+            self.assertNotEqual(rows[running.mission_id]["contextRoots"].get("status"), "detail_required")
+            self.assertEqual(rows[completed.mission_id]["contextRoots"]["status"], "detail_required")
+            self.assertEqual(
+                rows[completed.mission_id]["contextRoots"]["source"],
+                "summary_deferred_terminal_context",
+            )
+            self.assertEqual(rows[completed.mission_id]["plannedScopeArtifacts"], {})
+            self.assertEqual(rows[completed.mission_id]["runtimeLanes"], [])
+            self.assertEqual(
+                rows[completed.mission_id]["summaryCompaction"]["schema"],
+                "fluxio.mission_summary_compaction.v1",
+            )
+            self.assertEqual(summary["summaryShaping"]["richContextRoots"], "active_missions_only")
+            self.assertEqual(summary["performance"]["budget"]["itemLimits"]["richContextRoots"], 1)
+
+    def test_summary_bounds_skill_red_team_project_and_audit_sections(self) -> None:
+        skill_catalog = {
+            "curatedPacks": [{"packId": f"curated_{index}"} for index in range(20)],
+            "recommendedPacks": [{"packId": f"recommended_{index}"} for index in range(12)],
+            "userInstalledSkills": [{"id": f"installed_{index}"} for index in range(12)],
+            "learnedSkills": [
+                {
+                    "skill_id": f"learned_{index}",
+                    "label": f"Learned {index}",
+                    "audit": [{"large": item} for item in range(200)],
+                    "feedbackSummary": {
+                        "sliceCount": 3,
+                        "trend": "repair",
+                        "history": [{"large": item} for item in range(100)],
+                    },
+                }
+                for index in range(12)
+            ],
+            "managementSummary": {"totalSkills": 56},
+            "feedbackLoop": {
+                "latest": [{"id": index} for index in range(12)],
+                "repairProposals": [{"id": index} for index in range(8)],
+                "systemLossRouting": {
+                    "activeRepairSkillIds": [f"repair_{index}" for index in range(12)],
+                    "preferredSkillIds": [f"preferred_{index}" for index in range(12)],
+                },
+            },
+        }
+        red_team = {
+            "schema": "fluxio.red_team_escalation_snapshot.v1",
+            "history": [{"recordedAt": f"2026-05-29T00:{index:02d}:00+00:00"} for index in range(10)],
+            "summary": {"runCount": 10},
+            "escalationAudit": {
+                "schema": "fluxio.red_team_escalation_audit.v1",
+                "status": "pending",
+                "satisfiedTargets": 3,
+                "pendingTargets": 1,
+                "rawRows": [{"large": index} for index in range(20)],
+            },
+        }
+        project_progress = {
+            "schema": "fluxio.project_progress_history.v1",
+            "projects": [
+                {
+                    "workspaceId": "workspace_demo",
+                    "milestones": [{"id": f"m{index}"} for index in range(12)],
+                    "buckets": [{"date": f"2026-05-{index:02d}"} for index in range(12)],
+                    "launchRehearsal": {
+                        "receiptHistory": [{"id": f"receipt_{index}"} for index in range(6)],
+                    },
+                }
+            ],
+            "schedulingQueue": [{"workspaceId": f"workspace_{index}"} for index in range(12)],
+        }
+        audit = {
+            "schema": "fluxio.system_audit_digest.v1",
+            "deficits": [{"id": index} for index in range(12)],
+            "badFirst": [{"id": index} for index in range(12)],
+            "improvementQueue": [{"id": index} for index in range(12)],
+            "activeGapMissions": [{"id": index} for index in range(12)],
+            "systemLossBreakdown": {"drivers": [{"id": index} for index in range(12)]},
+            "watchdogSelfImprovement": {"recentReceipts": [{"id": index} for index in range(12)]},
+            "t3Reference": {"strengthsToBeat": [f"strength_{index}" for index in range(12)]},
+        }
+
+        compact_skills = ControlRoomStore._summary_skill_catalog_payload(skill_catalog)
+        compact_red_team = ControlRoomStore._summary_red_team_escalation_payload(red_team)
+        compact_projects = ControlRoomStore._summary_project_progress_payload(project_progress)
+        compact_audit = ControlRoomStore._summary_system_audit_digest_payload(audit)
+
+        self.assertEqual(len(compact_skills["curatedPacks"]), 12)
+        self.assertEqual(len(compact_skills["recommendedPacks"]), 8)
+        self.assertEqual(len(compact_skills["userInstalledSkills"]), 8)
+        self.assertEqual(len(compact_skills["learnedSkills"]), 8)
+        self.assertEqual(compact_skills["summaryTruncation"]["curatedTotal"], 20)
+        self.assertNotIn("audit", compact_skills["learnedSkills"][0])
+        self.assertNotIn("history", compact_skills["learnedSkills"][0]["feedbackSummary"])
+        self.assertEqual(
+            compact_skills["learnedSkills"][0]["summaryCompaction"]["schema"],
+            "fluxio.skill_summary_compaction.v1",
+        )
+        self.assertEqual(len(compact_skills["feedbackLoop"]["latest"]), 6)
+        self.assertEqual(len(compact_skills["feedbackLoop"]["repairProposals"]), 4)
+        self.assertEqual(
+            len(compact_skills["feedbackLoop"]["systemLossRouting"]["activeRepairSkillIds"]),
+            8,
+        )
+        self.assertEqual(len(compact_red_team["history"]), 6)
+        self.assertEqual(compact_red_team["summaryTruncation"]["historyTotal"], 10)
+        self.assertNotIn("rawRows", compact_red_team["escalationAudit"])
+        self.assertEqual(len(compact_projects["projects"][0]["milestones"]), 5)
+        self.assertEqual(len(compact_projects["projects"][0]["buckets"]), 5)
+        self.assertEqual(len(compact_projects["projects"][0]["launchRehearsal"]["receiptHistory"]), 2)
+        self.assertEqual(len(compact_projects["schedulingQueue"]), 8)
+        self.assertEqual(len(compact_audit["deficits"]), 6)
+        self.assertEqual(len(compact_audit["badFirst"]), 4)
+        self.assertEqual(len(compact_audit["systemLossBreakdown"]["drivers"]), 4)
+        self.assertEqual(len(compact_audit["watchdogSelfImprovement"]["recentReceipts"]), 3)
+
+    def test_project_scheduler_respects_declared_workspace_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            app_root = root / "app"
+            api_root = root / "api"
+            app_root.mkdir()
+            api_root.mkdir()
+            store = ControlRoomStore(root)
+            app = store.upsert_workspace(
+                name="App",
+                root_path=str(app_root),
+                default_runtime="hermes",
+                workspace_id="workspace_app",
+            )
+            api = store.upsert_workspace(
+                name="API",
+                root_path=str(api_root),
+                default_runtime="hermes",
+                workspace_id="workspace_api",
+            )
+            app.goals.append(f"depends_on:{api.workspace_id}")
+            store.save_workspaces([app, api])
+
+            blocker = store.create_mission(
+                workspace_id=api.workspace_id,
+                runtime_id="hermes",
+                objective="Fix the API contract before UI work continues.",
+                success_checks=["API contract verified"],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            blocker.state.status = "blocked"
+            blocker.proof.blocked_by.append("contract review")
+            store.update_mission(blocker)
+
+            summary = store.build_summary_snapshot()
+            project_history = {
+                item["workspaceId"]: item
+                for item in summary["projectProgressHistory"]["projects"]
+            }
+            app_schedule = project_history[app.workspace_id]["scheduleRecommendation"]
+
+            self.assertEqual(app_schedule["state"], "dependency_blocked")
+            self.assertFalse(app_schedule["safeToLaunch"])
+            self.assertEqual(app_schedule["declaredDependencyIds"], [api.workspace_id])
+            self.assertEqual(
+                app_schedule["dependencyBlockedWorkspaces"][0]["workspaceId"],
+                api.workspace_id,
+            )
+            self.assertEqual(
+                app_schedule["dependencyBlockedWorkspaces"][0]["relation"],
+                "upstream_dependency",
+            )
+            self.assertIn("Upstream dependency workspace is blocked.", app_schedule["dependencyWarnings"])
+            self.assertIn(app_schedule, summary["projectProgressHistory"]["schedulingQueue"])
+            self.assertIn(
+                "dependency_schedule",
+                project_history[app.workspace_id]["launchRehearsal"]["blockedCheckIds"],
+            )
+
+    def test_project_progress_exposes_sync_authority_review_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            local_root = root / "local"
+            nas_root = root / "nas"
+            local_root.mkdir()
+            nas_root.mkdir()
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="Synced project",
+                root_path=str(local_root),
+                default_runtime="hermes",
+                local_project_path=str(local_root),
+                nas_project_path=str(nas_root),
+                sync_mode="auto_nas_mirror",
+                sync_direction="bidirectional",
+                auto_sync_to_nas=True,
+                workspace_id="workspace_synced",
+            )
+            sync_payload = {
+                "schema": "fluxio.workspace_sync_status.v1",
+                "effectiveDirection": "bidirectional",
+                "conflictsDetected": 1,
+                "manualReviewRequired": True,
+                "syncReceipt": {
+                    "schema": "fluxio.workspace_sync_receipt.v1",
+                    "receiptId": "sync_123",
+                    "effectiveDirection": "bidirectional",
+                    "conflictsDetected": 1,
+                    "manualReviewRequired": True,
+                },
+            }
+            workspace.goals = [
+                entry for entry in workspace.goals if not str(entry).startswith("sync_status:")
+            ]
+            workspace.goals.append(f"sync_status:{json.dumps(sync_payload, sort_keys=True)}")
+            store.save_workspaces([workspace])
+
+            summary = store.build_summary_snapshot()
+            project = summary["projectProgressHistory"]["projects"][0]
+            authority = project["syncAuthority"]
+
+            self.assertEqual(authority["schema"], "fluxio.workspace_sync_authority.v1")
+            self.assertEqual(authority["state"], "conflict_review")
+            self.assertEqual(authority["authority"], "manual_review")
+            self.assertEqual(authority["receiptId"], "sync_123")
+            self.assertEqual(authority["conflictCount"], 1)
+            self.assertTrue(authority["manualReviewRequired"])
+            self.assertFalse(authority["safeForWritableDependency"])
+            self.assertIn("Resolve sync conflicts", authority["nextAction"])
+            rehearsal = project["launchRehearsal"]
+            self.assertEqual(rehearsal["schema"], "fluxio.cross_device_launch_rehearsal.v1")
+            self.assertFalse(rehearsal["safeToLaunch"])
+            self.assertIn("sync_authority", rehearsal["blockedCheckIds"])
+            self.assertIn("launch=mission", rehearsal["urlPath"])
+            self.assertIn("mission-quickstart", rehearsal["cliCommand"])
+
+    def test_project_progress_exposes_ready_cross_device_launch_rehearsal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            project_root = root / "project"
+            project_root.mkdir()
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="Ready project",
+                root_path=str(project_root),
+                default_runtime="hermes",
+                workspace_id="workspace_ready",
+            )
+
+            summary = store.build_summary_snapshot()
+            project = next(
+                item
+                for item in summary["projectProgressHistory"]["projects"]
+                if item["workspaceId"] == workspace.workspace_id
+            )
+            rehearsal = project["launchRehearsal"]
+
+            self.assertEqual(rehearsal["schema"], "fluxio.cross_device_launch_rehearsal.v1")
+            self.assertTrue(rehearsal["safeToLaunch"])
+            self.assertEqual(rehearsal["status"], "ready")
+            self.assertEqual(rehearsal["blockedCheckIds"], [])
+            self.assertEqual(len(rehearsal["checklist"]), 3)
+            self.assertEqual(
+                {item["id"] for item in rehearsal["checklist"]},
+                {"sync_authority", "dependency_schedule", "runtime_route"},
+            )
+            self.assertIn("launch=mission", rehearsal["urlPath"])
+            self.assertIn("mission-quickstart", rehearsal["cliCommand"])
+
+    def test_cross_device_launch_rehearsal_receipt_is_archived_and_attached(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            project_root = root / "project"
+            project_root.mkdir()
+            store = ControlRoomStore(root)
+            workspace = store.upsert_workspace(
+                name="Receipt project",
+                root_path=str(project_root),
+                default_runtime="hermes",
+                workspace_id="workspace_receipt",
+            )
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Launch from the cross-device rehearsal path.",
+                success_checks=["Receipt archived"],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+
+            receipt = record_cross_device_launch_rehearsal_receipt(
+                store=store,
+                workspace_id=workspace.workspace_id,
+                mission_id=mission.mission_id,
+            )
+            second_receipt = record_cross_device_launch_rehearsal_receipt(
+                store=store,
+                workspace_id=workspace.workspace_id,
+                mission_id=mission.mission_id,
+            )
+            summary = store.build_summary_snapshot()
+            project = next(
+                item
+                for item in summary["projectProgressHistory"]["projects"]
+                if item["workspaceId"] == workspace.workspace_id
+            )
+
+            self.assertEqual(receipt["schema"], "fluxio.cross_device_launch_rehearsal_receipt.v1")
+            self.assertIn(receipt["status"], {"launched", "launched_with_review_items"})
+            self.assertEqual(receipt["missionId"], mission.mission_id)
+            self.assertTrue((root / ".agent_control" / "cross_device_launch_rehearsals" / "latest.json").exists())
+            self.assertEqual(
+                project["launchRehearsal"]["latestReceipt"]["receiptId"],
+                second_receipt["receiptId"],
+            )
+            self.assertEqual(project["launchRehearsal"]["receiptCount"], 2)
+            self.assertEqual(project["launchRehearsal"]["receiptTrendStatus"], "repeated")
+            self.assertEqual(len(project["launchRehearsal"]["receiptHistory"]), 2)
+            self.assertTrue(project["launchRehearsal"]["receiptBacked"])
+            self.assertEqual(
+                summary["projectProgressHistory"]["launchReceiptSummary"]["receiptCount"],
+                2,
+            )
+            self.assertEqual(
+                summary["projectProgressHistory"]["launchReceiptSummary"]["trendStatus"],
+                "repeated",
+            )
+
+    def test_snapshot_performance_budget_stays_bounded_with_long_histories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Exercise long history snapshot budgets.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            for index in range(120):
+                store.append_event(
+                    MissionEvent(
+                        mission_id=mission.mission_id,
+                        kind="mission.progress",
+                        message=f"Long-history event {index}",
+                    )
+                )
+
+            summary = store.build_summary_snapshot()
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=17)
+
+            self.assertLessEqual(len(summary["notifications"]), 24)
+            self.assertEqual(summary["performance"]["budget"]["itemLimits"]["activity"], 24)
+            self.assertLessEqual(len(detail["events"]), 17)
+            self.assertEqual(detail["performance"]["budget"]["itemLimits"]["events"], 17)
+            self.assertLessEqual(
+                detail["performance"]["payloadBytes"],
+                detail["performance"]["budget"]["payloadBudgetBytes"],
+            )
 
     def test_snapshot_includes_runtime_compartments_and_hermes_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -722,10 +2692,15 @@ class MissionControlTests(unittest.TestCase):
                 "OPENAI_API_KEY": "",
                 "MINIMAX_OAUTH_TOKEN": "",
                 "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                "FLUXIO_DISABLE_WSL_AUTH_DISCOVERY": "1",
+                "HERMES_AUTH_STORE": "",
+                "HERMES_HOME": "",
             },
             clear=False,
         ), tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
+            os.environ["HOME"] = str(root)
+            os.environ["OPENCLAW_STATE_DIR"] = str(root / ".openclaw")
             (root / "README.md").write_text("# Demo\n", encoding="utf-8")
             store = ControlRoomStore(root)
             workspaces = store.load_workspaces()
@@ -772,6 +2747,16 @@ class MissionControlTests(unittest.TestCase):
                 mission_payload["providerTruth"]["authPath"],
                 "MiniMax OpenClaw OAuth",
             )
+            mission.state.provider_runtime_truth = mission_payload["providerTruth"]
+            executor_lane = next(
+                item
+                for item in mission_control_module._runtime_lane_rows_for_mission(mission)
+                if item["role"] == "executor"
+            )
+            self.assertFalse(executor_lane["authPresent"])
+            self.assertEqual(executor_lane["health"], "blocked")
+            self.assertIn("MiniMax", executor_lane["blocker"])
+            self.assertNotIn("OpenAI Codex coding path", executor_lane["blocker"])
 
     def test_minimax_portal_auth_marks_provider_truth_ready_with_openclaw_oauth(self) -> None:
         with mock.patch.dict(
@@ -831,6 +2816,327 @@ class MissionControlTests(unittest.TestCase):
                 mission_payload["providerTruth"]["authPath"],
                 "MiniMax OpenClaw OAuth",
             )
+            mission.state.provider_runtime_truth = mission_payload["providerTruth"]
+            executor_lane = next(
+                item
+                for item in mission_control_module._runtime_lane_rows_for_mission(mission)
+                if item["role"] == "executor"
+            )
+            self.assertTrue(executor_lane["authPresent"])
+            self.assertEqual(executor_lane["authPath"], "MiniMax OpenClaw OAuth")
+            self.assertEqual(executor_lane["health"], "ready")
+            self.assertEqual(executor_lane["blocker"], "")
+
+    def test_minimax_oauth_presence_marks_runtime_lane_ready_even_before_profile_mode_saved(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MINIMAX_API_KEY": "",
+                "MINIMAX_CN_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "1",
+            },
+            clear=False,
+        ), tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspaces = store.load_workspaces()
+            workspace = workspaces[0]
+            workspace.minimax_auth_mode = "none"
+            workspace.route_overrides = [
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                    "effort": "medium",
+                }
+            ]
+            store.save_workspaces(workspaces)
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Route execution through Hermes and MiniMax",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=3600,
+            )
+            mission.state.current_cycle_phase = "execute"
+            mission.effective_route_contract = {
+                "roles": [
+                    {
+                        "role": "executor",
+                        "provider": "minimax",
+                        "model": "MiniMax-M2.7",
+                        "effort": "medium",
+                    }
+                ]
+            }
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+            self.assertTrue(mission_payload["providerTruth"]["authPresent"])
+            self.assertEqual(
+                mission_payload["providerTruth"]["authPath"],
+                "MiniMax OpenClaw OAuth",
+            )
+            mission.state.provider_runtime_truth = mission_payload["providerTruth"]
+            executor_lane = next(
+                item
+                for item in mission_control_module._runtime_lane_rows_for_mission(mission)
+                if item["role"] == "executor"
+            )
+            self.assertTrue(executor_lane["authPresent"])
+            self.assertEqual(executor_lane["health"], "ready")
+
+    def test_runtime_provider_env_file_marks_minimax_ready_for_cli_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            provider_env = root / ".fluxio_provider_env"
+            provider_env.write_text(
+                "# private\nexport MINIMAX_API_KEY='test-minimax-key'\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_CN_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                    "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                    "FLUXIO_PROVIDER_ENV_FILE": str(provider_env),
+                    "HOME": str(root / "empty-home"),
+                    "OPENCLAW_STATE_DIR": str(root / "empty-openclaw"),
+                },
+                clear=False,
+            ):
+                (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+                store = ControlRoomStore(root)
+                workspace = store.load_workspaces()[0]
+                workspace.minimax_auth_mode = "minimax-api"
+                store.save_workspaces([workspace])
+                mission = store.create_mission(
+                    workspace_id=workspace.workspace_id,
+                    runtime_id="hermes",
+                    objective="Route execution through MiniMax",
+                    success_checks=[],
+                    mode="Autopilot",
+                    verification_commands=[],
+                    max_runtime_seconds=3600,
+                )
+                mission.state.current_cycle_phase = "execute"
+                mission.effective_route_contract = {
+                    "roles": [
+                        {
+                            "role": "executor",
+                            "provider": "minimax",
+                            "model": "MiniMax-M2.7",
+                            "effort": "medium",
+                        }
+                    ]
+                }
+                store.update_mission(mission)
+
+                snapshot = store.build_snapshot()
+                mission_payload = next(
+                    item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+                )
+                self.assertTrue(mission_payload["providerTruth"]["authPresent"])
+                self.assertEqual(mission_payload["providerTruth"]["authPath"], "API key")
+
+                summary = store.build_summary_snapshot()
+                summary_row = next(
+                    item for item in summary["missions"] if item["mission_id"] == mission.mission_id
+                )
+                provider_capabilities = summary_row["providerCapabilities"]
+                self.assertEqual(
+                    provider_capabilities["schema"],
+                    "fluxio.provider_capability_contract.v1",
+                )
+                self.assertEqual(provider_capabilities["laneCount"], 3)
+                providers_by_id = {
+                    item["provider"]: item for item in provider_capabilities["providers"]
+                }
+                self.assertTrue(providers_by_id["minimax"]["authPresent"])
+                self.assertEqual(providers_by_id["minimax"]["health"], "ready")
+                self.assertEqual(providers_by_id["minimax"]["readyRoles"], 1)
+                self.assertEqual(
+                    providers_by_id["minimax"]["quota"]["status"],
+                    "unreported",
+                )
+                self.assertIn("frontend-ui", providers_by_id["minimax"]["toolFamilies"])
+                self.assertEqual(providers_by_id["openai-codex"]["health"], "blocked")
+                self.assertIn(
+                    "auth_missing",
+                    providers_by_id["openai-codex"]["failureClasses"],
+                )
+                self.assertEqual(provider_capabilities["quotaSummary"]["unreportedProviders"], 1)
+                self.assertIn("code-edit", provider_capabilities["toolSummary"]["families"])
+                executor_lane = next(
+                    item for item in summary_row["runtimeLanes"] if item["role"] == "executor"
+                )
+                self.assertTrue(executor_lane["authPresent"])
+                self.assertEqual(executor_lane["authPath"], "API key")
+                self.assertEqual(executor_lane["health"], "ready")
+                self.assertEqual(executor_lane["quota"]["schema"], "fluxio.provider_quota_truth.v1")
+
+    def test_release_adjacent_runtime_codex_auth_marks_planner_ready_for_cli_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            release_root = (
+                pathlib.Path(temp_dir)
+                / "syntelos"
+                / "releases"
+                / "20260505-212517"
+            )
+            runtime_home = pathlib.Path(temp_dir) / "syntelos" / "runtime" / "home"
+            codex_home = runtime_home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "auth.json").write_text(
+                json.dumps(
+                    {
+                        "OPENAI_API_KEY": None,
+                        "auth_mode": "chatgpt",
+                        "tokens": {"access_token": "token"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            release_root.mkdir(parents=True)
+            (release_root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "",
+                    "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT": "",
+                    "HOME": str(pathlib.Path(temp_dir) / "missing-home"),
+                    "OPENCLAW_STATE_DIR": str(pathlib.Path(temp_dir) / "missing-openclaw"),
+                },
+                clear=False,
+            ), mock.patch.object(mission_control_module.Path, "cwd", return_value=release_root):
+                store = ControlRoomStore(release_root)
+                workspace = store.load_workspaces()[0]
+                workspace.openai_codex_auth_mode = "oauth"
+                store.save_workspaces([workspace])
+                mission = store.create_mission(
+                    workspace_id=workspace.workspace_id,
+                    runtime_id="hermes",
+                    objective="Route planning through Codex",
+                    success_checks=[],
+                    mode="Autopilot",
+                    verification_commands=[],
+                    max_runtime_seconds=3600,
+                )
+                mission.state.current_cycle_phase = "plan"
+                mission.effective_route_contract = {
+                    "roles": [
+                        {
+                            "role": "planner",
+                            "provider": "openai-codex",
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                        }
+                    ]
+                }
+                store.update_mission(mission)
+
+                summary = store.build_summary_snapshot()
+                row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+                planner_lane = next(item for item in row["runtimeLanes"] if item["role"] == "planner")
+                self.assertTrue(planner_lane["authPresent"])
+                self.assertEqual(planner_lane["authPath"], "OpenAI Codex OAuth")
+                self.assertEqual(planner_lane["health"], "ready")
+
+    def test_summary_reconciles_stale_mission_route_contract_from_workspace_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            workspace.route_overrides = [
+                {
+                    "role": "planner",
+                    "provider": "openai-codex",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                    "budgetClass": "premium",
+                },
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                    "effort": "high",
+                    "budgetClass": "specialist",
+                },
+                {
+                    "role": "verifier",
+                    "provider": "openai-codex",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                    "budgetClass": "premium",
+                },
+            ]
+            store.save_workspaces([workspace])
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Use stale launch-time route then upgrade it",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.route_configs = [
+                {
+                    "role": "planner",
+                    "provider": "openai-codex",
+                    "model": "gpt-5.3-codex",
+                    "effort": "high",
+                    "budget_class": "specialist",
+                    "explanation": "Route override from workspace runtime contract.",
+                    "route_intent": "manual_workspace_override",
+                },
+                {
+                    "role": "executor",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                    "effort": "medium",
+                    "budget_class": "specialist",
+                    "explanation": "Route override from workspace runtime contract.",
+                    "route_intent": "manual_workspace_override",
+                },
+                {
+                    "role": "verifier",
+                    "provider": "openai",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                    "budget_class": "premium",
+                    "explanation": "Route override from workspace runtime contract.",
+                    "route_intent": "manual_workspace_override",
+                },
+            ]
+            mission.effective_route_contract = {}
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            lanes = {item["role"]: item for item in row["runtimeLanes"]}
+
+            self.assertEqual(lanes["planner"]["model"], "gpt-5.5")
+            self.assertEqual(lanes["planner"]["provider"], "openai-codex")
+            self.assertEqual(lanes["executor"]["effort"], "high")
+            self.assertEqual(lanes["verifier"]["provider"], "openai-codex")
+
+            store.build_snapshot()
+            refreshed = next(item for item in store.load_missions() if item.mission_id == mission.mission_id)
+            refreshed_routes = {item["role"]: item for item in refreshed.route_configs}
+            self.assertEqual(refreshed_routes["planner"]["model"], "gpt-5.5")
+            self.assertEqual(refreshed_routes["executor"]["effort"], "high")
+            self.assertEqual(refreshed_routes["verifier"]["provider"], "openai-codex")
 
     def test_second_mission_is_queued_behind_active_workspace_mission(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1122,6 +3428,25 @@ class MissionControlTests(unittest.TestCase):
                 mission_payload["action_history"][1]["proposal"]["sourceKind"],
                 "local",
             )
+            receipts_path = root / ".agent_control" / "delivery_receipts.jsonl"
+            self.assertTrue(receipts_path.exists())
+            receipt_lines = receipts_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(receipt_lines), 1)
+            receipt = json.loads(receipt_lines[0])
+            self.assertEqual(receipt["mission_id"], mission.mission_id)
+            self.assertEqual(receipt["event_kind"], "approval.required")
+            self.assertIn(receipt["status"], {"skipped", "delivered", "error"})
+
+            snapshot = store.build_snapshot()
+            receipt_lines_after_refresh = receipts_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(receipt_lines_after_refresh), 1)
+            mission_payload_after_refresh = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+            self.assertEqual(
+                len(mission_payload_after_refresh["escalation_policy"]["delivery_receipts"]),
+                1,
+            )
 
     def test_snapshot_surfaces_time_budget_and_run_until_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1311,6 +3636,64 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(snapshot["sessionHealth"]["delegatedStaleCount"], 0)
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
 
+    def test_summary_harness_lab_uses_mission_session_index_without_full_runtime_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep the delegated runtime loop observable.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            mission.state.status = "running"
+            mission.delegated_runtime_sessions.append(
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_summary",
+                    runtime_id="hermes",
+                    launch_command="python -m grant_agent.runtime_worker",
+                    status="running",
+                    heartbeat_status="healthy",
+                    heartbeat_at=utc_now_iso(),
+                    heartbeat_interval_seconds=10,
+                )
+            )
+            store.update_mission(mission)
+            runtime_root = root / ".agent_control" / "runtime_sessions"
+            runtime_root.mkdir(parents=True)
+            for index in range(120):
+                (runtime_root / f"delegate_old_{index}.json").write_text(
+                    json.dumps(
+                        {
+                            "delegated_id": f"delegate_old_{index}",
+                            "status": "running",
+                            "heartbeat_status": "stale",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            summary = build_summary_harness_lab_snapshot(root, missions=store.load_missions())
+
+            self.assertEqual(summary["source"], "mission_store_delegated_sessions_summary")
+            self.assertTrue(summary["fullSessionScanDeferred"])
+            self.assertEqual(
+                summary["sessionHealth"]["schema"],
+                "fluxio.runtime_session_health.summary.v1",
+            )
+            self.assertEqual(
+                summary["sessionHealth"]["source"],
+                "mission_store_delegated_sessions",
+            )
+            self.assertEqual(summary["sessionHealth"]["totalSessions"], 1)
+            self.assertEqual(summary["sessionHealth"]["activeCount"], 1)
+            self.assertEqual(summary["sessionHealth"]["delegatedHealthyCount"], 1)
+            self.assertEqual(summary["sessionHealth"]["delegatedStaleCount"], 0)
+
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -1390,6 +3773,135 @@ class MissionControlTests(unittest.TestCase):
             self.assertGreaterEqual(readiness["score"], 90)
             self.assertIn("proofReadiness", readiness)
             self.assertFalse(readiness["proofReadiness"]["ready"])
+
+    def test_release_readiness_reports_release_proof_ci_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "scripts").mkdir(parents=True)
+            (root / "web" / "src" / "main.tsx").write_text("export {};\n", encoding="utf-8")
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text('export default { root: "web" };\n', encoding="utf-8")
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            ),
+                            "verify:web-distribution": "python scripts/verify_public_web_distribution.py",
+                            "verify:self-improvement": "python scripts/verify_self_improvement_evidence.py --write",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "scripts" / "verify_public_web_distribution.py").write_text(
+                'print("fluxio.public_web_distribution.v1")\n',
+                encoding="utf-8",
+            )
+            (root / "scripts" / "verify_self_improvement_evidence.py").write_text(
+                'print("fluxio.self_improvement_evidence.v1")\n',
+                encoding="utf-8",
+            )
+            (root / "scripts" / "archive_release_proofs.py").write_text(
+                'LABEL = "self_improvement_evidence"\n',
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows" / "web-pages.yml").write_text(
+                "\n".join(
+                    [
+                        "steps:",
+                        "  - run: npm run frontend:build",
+                        "  - run: npm run verify:web-distribution -- --require-built-dist",
+                        "  - uses: actions/upload-pages-artifact@v3",
+                        "    with:",
+                        "      path: web/dist",
+                        "  - id: deployment",
+                        "    uses: actions/deploy-pages@v4",
+                        "environment:",
+                        "  url: ${{ steps.deployment.outputs.page_url }}",
+                        "  - run: echo fluxio.public_web_deployment.v1 > .agent_control/deployment_evidence/public-web.json",
+                        "  - uses: actions/upload-artifact@v4",
+                        "    with:",
+                        "      name: fluxio-public-web-deployment",
+                        "      path: .agent_control/deployment_evidence/public-web.json",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows" / "release-proof.yml").write_text(
+                "\n".join(
+                    [
+                        "steps:",
+                        "  - run: npm run frontend:build",
+                        "  - run: npm run verify:long-history",
+                        "  - run: npm run verify:self-improvement",
+                        "  - run: python -c \"from pathlib import Path; Path('.agent_control/proof_digests/ci-release-proof.md').write_text('ok')\"",
+                        "  - run: npm run verify:release-artifacts",
+                        "  - uses: actions/upload-artifact@v4",
+                        "    with:",
+                        "      path: |",
+                        "        .agent_control/release_artifacts/**",
+                        "        .agent_control/self_improvement_evidence/**",
+                        "        tmp-ui-checks/**",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding={
+                    "checks": {
+                        "uv": {"installed": True, "details": "ok"},
+                        "openclaw": {"installed": True, "details": "ok"},
+                        "hermes": {"installed": True, "details": "ok"},
+                    }
+                },
+                setup_health={"serviceManagementSummary": {"totalItems": 1, "healthyCount": 1}},
+                harness_lab={
+                    "efficiency": {
+                        "completionRate": 0,
+                        "delegatedRunRate": 0,
+                        "resumeRunRate": 0,
+                        "resumeCompletionRate": 0,
+                        "verificationPauseRate": 0,
+                    },
+                    "sessionHealth": {"staleHeartbeatCount": 0},
+                },
+            )
+
+            ci_gate = next(item for item in readiness["gates"] if item["gateId"] == "release_artifact_ci")
+            self.assertFalse(ci_gate["required"])
+            self.assertTrue(ci_gate["passed"])
+            self.assertIn("uploads evidence", ci_gate["details"])
+            public_web_gate = next(
+                item for item in readiness["gates"] if item["gateId"] == "public_web_distribution"
+            )
+            self.assertFalse(public_web_gate["required"])
+            self.assertTrue(public_web_gate["passed"])
+            self.assertIn("public web deploy", public_web_gate["details"])
+            self_improvement_gate = next(
+                item for item in readiness["gates"] if item["gateId"] == "self_improvement_evidence"
+            )
+            self.assertFalse(self_improvement_gate["required"])
+            self.assertTrue(self_improvement_gate["passed"])
+            self.assertIn("archived with release proof", self_improvement_gate["details"])
 
     def test_release_readiness_accepts_dynamic_vite_web_root_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1554,6 +4066,7 @@ class MissionControlTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            self._write_clear_watchdog_release_evidence(root)
             onboarding = {
                 "checks": {
                     "uv": {"installed": True, "details": "ok"},
@@ -1590,6 +4103,328 @@ class MissionControlTests(unittest.TestCase):
             proof_gate_ids = {item["gateId"] for item in readiness["gates"]}
             self.assertIn("proof_openclaw_completed", proof_gate_ids)
             self.assertIn("proof_hermes_completed", proof_gate_ids)
+
+    def test_release_readiness_requires_clear_watchdog_for_active_missions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / "web" / "src" / "main.tsx").write_text("export {};\n", encoding="utf-8")
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text('export default { root: "web" };\n', encoding="utf-8")
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "runtime_id": "hermes",
+                            "state": {"status": "running", "continuity_state": "delegated_active"},
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {"serviceManagementSummary": {"totalItems": 4, "healthyCount": 4}}
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+            watchdog_gate = next(
+                item for item in readiness["gates"] if item["gateId"] == "mission_watchdog_clear"
+            )
+            self.assertFalse(watchdog_gate["passed"])
+            self.assertEqual(readiness["status"], "close_but_blocked")
+
+            self._write_clear_watchdog_release_evidence(root)
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+            watchdog_gate = next(
+                item for item in readiness["gates"] if item["gateId"] == "mission_watchdog_clear"
+            )
+            self.assertTrue(watchdog_gate["passed"])
+            self.assertEqual(readiness["status"], "ready_for_1_0_validation")
+
+            info_only_report = {
+                "schema": "fluxio.mission_watchdog.v1",
+                "checkedAt": utc_now_iso(),
+                "root": str(root),
+                "staleMinutes": 60,
+                "summary": {
+                    "missionCount": 1,
+                    "issueCount": 1,
+                    "bad": 0,
+                    "warn": 0,
+                    "info": 1,
+                },
+                "issues": [
+                    {
+                        "severity": "info",
+                        "kind": "workspace_queue_pressure",
+                        "firstStep": "Keep queued until scope is known.",
+                    }
+                ],
+                "problemReport": {
+                    "schema": "fluxio.watchdog_problem_report.v1",
+                    "checkedAt": utc_now_iso(),
+                    "status": "open",
+                    "problemCount": 1,
+                    "firstProblem": {
+                        "firstRepairStep": "Keep queued until scope is known.",
+                    },
+                },
+            }
+            write_mission_watchdog_report(root, info_only_report)
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+            watchdog_gate = next(
+                item for item in readiness["gates"] if item["gateId"] == "mission_watchdog_clear"
+            )
+            self.assertTrue(watchdog_gate["passed"])
+            self.assertEqual(watchdog_gate["blockingIssueCount"], 0)
+
+    def test_release_readiness_blocks_stale_watchdog_supervisor_even_when_pid_is_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / "web" / "src" / "main.tsx").write_text("export {};\n", encoding="utf-8")
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "grant_agent").mkdir(parents=True)
+            (root / "src" / "grant_agent" / "web_backend.py").write_text(
+                "def serve_control_room(): pass\n",
+                encoding="utf-8",
+            )
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep the watchdog honest",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            mission.state.status = "running"
+            store.update_mission(mission)
+            self._write_clear_watchdog_release_evidence(root)
+            stale_next_run = datetime.now(timezone.utc) - timedelta(hours=4)
+            write_watchdog_supervisor_state(
+                root,
+                {
+                    "schema": "fluxio.mission_watchdog_supervisor.v1",
+                    "root": str(root),
+                    "processPid": os.getpid(),
+                    "status": "clear",
+                    "loopMode": "ongoing",
+                    "supervisorActive": True,
+                    "startedAt": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                    "lastRunAt": (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),
+                    "nextRunAt": stale_next_run.isoformat(),
+                    "intervalSeconds": 1200,
+                    "staleMinutes": 60,
+                    "runsCompleted": 10,
+                    "lastProblemCount": 0,
+                    "lastIssueCount": 0,
+                    "nextAction": "No watchdog problems found. Keep the external loop active.",
+                },
+            )
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True},
+                    "openclaw": {"installed": True},
+                    "hermes": {"installed": True},
+                }
+            }
+            setup_health = {"serviceManagementSummary": {"totalItems": 1, "healthyCount": 1}}
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 0,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+            watchdog_gate = next(
+                item for item in readiness["gates"] if item["gateId"] == "mission_watchdog_clear"
+            )
+
+            self.assertFalse(watchdog_gate["passed"])
+            self.assertTrue(watchdog_gate["supervisorStale"])
+            self.assertTrue(watchdog_gate["supervisorProcessAlive"])
+            self.assertIn("next run", watchdog_gate["details"])
+            self.assertIn(readiness["status"], {"blocked", "close_but_blocked"})
+
+    def test_release_readiness_treats_openclaw_proof_as_optional_for_hermes_first(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / "web" / "src" / "main.tsx").write_text("export {};\n", encoding="utf-8")
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text('export default { root: "web" };\n', encoding="utf-8")
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "runtime_id": "hermes",
+                            "state": {
+                                "status": "completed",
+                                "continuity_state": "terminal",
+                            },
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "state": {
+                                "status": "needs_approval",
+                                "continuity_state": "approval_waiting",
+                            },
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "state": {
+                                "status": "running",
+                                "continuity_state": "delegated_active",
+                                "time_budget_status": "delegated_active",
+                            },
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self._write_clear_watchdog_release_evidence(root)
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {"serviceManagementSummary": {"totalItems": 4, "healthyCount": 4}}
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+
+            self.assertTrue(readiness["proofReadiness"]["ready"])
+            self.assertEqual(readiness["proofReadiness"]["missingProofs"], [])
+            self.assertEqual(
+                readiness["proofReadiness"]["optionalMissingProofs"],
+                ["OpenClaw proving mission completed"],
+            )
+            self.assertEqual(readiness["status"], "ready_for_1_0_validation")
 
     def test_release_readiness_uses_pending_and_delegated_session_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1658,6 +4493,7 @@ class MissionControlTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            self._write_clear_watchdog_release_evidence(root)
             onboarding = {
                 "checks": {
                     "uv": {"installed": True, "details": "ok"},
@@ -1815,6 +4651,386 @@ class MissionControlTests(unittest.TestCase):
                 "NAS or network storage",
                 mission_payload["delegated_runtime_sessions"][0]["execution_target_detail"],
             )
+
+    def test_completed_mission_terminal_state_overrides_failed_delegated_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Close mission after verified proof",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            session = DelegatedRuntimeSession(
+                delegated_id="delegate_failed_tail",
+                runtime_id="hermes",
+                launch_command="hermes chat",
+                status="failed",
+                detail="A later delegated retry failed after proof was captured.",
+                acknowledged=False,
+            )
+            mission.delegated_runtime_sessions = [session]
+            mission.state.status = "completed"
+            mission.state.last_runtime_event = "Error: later delegated retry failed"
+            mission.state.runtime_autonomy = {"delegatedStatus": "delegated_runtime_failed"}
+            mission.state.blocker_classification = {
+                "kind": "delegated_runtime_failed",
+                "summary": "Stale delegated failure.",
+            }
+            mission.proof.summary = "Proof verified."
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+
+            self.assertEqual(payload["missionLoop"]["continuityState"], "terminal")
+            self.assertEqual(payload["missionLoop"]["currentRuntimeLane"], "hermes primary lane completed")
+            self.assertEqual(payload["missionLoop"]["currentCyclePhase"], "complete")
+            self.assertEqual(payload["missionLoop"]["blocker"], {})
+            self.assertEqual(payload["missionLoop"]["runtimeAutonomy"]["policy"], "terminal")
+            self.assertEqual(payload["missionLoop"]["runtimeAutonomy"]["delegatedStatus"], "idle")
+            self.assertEqual(payload["state"]["continuity_state"], "terminal")
+            self.assertEqual(payload["state"]["current_runtime_lane"], "hermes primary lane completed")
+            self.assertEqual(payload["state"]["last_runtime_event"], "completed")
+            self.assertEqual(payload["state"]["blocker_classification"], {})
+            self.assertEqual(payload["state"]["runtime_autonomy"]["delegatedStatus"], "idle")
+
+    def test_snapshot_reconciles_running_mission_from_completed_runtime_cycle_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Reconcile runtime cycle completion",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.last_runtime_event = "running"
+            mission.proof.summary = "Mission resume dispatched asynchronously."
+            store.update_mission(mission)
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.runtime_cycle",
+                    message="hermes control cycle finished with status completed.",
+                    metadata={
+                        "sessionId": "session_done",
+                        "autopilotStatus": "completed",
+                        "pauseReason": "",
+                    },
+                )
+            )
+
+            snapshot = store.build_snapshot()
+            payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+
+            self.assertEqual(payload["state"]["status"], "completed")
+            self.assertEqual(payload["state"]["latest_session_id"], "session_done")
+            self.assertEqual(payload["state"]["last_runtime_event"], "completed")
+            self.assertEqual(payload["proof"]["summary"], "Mission completed with proof artifacts.")
+            self.assertEqual(payload["missionLoop"]["continuityState"], "terminal")
+
+    def test_mission_detail_agent_messages_hide_runtime_cycle_spam(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show real Hermes action reports",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.action_history = [
+                {
+                    "action_id": "action_patch",
+                    "proposal": {
+                        "kind": "file_patch",
+                        "title": "Patch target file",
+                    },
+                    "gate": {"status": "not_required"},
+                    "result": {"result_summary": "File mutation completed."},
+                    "executed_at": "2026-05-29T08:21:28Z",
+                }
+            ]
+            store.update_mission(mission)
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.runtime_cycle",
+                    message="hermes control cycle finished with status running.",
+                )
+            )
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+            labels = [item["label"] for item in detail["agentMessages"]]
+
+            self.assertIn("mission.runtime_cycle", [item["kind"] for item in detail["events"]])
+            self.assertNotIn("mission.runtime_cycle", labels)
+            self.assertTrue(
+                any(
+                    item["label"] == "Control-room action result"
+                    and item["title"] == "Patch target file"
+                    and "File mutation completed." in item["detail"]
+                    and item["traceOnly"] is True
+                    and item["chatPreferred"] is False
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_mission_detail_reports_missing_runtime_transcript_without_pretending_bookkeeping_is_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show transcript integrity",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.latest_session_id = "session_missing"
+            mission.plan_revisions = [
+                {
+                    "revision_id": "rev1",
+                    "summary": "Planner revised the next steps after a successful action.",
+                    "created_at": "2026-05-29T08:21:28Z",
+                    "steps": [],
+                }
+            ]
+            store.update_mission(mission)
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "missing_transcript")
+            self.assertIn("session_missing", detail["runtimeTranscript"]["candidateSessionIds"])
+            labels = [item["label"] for item in detail["agentMessages"]]
+            self.assertIn("Runtime transcript integrity", labels)
+            self.assertIn("Control-room planner", labels)
+            self.assertNotIn("Planner review", labels)
+            self.assertTrue(
+                any(
+                    item["label"] == "Runtime transcript integrity"
+                    and item["traceOnly"] is False
+                    and item["chatPreferred"] is True
+                    for item in detail["agentMessages"]
+                )
+            )
+            self.assertTrue(
+                any(
+                    item["label"] == "Control-room planner"
+                    and item["traceOnly"] is True
+                    and item["chatPreferred"] is False
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_mission_detail_attaches_real_session_timeline_before_bookkeeping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show real Hermes report",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            session_dir = root / ".agent_runs" / "session_live"
+            session_dir.mkdir(parents=True)
+            (session_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "runtime.report",
+                        "message": "Hermes produced a concrete slice report.",
+                        "timestamp": "2026-05-29T08:21:28Z",
+                        "metadata": {
+                            "kind": "file_patch",
+                            "target_path": "docs/demo.md",
+                            "args": {
+                                "content": "## Slice report\nHermes wrote the actual operator-facing report body.",
+                            },
+                            "result": {"result_summary": "File mutation completed."},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (session_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "decisions": [
+                            "Fluxio hybrid harness orchestrated this mission.",
+                            "Keep the RF map scope defensive.",
+                        ],
+                        "next_actions": ["Prepare rollout notes and next iteration tasks"],
+                        "notes": [
+                            "Execution policy: hands_free approvals with high delegation.",
+                            "Runtime controls: context=2400 tokens, parallel_agents=1.",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mission.state.latest_session_id = "session_live"
+            store.update_mission(mission)
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "attached")
+            self.assertTrue(
+                any(
+                    item["label"] == "Hermes session transcript"
+                    and item["title"] == "Hermes produced a concrete slice report."
+                    and item["detail"].startswith("Runtime output: ## Slice report")
+                    and "Action: file_patch" in item["detail"]
+                    and "docs/demo.md" in item["detail"]
+                    and "Hermes wrote the actual operator-facing report body" in item["detail"]
+                    and "result_summary" in item["technicalDetail"]
+                    and item["traceOnly"] is False
+                    and item["chatPreferred"] is True
+                    for item in detail["agentMessages"]
+                )
+            )
+            self.assertFalse(
+                any(
+                    item["label"].startswith("Hermes session decision")
+                    or item["label"].startswith("Hermes session note")
+                    or item["label"].startswith("Hermes session next action")
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_mission_detail_keeps_latest_session_ahead_of_stale_event_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show current Hermes report",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.latest_session_id = "session_current"
+            store.update_mission(mission)
+            current_dir = root / ".agent_runs" / "session_current"
+            current_dir.mkdir(parents=True)
+            (current_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "runtime.report",
+                        "message": "Current Hermes report is the selected transcript.",
+                        "timestamp": "2026-05-29T08:30:00Z",
+                        "metadata": {
+                            "kind": "file_write",
+                            "args": {"content": "Current report body"},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            for index in range(10):
+                stale_id = f"session_stale_{index}"
+                stale_dir = root / ".agent_runs" / stale_id
+                stale_dir.mkdir(parents=True)
+                (stale_dir / "timeline.jsonl").write_text(
+                    json.dumps(
+                        {
+                            "kind": "runtime.report",
+                            "message": f"Stale report {index}",
+                            "timestamp": f"2026-05-29T08:2{index}:00Z",
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                store.append_event(
+                    MissionEvent(
+                        mission_id=mission.mission_id,
+                        kind="mission.runtime_cycle",
+                        message=f"Stale cycle {index}",
+                        metadata={"sessionId": stale_id},
+                    )
+                )
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=20)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "attached")
+            self.assertEqual(detail["runtimeTranscript"]["sessionId"], "session_current")
+            self.assertTrue(
+                any(
+                    item["label"] == "Hermes session transcript"
+                    and item["title"] == "Current Hermes report is the selected transcript."
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_running_mission_ignores_stale_queue_pause_reason_after_parallel_split(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Run after parallel split",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.queue_position = 0
+            mission.state.queue_reason = ""
+            mission.state.last_budget_pause_reason = "Waiting for mission 'old blocker' to leave the active slot."
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+
+            self.assertEqual(payload["missionLoop"]["timeBudget"]["status"], "running")
+            self.assertEqual(payload["missionLoop"]["pauseReason"], "")
+            self.assertEqual(payload["state"]["last_budget_pause_reason"], "")
 
     @unittest.skipUnless(shutil.which("git"), "git is required for workspace git action tests")
     def test_git_inspect_action_persists_workspace_history(self) -> None:

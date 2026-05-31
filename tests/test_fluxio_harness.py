@@ -11,6 +11,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from grant_agent.fluxio_harness import (
     FluxioHarness,
     LegacyHarnessAdapter,
+    build_route_outcome_trends,
     recommended_model_routes,
     resolve_efficiency_autotune_policy,
 )
@@ -64,6 +65,293 @@ class FluxioHarnessTests(unittest.TestCase):
             library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
 
             self.assertEqual(library.learned_skills, [])
+
+    def test_skill_library_records_slice_feedback_loss_and_catalog_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "repo_scan",
+                            "description": "Ground the task in repo evidence",
+                            "schema": {"type": "object", "properties": {}},
+                            "permissions": ["file_read"],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+
+            records = library.record_slice_feedback(
+                mission_id="mission_demo",
+                step_id="step_patch",
+                selected_skills=[
+                    {"skillId": "repo_scan", "label": "Repo Scan", "sourceKind": "curated"}
+                ],
+                execution_ok=True,
+                verification_failures=[],
+                changed_files=["src/app.py"],
+            )
+            catalog = library.build_catalog()
+
+            self.assertEqual(records[0]["nextAction"], "reinforce")
+            self.assertLess(records[0]["systemLoss"], 0.15)
+            self.assertEqual(catalog["feedbackLoop"]["cadence"], "mission_slice_end")
+            self.assertEqual(catalog["feedbackLoop"]["totalFeedbackSlices"], 1)
+            self.assertTrue(catalog["feedbackLoop"]["systemLossRouting"]["enabled"])
+            self.assertEqual(
+                catalog["curatedPacks"][0]["feedbackSummary"]["selectionPolicy"]["state"],
+                "prefer",
+            )
+            self.assertEqual(
+                catalog["curatedPacks"][0]["feedbackSummary"]["trend"],
+                "reinforce",
+            )
+
+    def test_skill_retrieval_uses_slice_loss_to_route_away_from_repair_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "repo_scan",
+                            "description": "Ground the repo workspace task in evidence",
+                            "schema": {"type": "object", "properties": {}},
+                            "permissions": ["file_read"],
+                        },
+                        {
+                            "name": "workspace_risky_runner",
+                            "description": "Run workspace repo changes quickly",
+                            "schema": {"type": "object", "properties": {}},
+                            "permissions": ["file_write"],
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+            library.record_slice_feedback(
+                mission_id="mission_bad",
+                step_id="step_risky",
+                selected_skills=[
+                    {
+                        "skillId": "workspace_risky_runner",
+                        "label": "Workspace Risky Runner",
+                        "sourceKind": "curated",
+                    }
+                ],
+                execution_ok=False,
+                verification_failures=["python -m pytest"],
+                changed_files=[],
+            )
+            library.record_slice_feedback(
+                mission_id="mission_good",
+                step_id="step_repo",
+                selected_skills=[{"skillId": "repo_scan", "label": "Repo Scan", "sourceKind": "curated"}],
+                execution_ok=True,
+                verification_failures=[],
+                changed_files=["src/app.py"],
+            )
+
+            retrieved = library.retrieve("repo workspace changes", top_k=1)
+
+            self.assertEqual(retrieved[0]["skillId"], "repo_scan")
+            self.assertEqual(retrieved[0]["selectionPolicy"]["state"], "prefer")
+
+    def test_operator_value_closeouts_change_skill_selection_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "useful_workspace_loop",
+                            "description": "Handle workspace repo task evidence",
+                            "schema": {"type": "object", "properties": {}},
+                            "permissions": ["file_read"],
+                        },
+                        {
+                            "name": "low_value_workspace_loop",
+                            "description": "Handle workspace repo task evidence",
+                            "schema": {"type": "object", "properties": {}},
+                            "permissions": ["file_read"],
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir()
+            missions = []
+            for index, (skill_id, score, outcome, signal) in enumerate(
+                [
+                    ("useful_workspace_loop", 91, "useful", "promote"),
+                    ("useful_workspace_loop", 86, "useful", "promote"),
+                    ("low_value_workspace_loop", 32, "not_useful", "deprioritize"),
+                ]
+            ):
+                missions.append(
+                    {
+                        "mission_id": f"mission_skill_value_{index}",
+                        "updated_at": f"2026-05-28T0{index}:00:00+00:00",
+                        "skill_usage": [
+                            {
+                                "skill_id": skill_id,
+                                "label": skill_id.replace("_", " ").title(),
+                                "helped": signal == "promote",
+                            }
+                        ],
+                        "state": {
+                            "status": "completed",
+                            "operator_value_feedback": {
+                                "schema": "fluxio.mission_operator_value_feedback.v1",
+                                "score": score,
+                                "outcome": outcome,
+                                "trustSignal": signal,
+                            },
+                        },
+                    }
+                )
+            (control_dir / "missions.json").write_text(json.dumps(missions), encoding="utf-8")
+            library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+
+            retrieved = library.retrieve("workspace repo task evidence", top_k=2)
+            catalog = library.build_catalog()
+            useful = next(item for item in catalog["curatedPacks"] if item["packId"] == "curated:useful_workspace_loop")
+            low_value = next(item for item in catalog["curatedPacks"] if item["packId"] == "curated:low_value_workspace_loop")
+
+            self.assertEqual(retrieved[0]["skillId"], "useful_workspace_loop")
+            self.assertNotIn("low_value_workspace_loop", [item["skillId"] for item in retrieved])
+            self.assertEqual(useful["feedbackSummary"]["operatorValue"]["state"], "prefer")
+            self.assertEqual(useful["feedbackSummary"]["promotionGate"]["eligible"], True)
+            self.assertEqual(low_value["feedbackSummary"]["selectionPolicy"]["state"], "deprioritize")
+            self.assertEqual(low_value["systemLossHold"]["held"], True)
+            self.assertEqual(catalog["feedbackLoop"]["operatorValueSkillCount"], 2)
+            self.assertIn("operator_value_closeout", catalog["feedbackLoop"]["scoreInputs"])
+
+    def test_high_loss_skill_feedback_creates_repair_proposal_with_validation_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "workspace_risky_runner",
+                            "description": "Run workspace repo changes quickly",
+                            "schema": {"type": "object", "properties": {}},
+                            "permissions": ["file_write"],
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+
+            library.record_slice_feedback(
+                mission_id="mission_bad",
+                step_id="step_risky",
+                selected_skills=[
+                    {
+                        "skillId": "workspace_risky_runner",
+                        "label": "Workspace Risky Runner",
+                        "sourceKind": "curated",
+                    }
+                ],
+                execution_ok=False,
+                verification_failures=["python -m pytest"],
+                changed_files=[],
+            )
+            catalog = library.build_catalog()
+
+            proposals = catalog["feedbackLoop"]["repairProposals"]
+            self.assertEqual(len(proposals), 1)
+            self.assertEqual(proposals[0]["skillId"], "workspace_risky_runner")
+            self.assertEqual(proposals[0]["beforeVerification"]["missionId"], "mission_bad")
+            self.assertEqual(
+                proposals[0]["beforeVerification"]["verificationFailures"],
+                ["python -m pytest"],
+            )
+            self.assertEqual(proposals[0]["afterVerification"]["maxSystemLoss"], 0.15)
+            self.assertEqual(
+                proposals[0]["repairPatch"]["routePolicy"],
+                "deprioritize_until_clean_validation_slice",
+            )
+            self.assertEqual(
+                catalog["curatedPacks"][0]["feedbackSummary"]["repairProposal"]["nextAction"],
+                "repair_before_reuse",
+            )
+            retrieved = library.retrieve("workspace risky runner", top_k=1)
+            self.assertEqual(retrieved, [])
+            self.assertEqual(catalog["curatedPacks"][0]["systemLossHold"]["held"], True)
+
+    def test_apply_repair_proposal_updates_editable_learned_skill_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "skills.json").write_text("[]", encoding="utf-8")
+            control_dir = root / ".agent_control"
+            control_dir.mkdir()
+            (control_dir / "learned_skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "skill_id": "learned_risky_runner",
+                            "label": "Risky Runner",
+                            "description": "Runs workspace changes quickly.",
+                            "prompt_hint": "Move fast.",
+                            "source": {"kind": "learned", "label": "Learned"},
+                            "confidence": 0.7,
+                            "status": "learned",
+                            "tags": ["learned"],
+                            "permissions": ["file_write"],
+                            "audit": [],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            library = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+            library.record_slice_feedback(
+                mission_id="mission_bad",
+                step_id="step_risky",
+                selected_skills=[
+                    {
+                        "skillId": "learned_risky_runner",
+                        "label": "Risky Runner",
+                        "sourceKind": "learned",
+                    }
+                ],
+                execution_ok=False,
+                verification_failures=["python -m pytest"],
+                changed_files=[],
+            )
+            proposal = library.build_catalog()["feedbackLoop"]["repairProposals"][0]
+
+            receipt = library.apply_repair_proposal(
+                proposal_id=proposal["proposalId"],
+                reviewer="operator",
+                validation_mission_id="mission_validation",
+            )
+
+            self.assertEqual(receipt["schema"], "fluxio.skill_repair_apply_receipt.v1")
+            self.assertEqual(receipt["status"], "applied")
+            self.assertIn("ground the slice", receipt["afterPromptHint"])
+            updated = SkillLibrary(root=root, registry=SkillRegistry(config_dir / "skills.json"))
+            self.assertEqual(updated.learned_skills[0].status, "repair_applied")
+            self.assertIn("repair-applied", updated.learned_skills[0].tags)
+            self.assertTrue((control_dir / "skill_repair_receipts.json").exists())
 
     def test_openai_codex_provider_does_not_force_repeated_handoff(self) -> None:
         session = type(
@@ -165,6 +453,7 @@ class FluxioHarnessTests(unittest.TestCase):
             self.assertGreaterEqual(len(result["route_configs"]), 4)
             self.assertTrue(result["plan_revisions"])
             self.assertTrue(result["learned_skill_events"])
+            self.assertTrue(result["skill_feedback_events"])
             self.assertIn("execution_scope", result)
             self.assertIn("execution_policy", result)
 
@@ -245,7 +534,8 @@ class FluxioHarnessTests(unittest.TestCase):
             first_executor = next(
                 item for item in first["route_configs"] if item["role"] == "executor"
             )
-            self.assertEqual(first_planner["model"], "gpt-5.4-mini")
+            self.assertEqual(first_planner["provider"], "openai-codex")
+            self.assertEqual(first_planner["model"], "gpt-5.5")
             self.assertEqual(first_executor["model"], "gpt-5.4-mini")
 
             resumed = harness.run(
@@ -267,6 +557,7 @@ class FluxioHarnessTests(unittest.TestCase):
             resumed_executor = next(
                 item for item in resumed["route_configs"] if item["role"] == "executor"
             )
+            self.assertEqual(resumed_planner["provider"], "openai-codex")
             self.assertEqual(resumed_planner["model"], "gpt-5.5")
             self.assertEqual(resumed_executor["model"], "gpt-5.5")
 
@@ -285,9 +576,239 @@ class FluxioHarnessTests(unittest.TestCase):
         )
         planner = next(item for item in routes if item.role == "planner")
         executor = next(item for item in routes if item.role == "executor")
+        self.assertEqual(planner.provider, "openai-codex")
         self.assertEqual(planner.model, "gpt-5.5")
         self.assertEqual(executor.provider, "minimax")
         self.assertEqual(executor.model, "MiniMax-M2.7-highspeed")
+        self.assertIn("override", executor.explanation.lower())
+
+    def test_recommended_routes_use_task_fit_for_frontend_execution(self) -> None:
+        routes = recommended_model_routes(
+            "builder",
+            routing_strategy_override="profile_default",
+            objective="Build a polished React frontend UI with mobile design proof.",
+        )
+        planner = next(item for item in routes if item.role == "planner")
+        executor = next(item for item in routes if item.role == "executor")
+        verifier = next(item for item in routes if item.role == "verifier")
+
+        self.assertEqual(planner.provider, "openai-codex")
+        self.assertEqual(planner.model, "gpt-5.5")
+        self.assertEqual(executor.provider, "minimax")
+        self.assertEqual(executor.model, "MiniMax-M2.7")
+        self.assertEqual(executor.task_type, "frontend_design")
+        self.assertEqual(executor.route_intent, "visual_interface_execution")
+        self.assertGreaterEqual(executor.fit_score, 70)
+        self.assertIn("Frontend/UI/design", executor.explanation)
+        self.assertEqual(verifier.provider, "openai")
+        self.assertEqual(verifier.model, "gpt-5.5")
+        self.assertEqual(verifier.task_type, "frontend_design")
+
+    def test_recommended_routes_use_task_fit_for_hardware_and_f1_missions(self) -> None:
+        hardware_routes = recommended_model_routes(
+            "builder",
+            routing_strategy_override="profile_default",
+            objective="Build a hardware engineering tool for electrical circuit simulation and sensor analysis.",
+        )
+        hardware_executor = next(item for item in hardware_routes if item.role == "executor")
+        self.assertEqual(hardware_executor.task_type, "hardware_electrical")
+        self.assertEqual(hardware_executor.model, "gpt-5.5")
+        self.assertEqual(hardware_executor.route_intent, "engineering_simulation_execution")
+
+        f1_routes = recommended_model_routes(
+            "builder",
+            routing_strategy_override="profile_default",
+            objective="Create an F1 telemetry analytics dashboard for lap time visualization.",
+        )
+        f1_executor = next(item for item in f1_routes if item.role == "executor")
+        self.assertEqual(f1_executor.task_type, "data_f1_analytics")
+        self.assertEqual(f1_executor.model, "gpt-5.5")
+        self.assertEqual(f1_executor.route_intent, "analytics_dashboard_execution")
+
+    def test_recommended_routes_use_outcome_trends_for_similar_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            runs_root = root / ".agent_runs"
+            for index in range(2):
+                session = runs_root / f"session_f1_success_{index}"
+                session.mkdir(parents=True)
+                (session / "state.json").write_text(
+                    json.dumps(
+                        {
+                            "objective": "Create an F1 telemetry analytics dashboard for lap visualization.",
+                            "autopilot_status": "completed",
+                            "route_configs": [
+                                {
+                                    "role": "executor",
+                                    "provider": "minimax",
+                                    "model": "MiniMax-M2.7",
+                                    "effort": "medium",
+                                    "budget_class": "specialist",
+                                },
+                                {
+                                    "role": "verifier",
+                                    "provider": "openai",
+                                    "model": "gpt-5.5",
+                                    "effort": "high",
+                                    "budget_class": "premium",
+                                },
+                            ],
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+
+            trends = build_route_outcome_trends(root)
+            routes = recommended_model_routes(
+                "builder",
+                routing_strategy_override="profile_default",
+                objective="Build an F1 telemetry analytics dashboard for tire and lap-time comparison.",
+                route_outcome_trends=trends,
+            )
+            executor = next(item for item in routes if item.role == "executor")
+
+            self.assertEqual(executor.provider, "minimax")
+            self.assertEqual(executor.model, "MiniMax-M2.7")
+            self.assertEqual(executor.task_type, "data_f1_analytics")
+            self.assertEqual(executor.route_intent, "outcome_trend_execution")
+            self.assertEqual(executor.outcome_sample_count, 2)
+            self.assertEqual(executor.outcome_success_rate, 100)
+            self.assertIn("outcome trend", executor.explanation)
+
+    def test_operator_value_closeouts_feed_route_outcome_trends(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            missions = []
+            for index, score in enumerate((92, 88)):
+                missions.append(
+                    {
+                        "mission_id": f"mission_operator_value_{index}",
+                        "workspace_id": "workspace_default",
+                        "runtime_id": "hermes",
+                        "objective": "Create an F1 telemetry analytics dashboard for race pace comparison.",
+                        "updated_at": f"2026-05-28T0{index}:00:00+00:00",
+                        "route_configs": [
+                            {
+                                "role": "executor",
+                                "provider": "minimax",
+                                "model": "MiniMax-M2.7",
+                                "effort": "medium",
+                                "budget_class": "specialist",
+                            }
+                        ],
+                        "state": {
+                            "status": "completed",
+                            "operator_value_feedback": {
+                                "schema": "fluxio.mission_operator_value_feedback.v1",
+                                "score": score,
+                                "outcome": "useful",
+                                "trustSignal": "promote",
+                            },
+                        },
+                    }
+                )
+            (control_dir / "missions.json").write_text(
+                json.dumps(missions, indent=2),
+                encoding="utf-8",
+            )
+
+            trends = build_route_outcome_trends(root)
+            recommendation = trends["recommendations"]["data_f1_analytics"]["executor"]
+            routes = recommended_model_routes(
+                "builder",
+                routing_strategy_override="profile_default",
+                objective="Build an F1 telemetry analytics dashboard.",
+                route_outcome_trends=trends,
+            )
+            executor = next(item for item in routes if item.role == "executor")
+
+            self.assertEqual(trends["scannedMissionCloseouts"], 2)
+            self.assertEqual(recommendation["operatorValueSampleCount"], 2)
+            self.assertEqual(recommendation["operatorValueAverage"], 90)
+            self.assertEqual(executor.provider, "minimax")
+            self.assertEqual(executor.route_intent, "outcome_trend_execution")
+            self.assertIn("operator value 90/100", executor.outcome_trend)
+
+    def test_low_value_route_closeouts_quarantine_task_fit_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            missions = []
+            for index, score in enumerate((31, 42)):
+                missions.append(
+                    {
+                        "mission_id": f"mission_low_value_frontend_{index}",
+                        "workspace_id": "workspace_default",
+                        "runtime_id": "hermes",
+                        "objective": "Build a polished React frontend UI with mobile design proof.",
+                        "updated_at": f"2026-05-28T0{index}:00:00+00:00",
+                        "route_configs": [
+                            {
+                                "role": "executor",
+                                "provider": "minimax",
+                                "model": "MiniMax-M2.7",
+                                "effort": "high",
+                                "budget_class": "specialist",
+                            }
+                        ],
+                        "state": {
+                            "status": "completed",
+                            "operator_value_feedback": {
+                                "schema": "fluxio.mission_operator_value_feedback.v1",
+                                "score": score,
+                                "outcome": "not_useful",
+                                "trustSignal": "deprioritize",
+                            },
+                        },
+                    }
+                )
+            (control_dir / "missions.json").write_text(json.dumps(missions, indent=2), encoding="utf-8")
+
+            trends = build_route_outcome_trends(root)
+            quarantined = trends["quarantinedRoutes"]["frontend_design"]["executor"][0]
+            routes = recommended_model_routes(
+                "builder",
+                routing_strategy_override="profile_default",
+                objective="Build a polished React frontend UI with mobile design proof.",
+                route_outcome_trends=trends,
+            )
+            executor = next(item for item in routes if item.role == "executor")
+
+            self.assertEqual(quarantined["schema"], "fluxio.route_outcome_quarantine.v1")
+            self.assertEqual(quarantined["provider"], "minimax")
+            self.assertEqual(quarantined["model"], "MiniMax-M2.7")
+            self.assertEqual(quarantined["operatorValueSampleCount"], 2)
+            self.assertEqual(quarantined["operatorDeprioritizeCount"], 2)
+            self.assertEqual(executor.provider, "openai-codex")
+            self.assertEqual(executor.model, "gpt-5.5")
+            self.assertEqual(executor.route_intent, "route_outcome_quarantine_reroute")
+            self.assertIn("operator value", executor.outcome_trend)
+            self.assertIn("quarantine", executor.explanation.lower())
+
+    def test_explicit_executor_override_wins_over_task_fit(self) -> None:
+        routes = recommended_model_routes(
+            "builder",
+            routing_strategy_override="profile_default",
+            objective="Build a polished frontend UI.",
+            route_overrides=[
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "effort": "medium",
+                }
+            ],
+        )
+        executor = next(item for item in routes if item.role == "executor")
+
+        self.assertEqual(executor.provider, "openai")
+        self.assertEqual(executor.model, "gpt-5.4-mini")
+        self.assertEqual(executor.task_type, "frontend_design")
+        self.assertEqual(executor.route_intent, "manual_workspace_override")
         self.assertIn("override", executor.explanation.lower())
 
     def test_autotune_policy_waits_for_local_sample_size(self) -> None:

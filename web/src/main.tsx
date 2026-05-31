@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import "./fluxio/styles.css";
 import { FluxioApp } from "./fluxio/FluxioApp";
+import { registerFluxioPwa } from "./pwa";
 
 const rootElement = document.getElementById("root");
 
@@ -15,3 +16,5 @@ createRoot(rootElement).render(
     <FluxioApp />
   </React.StrictMode>,
 );
+
+registerFluxioPwa();

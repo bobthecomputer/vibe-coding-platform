@@ -9,7 +9,16 @@ from pathlib import Path
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
 from ..subprocess_utils import hidden_windows_subprocess_kwargs
 from ..runtime_updates import compare_version_tokens, latest_hermes_release, normalize_hermes_version
-from .base import AgentRuntimeAdapter, mission_phase_route, shell_join
+from .base import (
+    AgentRuntimeAdapter,
+    mission_phase_route,
+    _direct_runtime_command,
+    runtime_bin_candidates,
+    runtime_lookup_path,
+    runtime_subprocess_env,
+    shell_join,
+    shell_with_runtime_path,
+)
 
 HERMES_PROVIDER_MAP = {
     "openai": "openai-codex",
@@ -25,11 +34,22 @@ HERMES_PROVIDER_MAP = {
     "kimi-coding": "kimi-coding",
     "kimi-coding-cn": "kimi-coding-cn",
     "minimax": "minimax",
+    "minimax-oauth": "minimax-oauth",
     "minimax-cn": "minimax-cn",
     "kilocode": "kilocode",
     "xiaomi": "xiaomi",
     "arcee": "arcee",
 }
+
+
+def _runtime_which(command_name: str, workspace_root: Path) -> str | None:
+    candidates = runtime_bin_candidates(workspace_root)
+    direct = _direct_runtime_command(command_name, candidates)
+    if direct:
+        return direct
+    if candidates:
+        return shutil.which(command_name, path=runtime_lookup_path(workspace_root))
+    return shutil.which(command_name)
 
 
 class HermesRuntimeAdapter(AgentRuntimeAdapter):
@@ -59,7 +79,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         ]
 
     def detect(self, workspace_root: Path) -> RuntimeInstallStatus:
-        command = shutil.which("hermes")
+        command = _runtime_which("hermes", workspace_root)
         version_output = None
         detected_in_wsl = False
         issues: list[str] = []
@@ -72,6 +92,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                     text=True,
                     timeout=8,
                     check=False,
+                    env=runtime_subprocess_env(workspace_root),
                     **hidden_windows_subprocess_kwargs(),
                 )
                 version_output = (completed.stdout or completed.stderr).strip() or None
@@ -153,9 +174,9 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         return status
 
     def update(self, workspace_root: Path) -> dict[str, str]:
-        if shutil.which("hermes"):
+        if _runtime_which("hermes", workspace_root):
             return {
-                "command": "hermes update",
+                "command": shell_with_runtime_path("hermes update", workspace_root),
                 "follow_up": "hermes --version",
             }
         if self._wsl_hermes_available():
@@ -174,6 +195,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         route_contract = self._route_contract(mission)
         launch_command = self._mission_launch_command(
             mission.objective,
+            workspace_root=workspace.root_path,
             route_contract=route_contract,
         )
         return {
@@ -208,6 +230,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         return {
             "launch_command": self._mission_launch_command(
                 objective,
+                workspace_root=workspace.root_path,
                 route_contract=route_contract,
             ),
             "workspace": workspace.root_path,
@@ -226,19 +249,23 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         self,
         objective: str,
         *,
+        workspace_root: str = ".",
         route_contract: dict[str, str] | None = None,
     ) -> str:
         route_contract = route_contract or {}
         provider = self._normalize_provider(route_contract.get("provider", ""))
-        model = str(route_contract.get("model", "")).strip()
+        model = self._normalize_model(provider, route_contract.get("model", ""))
         native_args = ["hermes", "chat", "-q", objective, "-Q"]
         if model:
             native_args.extend(["--model", model])
         if provider:
             native_args.extend(["--provider", provider])
+        root = Path(workspace_root)
+        hermes_command = _runtime_which("hermes", root)
+        if hermes_command:
+            native_args[0] = hermes_command
+            return shell_join(native_args)
         hermes_chat_cmd = shell_join(native_args)
-        if shutil.which("hermes"):
-            return hermes_chat_cmd
         if self._wsl_hermes_available():
             return f"wsl bash -lc {shlex.quote(hermes_chat_cmd)}"
         return hermes_chat_cmd
@@ -249,12 +276,27 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "phase": str(route.get("phase", "")).strip().lower(),
             "role": str(route.get("role", "")).strip().lower(),
             "provider": self._normalize_provider(route.get("provider", "")),
-            "model": str(route.get("model", "")).strip(),
+            "model": self._normalize_model(
+                self._normalize_provider(route.get("provider", "")),
+                route.get("model", ""),
+            ),
             "effort": str(route.get("effort", "")).strip().lower(),
         }
 
     def _normalize_provider(self, provider: str) -> str:
         return HERMES_PROVIDER_MAP.get(str(provider or "").strip().lower(), "")
+
+    def _normalize_model(self, provider: str, model: object) -> str:
+        value = str(model or "").strip()
+        if provider in {"minimax", "minimax-oauth", "minimax-cn"}:
+            normalized = value.lower()
+            if normalized in {"minimax-m2.7", "minimax/minimax-m2.7"}:
+                return "minimax-m2.7"
+            if normalized in {"minimax-m2.5", "minimax/minimax-m2.5"}:
+                return "minimax-m2.5"
+            if normalized in {"minimax-m2.5-free", "minimax/minimax-m2.5-free"}:
+                return "minimax-m2.5-free"
+        return value
 
     def _route_summary(self, route_contract: dict[str, str]) -> str:
         model = str(route_contract.get("model", "")).strip()

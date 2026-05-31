@@ -74,6 +74,100 @@ class OnboardingTests(unittest.TestCase):
         self.assertIn("WSL2", status["details"])
         self.assertEqual(status["version"], "Hermes Agent v0.4.0")
 
+    @mock.patch("grant_agent.onboarding.subprocess.run")
+    @mock.patch("grant_agent.onboarding.shutil.which", return_value=None)
+    def test_command_version_finds_runtime_cargo_home_tools(
+        self,
+        _which_mock: mock.Mock,
+        run_mock: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cargo_home = pathlib.Path(temp_dir) / ".cargo"
+            bin_dir = cargo_home / "bin"
+            bin_dir.mkdir(parents=True)
+            cargo = bin_dir / "cargo"
+            cargo.write_text("#!/bin/sh\n", encoding="utf-8")
+            run_mock.return_value = mock.Mock(
+                stdout="cargo 1.95.0\n",
+                stderr="",
+            )
+
+            with mock.patch.dict("grant_agent.onboarding.os.environ", {"CARGO_HOME": str(cargo_home)}):
+                status = _command_version("cargo")
+
+            self.assertTrue(status["installed"])
+            self.assertEqual(status["command"], str(cargo))
+            self.assertEqual(status["version"], "cargo 1.95.0")
+
+    @mock.patch("grant_agent.onboarding.subprocess.run")
+    @mock.patch("grant_agent.onboarding.shutil.which")
+    def test_command_version_uses_release_adjacent_runtime_bin(
+        self,
+        which_mock: mock.Mock,
+        run_mock: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir) / "releases" / "20260505-212517"
+            runtime_bin = pathlib.Path(temp_dir) / "runtime" / "bin"
+            root.mkdir(parents=True)
+            runtime_bin.mkdir(parents=True)
+            uv_path = runtime_bin / "uv"
+
+            def _which(name: str, path: str | None = None) -> str | None:
+                if name == "uv" and path and str(runtime_bin) in path:
+                    return str(uv_path)
+                return None
+
+            which_mock.side_effect = _which
+            run_mock.return_value = mock.Mock(
+                stdout="uv 0.11.9\n",
+                stderr="",
+            )
+
+            status = _command_version("uv", ["--version"], root=root)
+
+            self.assertTrue(status["installed"])
+            self.assertEqual(status["command"], str(uv_path))
+            self.assertEqual(status["version"], "uv 0.11.9")
+            self.assertIn(str(runtime_bin), run_mock.call_args.kwargs["env"]["PATH"])
+
+    @mock.patch("grant_agent.onboarding.platform.system", return_value="Linux")
+    @mock.patch("grant_agent.onboarding.detect_wsl_status")
+    @mock.patch("grant_agent.onboarding._command_version")
+    def test_tauri_prereqs_are_not_required_for_linux_web_release(
+        self,
+        command_version: mock.Mock,
+        detect_wsl_status: mock.Mock,
+        _platform_system: mock.Mock,
+    ) -> None:
+        detect_wsl_status.return_value = {
+            "required": False,
+            "installed": True,
+            "default_version": None,
+            "details": "WSL2 is not required.",
+        }
+        command_version.side_effect = [
+            {"installed": True, "command": "node", "version": "v22", "details": "ok"},
+            {"installed": True, "command": "python", "version": "3.13", "details": "ok"},
+            {"installed": True, "command": "uv", "version": "0.11", "details": "ok"},
+            {"installed": True, "command": "openclaw", "version": "2026.5.12", "details": "ok"},
+            {"installed": True, "command": "hermes", "version": "v0.13.0", "details": "ok"},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "src-tauri").mkdir()
+            status = detect_onboarding_status(root, force=True)
+
+        tauri = next(
+            item
+            for item in status["setupHealth"]["dependencies"]
+            if item["dependencyId"] == "tauri_prereqs"
+        )
+        self.assertFalse(tauri["required"])
+        self.assertEqual(tauri["stage"], "healthy")
+        self.assertEqual(tauri["lastVerificationResult"], "not_run")
+
     @mock.patch("grant_agent.onboarding.detect_wsl_status")
     @mock.patch("grant_agent.onboarding._command_version")
     def test_detect_onboarding_status_collects_checks(

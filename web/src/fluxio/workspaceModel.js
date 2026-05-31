@@ -2,6 +2,7 @@ export const WORKSPACE_SURFACES = Object.freeze([
   { id: "home", label: "Home", section: "global" },
   { id: "agent", label: "Agent", section: "workspace" },
   { id: "builder", label: "Builder", section: "workspace" },
+  { id: "phone", label: "Phone", section: "workspace" },
   { id: "skills", label: "Skills", section: "workspace" },
   { id: "rule-sets", label: "Rule Sets", section: "workspace" },
   { id: "images", label: "Images", section: "workspace" },

@@ -25,4 +25,9 @@ web/dist/
 web/.tmp_frontend_build/
 src-tauri/target/
 .tmp_*/
+.tmp-*
+tmp-ui-checks/
 tmp/
+tmp-fluxio-*.tgz
+docs/cleanup/before-after/
+C*volume1*

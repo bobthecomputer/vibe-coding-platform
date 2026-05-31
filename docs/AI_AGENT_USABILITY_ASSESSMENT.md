@@ -13,7 +13,7 @@ Fluxio is materially closer to a usable supervised-agent product than it was bef
   Before this pass, custom Codex-provider model slugs inherited generic Codex reasoning and fast-mode controls. That is not honest for custom profiles such as MiniMax, which means the UI could imply controls the runtime does not actually support. Unknown custom models must stay capability-light until Fluxio has verified metadata for them.
 
 - `P1: exposed OpenAI model defaults drifted away from the current docs.`
-  The user-facing and server-facing defaults need to converge on `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex`, with `gpt-5-codex` treated only as a legacy alias. If the picker, bridge, and provider registry disagree here, operators stop trusting the thread state and model routing story.
+  The user-facing and server-facing defaults need to converge on `gpt-5.5` high-effort Codex planning/execution routes, with older `gpt-5.3-codex` entries treated only as selectable legacy options. If the picker, bridge, and provider registry disagree here, operators stop trusting the thread state and model routing story.
 
 - `P1: long-run continuity is regression-tested, but not yet soak-tested.`
   The delegated-runtime path is in much better shape than before. The repo already proves approval wait across restart, delegated runtime activity across restart, truthful time-budget status, pause reason, and current runtime lane in `tests/test_mission_control.py`, `tests/test_release_acceptance.py`, and `tests/test_runtime_supervisor.py`, and the runtime worker race around approval-file cleanup has been fixed. What is still missing is a longer real-world soak path outside mocked acceptance coverage.

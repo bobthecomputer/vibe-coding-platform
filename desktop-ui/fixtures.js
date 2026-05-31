@@ -1414,12 +1414,71 @@ const longRunResumedFixture = (() => {
   };
 })();
 
+const longHistoryFixture = (() => {
+  const fixture = clone(longRunResumedFixture);
+  const snapshot = fixture.snapshot;
+  const mission = snapshot.missions[0];
+  mission.title = 'Long-History Proof Load';
+  mission.objective = 'Stress the browser with hundreds of transcript, proof, changed-file, and activity rows.';
+  mission.state.last_plan_summary = 'Long-history browser proof fixture is active and virtualized.';
+  mission.proof.summary = 'Long-history proof fixture is active with bounded proof, transcript, and artifact lists.';
+  mission.route_configs = [
+    { role: 'planner', provider: 'openai-codex', model: 'gpt-5.5', budget_class: 'specialist', explanation: 'Codex planning lane chooses decomposition and route changes.' },
+    { role: 'executor', provider: 'minimax', model: 'MiniMax-M2.7', budget_class: 'specialist', explanation: 'Frontend-heavy execution routes to MiniMax.' },
+    { role: 'verifier', provider: 'openai', model: 'gpt-5.5', budget_class: 'premium', explanation: 'Verification stays on the high-confidence verifier route.' },
+  ];
+  mission.effectiveRouteContract.roles = mission.route_configs.map(item => ({
+    ...item,
+    budgetClass: item.budget_class,
+    source: 'fixture',
+    reason: item.explanation,
+  }));
+  const generatedActivity = Array.from({ length: 720 }, (_, index) => ({
+    kind: index % 9 === 0 ? 'verification.passed' : index % 5 === 0 ? 'runtime.output' : 'mission.progress',
+    mission_id: mission.mission_id,
+    message: `Long-history proof event ${String(index + 1).padStart(3, '0')} kept the mission moving without blocking the UI.`,
+    timestamp: `2026-04-14T${String(10 + Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}:00Z`,
+    metadata: {
+      slice: index + 1,
+      proofArtifact: `artifact-${String(index + 1).padStart(3, '0')}`,
+      lane: index % 3 === 0 ? 'planner' : index % 3 === 1 ? 'executor' : 'verifier',
+    },
+  }));
+  mission.proof.changed_files = Array.from(
+    { length: 180 },
+    (_, index) => `apps/fluxio-long-history/module-${String(index + 1).padStart(3, '0')}.ts`,
+  );
+  mission.changed_files = mission.proof.changed_files;
+  mission.proof.passed_checks = Array.from(
+    { length: 96 },
+    (_, index) => `long-history verification shard ${String(index + 1).padStart(2, '0')}`,
+  );
+  mission.proof_artifacts = Array.from(
+    { length: 260 },
+    (_, index) => `proof/long-history/artifact-${String(index + 1).padStart(3, '0')}.json`,
+  );
+  mission.delegated_runtime_sessions[0].latest_events = Array.from(
+    { length: 360 },
+    (_, index) => ({
+      event_id: `evt_long_history_${String(index + 1).padStart(3, '0')}`,
+      kind: index % 4 === 0 ? 'runtime.output' : 'runtime.heartbeat',
+      message: `Runtime transcript row ${String(index + 1).padStart(3, '0')} stayed virtualized during proof review.`,
+      status: 'running',
+    }),
+  );
+  snapshot.activity = generatedActivity;
+  fixture.name = 'Long-History Proof Load';
+  fixture.description = 'Stress fixture with hundreds of transcript, proof, changed-file, and activity rows for browser speed gates.';
+  return fixture;
+})();
+
 const fixtures = {
   live_review: liveReviewFixture,
   first_run: emptyStartFixture,
   verification_failure: verificationFailureFixture,
   approval_resumed: approvalResumedFixture,
   long_run_resumed: longRunResumedFixture,
+  long_history: longHistoryFixture,
 };
 
 export function listFixtureOptions() {

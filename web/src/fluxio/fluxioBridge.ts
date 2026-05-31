@@ -57,14 +57,28 @@ function asRecord(value: unknown): JsonRecord {
 }
 
 export async function getSnapshot(root: string | null = null): Promise<JsonRecord> {
-  try {
-    const snapshot = await callFluxioBackend("get_control_room_snapshot_command", {
-      payload: { root },
-    });
-    return asRecord(snapshot);
-  } catch {
-    return {};
-  }
+  const snapshot = await callFluxioBackend("get_control_room_snapshot_command", {
+    payload: { root },
+  });
+  return asRecord(snapshot);
+}
+
+export async function getSummary(root: string | null = null): Promise<JsonRecord> {
+  const summary = await callFluxioBackend("get_control_room_summary_command", {
+    payload: { root },
+  });
+  return asRecord(summary);
+}
+
+export async function getMissionDetail(
+  missionId: string,
+  root: string | null = null,
+  eventLimit = 80,
+): Promise<JsonRecord> {
+  const detail = await callFluxioBackend("get_control_room_mission_detail_command", {
+    payload: { root, missionId, eventLimit },
+  });
+  return asRecord(detail);
 }
 
 export async function dispatchCommand(

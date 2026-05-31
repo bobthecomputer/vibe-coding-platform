@@ -95,6 +95,59 @@ def _python_module_version(module_name: str, version_attr: str = "__version__") 
     }
 
 
+def _runtime_bin_candidates(root: Path | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    runtime_bin = str(
+        os.environ.get("FLUXIO_RUNTIME_BIN_DIR")
+        or os.environ.get("SYNTELOS_RUNTIME_BIN_DIR")
+        or ""
+    ).strip()
+    if runtime_bin:
+        candidates.append(Path(runtime_bin).expanduser())
+    if root is not None:
+        resolved = root.resolve()
+        candidates.extend(
+            [
+                resolved / ".agent_control" / "runtime" / "bin",
+                resolved / "runtime" / "bin",
+                resolved.parent / "runtime" / "bin",
+                resolved.parent.parent / "runtime" / "bin",
+            ]
+        )
+        if resolved.parent.name == "releases":
+            candidates.append(resolved.parent.parent / "runtime" / "bin")
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _command_lookup_path(root: Path | None = None) -> str:
+    parts = [str(candidate) for candidate in _runtime_bin_candidates(root) if candidate.exists()]
+    current_path = os.environ.get("PATH", "")
+    if current_path:
+        parts.append(current_path)
+    return os.pathsep.join(parts)
+
+
+def _tauri_prereqs_required(root: Path, platform_name: str | None = None) -> bool:
+    if str(os.environ.get("FLUXIO_REQUIRE_TAURI_PREREQS", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return (root / "src-tauri").exists()
+    normalized_platform = (platform_name or platform.system()).strip().lower()
+    # NAS and headless Linux web deployments can serve Fluxio without a local
+    # Rust/Tauri toolchain. Keep Tauri required for desktop-first hosts.
+    return (root / "src-tauri").exists() and normalized_platform in {"windows", "darwin"}
+
+
 def _primary_workspace_contract(root: Path) -> dict:
     workspaces = _load_control_list(root, "workspaces.json")
     if not workspaces:
@@ -133,8 +186,78 @@ def _normalize_minimax_auth_mode(value: object) -> str:
     return "none"
 
 
+def _auth_store_has_provider(path: Path, provider_id: str) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    needle = provider_id.strip().lower()
+
+    def visit(value: object) -> bool:
+        if isinstance(value, dict):
+            for key in ("providers", "credential_pool"):
+                nested = value.get(key)
+                if isinstance(nested, dict) and needle in {
+                    str(item).strip().lower() for item in nested.keys()
+                }:
+                    return True
+            provider = str(
+                value.get("provider")
+                or value.get("providerId")
+                or value.get("provider_id")
+                or ""
+            ).strip().lower()
+            if provider == needle:
+                return True
+            return any(visit(item) for item in value.values())
+        if isinstance(value, list):
+            return any(visit(item) for item in value)
+        return False
+
+    return visit(payload)
+
+
+def _hermes_auth_store_candidates() -> list[Path]:
+    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+    candidates: list[Path] = []
+    explicit_store = str(os.environ.get("HERMES_AUTH_STORE", "")).strip()
+    if explicit_store:
+        candidates.append(Path(explicit_store).expanduser())
+    hermes_home = str(os.environ.get("HERMES_HOME", "")).strip()
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "auth.json")
+    candidates.append(home / ".hermes" / "auth.json")
+    if os.name == "nt" and not str(os.environ.get("FLUXIO_DISABLE_WSL_AUTH_DISCOVERY", "")).strip():
+        try:
+            result = subprocess.run(
+                ["wsl", "bash", "-lc", 'printf "%s\t%s" "$WSL_DISTRO_NAME" "$HOME"'],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        output = (result.stdout if result is not None else "").strip()
+        if output and "\t" in output:
+            distro, wsl_home = output.split("\t", 1)
+            distro = distro.strip()
+            wsl_home = wsl_home.strip().strip("/")
+            if distro and wsl_home:
+                candidates.append(
+                    Path(r"\\wsl.localhost") / distro / wsl_home / ".hermes" / "auth.json"
+                )
+    return candidates
+
+
 def _minimax_openclaw_oauth_present() -> bool:
-    return bool(str(os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")).strip())
+    if str(os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")).strip():
+        return True
+    return any(
+        _auth_store_has_provider(path, provider_id)
+        for path in _hermes_auth_store_candidates()
+        for provider_id in ("minimax-oauth", "minimax", "minimax-portal")
+    )
 
 
 def _normalize_openai_codex_auth_mode(value: object) -> str:
@@ -170,8 +293,22 @@ def _model_auth_ready(
     )
 
 
-def _command_version(command_name: str, version_args: list[str] | None = None) -> dict:
-    command = shutil.which(command_name)
+def _command_version(
+    command_name: str,
+    version_args: list[str] | None = None,
+    *,
+    root: Path | None = None,
+) -> dict:
+    lookup_path = _command_lookup_path(root)
+    try:
+        command = shutil.which(command_name, path=lookup_path)
+    except TypeError:
+        command = shutil.which(command_name)
+    if not command and command_name in {"cargo", "rustc", "rustup"}:
+        cargo_home = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
+        candidate = cargo_home / "bin" / command_name
+        if candidate.exists():
+            command = str(candidate)
     if not command:
         # Hermes is frequently installed in WSL2 on Windows hosts.
         if command_name == "hermes":
@@ -196,6 +333,9 @@ def _command_version(command_name: str, version_args: list[str] | None = None) -
             }
 
     args = [command, *(version_args or ["--version"])]
+    env = os.environ.copy()
+    if lookup_path:
+        env["PATH"] = lookup_path
     try:
         completed = subprocess.run(  # noqa: S603
             args,
@@ -203,6 +343,7 @@ def _command_version(command_name: str, version_args: list[str] | None = None) -
             text=True,
             timeout=8,
             check=False,
+            env=env,
             **hidden_windows_subprocess_kwargs(),
         )
         version_text = (completed.stdout or completed.stderr).strip() or None
@@ -376,12 +517,12 @@ def detect_onboarding_status(root: Path, *, force: bool = False) -> dict:
     launched_mission_count = _launched_mission_count(root)
     phone_ready = _phone_destination_count(root) > 0
     checks = {
-        "node": _command_version("node"),
-        "python": _command_version("python"),
-        "uv": _command_version("uv", ["--version"]),
+        "node": _command_version("node", root=root),
+        "python": _command_version("python", root=root),
+        "uv": _command_version("uv", ["--version"], root=root),
         "opencv": _python_module_version("cv2"),
-        "openclaw": _command_version("openclaw"),
-        "hermes": _command_version("hermes"),
+        "openclaw": _command_version("openclaw", root=root),
+        "hermes": _command_version("hermes", root=root),
     }
     if checks["openclaw"].get("version"):
         checks["openclaw"]["version"] = normalize_openclaw_version(checks["openclaw"]["version"])
@@ -493,12 +634,12 @@ def _recommended_next_actions(
         workspace_contract.get("minimax_auth_mode", "none")
     )
     checks = checks or {
-        "node": _command_version("node"),
-        "python": _command_version("python"),
-        "uv": _command_version("uv", ["--version"]),
+        "node": _command_version("node", root=root),
+        "python": _command_version("python", root=root),
+        "uv": _command_version("uv", ["--version"], root=root),
         "opencv": _python_module_version("cv2"),
-        "openclaw": _command_version("openclaw"),
-        "hermes": _command_version("hermes"),
+        "openclaw": _command_version("openclaw", root=root),
+        "hermes": _command_version("hermes", root=root),
     }
     if wsl["required"] and not wsl["installed"]:
         status.append("Install WSL2 and reboot before backend setup.")
@@ -522,7 +663,13 @@ def _recommended_next_actions(
         status.append(
             "Save an OpenAI API key or MiniMax API key before launching a model-backed mission. ChatGPT app connection is configured separately through ChatGPT Apps/MCP."
         )
-    if (root / "src-tauri").exists() and (not shutil.which("cargo") or not shutil.which("rustc")):
+    if (
+        _tauri_prereqs_required(root)
+        and (
+            not _command_version("cargo")["installed"]
+            or not _command_version("rustc")["installed"]
+        )
+    ):
         status.append("Install Rust and Cargo before relying on the packaged Tauri desktop path.")
     if not _workspace_count(root):
         status.append("Add your first workspace so Syntelos can recommend skills and approvals.")
@@ -1137,7 +1284,7 @@ def _build_setup_health(
         if minimax_auth_configured
         else "Save a MiniMax API key, or complete and verify MiniMax auth in OpenClaw outside this app before routing MiniMax runs."
     )
-    tauri_required = (root / "src-tauri").exists()
+    tauri_required = _tauri_prereqs_required(root, platform_name)
     cargo_check = (
         _command_version("cargo")
         if tauri_required
@@ -1609,6 +1756,7 @@ def _build_setup_health(
     summary_items = [
         item for item in service_management if item.get("required", False)
     ]
+    operationally_healthy_statuses = {"healthy", "connected", "ready", "update_available"}
     return {
         "installState": _overall_install_state(dependencies, installer_ready),
         "environmentReady": environment_ready,
@@ -1624,10 +1772,14 @@ def _build_setup_health(
         "serviceManagementSummary": {
             "totalItems": len(summary_items),
             "healthyCount": sum(
-                1 for item in summary_items if item["currentHealthStatus"] == "healthy"
+                1
+                for item in summary_items
+                if item["currentHealthStatus"] in operationally_healthy_statuses
             ),
             "needsAttentionCount": sum(
-                1 for item in summary_items if item["currentHealthStatus"] != "healthy"
+                1
+                for item in summary_items
+                if item["currentHealthStatus"] not in operationally_healthy_statuses
             ),
             "fluxioManagedCount": sum(
                 1 for item in summary_items if item["managementMode"] == "fluxio_managed"

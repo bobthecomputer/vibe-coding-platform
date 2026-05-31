@@ -179,7 +179,9 @@ class MissionStateSnapshot:
     blocker_classification: dict[str, Any] = field(default_factory=dict)
     blocker_history: list[dict[str, Any]] = field(default_factory=list)
     provider_runtime_truth: dict[str, Any] = field(default_factory=dict)
+    lane_control_receipts: list[dict[str, Any]] = field(default_factory=list)
     code_execution: dict[str, Any] = field(default_factory=dict)
+    operator_value_feedback: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -193,6 +195,22 @@ class ApprovalEscalation:
     preview_message: str = ""
     last_sent_at: str | None = None
     last_error: str | None = None
+    delivery_receipts: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class DeliveryReceipt:
+    receipt_id: str
+    mission_id: str
+    channel: str
+    destination: str
+    event_kind: str
+    event_message: str
+    sent_at: str
+    status: str
+    error_message: str = ""
+    delivery_url: str = ""
+    retry_count: int = 0
 
 
 @dataclass
@@ -271,6 +289,12 @@ class ModelRouteConfig:
     budget_class: str = "balanced"
     fallback_policy: str = "same_provider"
     explanation: str = ""
+    task_type: str = "general_coding"
+    route_intent: str = ""
+    fit_score: int = 0
+    outcome_sample_count: int = 0
+    outcome_success_rate: int = 0
+    outcome_trend: str = ""
 
 
 @dataclass
@@ -473,6 +497,12 @@ class RoutingDecision:
     model: str
     reason: str
     budget_class: str
+    task_type: str = "general_coding"
+    route_intent: str = ""
+    fit_score: int = 0
+    outcome_sample_count: int = 0
+    outcome_success_rate: int = 0
+    outcome_trend: str = ""
     timestamp: str = field(default_factory=utc_now_iso)
 
 
@@ -763,6 +793,7 @@ class Mission:
     plan_revisions: list[PlanRevision] = field(default_factory=list)
     derived_tasks: list[DerivedTask] = field(default_factory=list)
     improvement_queue: list[ImprovementQueueItem] = field(default_factory=list)
+    planned_file_scope: list[str] = field(default_factory=list)
     skill_usage: list[SkillUsageRecord] = field(default_factory=list)
     learned_skill_events: list[dict[str, Any]] = field(default_factory=list)
     action_history: list[ActionExecutionRecord] = field(default_factory=list)

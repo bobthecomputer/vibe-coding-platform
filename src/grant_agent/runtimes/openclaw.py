@@ -3,10 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import re
-import shlex
+import shutil
 from pathlib import Path
 
 from ..models import Mission, RuntimeCapability, RuntimeInstallStatus, WorkspaceProfile
@@ -16,7 +15,16 @@ from ..runtime_updates import (
     latest_openclaw_release,
     normalize_openclaw_version,
 )
-from .base import AgentRuntimeAdapter, mission_phase_route, shell_join
+from .base import (
+    AgentRuntimeAdapter,
+    mission_phase_route,
+    _direct_runtime_command,
+    runtime_bin_candidates,
+    runtime_lookup_path,
+    runtime_subprocess_env,
+    shell_join,
+    shell_with_runtime_path,
+)
 
 OPENCLAW_PROVIDER_MAP = {
     "openai": "openai-codex",
@@ -34,6 +42,16 @@ OPENCLAW_PROVIDER_MAP = {
     "xiaomi": "xiaomi",
     "arcee": "arcee",
 }
+
+
+def _runtime_which(command_name: str, workspace_root: Path) -> str | None:
+    candidates = runtime_bin_candidates(workspace_root)
+    direct = _direct_runtime_command(command_name, candidates)
+    if direct:
+        return direct
+    if candidates:
+        return shutil.which(command_name, path=runtime_lookup_path(workspace_root))
+    return shutil.which(command_name)
 
 
 def read_openclaw_package_version(command: str | None) -> str | None:
@@ -84,7 +102,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         ]
 
     def detect(self, workspace_root: Path) -> RuntimeInstallStatus:
-        command = shutil.which("openclaw")
+        command = _runtime_which("openclaw", workspace_root)
         version = read_openclaw_package_version(command)
         issues: list[str] = []
         if command and not version:
@@ -96,6 +114,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
                     text=True,
                     timeout=8,
                     check=False,
+                    env=runtime_subprocess_env(workspace_root),
                     **hidden_windows_subprocess_kwargs(),
                 )
                 version = normalize_openclaw_version(
@@ -223,12 +242,14 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         *,
         route_contract: dict[str, str] | None = None,
     ) -> str:
+        workspace_path = Path(workspace_root)
+        openclaw_command = _runtime_which("openclaw", workspace_path) or "openclaw"
         session_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"fluxio_{mission_id}") or "fluxio"
         route_contract = route_contract or {}
         thinking = self._thinking_level(route_contract.get("effort", ""))
         model_id = self._canonical_model_id(route_contract)
         run_args = [
-            "openclaw",
+            openclaw_command,
             "agent",
             "--session-id",
             session_id,
@@ -246,7 +267,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         agent_id = self._agent_id(mission_id, model_id)
         run_args[2:2] = ["--agent", agent_id]
         add_args = [
-            "openclaw",
+            openclaw_command,
             "agents",
             "add",
             agent_id,
@@ -258,7 +279,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             "--json",
         ]
         set_args = [
-            "openclaw",
+            openclaw_command,
             "models",
             "--agent",
             agent_id,
@@ -269,8 +290,18 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         set_cmd = shell_join(set_args)
         run_cmd = shell_join(run_args)
         if os.name == "nt":
-            return f"({add_cmd} >nul 2>nul || {set_cmd} >nul 2>nul) && {run_cmd}"
-        return f"({add_cmd} >/dev/null 2>&1 || {set_cmd} >/dev/null 2>&1) && {run_cmd}"
+            return shell_join(
+                [
+                    "cmd",
+                    "/d",
+                    "/s",
+                    "/c",
+                    f"({add_cmd} >nul 2>nul || {set_cmd} >nul 2>nul) && {run_cmd}",
+                ]
+            )
+        else:
+            command = f"({add_cmd} >/dev/null 2>&1 || {set_cmd} >/dev/null 2>&1) && {run_cmd}"
+            return shell_join(["sh", "-lc", shell_with_runtime_path(command, workspace_path)])
 
     def _route_contract(self, mission: Mission) -> dict[str, str]:
         route = mission_phase_route(mission)

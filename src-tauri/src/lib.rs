@@ -921,6 +921,35 @@ struct ControlMissionStartPayload {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlMissionQuickstartPayload {
+    root: Option<String>,
+    objective: String,
+    workspace_id: Option<String>,
+    runtime: Option<String>,
+    success_checks: Option<Vec<String>>,
+    mode: Option<String>,
+    budget_hours: Option<u32>,
+    foreground: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlMissionDetailPayload {
+    root: Option<String>,
+    mission_id: String,
+    event_limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlMissionProofDigestPayload {
+    root: Option<String>,
+    mission_id: String,
+    output: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct CodexThreadIndexRecord {
     id: String,
     #[serde(default)]
@@ -5796,6 +5825,87 @@ async fn get_control_room_snapshot_command(
 }
 
 #[tauri::command]
+async fn get_control_room_summary_command(
+    app: AppHandle,
+    payload: Option<AutonomyDashboardPayload>,
+) -> Result<Value, String> {
+    let mut summary = run_agent_cli_json(
+        &app,
+        payload.and_then(|item| item.root),
+        "control-room-summary",
+        vec![],
+        30,
+    )
+    .await?;
+    let provider_presence = provider_secret_presence_snapshot(&CONTROL_ROOM_PROVIDER_IDS)?;
+    if let Value::Object(root) = &mut summary {
+        let localhost_status = app
+            .state::<OverlayAppState>()
+            .localhost_status
+            .lock()
+            .map_err(|_| "Failed to read localhost status".to_string())?
+            .clone();
+        let localhost_status_value =
+            serde_json::to_value(localhost_status).map_err(|error| error.to_string())?;
+        root.insert("localhostStatus".to_string(), localhost_status_value);
+        root.insert(
+            "providerSecretPresence".to_string(),
+            provider_presence.clone(),
+        );
+    }
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn get_control_room_mission_detail_command(
+    app: AppHandle,
+    payload: ControlMissionDetailPayload,
+) -> Result<Value, String> {
+    let args = vec![
+        "--mission-id".to_string(),
+        payload.mission_id,
+        "--event-limit".to_string(),
+        payload.event_limit.unwrap_or(80).clamp(1, 500).to_string(),
+    ];
+    let mut detail =
+        run_agent_cli_json(&app, payload.root, "control-room-mission-detail", args, 45).await?;
+    if let Value::Object(root) = &mut detail {
+        let localhost_status = app
+            .state::<OverlayAppState>()
+            .localhost_status
+            .lock()
+            .map_err(|_| "Failed to read localhost status".to_string())?
+            .clone();
+        let localhost_status_value =
+            serde_json::to_value(localhost_status).map_err(|error| error.to_string())?;
+        root.insert("localhostStatus".to_string(), localhost_status_value);
+    }
+    Ok(detail)
+}
+
+#[tauri::command]
+async fn export_mission_proof_digest_command(
+    app: AppHandle,
+    payload: ControlMissionProofDigestPayload,
+) -> Result<Value, String> {
+    let mut args = vec!["--mission-id".to_string(), payload.mission_id];
+    if let Some(output) = payload.output.filter(|value| !value.trim().is_empty()) {
+        args.push("--output".to_string());
+        args.push(output);
+    }
+    let response = run_agent_cli_json(&app, payload.root, "mission-proof-digest", args, 120).await?;
+    append_audit_entry(
+        &app,
+        "mission.proof_digest_exported",
+        json!({
+            "missionId": response.get("missionId").and_then(Value::as_str).unwrap_or(""),
+            "reportPath": response.get("reportPath").and_then(Value::as_str).unwrap_or(""),
+        }),
+    );
+    Ok(response)
+}
+
+#[tauri::command]
 fn inspect_codex_import_command() -> Result<CodexImportSnapshot, String> {
     Ok(cached_codex_import_snapshot())
 }
@@ -6391,6 +6501,40 @@ async fn start_control_room_mission_command(
 }
 
 #[tauri::command]
+async fn quickstart_control_room_mission_command(
+    app: AppHandle,
+    payload: ControlMissionQuickstartPayload,
+) -> Result<Value, String> {
+    let mut args = vec![
+        "--objective".to_string(),
+        payload.objective,
+        "--runtime".to_string(),
+        payload.runtime.unwrap_or_else(|| "auto".to_string()),
+        "--mode".to_string(),
+        payload.mode.unwrap_or_else(|| "Autopilot".to_string()),
+        "--budget-hours".to_string(),
+        payload.budget_hours.unwrap_or(4).to_string(),
+    ];
+    if let Some(workspace_id) = payload.workspace_id.filter(|value| !value.trim().is_empty()) {
+        args.push("--workspace-id".to_string());
+        args.push(workspace_id);
+    }
+    for success_check in payload.success_checks.unwrap_or_default() {
+        if !success_check.trim().is_empty() {
+            args.push("--success-check".to_string());
+            args.push(success_check);
+        }
+    }
+    if payload.foreground.unwrap_or(false) {
+        args.push("--foreground".to_string());
+    }
+    let response =
+        run_agent_cli_json(&app, payload.root, "mission-quickstart", args, 300).await?;
+    emit_control_room_changed(&app, "mission.quickstarted");
+    Ok(response)
+}
+
+#[tauri::command]
 async fn apply_control_room_mission_action_command(
     app: AppHandle,
     payload: ControlMissionActionPayload,
@@ -6749,14 +6893,18 @@ pub fn run() {
             get_audit_log,
             get_autonomy_dashboard_snapshot,
             get_control_room_snapshot_command,
+            get_control_room_summary_command,
+            get_control_room_mission_detail_command,
             inspect_codex_import_command,
             open_external_url_command,
             pick_folder_command,
             get_onboarding_status_command,
             export_control_room_data_command,
+            export_mission_proof_digest_command,
             save_workspace_profile_command,
             delete_workspace_profile_command,
             start_control_room_mission_command,
+            quickstart_control_room_mission_command,
             apply_control_room_mission_action_command,
             send_control_room_mission_follow_up_command,
             apply_control_room_workspace_action_command,

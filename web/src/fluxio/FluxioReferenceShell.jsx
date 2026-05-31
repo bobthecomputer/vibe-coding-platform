@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -48,8 +48,13 @@ import {
   WandSparkles,
 } from "lucide-react";
 
-import { ImagePlaygroundSurface } from "./ImagePlayground.jsx";
 import { RuntimeOperationsPanel } from "./RuntimeOperationsPanel.jsx";
+
+const ImagePlaygroundSurface = lazy(() =>
+  import("./ImagePlayground.jsx").then(module => ({
+    default: module.ImagePlaygroundSurface,
+  })),
+);
 
 function cx(...values) {
   return values.filter(Boolean).join(" ");
@@ -57,6 +62,22 @@ function cx(...values) {
 
 function asList(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function useVirtualWindow(items, { itemHeight = 96, viewportHeight = 440, overscan = 4 } = {}) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const list = asList(items);
+  const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - overscan);
+  const visibleCount = Math.ceil(viewportHeight / itemHeight) + overscan * 2;
+  const endIndex = Math.min(list.length, startIndex + visibleCount);
+  return {
+    totalCount: list.length,
+    items: list.slice(startIndex, endIndex),
+    onScroll: event => setScrollTop(event.currentTarget.scrollTop),
+    topPadding: startIndex * itemHeight,
+    bottomPadding: Math.max(0, (list.length - endIndex) * itemHeight),
+    viewportHeight,
+  };
 }
 
 function uniq(values) {
@@ -67,6 +88,410 @@ function titleizeToken(value) {
   return String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function eventTargetIsInteractive(event) {
+  const target = event?.target;
+  return Boolean(
+      target &&
+      typeof target.closest === "function" &&
+      target.closest("button,a,input,textarea,select,summary"),
+  );
+}
+
+const PUBLIC_LAUNCH_PROOF_GROUPS = [
+  {
+    id: "launcher",
+    label: "Launcher package",
+    checkIds: ["launcher_package_current", "package_public_entrypoint_declared"],
+    detail: "npx-style command, package files, and built web assets are packed.",
+  },
+  {
+    id: "public-web",
+    label: "Public web",
+    checkIds: ["public_web_reachable", "public_web_current"],
+    detail: "GitHub Pages is reachable and must match the current source state.",
+  },
+  {
+    id: "private-nas",
+    label: "Private NAS",
+    checkIds: ["private_nas_live_reachable"],
+    detail: "Tailscale web control is reachable and login-protected.",
+  },
+  {
+    id: "release-packet",
+    label: "Release packet",
+    checkIds: ["release_packet_attached", "publication_manifest_ready", "attachment_manifest_integrity"],
+    detail: "Release candidate, manifest, and attachments are present and verified.",
+  },
+  {
+    id: "external-publication",
+    label: "External publication",
+    checkIds: ["external_publication_proven"],
+    detail: "A public npm, signed installer, or GitHub release receipt exists.",
+  },
+];
+
+function publicLaunchProofSteps(readiness) {
+  const checks = asList(readiness?.checks);
+  const checkById = new Map(checks.map(item => [String(item?.checkId || ""), item]));
+  const missing = new Set(asList(readiness?.missing).map(item => String(item || "")));
+  const blockers = asList(readiness?.blockers);
+  return PUBLIC_LAUNCH_PROOF_GROUPS.map(group => {
+    const groupChecks = group.checkIds.map(checkId => checkById.get(checkId)).filter(Boolean);
+    const failedChecks = group.checkIds.filter(checkId => {
+      const check = checkById.get(checkId);
+      return missing.has(checkId) || (check && check.passed === false);
+    });
+    const blocker = blockers.find(item => group.checkIds.includes(String(item?.checkId || item?.id || item?.check || "")));
+    const passed = groupChecks.length > 0 && group.checkIds.every(checkId => checkById.get(checkId)?.passed === true);
+    const tone = passed ? "good" : failedChecks.length > 0 || blocker ? "warn" : "bad";
+    const firstFailed = failedChecks.map(checkId => checkById.get(checkId)).find(Boolean);
+    return {
+      ...group,
+      tone,
+      state: passed ? "Ready" : failedChecks.length > 0 || blocker ? "Needs proof" : "Not checked",
+      detail: firstFailed?.details || blocker?.details || blocker?.detail || group.detail,
+      checks: groupChecks,
+      failedChecks,
+    };
+  });
+}
+
+function clampPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function progressPercentValue(value) {
+  if (typeof value === "string" && value.trim().endsWith("%")) {
+    return clampPercent(value.trim().slice(0, -1));
+  }
+  return clampPercent(value);
+}
+
+function progressWidth(value) {
+  if (value == null || value === "") return null;
+  const percent = progressPercentValue(value);
+  return percent == null ? null : `${percent}%`;
+}
+
+function timestampLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value);
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function isLowSignalAgentMessage(message) {
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const title = String(message?.title || "").toLowerCase();
+  return (
+    label.includes("mission.runtime_cycle") ||
+    title.includes("control cycle finished with status running") ||
+    title.includes("delegated runtime heartbeat")
+  );
+}
+
+function isRuntimeOutputAgentMessage(message) {
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const detailText = [
+    message?.detail,
+    message?.message,
+    message?.content,
+    message?.technicalDetail,
+  ]
+    .map(value => String(value || "").toLowerCase())
+    .join("\n");
+  return (
+    detailText.includes("runtime output:") ||
+    detailText.includes("raw action output") ||
+    (label.includes("hermes session transcript") && detailText.includes("runtime output:"))
+  );
+}
+
+function runtimeOutputText(message) {
+  const reportSourceText = [
+    message?.detail,
+    message?.message,
+    message?.content,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const match = reportSourceText.match(/(?:runtime output|raw action output)\s*:\s*([\s\S]+)/i);
+  const rawBody = String(match?.[1] || "").trim();
+  if (!rawBody) return "";
+  return rawBody
+    .split(/\s+[·]\s+(?:Action|Target|Command|Gate|Result|Error|Revision|Active step)\s*:/i)[0]
+    .split(/\n\s*\{\s*["{]/)[0]
+    .trim();
+}
+
+function firstUsefulRuntimeLine(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map(line => line.replace(/^#{1,6}\s*/, "").replace(/^[-*]\s*/, "").trim())
+    .find(line => line && !/^objective\s*:/i.test(line) && !/^triggered by step\s*:/i.test(line)) || "";
+}
+
+function agentMessageDisplayTitle(message) {
+  const runtimeText = runtimeOutputText(message);
+  if (runtimeText) {
+    const runtimeTitle = firstUsefulRuntimeLine(runtimeText)
+      .replace(/\s+-\s+Objective\s*:\s*[\s\S]*$/i, "")
+      .trim();
+    if (runtimeTitle) return runtimeTitle;
+  }
+  return message?.title || message?.label || titleizeToken(message?.role || "agent");
+}
+
+function agentMessageDisplayDetail(message) {
+  const runtimeText = runtimeOutputText(message);
+  if (runtimeText) return runtimeText;
+  return message?.detail || message?.content || message?.message || message?.technicalDetail || "";
+}
+
+function isControlRoomBookkeepingAgentMessage(message) {
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const title = String(message?.title || "").toLowerCase();
+  return (
+    label.includes("control-room") ||
+    label.includes("provider route truth") ||
+    label.includes("runtime heartbeat") ||
+    title.includes(" is still cycling") ||
+    title.includes("heartbeat")
+  );
+}
+
+function isSyntheticAgentOverviewMessage(message) {
+  const id = String(message?.id || "").toLowerCase();
+  const label = String(message?.label || message?.roleLabel || "").trim().toLowerCase();
+  return (
+    id.startsWith("mission-review-") ||
+    label === "mission review" ||
+    label === "control-room mission state"
+  );
+}
+
+function isLiveRuntimeReportMessage(message) {
+  if (!message || message.traceOnly || isControlRoomBookkeepingAgentMessage(message) || isSyntheticAgentOverviewMessage(message)) {
+    return false;
+  }
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const role = String(message?.role || "").toLowerCase();
+  const hasBody = Boolean(
+    String(message?.detail || message?.message || message?.content || message?.technicalDetail || "").trim(),
+  );
+  return Boolean(
+    isRuntimeOutputAgentMessage(message) ||
+      label.includes("hermes session transcript") ||
+      label.includes("hermes runtime output") ||
+      (hasBody && message?.processMessage && (role === "runtime" || role === "assistant")) ||
+      (hasBody && label.includes("runtime")),
+  );
+}
+
+function isEmptyBookkeepingAgentMessage(message) {
+  if (!message || message.traceOnly) return true;
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const title = String(message?.title || "").trim().toLowerCase();
+  const detailText = [
+    message?.detail,
+    message?.message,
+    message?.content,
+    message?.technicalDetail,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (detailText) return false;
+  return (
+    label.includes("hermes session decision") ||
+    label.includes("hermes session next action") ||
+    (
+      label.includes("hermes session note") &&
+      (
+        title.startsWith("execution policy:") ||
+        title.startsWith("runtime controls:")
+      )
+    )
+  );
+}
+
+function compactAgentMessages(messages) {
+  const rows = [];
+  let lowSignalCount = 0;
+  let latestLowSignal = null;
+  for (const message of asList(messages)) {
+    if (isLowSignalAgentMessage(message)) {
+      lowSignalCount += 1;
+      latestLowSignal = message;
+      continue;
+    }
+    rows.push(message);
+  }
+  if (lowSignalCount > 0) {
+    rows.unshift({
+      ...(latestLowSignal || {}),
+      id: `runtime-heartbeat-summary-${lowSignalCount}`,
+      role: "runtime",
+      label: "Runtime heartbeat",
+      title: `${lowSignalCount} low-signal runtime heartbeat${lowSignalCount === 1 ? "" : "s"} collapsed`,
+      detail: "The full heartbeat stream stays in live evidence; the main thread shows decisions, blockers, tool output, and slice progress.",
+      tone: "neutral",
+      traceOnly: true,
+      chatPreferred: false,
+      chips: ["collapsed", "live"],
+    });
+  }
+  return rows;
+}
+
+function orderedAgentMessagesNewestFirst(messages) {
+  return asList(messages)
+    .map((message, index) => {
+      const rawTimestamp = message?.createdAt || message?.timestamp || message?.time || message?.updatedAt || "";
+      const parsedTimestamp = rawTimestamp ? Date.parse(rawTimestamp) : Number.NaN;
+      return {
+        message,
+        index,
+        timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : 0,
+      };
+    })
+    .sort((left, right) => {
+      if (right.timestamp !== left.timestamp) return right.timestamp - left.timestamp;
+      return right.index - left.index;
+    })
+    .map(item => item.message);
+}
+
+function uniqueRuntimeOutputMessages(messages) {
+  const seen = new Set();
+  const rows = [];
+  for (const message of asList(messages)) {
+    const body = runtimeOutputText(message)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1200);
+    const key = [
+      message?.missionId || message?.mission_id || "",
+      message?.runtimeId || message?.runtime_id || "",
+      body || stableAgentMessageKey(message, ""),
+    ].join(":");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push(message);
+  }
+  return rows;
+}
+
+function visibleAgentMessages(messages, limit = 36, priorityLimit = 8, options = {}) {
+  const requireRuntimeReports = Boolean(options?.requireRuntimeReports);
+  const rows = asList(messages).filter(message => !isEmptyBookkeepingAgentMessage(message));
+  const runtimeOutputRows = uniqueRuntimeOutputMessages(rows.filter(isRuntimeOutputAgentMessage));
+  const reportRows = rows.filter(isLiveRuntimeReportMessage);
+  const sourceRows = requireRuntimeReports
+    ? (runtimeOutputRows.length > 0 ? runtimeOutputRows : reportRows)
+    : runtimeOutputRows.length > 0
+      ? runtimeOutputRows
+      : reportRows.length > 0
+        ? reportRows
+        : rows.filter(message => !isControlRoomBookkeepingAgentMessage(message) && !isSyntheticAgentOverviewMessage(message));
+  const priorityRows = runtimeOutputRows.slice(-priorityLimit);
+  const seedRows = sourceRows.length <= limit ? sourceRows : sourceRows.slice(-limit);
+  const seenKeys = new Set();
+  const priorityKeys = new Set(
+    priorityRows.map((message, index) => stableAgentMessageKey(message, `priority-${index}`)),
+  );
+  const orderedPriorityRows = orderedAgentMessagesNewestFirst(priorityRows);
+  const orderedSeedRows = orderedAgentMessagesNewestFirst(seedRows);
+  const mergedRows = [];
+  const pushMessage = (message, fallback, { force = false } = {}) => {
+    const key = stableAgentMessageKey(message, fallback);
+    if (!key || seenKeys.has(key)) return;
+    if (!force && priorityKeys.has(key)) return;
+    seenKeys.add(key);
+    mergedRows.push(message);
+  };
+  orderedPriorityRows.forEach((message, index) => pushMessage(message, `priority-${index}`, { force: true }));
+  orderedSeedRows.forEach((message, index) => pushMessage(message, `tail-${index}`));
+  return mergedRows.slice(0, limit);
+}
+
+function isMeaningfulDefaultAgentMessage(message) {
+  if (!message || isLowSignalAgentMessage(message)) return false;
+  const title = String(message?.title || "").toLowerCase();
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const detail = String(message?.detail || message?.message || "").trim();
+  if (title.includes("low-signal runtime heartbeat") || title.includes("heartbeat") && label.includes("runtime heartbeat")) {
+    return false;
+  }
+  if (isRuntimeOutputAgentMessage(message)) {
+    return true;
+  }
+  return Boolean(
+    detail ||
+      message?.technicalDetail ||
+      message?.processMessage ||
+      message?.emphasis ||
+      label.includes("hermes session transcript") ||
+      label.includes("planner") ||
+      label.includes("action") ||
+      label.includes("mission review"),
+  );
+}
+
+const TERMINAL_BUILDER_STATUSES = new Set(["completed", "done", "failed", "stopped", "cancelled", "canceled"]);
+const ACTIVE_BUILDER_STATUSES = new Set(["active", "delegated", "needs approval", "needs review", "paused", "queued", "running"]);
+
+function normalizedStatus(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isActiveBuilderRow(row) {
+  const status = normalizedStatus(row?.status || row?.statusLabel || row?.rawStatus);
+  const tone = normalizedStatus(row?.statusTone || row?.tone);
+  if (Number(row?.delegatedLaneCount || row?.delegatedSessions || 0) > 0) return true;
+  if (TERMINAL_BUILDER_STATUSES.has(status)) return false;
+  return ACTIVE_BUILDER_STATUSES.has(status) || tone === "running" || tone === "warn";
+}
+
+function isBlockedBuilderRow(row) {
+  return Number(row?.blockedCount || row?.verificationFailures || row?.pendingApprovals || 0) > 0;
+}
+
+function sortLiveBuilderRows(rows) {
+  return asList(rows).slice().sort((left, right) => {
+    if (Boolean(right?.selected) !== Boolean(left?.selected)) return Number(Boolean(right?.selected)) - Number(Boolean(left?.selected));
+    const activeDelta = Number(isActiveBuilderRow(right)) - Number(isActiveBuilderRow(left));
+    if (activeDelta) return activeDelta;
+    const blockedDelta = Number(isBlockedBuilderRow(right)) - Number(isBlockedBuilderRow(left));
+    if (blockedDelta) return blockedDelta;
+    return 0;
+  });
+}
+
+function isRealChangedItem(item) {
+  const tuple = changedItemTuple(item);
+  const path = normalizedChangedPath(tuple[0]);
+  return path.length > 0 && path !== "changed-file";
+}
+
+function normalizedChangedPath(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function changedItemTuple(item) {
+  if (typeof item === "string") return [item.trim(), "recorded", "file"];
+  if (Array.isArray(item)) return [String(item[0] || "").trim(), String(item[1] || "recorded"), String(item[2] || "file")];
+  if (!item || typeof item !== "object") return false;
+  return [
+    String(item.path || item.file || "").trim(),
+    String(item.summary || item.status || "recorded").trim(),
+    String(item.kind || "file").trim(),
+  ];
 }
 
 const CONSISTENCY_STOP_WORDS = new Set([
@@ -263,6 +688,160 @@ function isImageArtifactPath(value) {
   return /\.(apng|avif|gif|jpe?g|png|svg|webp)(\?|#|$)/i.test(String(value || ""));
 }
 
+function isUsablePreviewUrl(value) {
+  const source = String(value || "").trim();
+  if (!source) return false;
+  if (/^no\s+/i.test(source)) return false;
+  if (/pending|unavailable|captured/i.test(source)) return false;
+  return /^(https?:\/\/|\/control\b|\/api\/artifact\b|data:|blob:)/i.test(source);
+}
+
+function isEmbeddablePreviewUrl(value) {
+  const source = String(value || "").trim();
+  if (!isUsablePreviewUrl(source)) return false;
+  const controlSource = source.startsWith("/control")
+    ? source
+    : /^https?:\/\//i.test(source)
+      ? (() => {
+          try {
+            const parsed = new URL(source);
+            return parsed.pathname === "/control" ? `${parsed.pathname}${parsed.search}` : "";
+          } catch {
+            return "";
+          }
+        })()
+      : "";
+  if (/surface=agent|mode=agent/i.test(controlSource)) return false;
+  let isArtifactUrl = source.startsWith("/api/artifact");
+  if (!isArtifactUrl && /^https?:\/\//i.test(source)) {
+    try {
+      isArtifactUrl = new URL(source).pathname.startsWith("/api/artifact");
+    } catch {
+      isArtifactUrl = false;
+    }
+  }
+  if (!isArtifactUrl) return true;
+  try {
+    const decoded = decodeURIComponent(source);
+    return /\.(html?|xhtml)(\?|#|$)/i.test(decoded);
+  } catch {
+    return /\.(html?|xhtml)(\?|#|$)/i.test(source);
+  }
+}
+
+function isMissionPreviewUrl(value) {
+  const source = String(value || "").trim();
+  if (!isEmbeddablePreviewUrl(source)) return false;
+  if (/^(https?:\/\/[^/]+)?\/control(?:\?|$)/i.test(source)) return false;
+  if (/^https?:\/\//i.test(source)) {
+    try {
+      const parsed = new URL(source);
+      if (!parsed.pathname.startsWith("/api/artifact")) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function previewUrlCandidatesForMessage(message) {
+  if (!message || typeof message !== "object") return [];
+  return [
+    message.previewUrl,
+    message.preview_url,
+    message.previewActionUrl,
+    message.artifactUrl,
+    message.servedUrl,
+    message.reportUrl,
+    message.screenshotUrl,
+    message.path && isImageArtifactPath(message.path) ? message.path : "",
+  ].filter(Boolean);
+}
+
+function agentMessageKey(message, fallback = "") {
+  if (!message || typeof message !== "object") return fallback;
+  const directKey = message.id || message.messageId || message.turnId || message.eventId;
+  if (directKey) return String(directKey);
+  const semanticKey = [
+    message.createdAt,
+    message.label || message.roleLabel || message.role,
+    message.title,
+  ].filter(Boolean).join(":");
+  return semanticKey || fallback;
+}
+
+function agentMessageFallbackKey(message, fallback = "") {
+  if (!message || typeof message !== "object") return fallback;
+  const semanticKey = [
+    message.missionId || message.mission_id,
+    message.runtimeId || message.runtime_id,
+    message.createdAt || message.timestamp || message.time,
+    message.label || message.roleLabel || message.role,
+    message.title,
+    message.detail || message.message || message.content,
+    message.technicalDetail,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join(":")
+    .slice(0, 420);
+  return semanticKey ? `message:${semanticKey}` : fallback;
+}
+
+function stableAgentMessageKey(message, fallback = "") {
+  const fallbackKey = agentMessageFallbackKey(message, fallback);
+  const missionKey = String(message?.missionId || message?.mission_id || "").trim();
+  const runtimeKey = String(message?.runtimeId || message?.runtime_id || "").trim();
+  if (isRuntimeOutputAgentMessage(message)) {
+    const reportTitle = agentMessageDisplayTitle(message)
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    const reportTimestamp = String(message?.createdAt || message?.timestamp || message?.time || "").trim();
+    const reportBodyKey = runtimeOutputText(message)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 320);
+    const reportKey = [missionKey, runtimeKey, "runtime-report", reportTimestamp, reportTitle, reportBodyKey]
+      .filter(Boolean)
+      .join(":");
+    if (reportKey) return reportKey;
+  }
+  const baseKey = agentMessageKey(message, fallbackKey);
+  const directKey = String(message?.id || message?.messageId || message?.turnId || message?.eventId || "").trim();
+  const contentKey = fallbackKey && fallbackKey !== baseKey ? fallbackKey : "";
+  const scopedKey = [missionKey, runtimeKey, baseKey, contentKey || (!directKey ? fallbackKey : "")]
+    .filter(Boolean)
+    .join(":");
+  return scopedKey || fallback;
+}
+
+function isGenericProcessLabel(value) {
+  return String(value || "").trim().toLowerCase() === "process message";
+}
+
+function isRouteMetadataPreviewText(value) {
+  return /^(chat:|route:|provider:|model:|effort:|openclaw:|hermes:)/i.test(String(value || "").trim());
+}
+
+function agentPreviewTitle(item) {
+  const title = String(item?.title || "").trim();
+  const label = String(item?.label || "").trim();
+  if (title && !isGenericProcessLabel(title)) return title;
+  if (label && !isGenericProcessLabel(label)) return label;
+  return "Live mission update";
+}
+
+function agentPreviewDetail(item) {
+  const detail = String(item?.detail || item?.technicalDetail || "").trim();
+  if (detail && detail !== item?.title && !isRouteMetadataPreviewText(detail)) return detail;
+  const chips = asList(item?.chips).map(value => String(value || "").trim()).filter(Boolean);
+  if (chips.length) return chips.slice(0, 3).join(" · ");
+  return String(item?.meta || item?.status || "Current Agent message").trim();
+}
+
 function dotToneClass(tone) {
   if (tone === "good" || tone === "completed") {
     return "good";
@@ -290,6 +869,13 @@ const HOME_CARDS = [
     copy: "Create and manage projects with powerful tools.",
     tone: "gold",
     icon: Hammer,
+  },
+  {
+    id: "phone",
+    title: "Phone",
+    copy: "Watch live mission progress and notifications from a compact mobile surface.",
+    tone: "blue",
+    icon: Smartphone,
   },
   {
     id: "skills",
@@ -582,6 +1168,11 @@ function WorkbenchSurface({ workbenchState, onRequestAction, onSetSurface }) {
   const playgrounds = asList(state.playgrounds);
   const lanes = asList(state.lanes);
   const runtimeOps = state.runtimeOps || {};
+  const proofDiff = state.proofDiff || {};
+  const proofDiffRows = asList(proofDiff.rows);
+  const [proofDiffWrap, setProofDiffWrap] = useState(true);
+  const [proofDiffVisibleCount, setProofDiffVisibleCount] = useState(12);
+  const visibleProofDiffRows = proofDiffRows.slice(0, proofDiffVisibleCount);
   const tutorials = state.tutorials || {};
   const coverage = state.coverage || {};
   const ideaPlanner = state.ideaPlanner || {};
@@ -811,6 +1402,58 @@ function WorkbenchSurface({ workbenchState, onRequestAction, onSetSurface }) {
         onRequestAction={onRequestAction}
         onSetSurface={onSetSurface}
       />
+
+      <section className={cx("proof-side-by-side-diff", proofDiffWrap ? "wrap" : "no-wrap")} aria-label="Side-by-side proof diff with wrap toggle">
+        <header className="proof-side-by-side-head">
+          <div>
+            <span>Side-by-side proof diff</span>
+            <strong>Expected work vs captured evidence</strong>
+          </div>
+          <p>{visibleProofDiffRows.length} of {proofDiffRows.length} rows · {proofDiff.source || "mission proof"}</p>
+        </header>
+        <div className="reference-inline-actions compact">
+          <button className="reference-outline-button" onClick={() => setProofDiffWrap(current => !current)} type="button">
+            {proofDiffWrap ? "Disable wrap" : "Enable wrap"}
+          </button>
+          {proofDiffRows.length > proofDiffVisibleCount ? (
+            <button className="reference-outline-button" onClick={() => setProofDiffVisibleCount(current => current + 12)} type="button">
+              Show more diff evidence
+            </button>
+          ) : null}
+        </div>
+        <div className="proof-diff-table" role="table" aria-label="Side-by-side proof diff rows">
+          <div className="proof-diff-row header" role="row">
+            <span role="columnheader">Expectation</span>
+            <span role="columnheader">Captured evidence</span>
+            <span role="columnheader">State</span>
+          </div>
+          {visibleProofDiffRows.length ? visibleProofDiffRows.map(row => (
+            <article className={cx("proof-diff-row", `tone-${row.tone || "neutral"}`)} key={row.id || row.captured} role="row">
+              <div role="cell">
+                <span>{row.category || "Proof"}</span>
+                <code>{row.expected || "Expected evidence"}</code>
+              </div>
+              <div role="cell">
+                <span>Evidence</span>
+                <code>{row.captured || "Nothing captured yet."}</code>
+              </div>
+              <strong role="cell">{row.status || "Captured"}</strong>
+            </article>
+          )) : (
+            <article className="proof-diff-row tone-warn" role="row">
+              <div role="cell">
+                <span>Proof</span>
+                <code>Expected evidence</code>
+              </div>
+              <div role="cell">
+                <span>Evidence</span>
+                <code>Nothing captured yet.</code>
+              </div>
+              <strong role="cell">Missing</strong>
+            </article>
+          )}
+        </div>
+      </section>
 
       <div className="builder-live-review-layout">
         <article className="builder-live-review-panel">
@@ -1480,6 +2123,256 @@ function MetricLine({ label, value }) {
   );
 }
 
+function LiveOperationsBrief({
+  activeRows = [],
+  liveDataStatus,
+  onOpenAgent,
+  onOpenNotifications,
+  onOpenQueue,
+  projectProgressHistory,
+  queueRows: explicitQueueRows = [],
+  threadRows = [],
+  workbenchState,
+}) {
+  if (liveDataStatus?.previewMode !== "live") {
+    return null;
+  }
+  const progressValue = clampPercent(workbenchState?.progress?.value);
+  const visibleThreadRows = asList(threadRows).filter(item => !isLowSignalAgentMessage(item)).slice(0, 3);
+  const latestThreadRow =
+    visibleThreadRows[0] ||
+    (liveDataStatus?.previewMode === "live"
+      ? null
+      : asList(workbenchState?.agentThreadPreview).find(Boolean) || null);
+  const queueRows = asList(explicitQueueRows).length
+    ? asList(explicitQueueRows)
+    : asList(projectProgressHistory?.schedulingQueue);
+  const topQueueRow = queueRows[0] || null;
+  const activeCount = Number(liveDataStatus?.activeMissionCount || activeRows.length || 0);
+  const runningCount = Number(liveDataStatus?.runningMissionCount || 0);
+  const notificationCount = Number(liveDataStatus?.notificationCount || 0);
+  const sliceNotificationCount = Number(liveDataStatus?.sliceNotificationCount || 0);
+  const latestDetail = latestThreadRow
+    ? agentPreviewDetail(latestThreadRow)
+    : workbenchState?.progress?.nextAction || "Waiting for the next live mission update.";
+  const sourceLabel = liveDataStatus?.summaryCache?.status === "hit"
+    ? "warm NAS summary"
+    : liveDataStatus?.source || "control-room summary";
+  return (
+    <section className="fluxos-live-operations-brief" aria-label="Live operations brief" data-live-operations-brief="true">
+      <div className="fluxos-live-brief-main">
+        <span>{sourceLabel}</span>
+        <strong>{workbenchState?.missionTitle || `${activeCount} active live mission${activeCount === 1 ? "" : "s"}`}</strong>
+        <p>{latestDetail}</p>
+      </div>
+      <div className="fluxos-live-brief-metrics">
+        <div>
+          <span>Progress</span>
+          <strong>{progressValue == null ? "No %" : `${progressValue}%`}</strong>
+        </div>
+        <div>
+          <span>Running</span>
+          <strong>{runningCount}</strong>
+        </div>
+        <div>
+          <span>Queue</span>
+          <strong>{queueRows.length}</strong>
+        </div>
+        <div>
+          <span>Alerts</span>
+          <strong>{notificationCount}</strong>
+          <em>{sliceNotificationCount} slice</em>
+        </div>
+      </div>
+      <div className="fluxos-live-brief-actions">
+        <button disabled={!workbenchState?.missionId || !onOpenAgent} onClick={onOpenAgent} type="button">Agent</button>
+        <button disabled={!topQueueRow?.workspaceId || !onOpenQueue} onClick={onOpenQueue} type="button">Queue</button>
+        <button disabled={notificationCount <= 0 || !onOpenNotifications} onClick={onOpenNotifications} type="button">Notify</button>
+      </div>
+    </section>
+  );
+}
+
+function LiveGuidedNextSteps({
+  liveDataStatus,
+  onOpenAgent,
+  onOpenNotifications,
+  onOpenProof,
+  onOpenQueue,
+  queueRows = [],
+  threadRows = [],
+  workbenchState,
+}) {
+  if (liveDataStatus?.previewMode !== "live") {
+    return null;
+  }
+  const hasThreadRows = asList(threadRows).length > 0;
+  const hasQueueRows = asList(queueRows).length > 0;
+  const hasNotifications = Number(liveDataStatus?.notificationCount || 0) > 0;
+  const progressValue = clampPercent(workbenchState?.progress?.value);
+  const proofReady = progressValue != null || asList(workbenchState?.proofDiff?.rows).length > 0;
+  const steps = [
+    {
+      id: "agent-report",
+      label: "Read current Agent report",
+      detail: hasThreadRows
+        ? "The live mission has selectable Hermes/runtime report rows."
+        : "Open Agent when the NAS detail endpoint returns report rows.",
+      status: hasThreadRows ? "ready" : "waiting",
+      action: onOpenAgent,
+      actionLabel: "Open Agent",
+      disabled: !workbenchState?.missionId || !onOpenAgent,
+    },
+    {
+      id: "queue",
+      label: "Check multi-project queue",
+      detail: hasQueueRows
+        ? `${asList(queueRows).length} dependency-aware project rows are ranked by the NAS scheduler.`
+        : "No ranked queue rows are available in the live summary.",
+      status: hasQueueRows ? "ready" : "waiting",
+      action: onOpenQueue,
+      actionLabel: "Open queue",
+      disabled: !hasQueueRows || !onOpenQueue,
+    },
+    {
+      id: "notifications",
+      label: "Keep progress notifications visible",
+      detail: hasNotifications
+        ? `${Number(liveDataStatus.notificationCount || 0)} live alerts, including ${Number(liveDataStatus.sliceNotificationCount || 0)} slice alerts.`
+        : "No visible live alerts are pending.",
+      status: hasNotifications ? "ready" : "waiting",
+      action: onOpenNotifications,
+      actionLabel: "Show alerts",
+      disabled: !hasNotifications || !onOpenNotifications,
+    },
+    {
+      id: "proof",
+      label: "Review proof before trusting output",
+      detail: proofReady
+        ? "Progress/proof evidence exists for the selected live mission."
+        : "Wait for the next mission proof or runtime event before closing the loop.",
+      status: proofReady ? "ready" : "waiting",
+      action: onOpenProof,
+      actionLabel: "Open proof",
+      disabled: !onOpenProof,
+    },
+  ];
+  return (
+    <section className="fluxos-guided-next-steps" aria-label="Live guided next steps" data-live-guided-next-steps="true">
+      <div className="fluxos-section-head">
+        <span>Guided next steps</span>
+        <strong>{workbenchState?.missionTitle || "Live mission path"}</strong>
+      </div>
+      <div className="fluxos-guided-step-list">
+        {steps.map((step, index) => (
+          <article className={`status-${step.status}`} data-guided-step={step.id} key={step.id}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <strong>{step.label}</strong>
+              <p>{step.detail}</p>
+            </div>
+            <button disabled={step.disabled} onClick={step.action} type="button">{step.actionLabel}</button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function LiveOperatorTutorialPath({
+  liveDataStatus,
+  onOpenAgent,
+  onOpenNotifications,
+  onOpenProof,
+  onOpenQueue,
+  queueRows = [],
+  threadRows = [],
+  workbenchState,
+}) {
+  if (liveDataStatus?.previewMode !== "live") {
+    return null;
+  }
+  const queueCount = asList(queueRows).length;
+  const threadCount = asList(threadRows).length;
+  const notificationCount = Number(liveDataStatus?.notificationCount || 0);
+  const sliceNotificationCount = Number(liveDataStatus?.sliceNotificationCount || 0);
+  const progressValue = clampPercent(workbenchState?.progress?.value);
+  const proofRows = asList(workbenchState?.proofDiff?.rows).length;
+  const milestones = [
+    {
+      id: "mission",
+      label: "Pick the active mission",
+      detail: workbenchState?.missionTitle || `${Number(liveDataStatus?.runningMissionCount || 0)} running mission rows from the NAS.`,
+      done: Boolean(workbenchState?.missionId || workbenchState?.missionTitle),
+      action: onOpenAgent,
+      actionLabel: "Open mission",
+      disabled: !workbenchState?.missionId || !onOpenAgent,
+    },
+    {
+      id: "queue",
+      label: "Check project order",
+      detail: queueCount ? `${queueCount} scheduler rows are ranked by dependency and root safety.` : "No live scheduler rows returned for this refresh.",
+      done: queueCount > 0,
+      action: onOpenQueue,
+      actionLabel: "Queue",
+      disabled: queueCount <= 0 || !onOpenQueue,
+    },
+    {
+      id: "agent",
+      label: "Read the Agent report",
+      detail: threadCount ? `${threadCount} current Hermes/runtime report rows are ready.` : "Open Agent after the mission detail endpoint returns report rows.",
+      done: threadCount > 0,
+      action: onOpenAgent,
+      actionLabel: "Agent",
+      disabled: !workbenchState?.missionId || !onOpenAgent,
+    },
+    {
+      id: "notifications",
+      label: "Keep progress visible",
+      detail: `${notificationCount} live notifications, including ${sliceNotificationCount} slice completions.`,
+      done: notificationCount > 0,
+      action: onOpenNotifications,
+      actionLabel: "Alerts",
+      disabled: notificationCount <= 0 || !onOpenNotifications,
+    },
+    {
+      id: "proof",
+      label: "Trust only after proof",
+      detail: progressValue != null || proofRows
+        ? `${progressValue == null ? "No %" : `${progressValue}%`} progress · ${proofRows} proof rows.`
+        : "Wait for a progress value, proof row, or runtime evidence before closing the loop.",
+      done: progressValue != null || proofRows > 0,
+      action: onOpenProof,
+      actionLabel: "Proof",
+      disabled: !onOpenProof,
+    },
+  ];
+  const completedCount = milestones.filter(item => item.done).length;
+  return (
+    <section className="fluxos-live-tutorial-path" aria-label="Live operator tutorial path" data-live-tutorial-path="true">
+      <div className="fluxos-section-head">
+        <span>Live operator tutorial</span>
+        <strong>{completedCount}/{milestones.length} steps ready</strong>
+      </div>
+      <p>
+        This path is built from current NAS mission, queue, Agent, notification, and proof data. It renders no sample tutorial steps.
+      </p>
+      <div className="fluxos-live-tutorial-steps">
+        {milestones.map((step, index) => (
+          <article className={step.done ? "done" : "waiting"} data-live-tutorial-step={step.id} key={step.id}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <strong>{step.label}</strong>
+              <p>{step.detail}</p>
+            </div>
+            <button disabled={step.disabled} onClick={step.action} type="button">{step.actionLabel}</button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function RuntimeCapabilityPills({ capabilities = [] }) {
   if (!capabilities.length) {
     return <p className="reference-surface-footnote">No runtime capabilities were reported yet.</p>;
@@ -1839,6 +2732,7 @@ function AgentRunningSurface(props) {
     selectedEffortLabel,
     slashCommands = [],
     timelineMoments = [],
+    workbenchState = null,
     onAttach,
     onChangeDraft,
     onDictation,
@@ -1853,9 +2747,27 @@ function AgentRunningSurface(props) {
   const [showTraceDetail, setShowTraceDetail] = useState(false);
   const processMoments = timelineMoments.slice(-4);
   const renderedMessages = messages.length > 0 ? messages : [];
+  const transcriptWindow = useVirtualWindow(renderedMessages, {
+    itemHeight: 176,
+    viewportHeight: 620,
+    overscan: 6,
+  });
+  const transcriptVirtualized = transcriptWindow.totalCount > 32;
+  const transcriptRows = transcriptVirtualized ? transcriptWindow.items : renderedMessages;
   const showMissionPanels = conversationMode === "mission" || Boolean(missionLoop);
   const showSlashCommands = String(draft || "").trim().startsWith("/");
   const selectedRoute = routeControls.selectedRoute || {};
+  const activeMissionId =
+    workbenchState?.missionId ||
+    missionLoop?.missionId ||
+    missionLoop?.mission_id ||
+    "";
+  const activeRuntimeId =
+    selectedRuntime ||
+    runtimeCompartment?.runtime ||
+    missionLoop?.runtimeId ||
+    missionLoop?.runtime_id ||
+    "";
   const routeOptions = routeControls.routeOptions || {};
   const actionModes = routeControls.actionModes || [];
   const runtimeSelectOptions = runtimeOptions.length > 0
@@ -1870,13 +2782,25 @@ function AgentRunningSurface(props) {
       : "Supervised";
   const checkpointSummary =
     missionLoop?.checkpointSummary || missionLoop?.continuityDetail || missionLoop?.continuityState || "No checkpoint yet";
+  const lazyProofArtifactPageSize = 4;
+  const lazyHermesEvidencePageSize = 5;
+  const [generatedArtifactPage, setGeneratedArtifactPage] = useState(1);
+  const [hermesEvidencePage, setHermesEvidencePage] = useState(1);
   const artifactItems = asList(missionLoop?.artifacts || missionLoop?.proofArtifacts || missionLoop?.proof_artifacts).slice(0, 3);
   const diffSummary = missionLoop?.diffSummary || missionLoop?.gitDiffSummary || missionLoop?.workspaceDiffSummary || "Diff pending";
   const compartmentEvents = asList(runtimeCompartment?.toolTimeline).slice(-5);
   const compartmentFiles = asList(runtimeCompartment?.filesChanged).slice(0, 5);
   const compartmentApprovals = asList(runtimeCompartment?.approvals).slice(0, 3);
-  const visibleGeneratedArtifacts = asList(generatedImageArtifacts).slice(0, 4);
-  const visibleHermesEvidence = asList(hermesEvidenceItems).slice(0, 5);
+  const generatedArtifactRows = asList(generatedImageArtifacts);
+  const hermesEvidenceRows = asList(hermesEvidenceItems);
+  const visibleGeneratedArtifacts = generatedArtifactRows.slice(
+    0,
+    generatedArtifactPage * lazyProofArtifactPageSize,
+  );
+  const visibleHermesEvidence = hermesEvidenceRows.slice(
+    0,
+    hermesEvidencePage * lazyHermesEvidencePageSize,
+  );
   const visibleNasChecks = asList(nasDeployChecks).slice(0, 6);
   const [workbenchTab, setWorkbenchTab] = useState("browser");
   const workbenchTabs = [
@@ -1905,6 +2829,66 @@ function AgentRunningSurface(props) {
     () => new Map(messageDiagnostics.map(entry => [entry.id, entry])),
     [messageDiagnostics],
   );
+  const runMessageEntries = useMemo(
+    () =>
+      renderedMessages.map((item, index) => ({
+        item,
+        key: stableAgentMessageKey(item, `reference-run-message-${index}`),
+      })),
+    [renderedMessages],
+  );
+  const runMessageKeySignature = runMessageEntries.map(entry => entry.key).join("|");
+  const [selectedRunMessageId, setSelectedRunMessageId] = useState("");
+  const runMessageScopeRef = useRef("");
+  const selectedRunMessageScope = [
+    conversationMode,
+    activeMissionId,
+    activeRuntimeId,
+    runMessageKeySignature,
+  ].join(":");
+  useEffect(() => {
+    setSelectedRunMessageId(current => {
+      const scopeChanged = runMessageScopeRef.current !== selectedRunMessageScope;
+      runMessageScopeRef.current = selectedRunMessageScope;
+      const currentEntry = current ? runMessageEntries.find(entry => entry.key === current) : null;
+      if (!scopeChanged && currentEntry) {
+        return current;
+      }
+      const runtimeReport =
+        [...runMessageEntries].reverse().find(entry => isRuntimeOutputAgentMessage(entry.item) || isLiveRuntimeReportMessage(entry.item)) ||
+        null;
+      const meaningful =
+        runtimeReport ||
+        [...runMessageEntries].reverse().find(entry => isMeaningfulDefaultAgentMessage(entry.item)) ||
+        runMessageEntries[runMessageEntries.length - 1] ||
+        null;
+      return meaningful?.key || "";
+    });
+  }, [runMessageEntries, selectedRunMessageScope]);
+  const selectedRunMessageEntry = runMessageEntries.find(entry => entry.key === selectedRunMessageId) || null;
+  const selectedRunMessage = selectedRunMessageEntry?.item || null;
+  const selectedRunMessageBody = selectedRunMessage ? agentMessageDisplayDetail(selectedRunMessage) : "";
+  const selectedRunMessageMeta = [
+    selectedRunMessage?.label || selectedRunMessage?.roleLabel || "",
+    selectedRunMessage?.runtimeId || activeRuntimeId || "",
+    selectedRunMessage?.meta || selectedRunMessage?.createdAt || "",
+  ].filter(Boolean).join(" · ");
+  const selectRunMessage = useCallback((messageKey, event = null) => {
+    if (eventTargetIsInteractive(event)) {
+      return;
+    }
+    const normalizedMessageKey = String(messageKey || "").trim();
+    if (!normalizedMessageKey) {
+      return;
+    }
+    setSelectedRunMessageId(normalizedMessageKey);
+  }, []);
+  const handleRunMessageKeyDown = useCallback((event, messageKey) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectRunMessage(messageKey, null);
+    }
+  }, [selectRunMessage]);
   const pendingMessageCount = useMemo(
     () => messageDiagnostics.filter(entry => entry.pendingMs > 0).length,
     [messageDiagnostics],
@@ -1960,6 +2944,11 @@ function AgentRunningSurface(props) {
                       ? `Consistency watch: ${contradictionCount} flagged`
                       : "Consistency watch: clear"}
                   </span>
+                  <span className="reference-health-pill">
+                    {transcriptVirtualized
+                      ? `Virtualized transcript: ${transcriptWindow.items.length}/${transcriptWindow.totalCount}`
+                      : `Transcript: ${renderedMessages.length}`}
+                  </span>
                 </div>
               </div>
               <span className={cx("reference-session-state", runtimeCompartment?.streaming === "live" && "live")}>
@@ -1967,7 +2956,11 @@ function AgentRunningSurface(props) {
               </span>
             </header>
 
-            <div className="reference-chat-thread-canvas">
+            <div
+              className={cx("reference-chat-thread-canvas", transcriptVirtualized && "virtualized")}
+              onScroll={transcriptVirtualized ? transcriptWindow.onScroll : undefined}
+              style={transcriptVirtualized ? { maxHeight: transcriptWindow.viewportHeight } : undefined}
+            >
               {renderedMessages.length === 0 ? (
                 <article className="reference-conversation-blank">
                   <strong>New conversation</strong>
@@ -1982,19 +2975,39 @@ function AgentRunningSurface(props) {
                 </article>
               ) : null}
 
-              {renderedMessages.map(item => {
+              {transcriptVirtualized && transcriptWindow.topPadding > 0 ? (
+                <div
+                  aria-hidden="true"
+                  className="reference-chat-virtual-spacer"
+                  style={{ height: transcriptWindow.topPadding }}
+                />
+              ) : null}
+
+              {transcriptRows.map(item => {
                 const diagnostics = messageDiagnosticsById.get(item.id) || {};
                 const contradictionSignal = diagnostics.contradiction || null;
                 if (item.role === "user") {
                   return (
-                    <div className="reference-user-bubble" key={item.id}>
+                    <div
+                      className="reference-user-bubble"
+                      data-mission-id={item.missionId || activeMissionId}
+                      data-runtime-id={item.runtimeId || activeRuntimeId}
+                      data-turn-id={item.id}
+                      key={item.id}
+                    >
                       <p>{item.title}</p>
                       <span>{item.meta || "Now"}</span>
                     </div>
                   );
                 }
                 return (
-                  <div className={cx("reference-agent-thread", item.pending ? "is-pending" : "")} key={item.id}>
+                  <div
+                    className={cx("reference-agent-thread", item.pending ? "is-pending" : "")}
+                    data-mission-id={item.missionId || activeMissionId}
+                    data-runtime-id={item.runtimeId || activeRuntimeId}
+                    data-turn-id={item.id}
+                    key={item.id}
+                  >
                     <div className="reference-agent-avatar">
                       <div className="reference-brand-mark tiny">
                         <span />
@@ -2061,6 +3074,13 @@ function AgentRunningSurface(props) {
                   </div>
                 );
               })}
+              {transcriptVirtualized && transcriptWindow.bottomPadding > 0 ? (
+                <div
+                  aria-hidden="true"
+                  className="reference-chat-virtual-spacer"
+                  style={{ height: transcriptWindow.bottomPadding }}
+                />
+              ) : null}
             </div>
 
             <ComposerDock
@@ -2249,6 +3269,32 @@ function AgentRunningSurface(props) {
         </article>
       ) : null}
 
+      {showMissionPanels ? (
+        <article
+          className="reference-selected-report-reader"
+          data-reference-selected-report-reader="true"
+          data-selected-message-id={selectedRunMessageId}
+          data-preview-state="selected-message"
+        >
+          <div className="reference-selected-report-head">
+            <div>
+              <span>Selected live report</span>
+              <strong>{selectedRunMessage ? agentMessageDisplayTitle(selectedRunMessage) : "Waiting for Hermes/runtime output"}</strong>
+            </div>
+            <small>{selectedRunMessageMeta || "Mission thread evidence"}</small>
+          </div>
+          {selectedRunMessageBody ? (
+            <pre data-reference-selected-report-body="true">{selectedRunMessageBody}</pre>
+          ) : (
+            <p>
+              {renderedMessages.length
+                ? "This selected row has no detailed runtime body yet. The reader stays empty instead of keeping an older frame."
+                : "The mission detail endpoint has not returned Hermes/runtime messages yet."}
+            </p>
+          )}
+        </article>
+      ) : null}
+
       {runtimeCompartment ? (
         <article className="agent-compartment-box" aria-label="Active agent runtime compartment">
           <div className="agent-compartment-box-head">
@@ -2311,7 +3357,7 @@ function AgentRunningSurface(props) {
                   <span key={`approval-${approval?.id || index}`}>{approval?.status || approval?.decision || "approval recorded"}</span>
                 ))}
                 {compartmentFiles.length + compartmentApprovals.length === 0 ? (
-                  <p className="agent-compartment-empty">No changed-file or approval receipts attached yet.</p>
+                  <p className="agent-compartment-empty">No changed file or approval receipts attached yet.</p>
                 ) : null}
               </div>
             </div>
@@ -2320,7 +3366,7 @@ function AgentRunningSurface(props) {
             <div className="agent-compartment-lane">
               <div className="agent-compartment-subhead">
                 <span>Generated image artifacts</span>
-                <b>{visibleGeneratedArtifacts.length}</b>
+                <b>{visibleGeneratedArtifacts.length}/{generatedArtifactRows.length}</b>
               </div>
               <div className="agent-artifact-grid">
                 {visibleGeneratedArtifacts.length ? visibleGeneratedArtifacts.map((artifact, index) => {
@@ -2339,11 +3385,20 @@ function AgentRunningSurface(props) {
                   );
                 }) : <p className="agent-compartment-empty">No served image artifacts are available yet.</p>}
               </div>
+              {visibleGeneratedArtifacts.length < generatedArtifactRows.length ? (
+                <button
+                  className="agent-proof-page-button"
+                  onClick={() => setGeneratedArtifactPage(page => page + 1)}
+                  type="button"
+                >
+                  Show more artifacts
+                </button>
+              ) : null}
             </div>
             <div className="agent-compartment-lane">
               <div className="agent-compartment-subhead">
                 <span>Hermes mission evidence</span>
-                <b>{visibleHermesEvidence.length}</b>
+                <b>{visibleHermesEvidence.length}/{hermesEvidenceRows.length}</b>
               </div>
               <div className="agent-compartment-event-list">
                 {visibleHermesEvidence.length ? visibleHermesEvidence.map((item, index) => (
@@ -2369,6 +3424,15 @@ function AgentRunningSurface(props) {
                   </div>
                 )) : <p className="agent-compartment-empty">No Hermes evidence has been captured yet.</p>}
               </div>
+              {visibleHermesEvidence.length < hermesEvidenceRows.length ? (
+                <button
+                  className="agent-proof-page-button"
+                  onClick={() => setHermesEvidencePage(page => page + 1)}
+                  type="button"
+                >
+                  Show more evidence
+                </button>
+              ) : null}
             </div>
           </div>
           <div className="agent-compartment-lane agent-nas-readiness-panel">
@@ -2431,14 +3495,41 @@ function AgentRunningSurface(props) {
           </article>
         ) : null}
 
-        {renderedMessages.map(item =>
-          item.role === "user" ? (
-            <div className="reference-user-bubble" key={item.id}>
+        {renderedMessages.map((item, index) => {
+          const messageKey = stableAgentMessageKey(item, `reference-run-message-${index}`);
+          const selected = selectedRunMessageId === messageKey;
+          return item.role === "user" ? (
+            <div
+              aria-pressed={selected}
+              className={cx("reference-user-bubble", selected && "selected")}
+              data-mission-id={item.missionId || activeMissionId}
+              data-runtime-id={item.runtimeId || activeRuntimeId}
+              data-selected-agent-message={selected ? "true" : "false"}
+              data-turn-id={item.id}
+              onClick={event => selectRunMessage(messageKey, event)}
+              onKeyDown={event => handleRunMessageKeyDown(event, messageKey)}
+              role="button"
+              tabIndex={0}
+              key={item.id}
+            >
               <p>{item.title}</p>
               <span>{item.meta || "Now"}</span>
             </div>
           ) : (
-            <div className={cx("reference-agent-thread", item.pending ? "is-pending" : "")} key={item.id}>
+            <div
+              aria-pressed={selected}
+              className={cx("reference-agent-thread", item.pending ? "is-pending" : "", selected && "selected")}
+              data-mission-id={item.missionId || activeMissionId}
+              data-runtime-id={item.runtimeId || activeRuntimeId}
+              data-runtime-report={isRuntimeOutputAgentMessage(item) ? "true" : "false"}
+              data-selected-agent-message={selected ? "true" : "false"}
+              data-turn-id={item.id}
+              onClick={event => selectRunMessage(messageKey, event)}
+              onKeyDown={event => handleRunMessageKeyDown(event, messageKey)}
+              role="button"
+              tabIndex={0}
+              key={item.id}
+            >
               <div className="reference-agent-avatar">
                 <div className="reference-brand-mark tiny">
                   <span />
@@ -2481,8 +3572,8 @@ function AgentRunningSurface(props) {
                 ) : null}
               </div>
             </div>
-          ),
-        )}
+          );
+        })}
 
         {showMissionPanels && processMoments.length > 0 ? (
           <article className="reference-status-panel">
@@ -3164,6 +4255,11 @@ function BuilderSurface(props) {
     ["Turning point", selectedRow?.turningPoint || "—"],
     ["Last update", selectedRow?.updated || selectedRow?.lastRunMeta || "—"],
   ];
+  const virtualTimeline = useVirtualWindow(timelineMoments, {
+    itemHeight: 92,
+    viewportHeight: 430,
+    overscan: 5,
+  });
   const builderMetrics = buildBuilderMetrics(builderRows);
   const openBuilderDetailFromKey = (event, rowId) => {
     if (event.key !== "Enter" && event.key !== " ") {
@@ -3262,11 +4358,20 @@ function BuilderSurface(props) {
             <div className="reference-builder-section-head">
               <div>
                 <strong>Timeline</strong>
-                <span>Key moments from this flow</span>
+                <span>
+                  Key moments from this flow · {virtualTimeline.totalCount} item{virtualTimeline.totalCount === 1 ? "" : "s"}
+                </span>
               </div>
             </div>
-            <div className="reference-builder-moments">
-              {timelineMoments.map(item => (
+            <div
+              className="reference-builder-moments virtualized"
+              onScroll={virtualTimeline.onScroll}
+              style={{ maxHeight: virtualTimeline.viewportHeight }}
+            >
+              {virtualTimeline.topPadding > 0 ? (
+                <div aria-hidden="true" className="reference-builder-virtual-spacer" style={{ height: virtualTimeline.topPadding }} />
+              ) : null}
+              {virtualTimeline.items.map(item => (
                 <article className={cx("reference-builder-moment", item.tone)} key={item.id}>
                   <div className="reference-builder-moment-time">
                     <span>{item.time}</span>
@@ -3278,6 +4383,9 @@ function BuilderSurface(props) {
                   </div>
                 </article>
               ))}
+              {virtualTimeline.bottomPadding > 0 ? (
+                <div aria-hidden="true" className="reference-builder-virtual-spacer" style={{ height: virtualTimeline.bottomPadding }} />
+              ) : null}
             </div>
           </article>
           <article className="reference-builder-summary-panel">
@@ -5575,9 +6683,22 @@ function LegacyFluxioReferenceShell(props) {
     ) : surface === "rule-sets" ? (
       <RuleSetsSurface onRequestAction={onRequestAction} studioState={skillStudioState} />
     ) : surface === "images" ? (
-      <ImagePlaygroundSurface callBackend={callBackend} />
+      <Suspense fallback={
+        <article className="fluxos-flow-empty">
+          <span>Images</span>
+          <strong>Loading image studio</strong>
+          <p>The mission-control shell is already interactive while the image playground bundle loads.</p>
+        </article>
+      }>
+        <ImagePlaygroundSurface callBackend={callBackend} />
+      </Suspense>
     ) : surface === "workbench" ? (
-      <WorkbenchSurface onRequestAction={onRequestAction} onSetSurface={onSetSurface} workbenchState={workbenchState} />
+      <WorkbenchSurface
+        key={workbenchState?.missionId || currentProjectLabel || "workbench"}
+        onRequestAction={onRequestAction}
+        onSetSurface={onSetSurface}
+        workbenchState={workbenchState}
+      />
     ) : surface === "settings" ? (
       <SettingsSurface onRequestAction={onRequestAction} settingsState={settingsState} />
     ) : surface === "agent" && agentScene === "idle" ? (
@@ -5602,6 +6723,7 @@ function LegacyFluxioReferenceShell(props) {
       />
     ) : surface === "agent" && agentScene === "run" ? (
       <AgentRunningSurface
+        key={workbenchState?.missionId || currentProjectLabel || "agent-run"}
         draft={draft}
         activeCommentTarget={activeCommentTarget}
         conversationMode={conversationMode}
@@ -5628,9 +6750,11 @@ function LegacyFluxioReferenceShell(props) {
         selectedRuntimeLabel={runtimeLabel}
         slashCommands={slashCommands}
         timelineMoments={timelineMoments}
+        workbenchState={workbenchState}
       />
     ) : surface === "agent" && agentScene === "live" ? (
       <LivePreviewSurface
+        key={workbenchState?.missionId || currentProjectLabel || "agent-live"}
         changedItems={changedItems}
         draft={draft}
         feedbackItems={feedbackItems}
@@ -5811,6 +6935,7 @@ const FLUXIO_NAV_ITEMS = [
   { id: "home", label: "Home", Icon: Home },
   { id: "agent", label: "Agent", Icon: Bot },
   { id: "builder", label: "Builder", Icon: Hammer },
+  { id: "phone", label: "Phone", Icon: Smartphone },
   { id: "skills", label: "Skills", Icon: Grid2x2 },
   { id: "rule-sets", label: "Rule Sets", Icon: Shield },
   { id: "images", label: "Images", Icon: Palette },
@@ -5878,25 +7003,11 @@ const AGENT_PLAN = [
   ["Merge gate", "Summarize changed files, evidence, and remaining risk.", "queued"],
 ];
 
-const TOOL_EVENTS = [
-  ["13:44:12", "Read image pack", "17 references indexed", "good"],
-  ["13:46:03", "Inspect app shell", "React/Vite control route", "good"],
-  ["13:48:27", "Patch UI", "Agent OS surface active", "warn"],
-  ["13:51:09", "Visual QA", "Browser pass required", "neutral"],
-];
+const TOOL_EVENTS = [];
 
-const CHANGED_FILES = [
-  ["FluxioReferenceShell.jsx", "+agent OS shell", "ui"],
-  ["styles.css", "+visual system", "css"],
-  ["FluxioShell.jsx", "runtime data source", "state"],
-];
+const CHANGED_FILES = [];
 
-const BUILDER_FLOWS = [
-  ["Checkout QA", "Browser test", "needs review", "83%"],
-  ["Market research", "Evidence pack", "running", "61%"],
-  ["Landing polish", "Preview diff", "ready", "94%"],
-  ["Image variants", "Asset studio", "queued", "18%"],
-];
+const BUILDER_FLOWS = [];
 
 const SKILL_CARDS = [
   ["Frontend polish", "Visual QA, responsive checks, no placeholder UI.", "High", "Browser + Code"],
@@ -5919,9 +7030,9 @@ const FLUXIO_DATABASES = [
   ["blob", "Artifact Store", "Screenshots and exports", "Synced", "amber"],
 ];
 
-function fluxioAction(handler, fallback) {
+function fluxioAction(handler, fallback, payload) {
   if (typeof handler === "function") {
-    handler(fallback);
+    handler(fallback, payload);
   }
 }
 
@@ -6040,19 +7151,17 @@ function FluxioEvidenceRail({ onRequestAction, runtimeCompartment, routeControls
 }
 
 function FluxioHomeSurface(props) {
-  const { onSetSurface, onRequestAction, draft, onChangeDraft, onAttach, onDictation, onIdleSubmit } = props;
+  const { builderRows, liveDataStatus, onSetSurface, onRequestAction, draft, onChangeDraft, onAttach, onDictation, onIdleSubmit } = props;
+  const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const isLiveLoading = isLiveBackend && liveDataStatus?.loading && !Number(liveDataStatus?.missionCount || 0);
+  const liveRows = sortLiveBuilderRows(builderRows).slice(0, 4);
   const modeCards = [
     ["agent", Bot, "Agent", "Chat with AI to plan, analyze, and build with real-time context.", "Active mode"],
     ["builder", Code2, "Builder", "Create and iterate on full-stack apps, APIs, and deployment flows.", ""],
     ["skills", Sparkles, "Skills", "Use and manage specialized AI skills, rules, and reusable workflows.", ""],
     ["images", Palette, "Images", "Generate, edit, and iterate on images with prompts and references.", ""],
   ];
-  const recentSessions = [
-    ["User analytics panel", "Updated 2m ago", Bot],
-    ["Stripe integration", "Updated 1h ago", Code2],
-    ["Email onboarding flow", "Updated 3h ago", Sparkles],
-    ["Dashboard redesign", "Updated yesterday", Palette],
-  ];
+  const recentSessions = [];
   return (
     <div className="fluxos-home">
       <section className="fluxos-home-lobby">
@@ -6075,14 +7184,34 @@ function FluxioHomeSurface(props) {
 
         <section className="fluxos-recent-row" aria-label="Recent sessions">
           <div className="fluxos-recent-head">
-            <strong>Recent sessions</strong>
+            <strong>{isLiveBackend ? "Live NAS missions" : "Recent sessions"}</strong>
             <button onClick={() => fluxioAction(onRequestAction, "home:view-all-sessions")} type="button">
               View all
               <ArrowRight size={15} strokeWidth={1.7} />
             </button>
           </div>
           <div className="fluxos-recent-grid">
-            {recentSessions.map(([title, time, Icon]) => (
+            {liveRows.length > 0 ? liveRows.map(row => (
+              <button key={row.id || row.name || row.title} onClick={() => onSetSurface?.("builder")} type="button">
+                <Bot size={18} strokeWidth={1.7} />
+                <span>
+                  <strong>{row.name || row.title || "Live mission"}</strong>
+                  <small>{row.status || row.updated || liveDataStatus?.source || "live"}</small>
+                </span>
+              </button>
+            )) : isLiveLoading ? (
+              <article className="fluxos-flow-empty is-loading">
+                <span>Live data only</span>
+                <strong>Connecting to NAS live summary</strong>
+                <p>Fluxio is waiting for the authenticated control-room response. No cached or sample mission rows are shown.</p>
+              </article>
+            ) : isLiveBackend ? (
+              <article className="fluxos-flow-empty">
+                <span>Live data only</span>
+                <strong>No live mission rows loaded</strong>
+                <p>The home surface is waiting for NAS control-room data; no cached or sample sessions are shown.</p>
+              </article>
+            ) : recentSessions.map(([title, time, Icon]) => (
               <button key={title} onClick={() => fluxioAction(onRequestAction, `home:session:${title}`)} type="button">
                 <Icon size={18} strokeWidth={1.7} />
                 <span>
@@ -6110,7 +7239,9 @@ function FluxioHomeSurface(props) {
 
 function FluxioAgentSurface(props) {
   const {
+    builderRows,
     draft,
+    liveDataStatus,
     messages,
     onAttach,
     onChangeDraft,
@@ -6118,38 +7249,609 @@ function FluxioAgentSurface(props) {
     onRequestAction,
     onRuntimeChange,
     onSend,
+    onSelectFlow,
+    onSetSurface,
     runtimeCompartment,
     routeControls,
     selectedModelLabel,
     selectedRuntimeLabel,
     timelineMoments,
+    missionLoop,
+    workbenchState,
   } = props;
-  const visibleMessages = asList(messages).slice(-4);
-  const visibleTimeline = asList(timelineMoments).slice(0, 4);
+  const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const allMessages = asList(messages);
+  const compactMessages = compactAgentMessages(allMessages);
+  const visibleMessages = visibleAgentMessages(compactMessages, 36, 8, { requireRuntimeReports: isLiveBackend });
+  const hiddenMessageCount = Math.max(0, compactMessages.length - visibleMessages.length);
+  const [selectedMessageId, setSelectedMessageId] = useState("");
+  const [selectedDiagnosticMessageId, setSelectedDiagnosticMessageId] = useState("");
+  const selectionScopeRef = useRef("");
+  const manualMessageSelectionRef = useRef(false);
+  const thinkingRows = orderedAgentMessagesNewestFirst(
+    compactMessages.filter(message =>
+      !message?.traceOnly &&
+      !isRuntimeOutputAgentMessage(message) &&
+      !isControlRoomBookkeepingAgentMessage(message) &&
+      (
+        String(message?.label || message?.roleLabel || "").toLowerCase().includes("hermes") ||
+        String(message?.label || "").toLowerCase().includes("thinking") ||
+        String(message?.label || "").toLowerCase().includes("trace") ||
+        (message?.technicalDetail && !message?.traceOnly)
+      ),
+    ),
+  ).slice(0, 5);
+  const livePlanRows = orderedAgentMessagesNewestFirst(
+    compactMessages.filter(message => {
+      const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+      return (
+        !isLowSignalAgentMessage(message) &&
+        !message?.traceOnly &&
+        !isRuntimeOutputAgentMessage(message) &&
+        !isControlRoomBookkeepingAgentMessage(message) &&
+        (
+          message?.processMessage ||
+          message?.emphasis ||
+          label.includes("planner") ||
+          label.includes("mission review") ||
+          label.includes("action") ||
+          label.includes("lane")
+        )
+      );
+    }),
+  ).slice(0, 5);
+  const visibleTimeline = orderedAgentMessagesNewestFirst(
+    asList(timelineMoments).filter(item => !isLowSignalAgentMessage(item)),
+  ).slice(0, 8);
+  const progressValue = clampPercent(workbenchState?.progress?.value);
+  const missionStatus = titleizeToken(workbenchState?.missionStatus || missionLoop?.status || "live");
+  const progressLabel =
+    progressValue == null
+      ? workbenchState?.progress?.label || "Live progress metric unavailable"
+      : `${workbenchState?.progress?.label || "Progress"} · ${progressValue}%`;
+  const liveLaneRows = asList(workbenchState?.lanes).filter(item => item && typeof item === "object").slice(0, 8);
+  const liveMissionRows = isLiveBackend ? sortLiveBuilderRows(builderRows) : [];
+  const runningLiveMissionRows = liveMissionRows.filter(row => {
+    const status = String(row.status || row.statusLabel || "").toLowerCase();
+    return ["running", "delegated", "active"].includes(status);
+  });
+  const preferredRunningLiveMission = runningLiveMissionRows.find(row => {
+    const missionId = String(row.id || row.missionId || row.mission_id || "").trim();
+    return missionId && missionId !== String(workbenchState?.missionId || "").trim();
+  }) || runningLiveMissionRows[0] || null;
+  const preferredRunningLiveMissionId = String(
+    preferredRunningLiveMission?.id ||
+      preferredRunningLiveMission?.missionId ||
+      preferredRunningLiveMission?.mission_id ||
+      "",
+  ).trim();
+  const liveLaneRoleSummary = uniq(liveLaneRows.map(item => String(item.role || item.label || "").toLowerCase()))
+    .slice(0, 4)
+    .map(titleizeToken)
+    .join(" / ");
+  const livePreviewUrlCandidates = [
+    workbenchState?.previewUrl,
+    workbenchState?.liveReview?.previewUrl,
+    workbenchState?.previewActionUrl,
+    workbenchState?.liveReview?.previewActionUrl,
+  ];
+  const livePreviewActionUrl = livePreviewUrlCandidates.find(isUsablePreviewUrl) || "";
+  const livePreviewFrameUrl = livePreviewUrlCandidates.find(isMissionPreviewUrl) || "";
+  const visibleMessageEntries = useMemo(
+    () => visibleMessages.map((message, index) => ({
+      key: stableAgentMessageKey(message, `message-${index}`),
+      message,
+    })).filter(entry => entry.key),
+    [visibleMessages],
+  );
+  const visibleMessageKeySignature = visibleMessageEntries.map(entry => entry.key).join("|");
+  const selectableMessageEntries = useMemo(() => {
+    const entries = [];
+    const keys = new Set();
+    const pushEntry = (message, key) => {
+      if (!message || keys.has(key)) return;
+      keys.add(key);
+      entries.push({ key, message });
+    };
+    visibleMessages.forEach((message, index) => {
+      pushEntry(message, stableAgentMessageKey(message, `message-${index}`));
+    });
+    return entries;
+  }, [visibleMessages]);
+  const diagnosticMessageEntries = useMemo(() => {
+    const entries = [];
+    const keys = new Set();
+    const pushEntry = (message, key) => {
+      if (!message || keys.has(key)) return;
+      keys.add(key);
+      entries.push({ key, message });
+    };
+    thinkingRows.forEach((message, index) => {
+      pushEntry(message, stableAgentMessageKey(message, `thinking-${index}`));
+    });
+    livePlanRows.forEach((message, index) => {
+      pushEntry(message, stableAgentMessageKey(message, `live-plan-${index}`));
+    });
+    return entries;
+  }, [livePlanRows, thinkingRows]);
+  const selectableMessageKeySet = useMemo(
+    () => new Set(selectableMessageEntries.map(entry => entry.key)),
+    [selectableMessageEntries],
+  );
+  const messageSelectionScope = [
+    liveDataStatus?.previewMode || "preview",
+    workbenchState?.missionId || "",
+    workbenchState?.missionTitle || "",
+    workbenchState?.runtime || "",
+  ].join(":");
+  const messageSelectionContentSignature = isLiveBackend ? visibleMessageKeySignature : "";
+  useEffect(() => {
+    setSelectedMessageId(current => {
+      const scopeChanged = selectionScopeRef.current !== messageSelectionScope;
+      selectionScopeRef.current = messageSelectionScope;
+      if (scopeChanged) {
+        manualMessageSelectionRef.current = false;
+      }
+      const currentEntry = current
+        ? selectableMessageEntries.find(entry => entry.key === current)
+        : null;
+      const currentEntryMissionId = String(
+        currentEntry?.message?.missionId ||
+          currentEntry?.message?.mission_id ||
+          workbenchState?.missionId ||
+          "",
+      ).trim();
+      const scopedMissionId = String(workbenchState?.missionId || "").trim();
+      if (
+        current &&
+        currentEntry &&
+        manualMessageSelectionRef.current &&
+        (!isLiveBackend || !scopedMissionId || currentEntryMissionId === scopedMissionId)
+      ) {
+        return current;
+      }
+      const latestRuntimeOutputMessage = visibleMessages.find(isRuntimeOutputAgentMessage);
+      const latestMeaningfulMessage = latestRuntimeOutputMessage || visibleMessages.find(isMeaningfulDefaultAgentMessage);
+      const defaultEntry =
+        visibleMessageEntries.find(entry => entry.message === latestMeaningfulMessage) ||
+        visibleMessageEntries.find(entry => entry.message === visibleMessages[visibleMessages.length - 1]) ||
+        (isLiveBackend ? null : selectableMessageEntries[selectableMessageEntries.length - 1]);
+      return defaultEntry?.key || "";
+    });
+  }, [isLiveBackend, messageSelectionContentSignature, messageSelectionScope, selectableMessageEntries, visibleMessageEntries, visibleMessages, workbenchState?.missionId]);
+  useEffect(() => {
+    setSelectedDiagnosticMessageId("");
+  }, [messageSelectionScope]);
+  const selectedMessageEntry = selectableMessageEntries.find(entry => entry.key === selectedMessageId) || null;
+  const autoSelectedMessageEntry = isLiveBackend
+    ? selectedMessageEntry || visibleMessageEntries[0] || null
+    : selectedMessageEntry;
+  const resolvedSelectedMessageKey = autoSelectedMessageEntry?.key || "";
+  const selectedMessage = autoSelectedMessageEntry?.message || null;
+  const messageSelectionActive = Boolean(autoSelectedMessageEntry && selectedMessage);
+  const selectedMessagePreviewCandidates = previewUrlCandidatesForMessage(selectedMessage);
+  const selectedMessagePreviewActionUrl = selectedMessagePreviewCandidates.find(isUsablePreviewUrl) || "";
+  const messageSelectionPinned = Boolean(autoSelectedMessageEntry || selectedMessageId);
+  const activePreviewActionUrl = messageSelectionPinned
+    ? selectedMessagePreviewActionUrl
+    : isLiveBackend
+      ? ""
+      : livePreviewActionUrl;
+  const activePreviewFrameUrl = isLiveBackend || messageSelectionPinned ? "" : livePreviewFrameUrl;
+  const livePreviewFrameBlocked = Boolean(activePreviewActionUrl && !activePreviewFrameUrl);
+  const selectedMessageSourceLabel = [
+    selectedMessage?.label || selectedMessage?.roleLabel || "Live mission row",
+    selectedMessage?.runtimeId || workbenchState?.runtime || "",
+    selectedMessage?.createdAt || selectedMessage?.meta || "",
+  ].filter(Boolean).join(" · ");
+  const selectedMessageBody = selectedMessage ? agentMessageDisplayDetail(selectedMessage) : "";
+  const liveRuntimeReportCount = visibleMessages.filter(isRuntimeOutputAgentMessage).length;
+  const hasLiveRuntimeReports = liveRuntimeReportCount > 0;
+  const selectedMessageRuntimeLabel = selectedMessage?.runtimeId || workbenchState?.runtime || "live";
+  const selectedMessageTimeLabel = timestampLabel(selectedMessage?.createdAt || selectedMessage?.timestamp || selectedMessage?.time || "");
+  const selectedMessageKindLabel = isRuntimeOutputAgentMessage(selectedMessage)
+    ? "Hermes runtime report"
+    : isLiveRuntimeReportMessage(selectedMessage)
+      ? "Hermes transcript"
+    : selectedMessage?.processMessage
+      ? "Runtime trace"
+      : selectedMessage
+        ? "Mission message"
+        : "Runtime report";
+  const previewState = messageSelectionPinned
+    ? "selected-message"
+    : activePreviewFrameUrl
+      ? "mission-frame"
+      : "empty";
+  const liveThreadFirstStats = [
+    ["Messages", visibleMessages.length, hiddenMessageCount > 0 ? `${hiddenMessageCount} older` : "shown"],
+    ["Selected", selectedMessage ? "1" : "0", selectedMessage ? "report pinned" : "waiting"],
+    ["Lanes", liveLaneRows.length, liveLaneRoleSummary || "planner/executor/verifier"],
+    ["Alerts", Number(liveDataStatus?.notificationCount || 0), `${Number(liveDataStatus?.sliceNotificationCount || 0)} slice`],
+  ];
+  const liveDiagnosticStats = [
+    ["Trace", thinkingRows.length, "rows"],
+    ["Lanes", liveLaneRows.length, liveLaneRoleSummary || "runtime"],
+    ["Plan", livePlanRows.length, "steps"],
+  ];
+  const livePreviewLabel =
+    workbenchState?.previewSourceLabel ||
+    workbenchState?.previewLabel ||
+    (isLiveBackend ? "No live preview frame attached" : "Local layout preview");
+  const selectAgentMessage = useCallback(messageKey => {
+    const normalizedMessageKey = String(messageKey || "").trim();
+    if (!normalizedMessageKey) return;
+    if (isLiveBackend && !selectableMessageKeySet.has(normalizedMessageKey)) return;
+    if (isLiveBackend) {
+      const entry = selectableMessageEntries.find(item => item.key === normalizedMessageKey);
+      const scopedMissionId = String(workbenchState?.missionId || "").trim();
+      const entryMissionId = String(entry?.message?.missionId || entry?.message?.mission_id || "").trim();
+      if (scopedMissionId && entryMissionId && entryMissionId !== scopedMissionId) {
+        return;
+      }
+    }
+    manualMessageSelectionRef.current = true;
+    setSelectedMessageId(normalizedMessageKey);
+  }, [isLiveBackend, selectableMessageEntries, selectableMessageKeySet, workbenchState?.missionId]);
+  const selectDiagnosticMessage = useCallback(messageKey => {
+    const normalizedMessageKey = String(messageKey || "").trim();
+    if (!normalizedMessageKey) return;
+    if (isLiveBackend && !diagnosticMessageEntries.some(entry => entry.key === normalizedMessageKey)) return;
+    setSelectedDiagnosticMessageId(normalizedMessageKey);
+  }, [diagnosticMessageEntries, isLiveBackend]);
+  const handleAgentMessageKeyDown = useCallback((event, messageKey) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectAgentMessage(messageKey);
+    }
+  }, [selectAgentMessage]);
+  const handleDiagnosticMessageKeyDown = useCallback((event, messageKey) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectDiagnosticMessage(messageKey);
+    }
+  }, [selectDiagnosticMessage]);
   return (
     <div className="fluxos-agent-grid">
       <section className="fluxos-agent-main">
         <div className="fluxos-section-head">
           <span>Active run</span>
-          <strong>Reproduce Fluxio UI and prepare merge</strong>
+          <strong>{isLiveBackend ? workbenchState?.missionTitle || "Live NAS run state" : "Reproduce Fluxio UI and prepare merge"}</strong>
         </div>
-        <div className="fluxos-plan-list">
-          {AGENT_PLAN.map(([label, copy, status]) => (
-            <article className={`fluxos-plan-step status-${status}`} key={label}>
-              <span>{status === "done" ? <Check size={16} strokeWidth={2} /> : status === "running" ? <CircleDashed size={16} strokeWidth={2} /> : <Clock3 size={16} strokeWidth={2} />}</span>
+        <LiveOperationsBrief
+          activeRows={[]}
+          liveDataStatus={liveDataStatus}
+          onOpenAgent={() => onRequestAction?.("agent:open-current-mission", { missionId: workbenchState?.missionId })}
+          onOpenNotifications={() => onRequestAction?.("notifications:show-live-stack")}
+          onOpenQueue={() => onRequestAction?.("builder:open-project-queue")}
+          projectProgressHistory={props.projectProgressHistory}
+          threadRows={visibleMessages}
+          workbenchState={workbenchState}
+        />
+        {isLiveBackend ? (
+          <div className="fluxos-agent-progress" aria-label="Mission progress">
+            <div>
+              <span>{missionStatus}</span>
+              <strong>{progressLabel}</strong>
+              {workbenchState?.progress?.nextAction ? <p>{workbenchState.progress.nextAction}</p> : null}
+            </div>
+            {progressValue == null ? (
+              <em>No live percentage returned</em>
+            ) : (
+              <i style={{ "--progress": `${progressValue}%` }} />
+            )}
+          </div>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            aria-label="Thread-first Agent command band"
+            className="fluxos-agent-thread-first-band"
+            data-live-agent-thread-first-band="true"
+          >
+            <div className="fluxos-agent-thread-first-copy">
+              <span>Thread-first Agent</span>
+              <strong>{workbenchState?.missionTitle || "Live mission thread"}</strong>
+              <p>{workbenchState?.progress?.nextAction || "Read the current Hermes/runtime report, then inspect proof or lane controls only when needed."}</p>
+            </div>
+            <div className="fluxos-agent-thread-first-metrics" aria-label="Live Agent thread metrics">
+              {liveThreadFirstStats.map(([label, value, detail]) => (
+                <article key={`agent-thread-first-${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-agent-thread-first-actions">
+              <button
+                disabled={!selectedMessage}
+                onClick={() => document.querySelector(".fluxos-selected-message-proof")?.scrollIntoView({ block: "nearest", behavior: "smooth" })}
+                type="button"
+              >
+                Focus selected report
+              </button>
+              <button onClick={() => onSetSurface?.("workbench")} type="button">
+                Open Workbench
+              </button>
+              <button onClick={() => onRequestAction?.("notifications:show-live-stack")} type="button">
+                Show notifications
+              </button>
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            aria-label="Selected live Agent report reader"
+            className="fluxos-agent-selected-report"
+            data-live-selected-report-reader="true"
+          >
+            <div className="fluxos-agent-selected-report-head">
               <div>
-                <strong>{label}</strong>
-                <p>{copy}</p>
+                <span>Selected live report</span>
+                <strong>{selectedMessage ? agentMessageDisplayTitle(selectedMessage) : "Waiting for live Agent report"}</strong>
               </div>
-            </article>
-          ))}
-        </div>
-
+              <div className="fluxos-agent-selected-report-meta" aria-label="Selected report source">
+                <em>{selectedMessageKindLabel}</em>
+                <em>{titleizeToken(selectedMessageRuntimeLabel)}</em>
+                {selectedMessageTimeLabel ? <em>{selectedMessageTimeLabel}</em> : null}
+                <em>{messageSelectionActive ? "Pinned" : "Refreshing"}</em>
+              </div>
+            </div>
+            <p>
+              {selectedMessageSourceLabel ||
+                "This reader is built from the selected mission detail endpoint. It does not render cached sample messages."}
+            </p>
+            {selectedMessageBody ? (
+              <pre className="fluxos-agent-selected-report-body" data-live-selected-report-body="true">{selectedMessageBody}</pre>
+            ) : (
+              <article className="fluxos-flow-empty" data-live-report-empty-state="true">
+                <span>Live data only</span>
+                <strong>{hasLiveRuntimeReports ? "No selected report body returned yet" : "No Hermes runtime reports on this selected mission"}</strong>
+                <p>
+                  {hasLiveRuntimeReports
+                    ? "The Agent keeps the selection pinned here instead of filling the reader with fallback text."
+                    : "This mission detail returned no Runtime output body, so Fluxio leaves the reader empty instead of reusing the F1 frame or any older report."}
+                </p>
+                {!hasLiveRuntimeReports && preferredRunningLiveMissionId ? (
+                  <button
+                    data-live-active-mission-switch="true"
+                    onClick={() => onSelectFlow?.(preferredRunningLiveMissionId)}
+                    type="button"
+                  >
+                    Open running Hermes mission
+                  </button>
+                ) : null}
+              </article>
+            )}
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            aria-label="Agent diagnostics shelf"
+            className="fluxos-agent-diagnostics-shelf"
+            data-agent-diagnostics-shelf="true"
+          >
+            <div>
+              <span>Diagnostics</span>
+              <strong>Trace, lanes, and plan stay below the report thread.</strong>
+            </div>
+            <div className="fluxos-agent-diagnostics-metrics">
+              {liveDiagnosticStats.map(([label, value, detail]) => (
+                <article key={`agent-diagnostic-${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section className="fluxos-agent-lane-board" aria-label="Live sub-agent lane board" data-live-agent-lane-board="true">
+            <div className="fluxos-thread-head">
+              <span>Sub-agent lane board</span>
+              <strong>
+                {liveLaneRows.length
+                  ? `${liveLaneRows.length} ${liveLaneRoleSummary || "planner/executor/verifier"} lane${liveLaneRows.length === 1 ? "" : "s"}`
+                  : "No live lanes"}
+              </strong>
+            </div>
+            {liveLaneRows.length ? (
+              <div className="fluxos-agent-lane-grid">
+                {liveLaneRows.map((lane, index) => {
+                  const laneStatus = String(lane.status || "").toLowerCase();
+                  const tone = laneStatus.includes("blocked") || lane.blocker
+                    ? "bad"
+                    : lane.active || laneStatus.includes("active") || laneStatus.includes("running")
+                      ? "good"
+                      : laneStatus.includes("ready")
+                        ? "neutral"
+                        : "warn";
+                  return (
+                    <article
+                      className={`fluxos-agent-lane tone-${tone}`}
+                      data-live-agent-lane="true"
+                      data-lane-role={String(lane.role || lane.label || "").toLowerCase()}
+                      data-lane-status={lane.status || ""}
+                      key={lane.id || `${lane.role}-${lane.provider}-${lane.model}-${index}`}
+                    >
+                      <span>{[lane.role || lane.label || "Lane", lane.phase || lane.source || ""].filter(Boolean).join(" · ")}</span>
+                      <strong>{[lane.provider || "provider", lane.model || "model"].filter(Boolean).join(" / ")}</strong>
+                      <p>{lane.lastEvent || lane.blocker || "Live lane returned no current event."}</p>
+                      <div className="fluxos-agent-lane-meta">
+                        <em>{titleizeToken(lane.status || "unknown")}</em>
+                        {lane.effort ? <em>{titleizeToken(lane.effort)}</em> : null}
+                        {lane.authPresent === true ? <em>Auth ready</em> : lane.authPresent === false ? <em>Auth missing</em> : null}
+                        {lane.quotaStatus ? <em>{`Quota ${titleizeToken(lane.quotaStatus)}`}</em> : null}
+                      </div>
+                      {asList(lane.toolFamilies).length ? (
+                        <div className="fluxos-agent-lane-tools">
+                          {asList(lane.toolFamilies).slice(0, 4).map(tool => <em key={`${lane.id || index}-${tool}`}>{tool}</em>)}
+                        </div>
+                      ) : null}
+                      <div className="fluxos-agent-lane-controls">
+                        {asList(lane.controls).slice(0, 4).map(control => (
+                          <button
+                            data-live-agent-lane-control="true"
+                            data-lane-control-action={control.action || control.id || ""}
+                            disabled={control.enabled === false}
+                            key={`${lane.id || index}-${control.id || control.action}`}
+                            onClick={() => fluxioAction(onRequestAction, `agent:lane:${control.action || control.id || "inspect"}`, { lane, control })}
+                            type="button"
+                          >
+                            {control.label || titleizeToken(control.action || control.id || "Open")}
+                          </button>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <article className="fluxos-flow-empty">
+                <span>Live data only</span>
+                <strong>No sub-agent lane contract returned</strong>
+                <p>The Agent lane board stays empty until the selected NAS mission exposes delegated sessions or provider capability lanes.</p>
+              </article>
+            )}
+            {workbenchState?.laneControlReceipt ? (
+              <article className="fluxos-agent-lane-receipt" data-live-agent-lane-control-receipt="true">
+                <span>Lane control receipt</span>
+                <strong>{workbenchState.laneControlReceipt.label || titleizeToken(workbenchState.laneControlReceipt.action || "Action")}</strong>
+                <p>{workbenchState.laneControlReceipt.detail || "Lane action routed."}</p>
+                {workbenchState.laneControlReceipt.stateMutationProof?.field ? (
+                  <div className="fluxos-agent-lane-proof" data-live-agent-lane-mutation-proof="true">
+                    <em>{workbenchState.laneControlReceipt.stateMutationProof.field}</em>
+                    <strong>
+                      {[
+                        workbenchState.laneControlReceipt.stateMutationProof.before || "empty",
+                        workbenchState.laneControlReceipt.stateMutationProof.after || "empty",
+                      ].join(" -> ")}
+                    </strong>
+                    <span>{workbenchState.laneControlReceipt.stateMutationProof.observedAfterWrite ? "Observed after write" : "Write observation pending"}</span>
+                  </div>
+                ) : null}
+              </article>
+            ) : null}
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section className="fluxos-thinking-panel" aria-label="Live runtime thinking and trace">
+            <div className="fluxos-thread-head">
+              <span>Thinking and runtime trace</span>
+              <strong>{thinkingRows.length ? `${thinkingRows.length} live rows` : "waiting"}</strong>
+            </div>
+            {thinkingRows.length ? thinkingRows.map((message, index) => {
+              const messageKey = stableAgentMessageKey(message, `thinking-${index}`);
+              const selected = selectedDiagnosticMessageId === messageKey;
+              return (
+              <article
+                aria-pressed={selected}
+                className={`fluxos-message process ${message.emphasis ? "emphasis" : ""} ${selected ? "selected" : ""}`.trim()}
+                data-agent-message-key={messageKey}
+                data-diagnostic-id={messageKey}
+                data-mission-id={message.missionId || workbenchState?.missionId || ""}
+                data-message-zone="thinking"
+                data-runtime-id={message.runtimeId || workbenchState?.runtime || ""}
+                data-selected-diagnostic-message={selected ? "true" : "false"}
+                key={messageKey}
+                onClick={() => selectDiagnosticMessage(messageKey)}
+                onKeyDown={event => handleDiagnosticMessageKeyDown(event, messageKey)}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="fluxos-message-head">
+                  <span>{[message.label || message.roleLabel || "Runtime", message.meta || message.createdAt || ""].filter(Boolean).join(" · ")}</span>
+                  <strong>{agentMessageDisplayTitle(message)}</strong>
+                </div>
+                {agentMessageDisplayDetail(message) ? <p>{agentMessageDisplayDetail(message)}</p> : null}
+                {message.technicalDetail ? (
+                  <details className="fluxos-message-trace" open={index === thinkingRows.length - 1}>
+                    <summary>Raw trace</summary>
+                    <p>{String(message.technicalDetail).slice(0, 900)}</p>
+                  </details>
+                ) : null}
+              </article>
+            );
+            }) : (
+              <article className="fluxos-flow-empty">
+                <span>Live data only</span>
+                <strong>No runtime trace rows loaded yet</strong>
+                <p>The selected mission thread is real; this panel stays empty until Hermes emits process or thinking evidence.</p>
+              </article>
+            )}
+          </section>
+        ) : null}
         <section className="fluxos-thread">
-          {(visibleMessages.length ? visibleMessages : [
+          <div className="fluxos-thread-head">
+            <span>{isLiveBackend ? "Live Hermes/runtime reports" : "Thread"}</span>
+            <strong>
+              {visibleMessages.length} shown
+              {hiddenMessageCount > 0 ? ` · ${hiddenMessageCount} older` : ""}
+            </strong>
+          </div>
+          {visibleMessages.length ? visibleMessages.map((message, index) => {
+            const messageDetail = agentMessageDisplayDetail(message);
+            const messageMeta = [message.label || message.roleLabel || "", message.meta || message.createdAt || ""]
+              .filter(Boolean)
+              .join(" · ");
+            const messageKey = stableAgentMessageKey(message, `message-${index}`);
+            const messageSelected = selectedMessageId === messageKey;
+            return (
+              <article
+                aria-pressed={messageSelected}
+                className={`fluxos-message role-${message.role || "assistant"} ${message.processMessage ? "process" : ""} ${message.emphasis ? "emphasis" : ""} ${messageSelected ? "selected" : ""}`.trim()}
+                data-agent-message-key={messageKey}
+                data-mission-id={message.missionId || workbenchState?.missionId || ""}
+                data-message-zone="thread"
+                data-runtime-id={message.runtimeId || workbenchState?.runtime || ""}
+                data-runtime-report={isRuntimeOutputAgentMessage(message) ? "true" : "false"}
+                data-hermes-transcript={isLiveRuntimeReportMessage(message) ? "true" : "false"}
+                data-selected-agent-message={messageSelected ? "true" : "false"}
+                data-turn-id={messageKey}
+                key={messageKey}
+                onClick={() => selectAgentMessage(messageKey)}
+                onKeyDown={event => handleAgentMessageKeyDown(event, messageKey)}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="fluxos-message-head">
+                  <span>{messageMeta}</span>
+                  <strong>{agentMessageDisplayTitle(message)}</strong>
+                </div>
+                {messageDetail ? <p>{messageDetail}</p> : null}
+                {message.technicalDetail ? (
+                  <details className="fluxos-message-trace">
+                    <summary>Runtime trace</summary>
+                    <p>{String(message.technicalDetail).slice(0, 720)}</p>
+                  </details>
+                ) : null}
+                {asList(message.chips).length > 0 ? (
+                  <div className="fluxos-message-chips">
+                    {asList(message.chips).slice(0, 4).map(chip => <span key={`${message.id || index}-${chip}`}>{chip}</span>)}
+                  </div>
+                ) : null}
+              </article>
+            );
+          }) : isLiveBackend ? (
+            <article className="fluxos-flow-empty">
+              <span>Live data only</span>
+              <strong>No Hermes/runtime report rows loaded for this mission</strong>
+              <p>The agent thread will stay empty until the NAS returns current mission messages. Planner steps, file reads, and archived bookkeeping stay out of the main message list. The live thread shows concrete Runtime output bodies first, then real Hermes transcript rows for historical missions that did not emit a final Runtime output body. It never reuses an older frame or bundled sample message.</p>
+              {preferredRunningLiveMissionId ? (
+                <button
+                  data-live-active-mission-switch="true"
+                  onClick={() => onSelectFlow?.(preferredRunningLiveMissionId)}
+                  type="button"
+                >
+                  Open running Hermes mission
+                </button>
+              ) : null}
+            </article>
+          ) : [
             { id: "u", role: "user", title: "Goal", detail: "Build Fluxio as a usable agent command center." },
             { id: "a", role: "assistant", title: "Fluxio", detail: "I will keep plan, changes, preview, and approvals visible while I work." },
-          ]).map((message, index) => {
+          ].map((message, index) => {
             const messageDetail = message.detail || message.content || message.message || "";
             return (
               <article className={`fluxos-message role-${message.role || "assistant"}`} key={message.id || index}>
@@ -6159,6 +7861,51 @@ function FluxioAgentSurface(props) {
             );
           })}
         </section>
+
+        <div className="fluxos-plan-list">
+          {isLiveBackend ? (
+            livePlanRows.length > 0 ? livePlanRows.map((message, index) => {
+              const messageKey = stableAgentMessageKey(message, `live-plan-${index}`);
+              const selected = selectedDiagnosticMessageId === messageKey;
+              return (
+              <article
+                aria-pressed={selected}
+                className={`fluxos-plan-step status-${message.tone === "bad" ? "blocked" : message.tone === "good" ? "done" : "running"} ${selected ? "selected" : ""}`.trim()}
+                data-agent-message-key={messageKey}
+                data-diagnostic-id={messageKey}
+                data-mission-id={message.missionId || workbenchState?.missionId || ""}
+                data-message-zone="plan"
+                data-selected-diagnostic-message={selected ? "true" : "false"}
+                key={messageKey}
+                onClick={() => selectDiagnosticMessage(messageKey)}
+                onKeyDown={event => handleDiagnosticMessageKeyDown(event, messageKey)}
+                role="button"
+                tabIndex={0}
+              >
+                <span>{message.tone === "good" ? <Check size={16} strokeWidth={2} /> : message.tone === "bad" ? <CircleHelp size={16} strokeWidth={2} /> : <CircleDashed size={16} strokeWidth={2} />}</span>
+                <div>
+                  <strong>{agentMessageDisplayTitle(message)}</strong>
+                  {agentMessageDisplayDetail(message) ? <p>{agentMessageDisplayDetail(message)}</p> : null}
+                </div>
+              </article>
+            );
+            }) : (
+              <article className="fluxos-flow-empty">
+                <span>Live data only</span>
+                <strong>No mission-detail messages loaded</strong>
+                <p>{liveDataStatus?.source ? `Current source: ${liveDataStatus.source}.` : "Waiting for the NAS control-room detail endpoint."}</p>
+              </article>
+            )
+          ) : AGENT_PLAN.map(([label, copy, status]) => (
+            <article className={`fluxos-plan-step status-${status}`} key={label}>
+              <span>{status === "done" ? <Check size={16} strokeWidth={2} /> : status === "running" ? <CircleDashed size={16} strokeWidth={2} /> : <Clock3 size={16} strokeWidth={2} />}</span>
+              <div>
+                <strong>{label}</strong>
+                <p>{copy}</p>
+              </div>
+            </article>
+          ))}
+        </div>
 
         <FluxioComposer
           draft={draft}
@@ -6171,35 +7918,123 @@ function FluxioAgentSurface(props) {
         />
       </section>
 
-      <section className="fluxos-preview-panel">
+      <section
+          className="fluxos-preview-panel"
+          data-live-message-selection-version="v21"
+        data-preview-state={previewState}
+        data-selected-message-id={resolvedSelectedMessageKey}
+        data-selected-message-requested-id={selectedMessageId}
+        key={`${workbenchState?.missionId || workbenchState?.missionTitle || "agent-preview"}:${resolvedSelectedMessageKey || "no-message"}`}
+      >
         <div className="fluxos-browser-chrome">
           <span />
-          <strong>/control?surface=agent</strong>
+            <strong>
+              {isLiveBackend
+                ? messageSelectionPinned
+                  ? `Selected message: ${selectedMessage?.label || selectedMessage?.roleLabel || "Agent"}`
+                  : livePreviewLabel
+                : "/control?surface=agent"}
+            </strong>
           <button onClick={() => fluxioAction(onRequestAction, "preview:refresh")} type="button">
             <RefreshCw size={15} strokeWidth={1.9} />
           </button>
+          {activePreviewActionUrl ? (
+            <button onClick={() => window.open(activePreviewActionUrl, "_blank", "noopener,noreferrer")} type="button">
+              Open new tab
+            </button>
+          ) : isLiveBackend ? (
+            <button disabled title="No live preview URL returned by NAS" type="button">
+              Open
+            </button>
+          ) : null}
         </div>
         <div className="fluxos-live-preview" aria-label="Live preview">
-          <div className="fluxos-preview-card wide" />
-          <div className="fluxos-preview-card active" />
-          <div className="fluxos-preview-card narrow" />
-          <div className="fluxos-selector one">Hero</div>
-          <div className="fluxos-selector two">CTA passes</div>
+          {isLiveBackend ? (
+            messageSelectionPinned ? (
+              <article className="fluxos-flow-empty fluxos-selected-message-proof">
+                <span>Selected live message</span>
+                <strong>{selectedMessage ? agentMessageDisplayTitle(selectedMessage) : "Mission message is refreshing"}</strong>
+                {selectedMessageSourceLabel ? <small>{selectedMessageSourceLabel}</small> : null}
+                {selectedMessageBody ? (
+                  <pre className="fluxos-selected-message-body" data-live-selected-message-body="true">{selectedMessageBody}</pre>
+                ) : (
+                  <p>This live row has no served preview artifact, or it is refreshing. The panel stays pinned to the selected message instead of reusing an older frame.</p>
+                )}
+                <div className="fluxos-message-chips">
+                  {asList(selectedMessage?.chips).slice(0, 5).map(chip => (
+                    <span key={`selected-message-chip-${chip}`}>{chip}</span>
+                  ))}
+                </div>
+                <div className="fluxos-preview-empty-actions">
+                  {selectedMessagePreviewActionUrl ? (
+                    <button onClick={() => window.open(selectedMessagePreviewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open preview</button>
+                  ) : null}
+                  <button disabled={!selectedMessage?.id} onClick={() => fluxioAction(onRequestAction, "run:message-comment", { messageId: selectedMessage?.id })} type="button">Comment</button>
+                  <button disabled={!selectedMessage?.id} onClick={() => fluxioAction(onRequestAction, "run:message-copy", { messageId: selectedMessage?.id })} type="button">Copy</button>
+                </div>
+              </article>
+            ) : activePreviewFrameUrl ? (
+              <article className="fluxos-flow-empty fluxos-frame-blocked">
+                <span>Live URL captured</span>
+                <strong>Open the live artifact in a new tab</strong>
+                <p>The Agent surface no longer embeds live mission frames. It stays on Hermes/runtime messages so an older served preview cannot remain stuck while you switch rows.</p>
+                <div className="fluxos-preview-empty-actions">
+                  <button onClick={() => window.open(activePreviewFrameUrl, "_blank", "noopener,noreferrer")} type="button">Open new tab</button>
+                  <button onClick={() => fluxioAction(onRequestAction, "preview:refresh")} type="button">Refresh</button>
+                </div>
+              </article>
+            ) : livePreviewFrameBlocked ? (
+              <article className="fluxos-flow-empty fluxos-frame-blocked">
+                <span>Live URL captured</span>
+                <strong>Embedded preview disabled for this target</strong>
+                <p>The live preview URL is real, but it is likely protected by browser frame policy. Open it in a new tab instead of showing a broken iframe.</p>
+                <div className="fluxos-preview-empty-actions">
+                  <button onClick={() => window.open(activePreviewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open new tab</button>
+                  <button onClick={() => fluxioAction(onRequestAction, "preview:refresh")} type="button">Refresh</button>
+                </div>
+              </article>
+            ) : (
+              <article className="fluxos-flow-empty">
+                <span>Live data only</span>
+                <strong>No live preview URL captured</strong>
+                <p>{workbenchState?.previewSourceDetail || "The Agent preview waits for a served NAS preview URL from the selected mission."}</p>
+                <div className="fluxos-preview-empty-actions">
+                  <button onClick={() => fluxioAction(onRequestAction, "preview:refresh")} type="button">Refresh</button>
+                  <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Capture proof</button>
+                </div>
+              </article>
+            )
+          ) : (
+            <>
+              <div className="fluxos-preview-card wide" />
+              <div className="fluxos-preview-card active" />
+              <div className="fluxos-preview-card narrow" />
+              <div className="fluxos-selector one">Hero</div>
+              <div className="fluxos-selector two">CTA passes</div>
+            </>
+          )}
         </div>
         <div className="fluxos-tool-grid">
-          {(visibleTimeline.length ? visibleTimeline : TOOL_EVENTS).map((item, index) => {
+          {(visibleTimeline.length ? visibleTimeline : isLiveBackend ? [] : TOOL_EVENTS).map((item, index) => {
             const tuple = Array.isArray(item) ? item : [item.time || item.timestamp || "now", item.title || item.kind, item.detail || item.message, item.tone || "neutral"];
             return (
-              <article className={`fluxos-tool-event tone-${tuple[3] || "neutral"}`} key={`${tuple[0]}-${index}`}>
+              <article className={`fluxos-tool-event tone-${tuple[3] || "neutral"}`} key={`${workbenchState?.missionId || "mission"}-${tuple[0]}-${tuple[1]}-${index}`}>
                 <span>{tuple[0]}</span>
                 <strong>{tuple[1]}</strong>
                 <p>{tuple[2]}</p>
               </article>
             );
           })}
+          {visibleTimeline.length === 0 && isLiveBackend ? (
+            <article className="fluxos-flow-empty">
+              <span>Live data only</span>
+              <strong>No live tool events loaded</strong>
+              <p>The tool grid is waiting for NAS mission timeline events.</p>
+            </article>
+          ) : null}
         </div>
         <div className="fluxos-runtime-strip">
-          <button onClick={() => onRuntimeChange?.("openclaw")} type="button">{selectedRuntimeLabel || "OpenClaw"}</button>
+          <button onClick={() => onRuntimeChange?.("hermes")} type="button">{selectedRuntimeLabel || "Hermes"}</button>
           <button onClick={() => fluxioAction(onRequestAction, "agent:open-terminal")} type="button">Terminal</button>
           <button onClick={() => fluxioAction(onRequestAction, "agent:open-browser")} type="button">Browser</button>
         </div>
@@ -6216,35 +8051,922 @@ function FluxioAgentSurface(props) {
 }
 
 function FluxioBuilderSurface(props) {
-  const { builderRows, changedItems, onOpenBuilderDetail, onRequestAction, onSelectFlow, onSelectProject, timelineMoments } = props;
-  const rows = asList(builderRows).length ? asList(builderRows).slice(0, 4) : BUILDER_FLOWS;
-  const changes = asList(changedItems).length ? asList(changedItems).slice(0, 5) : CHANGED_FILES;
+  const { builderRows, changedItems, liveDataStatus, onOpenBuilderDetail, onRequestAction, onSelectFlow, onSelectProject, projectProgressHistory, systemAuditDigest, timelineMoments, workbenchState } = props;
+  const sourceRows = asList(builderRows);
+  const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const liveRows = sortLiveBuilderRows(sourceRows);
+  const liveLoading = isLiveBackend && liveDataStatus?.loading && sourceRows.length === 0;
+  const rows = sourceRows.length ? liveRows.slice(0, isLiveBackend ? 8 : 4) : liveLoading || isLiveBackend ? [] : BUILDER_FLOWS;
+  const metricRows = sourceRows.length ? sourceRows : rows;
+  const activeRows = metricRows.filter(row => isActiveBuilderRow(row));
+  const reviewRows = metricRows.filter(row => isBlockedBuilderRow(row));
+  const selectedProgressValue = clampPercent(workbenchState?.progress?.value);
+  const liveAdvancementRows = isLiveBackend
+    ? activeRows.slice(0, 6).map(row => {
+        const missionId = String(row?.id || row?.missionId || row?.mission_id || "").trim();
+        const isSelectedMission = Boolean(
+          missionId &&
+          missionId === String(workbenchState?.missionId || "").trim(),
+        );
+        if (!isSelectedMission || selectedProgressValue == null) {
+          return row;
+        }
+        return {
+          ...row,
+          progress: `${selectedProgressValue}%`,
+          progressLabel: workbenchState?.progress?.label || row?.progressLabel || row?.status || "",
+          progressDetail: workbenchState?.progress?.source || row?.progressDetail || "",
+          progressNextAction: workbenchState?.progress?.nextAction || row?.progressNextAction || "",
+        };
+      })
+    : [];
+  const liveMissionCount = Number(liveDataStatus?.missionCount ?? metricRows.length);
+  const liveActiveCount = Number(liveDataStatus?.activeMissionCount ?? activeRows.length);
+  const liveQueuedCount = Number(liveDataStatus?.queuedMissionCount ?? 0);
+  const liveBlockedCount = Number(liveDataStatus?.blockedMissionCount ?? reviewRows.length);
+  const liveCompletedCount = Number(liveDataStatus?.completedMissionCount ?? 0);
+  const liveRunningCount = Number(liveDataStatus?.runningMissionCount ?? 0);
+  const liveChangedItems = asList(changedItems).filter(isRealChangedItem).map(changedItemTuple);
+  const changes = liveChangedItems.length ? liveChangedItems.slice(0, 5) : isLiveBackend ? [] : CHANGED_FILES;
+  const publicLaunchReadiness = systemAuditDigest?.publicLaunchReadiness || {};
+  const publicLaunchRepairPacket = publicLaunchReadiness?.repairPacket || {};
+  const publicLaunchSteps = publicLaunchProofSteps(publicLaunchReadiness);
+  const proofDiffRows = asList(workbenchState?.proofDiff?.rows);
+  const [proofDiffWrap, setProofDiffWrap] = useState(true);
+  const [proofDiffVisibleCount, setProofDiffVisibleCount] = useState(12);
+  const visibleProofDiffRows = proofDiffRows.slice(0, proofDiffVisibleCount);
+  const missionContextRoots = rows
+    .flatMap(row => asList(row?.contextRoots?.roots).map(root => ({ ...root, missionName: row?.name || row?.title || "Mission" })))
+    .slice(0, 6);
+  const selectedContext = rows.find(row => row?.selected)?.contextRoots || rows[0]?.contextRoots || {};
+  const selectedMissionRow = rows.find(row => row?.selected) || rows[0] || {};
+  const selectedMissionId = selectedMissionRow?.id || selectedMissionRow?.missionId || selectedMissionRow?.mission_id || "";
+  const selectedProviderCapabilities = selectedMissionRow?.providerCapabilities || selectedMissionRow?.provider_capabilities || {};
+  const providerCapabilityRows = asList(selectedProviderCapabilities?.providers);
+  const providerLaneRows = asList(selectedProviderCapabilities?.lanes);
+  const selectedRouteDecisionRows = providerLaneRows.length
+    ? providerLaneRows.slice(0, 4)
+    : [
+        { role: "planner", provider: "openai-codex", model: "gpt-5.5", effort: "high", reason: "Plan and route the mission." },
+        { role: "executor", provider: selectedProviderCapabilities.runtimeId || selectedMissionRow.runtimeId || "hermes", model: "task-fit", effort: "high", reason: "Execute through the selected runtime lane." },
+        { role: "verifier", provider: "openai-codex", model: "gpt-5.5", effort: "high", reason: "Verify diffs, browser proof, and receipts." },
+      ];
+  const selectedThreadRows = (
+    asList(workbenchState?.agentThreadPreview).length > 0
+      ? asList(workbenchState?.agentThreadPreview)
+      : asList(workbenchState?.runtimeOps)
+  )
+    .filter(item => !isLowSignalAgentMessage(item))
+    .slice(0, 3);
+  const projectHealthRows = rows.map((row, index) => ({
+    id: row?.id || `project-health-${index}`,
+    title: row?.workspaceName || row?.description || row?.name || "Workspace",
+    detail: row?.workspacePath || row?.lastRunMeta || (isLiveBackend ? "Workspace path missing in live NAS summary." : "No workspace path recorded."),
+    activeCount: row?.status === "Completed" ? 0 : 1,
+    blockedCount: Number(row?.blockedCount || 0),
+    laneCount: Number(row?.delegatedLaneCount || 0),
+    tone: Number(row?.blockedCount || 0) > 0 ? "warn" : row?.statusTone || "neutral",
+  }));
+  const projectRowsByWorkspaceId = new Map(
+    asList(projectProgressHistory?.projects).map(item => [item.workspaceId, item]),
+  );
+  const schedulingQueueRows = asList(projectProgressHistory?.schedulingQueue).map((item, index) => {
+    const project = projectRowsByWorkspaceId.get(item.workspaceId) || {};
+    const counts = project.counts || {};
+    const relatedHoldCount =
+      asList(item.sameRootActiveWorkspaces).length +
+      asList(item.dependencyActiveWorkspaces).length +
+      asList(item.sameRootBlockedWorkspaces).length +
+      asList(item.dependencyBlockedWorkspaces).length;
+    return {
+      ...item,
+      rank: index + 1,
+      title: item.workspaceName || project.workspaceName || item.workspaceId || "Workspace",
+      activeCount: Number(counts.active || 0),
+      queuedCount: Number(counts.queued || 0),
+      blockedCount: Number(counts.blocked || 0),
+      completedCount: Number(counts.completed || 0),
+      relatedHoldCount,
+    };
+  });
+  const liveGuideRows = isLiveBackend ? [
+    {
+      id: "mission",
+      label: "Mission",
+      value: liveMissionCount ? `${liveMissionCount} live · ${liveActiveCount} active` : "No live rows",
+      detail: liveMissionCount
+        ? `${liveRunningCount} running · ${liveQueuedCount} queued · ${liveBlockedCount} blocked`
+        : "The NAS summary returned no mission rows; the UI does not show fixture missions.",
+    },
+    {
+      id: "thread",
+      label: "Agent thread",
+      value: selectedThreadRows.length ? `${selectedThreadRows.length} current rows` : "No selected rows",
+      detail: selectedThreadRows.length
+        ? "Open Agent to inspect the selected mission transcript, runtime trace, and proof body."
+        : "The selected mission has not returned detail messages yet.",
+    },
+    {
+      id: "queue",
+      label: "Queue",
+      value: schedulingQueueRows.length ? `${schedulingQueueRows.length} ranked projects` : "No scheduler rows",
+      detail: projectProgressHistory?.scheduler?.nextAction || "The live scheduler has not emitted a next action.",
+    },
+    {
+      id: "notify",
+      label: "Notifications",
+      value: `${Number(liveDataStatus?.notificationCount || 0)} visible · ${Number(liveDataStatus?.sliceNotificationCount || 0)} slice alerts`,
+      detail: "Browser notifications use the first line of the live mission update and can be dismissed from the stack.",
+    },
+  ] : [];
+  const missionAdvancementRows = isLiveBackend
+    ? liveRows.slice(0, 5).map((row, index) => {
+        const rowProgressValue = progressPercentValue(row?.progress);
+        const status = row?.status || row?.statusLabel || "live";
+        const missionId = row?.id || row?.missionId || row?.mission_id || "";
+        const isSelectedMission = Boolean(
+          missionId &&
+          missionId === String(workbenchState?.missionId || "").trim(),
+        );
+        const progressValue =
+          rowProgressValue == null && isSelectedMission
+            ? selectedProgressValue
+            : rowProgressValue;
+        const laneCount = Number(row?.delegatedLaneCount || row?.runs || 0);
+        const blockerCount = Number(row?.blockedCount || 0);
+        return {
+          id: missionId || `mission-advancement-${index}`,
+          title: row?.name || row?.title || missionId || "Live mission",
+          status,
+          tone: blockerCount > 0 ? "warn" : isActiveBuilderRow(row) ? "good" : "neutral",
+          progress: progressValue,
+          detail:
+            (isSelectedMission ? workbenchState?.progress?.nextAction : "") ||
+            row?.progressNextAction ||
+            row?.turningPoint ||
+            (isSelectedMission ? workbenchState?.progress?.source : "") ||
+            row?.progressDetail ||
+            row?.lastRunMeta ||
+            "Waiting for the next live runtime update.",
+          meta: [
+            row?.runtimeId || row?.runtime || "",
+            laneCount ? `${laneCount} lane${laneCount === 1 ? "" : "s"}` : "",
+            row?.updated || "",
+          ].filter(Boolean).join(" · "),
+        };
+      })
+    : [];
+  const systemAdvancementRows = isLiveBackend ? [
+    systemAuditDigest?.redTeamEscalation?.historyRows ? {
+      id: "red-team",
+      label: "Red-team pressure",
+      value: `${systemAuditDigest.redTeamEscalation.latestResistanceScore || 0} resistance`,
+      detail: `${systemAuditDigest.redTeamEscalation.historyRows} rows · next ${systemAuditDigest.redTeamEscalation.nextAttemptBudget || 0} attempts · pressure ${systemAuditDigest.redTeamEscalation.currentPressureIndex || 0} -> ${systemAuditDigest.redTeamEscalation.nextPressureIndex || 0}`,
+    } : null,
+    systemAuditDigest?.watchdogSelfImprovement?.schema ? {
+      id: "watchdog",
+      label: "Watchdog learning",
+      value: `${systemAuditDigest.watchdogSelfImprovement.historyRows || 0} receipts`,
+      detail: systemAuditDigest.watchdogSelfImprovement.trendReady
+        ? `${systemAuditDigest.watchdogSelfImprovement.completedReceipts || 0} completed · next ${systemAuditDigest.watchdogSelfImprovement.nextAttemptBudget || 0} attempts`
+        : systemAuditDigest.watchdogSelfImprovement.nextAction,
+    } : null,
+    systemAuditDigest?.mustBeatStatus ? {
+      id: "t3",
+      label: "T3 comparison",
+      value: `${Number(systemAuditDigest?.mustBeatStatus?.ahead || 0)}/${Number(systemAuditDigest?.mustBeatStatus?.total || 7)} ahead`,
+      detail: Number(systemAuditDigest?.mustBeatStatus?.deficitCount || 0)
+        ? `${Number(systemAuditDigest?.mustBeatStatus?.deficitCount || 0)} deficit${Number(systemAuditDigest?.mustBeatStatus?.deficitCount || 0) === 1 ? "" : "s"} still block the must-beat target.`
+        : systemAuditDigest?.t3Reference?.latestObservedRelease || "All tracked categories are ahead.",
+    } : null,
+    publicLaunchReadiness?.status ? {
+      id: "public-launch",
+      label: "Public launch",
+      value: titleizeToken(publicLaunchReadiness.status),
+      detail: publicLaunchReadiness.nextAction || "Attach current public-web and publication proof.",
+    } : null,
+  ].filter(Boolean) : [];
+  const t3DeficitRows = asList(systemAuditDigest?.deficits);
+  const t3ImprovementRows = asList(systemAuditDigest?.improvementQueue);
+  const t3RepairRows = (t3DeficitRows.length > 0 ? t3DeficitRows : t3ImprovementRows)
+    .slice(0, 4)
+    .map((item, index) => ({
+      id: item.id || item.category || item.title || `t3-repair-${index}`,
+      category: item.category || item.title || "System repair",
+      detail: item.blockingGap || item.detail || systemAuditDigest?.scoreCapReason || "Fluxio is not ahead in this category yet.",
+      nextAction: item.nextAction || item.nextMove || item.repairAction || "Open the repair lane and attach proof.",
+      delta: Number(item.delta ?? (Number(item.fluxioScore || 0) - Number(item.t3Score || 0))),
+      fluxioScore: item.fluxioScore,
+      t3Score: item.t3Score,
+      lane: item.lane || "T3 parity",
+      priority: item.priority || index + 1,
+      raw: item,
+    }));
+  const t3AheadCount = Number(systemAuditDigest?.mustBeatStatus?.ahead || 0);
+  const t3TotalCount = Number(systemAuditDigest?.mustBeatStatus?.total || 0);
+  const t3DeficitCount = Number(systemAuditDigest?.mustBeatStatus?.deficitCount || t3DeficitRows.length || 0);
+  const topQueueRow = schedulingQueueRows[0] || null;
+  const queueFirstHeldCount = schedulingQueueRows.filter(item => item.safeToLaunch === false).length;
+  const queueFirstNotificationCount = Number(liveDataStatus?.notificationCount || 0);
+  const queueFirstSliceCount = Number(liveDataStatus?.sliceNotificationCount || 0);
   return (
     <div className="fluxos-builder">
       <section className="fluxos-builder-main">
         <div className="fluxos-section-head">
           <span>Builder overview</span>
-          <strong>Project readiness</strong>
+          <strong>{isLiveBackend ? "Live NAS mission readiness" : "Project readiness"}</strong>
         </div>
+        <div className="fluxos-live-data-banner" aria-label="Live data source">
+          <span>{isLiveBackend ? "Live data" : "Preview data"}</span>
+          <strong>{liveDataStatus?.source || (isLiveBackend ? "control-room summary" : "fixture")}</strong>
+          <p>
+            {liveMissionCount} mission rows · {Number(liveDataStatus?.notificationCount || 0)} notifications
+            {liveDataStatus?.refreshedAt ? ` · refreshed ${liveDataStatus.refreshedAt}` : ""}
+            {liveDataStatus?.summaryCache?.status
+              ? ` · ${liveDataStatus.summaryCache.status === "hit" ? "warm live summary" : "fresh live summary"}`
+              : ""}
+            {liveDataStatus?.refreshing && !liveLoading ? " · full snapshot refreshing" : ""}
+          </p>
+        </div>
+        <LiveOperationsBrief
+          activeRows={activeRows}
+          liveDataStatus={liveDataStatus}
+          onOpenAgent={() => onOpenBuilderDetail?.(selectedMissionId)}
+          onOpenNotifications={() => onRequestAction?.("notifications:show-live-stack")}
+          onOpenQueue={() => onSelectProject?.(schedulingQueueRows[0]?.workspaceId)}
+          projectProgressHistory={projectProgressHistory}
+          queueRows={schedulingQueueRows}
+          threadRows={selectedThreadRows}
+          workbenchState={workbenchState}
+        />
+        {isLiveBackend ? (
+          <section
+            className="fluxos-queue-first-band"
+            aria-label="Queue-first Builder command band"
+            data-live-builder-command-band="true"
+          >
+            <div className="fluxos-queue-first-copy">
+              <span>Queue-first Builder</span>
+              <strong>
+                {topQueueRow
+                  ? `#${topQueueRow.rank} ${topQueueRow.title}`
+                  : selectedMissionRow?.name || selectedMissionRow?.title || "No ranked project"}
+              </strong>
+              <p>
+                {topQueueRow?.recommendedAction ||
+                  topQueueRow?.reason ||
+                  workbenchState?.progress?.nextAction ||
+                  "Open the live Agent thread or launch a mission to create the next ranked project row."}
+              </p>
+            </div>
+            <div className="fluxos-queue-first-metrics" aria-label="Queue-first live Builder metrics">
+              <article>
+                <span>Projects</span>
+                <strong>{projectHealthRows.filter(item => Number(item.activeCount || 0) > 0).length}</strong>
+                <p>{queueFirstHeldCount} held</p>
+              </article>
+              <article>
+                <span>Missions</span>
+                <strong>{liveActiveCount}</strong>
+                <p>{liveBlockedCount} blocked</p>
+              </article>
+              <article>
+                <span>Queue</span>
+                <strong>{schedulingQueueRows.length}</strong>
+                <p>{topQueueRow?.safeToLaunch ? "top safe" : topQueueRow ? "top held" : "empty"}</p>
+              </article>
+              <article>
+                <span>Alerts</span>
+                <strong>{queueFirstNotificationCount}</strong>
+                <p>{queueFirstSliceCount} slice</p>
+              </article>
+            </div>
+            <div className="fluxos-queue-first-actions">
+              <button disabled={!topQueueRow?.workspaceId} onClick={() => onSelectProject?.(topQueueRow?.workspaceId)} type="button">
+                Open top project
+              </button>
+              <button disabled={!selectedMissionId} onClick={() => onOpenBuilderDetail?.(selectedMissionId)} type="button">
+                Open live Agent
+              </button>
+              <button onClick={() => onRequestAction?.("launch:mission")} type="button">
+                Launch next mission
+              </button>
+            </div>
+          </section>
+        ) : null}
         <div className="fluxos-status-grid">
-          <MetricTile detail="Typecheck and browser smoke pending" label="Publish confidence" tone="warn" value="82%" />
-          <MetricTile detail="Active flows connected to review cards" label="Flows" tone="good" value={String(rows.length)} />
-          <MetricTile detail="One approval blocks merge" label="Review" tone="warn" value="Open" />
+          <MetricTile detail={liveLoading ? "Waiting for the authenticated NAS summary; no cached rows are shown." : isLiveBackend ? "All mission rows from the NAS summary, not the visible preview limit." : "Typecheck and browser smoke pending"} label={isLiveBackend ? "Live missions" : "Publish confidence"} tone={liveMissionCount ? "good" : "warn"} value={isLiveBackend ? (liveLoading ? "Syncing" : String(liveMissionCount)) : "82%"} />
+          <MetricTile detail={liveLoading ? "Running, queued, and completed counts appear after the live summary returns." : isLiveBackend ? `${liveRunningCount} running · ${liveQueuedCount} queued · ${liveCompletedCount} completed` : "Active flows connected to review cards"} label={isLiveBackend ? "Active" : "Flows"} tone="good" value={isLiveBackend ? (liveLoading ? "--" : String(liveActiveCount)) : String(activeRows.length)} />
+          <MetricTile detail={liveLoading ? "Review blockers are hidden until the NAS response is loaded." : isLiveBackend ? "Blocked, failed, or approval-gated mission rows from the NAS summary." : "One approval blocks merge"} label="Review" tone="warn" value={isLiveBackend ? (liveLoading ? "--" : String(liveBlockedCount)) : "Open"} />
         </div>
+        {isLiveBackend ? (
+          <section className="fluxos-beginner-guide" aria-label="Live beginner mission guide" data-live-beginner-guide="true">
+            <div className="fluxos-section-head">
+              <span>Beginner guide</span>
+              <strong>{selectedMissionRow?.name || selectedMissionRow?.title || "Select a live mission"}</strong>
+            </div>
+            <div className="fluxos-beginner-guide-grid">
+              {liveGuideRows.map(item => (
+                <article key={`live-guide-${item.id}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-beginner-actions">
+              <button disabled={!selectedMissionId} onClick={() => onOpenBuilderDetail?.(selectedMissionId)} type="button">Open Agent thread</button>
+              <button disabled={!schedulingQueueRows[0]?.workspaceId} onClick={() => onSelectProject?.(schedulingQueueRows[0]?.workspaceId)} type="button">Open top queued project</button>
+              <button onClick={() => onRequestAction?.("notifications:show-live-stack")} type="button">Show notifications</button>
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            className="fluxos-mission-advancement-digest"
+            aria-label="Live mission advancement digest"
+            data-live-advancement-digest="true"
+          >
+            <div className="fluxos-section-head">
+              <span>Mission advancement digest</span>
+              <strong>{`${missionAdvancementRows.length} visible mission${missionAdvancementRows.length === 1 ? "" : "s"} · live NAS only`}</strong>
+            </div>
+            <p>
+              Current mission progress, self-improvement pressure, and public-readiness blockers are grouped here so Builder answers what advanced without mixing in fixture data.
+            </p>
+            <div className="fluxos-mission-advancement-grid">
+              {missionAdvancementRows.length > 0 ? missionAdvancementRows.map(item => (
+                <button
+                  className={`tone-${item.tone}`}
+                  data-live-advancement-mission="true"
+                  key={item.id}
+                  onClick={() => onOpenBuilderDetail?.(item.id)}
+                  type="button"
+                >
+                  <span>{titleizeToken(item.status)}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                  <div>
+                    {item.progress == null ? <em>No numeric progress</em> : <em>{`${item.progress}%`}</em>}
+                    {item.meta ? <em>{item.meta}</em> : null}
+                  </div>
+                  {item.progress == null ? null : <i aria-label={`Mission progress ${item.progress}%`} style={{ "--progress": `${item.progress}%` }} />}
+                </button>
+              )) : (
+                <article className="fluxos-flow-empty">
+                  <span>Live data only</span>
+                  <strong>No advancement rows returned</strong>
+                  <p>The digest waits for NAS mission rows and never backfills sample progress.</p>
+                </article>
+              )}
+            </div>
+            {systemAdvancementRows.length > 0 ? (
+              <div className="fluxos-system-advancement-grid" aria-label="System self-improvement advancement">
+                {systemAdvancementRows.map(item => (
+                  <article key={`system-advancement-${item.id}`}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                    <p>{item.detail}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        <LiveGuidedNextSteps
+          liveDataStatus={liveDataStatus}
+          onOpenAgent={() => onOpenBuilderDetail?.(selectedMissionId)}
+          onOpenNotifications={() => onRequestAction?.("notifications:show-live-stack")}
+          onOpenProof={() => onRequestAction?.("run:proof")}
+          onOpenQueue={() => onSelectProject?.(schedulingQueueRows[0]?.workspaceId)}
+          queueRows={schedulingQueueRows}
+          threadRows={selectedThreadRows}
+          workbenchState={workbenchState}
+        />
+        <LiveOperatorTutorialPath
+          liveDataStatus={liveDataStatus}
+          onOpenAgent={() => onOpenBuilderDetail?.(selectedMissionId)}
+          onOpenNotifications={() => onRequestAction?.("notifications:show-live-stack")}
+          onOpenProof={() => onRequestAction?.("run:proof")}
+          onOpenQueue={() => onSelectProject?.(schedulingQueueRows[0]?.workspaceId)}
+          queueRows={schedulingQueueRows}
+          threadRows={selectedThreadRows}
+          workbenchState={workbenchState}
+        />
+        {isLiveBackend ? (
+          <section className="fluxos-project-queue" aria-label="Live multi-project Builder queue" data-live-builder-queue="true">
+            <div className="fluxos-section-head">
+              <span>Multi-project queue</span>
+              <strong>
+                {schedulingQueueRows.length} ranked project{schedulingQueueRows.length === 1 ? "" : "s"}
+              </strong>
+            </div>
+            <p>
+              {projectProgressHistory?.scheduler?.nextAction ||
+                "Builder waits for the live NAS scheduling contract instead of guessing project order."}
+            </p>
+            {schedulingQueueRows.length > 0 ? (
+              <div className="fluxos-project-queue-list">
+                {schedulingQueueRows.slice(0, 6).map(item => (
+                  <button
+                    className={cx("fluxos-project-queue-row", item.safeToLaunch ? "safe" : "held")}
+                    key={`live-builder-queue-${item.workspaceId || item.rank}`}
+                    onClick={() => onSelectProject?.(item.workspaceId)}
+                    type="button"
+                  >
+                    <span>#{item.rank} · {titleizeToken(item.state || "watch")} · priority {item.priorityScore || 0}</span>
+                    <strong>{item.title}</strong>
+                    <p>{item.recommendedAction || item.reason || "No live scheduling action recorded."}</p>
+                    <p>
+                      {item.targetMissionTitle ? `Target: ${item.targetMissionTitle}` : "No target mission"} · {titleizeToken(item.runtime || "hermes")}
+                    </p>
+                    <div className="fluxos-project-queue-counters">
+                      <em>{item.activeCount} active</em>
+                      <em>{item.queuedCount} queued</em>
+                      <em>{item.blockedCount} blocked</em>
+                      <em>{item.completedCount} done</em>
+                      <em>{item.relatedHoldCount} related holds</em>
+                      <em>{item.safeToLaunch ? "safe to launch" : "hold"}</em>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="fluxos-flow-empty" data-live-builder-queue="missing">
+                No live multi-project scheduling queue is available from the NAS summary.
+              </p>
+            )}
+          </section>
+        ) : null}
+        {isLiveBackend && selectedProviderCapabilities?.schema ? (
+          <section className="fluxos-gap-radar" aria-label="Provider capability truth">
+            <div className="fluxos-section-head">
+              <span>Provider capability truth</span>
+              <strong>{titleizeToken(selectedProviderCapabilities.status || "unknown")}</strong>
+            </div>
+            <p>
+              {`${providerLaneRows.length || selectedProviderCapabilities.laneCount || 0} planner/executor/verifier lanes · `}
+              {`${selectedProviderCapabilities.readyLaneCount || 0} ready · ${selectedProviderCapabilities.blockedLaneCount || 0} blocked · `}
+              {selectedProviderCapabilities.runtimeId || selectedMissionRow.runtimeId || "runtime"}
+            </p>
+            <p>
+              {`${asList(selectedProviderCapabilities.toolSummary?.families).slice(0, 6).join(", ") || "tool families pending"} · `}
+              {`${selectedProviderCapabilities.quotaSummary?.reportedProviders || 0} quota reports · `}
+              {`${selectedProviderCapabilities.quotaSummary?.unreportedProviders || 0} unreported`}
+            </p>
+            <div className="fluxos-provider-admission-truth" data-provider-admission-truth="true">
+              <span>Admission vs quota</span>
+              <strong>Auth decides whether the runtime can launch; quota is separate live usage evidence.</strong>
+              <p>
+                Quota unreported means Hermes/OpenClaw has no live quota or rate-window report for that provider.
+                It is not a provider-limit or exhausted-usage claim.
+              </p>
+            </div>
+            <div className="fluxos-provider-route-decision" data-task-fit-route-decision="true">
+              <div>
+                <span>Task-fit route decision</span>
+                <strong>Planner, executor, verifier, and harness are separate live lanes.</strong>
+                <p>Hermes supervises durable work; Codex 5.5 high handles planning and verification; MiniMax is used only when the executor lane is authenticated for frontend work.</p>
+              </div>
+              {selectedRouteDecisionRows.map((item, index) => (
+                <article key={`provider-route-decision-${item.role || index}`}>
+                  <span>{titleizeToken(item.role || item.label || "Lane")}</span>
+                  <strong>{`${item.provider || item.runtime || "provider"} / ${item.model || "model"}`}</strong>
+                  <p>{`${titleizeToken(item.effort || item.status || "high")} · ${item.reason || item.lastEvent || item.blocker || "Live route lane returned no current reason."}`}</p>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-gap-radar-grid">
+              {providerCapabilityRows.length > 0 ? providerCapabilityRows.slice(0, 4).map(item => (
+                <article className={item.health === "blocked" ? "warn" : "good"} key={`provider-capability-${item.provider}`}>
+                  <span>{asList(item.roles).join(" / ") || "route"}</span>
+                  <strong>{`${titleizeToken(item.provider || "provider")} · ${item.authPresent ? "Authenticated" : "Auth missing"}`}</strong>
+                  <p>
+                    {`${asList(item.models).join(", ") || "model unresolved"} · ${item.authPath || "not configured"}`}
+                    {asList(item.blockers).length ? ` · ${asList(item.blockers)[0]}` : ""}
+                  </p>
+                  <p>
+                    {`Quota ${titleizeToken(item.quota?.status || "unknown")} · `}
+                    {asList(item.toolFamilies).slice(0, 4).join(", ") || "tools unreported"}
+                    {asList(item.failureClasses).length ? ` · ${asList(item.failureClasses).join(", ")}` : ""}
+                  </p>
+                </article>
+              )) : (
+                <article className="warn">
+                  <span>Live route contract</span>
+                  <strong>No provider lanes resolved yet</strong>
+                  <p>{selectedProviderCapabilities.nextAction || "Resolve the mission route contract before dispatching provider work."}</p>
+                </article>
+              )}
+            </div>
+          </section>
+        ) : null}
+        {liveAdvancementRows.length > 0 ? (
+          <section className="fluxos-gap-radar" aria-label="Live mission advancement">
+            <div className="fluxos-section-head">
+              <span>Live mission advancement</span>
+              <strong>{liveAdvancementRows.length} active project{liveAdvancementRows.length === 1 ? "" : "s"}</strong>
+            </div>
+            <div className="fluxos-gap-radar-grid">
+              {liveAdvancementRows.map(row => {
+                const width = progressWidth(row.progress);
+                return (
+                  <article className={isBlockedBuilderRow(row) ? "warn" : "good"} key={`advancement-${row.id || row.name}`}>
+                    <span>
+                      {row.runtimeId || "runtime"} · {row.delegatedLaneCount || 0} lane{Number(row.delegatedLaneCount || 0) === 1 ? "" : "s"} · {row.artifactStatus || "artifact pending"}
+                    </span>
+                    <strong>{row.name}</strong>
+                    <p>
+                      {row.progress || "No numeric progress"} · {row.progressLabel || row.status}
+                      {row.progressNextAction ? ` · ${row.progressNextAction}` : ""}
+                    </p>
+                    {width ? (
+                      <div className="reference-success-track" aria-label={`${row.name} progress ${row.progress}`}>
+                        <span style={{ width }} />
+                      </div>
+                    ) : null}
+                    {row.artifactNextAction ? <p>{row.artifactNextAction}</p> : null}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+        {systemAuditDigest?.schema ? (
+          <section className="fluxos-gap-radar" aria-label="T3 gap radar">
+            <div className="fluxos-section-head">
+              <span>T3 gap radar</span>
+              <strong>
+                {`${systemAuditDigest.systemScoreOutOf20 ?? "--"}/20 · ${systemAuditDigest.mustBeatStatus?.ahead ?? 0}/${systemAuditDigest.mustBeatStatus?.total ?? 7} categories ahead`}
+              </strong>
+            </div>
+            <p>
+              {`${systemAuditDigest.operatorConfidenceScore ?? 0}/100 operator confidence · `}
+              {`${systemAuditDigest.missingOperatorValueSamples ?? 0} value samples missing · `}
+              {systemAuditDigest.source || "control-room digest"}
+            </p>
+            <p>{systemAuditDigest.scoreCapReason || "Scores stay capped until live route trust is value-scored."}</p>
+            <div className="fluxos-t3-repair-plan" aria-label="T3 parity repair plan">
+              <div className="fluxos-t3-repair-plan-head">
+                <span>T3 parity repair plan</span>
+                <strong>{`${t3AheadCount}/${t3TotalCount || 7} ahead · ${t3DeficitCount} to beat`}</strong>
+                <p>{systemAuditDigest.t3Reference?.latestObservedRelease || "Latest T3 release evidence is not loaded."}</p>
+              </div>
+              <div className="fluxos-t3-repair-plan-list">
+                {t3RepairRows.length > 0 ? t3RepairRows.map(item => (
+                  <button
+                    className={item.delta < 0 ? "bad" : "warn"}
+                    key={`t3-repair-${item.id}`}
+                    onClick={() => onRequestAction?.("t3-repair:open", { item: item.raw })}
+                    type="button"
+                  >
+                    <span>{`${item.lane} · priority ${item.priority}`}</span>
+                    <strong>{item.category}</strong>
+                    <p>{item.nextAction}</p>
+                    <em>
+                      {Number.isFinite(item.delta)
+                        ? `Delta ${item.delta >= 0 ? "+" : ""}${item.delta}`
+                        : "Needs scoring"}
+                      {item.fluxioScore || item.t3Score ? ` · Fluxio ${item.fluxioScore ?? "--"}/20 · T3 ${item.t3Score ?? "--"}/20` : ""}
+                    </em>
+                  </button>
+                )) : (
+                  <article>
+                    <span>T3 parity</span>
+                    <strong>No tracked T3 deficits loaded</strong>
+                    <p>{systemAuditDigest.nextAction || "Keep live route-trust and public launch evidence current."}</p>
+                  </article>
+                )}
+              </div>
+            </div>
+            {systemAuditDigest.systemLossBreakdown?.schema ? (
+              <div className="fluxos-system-loss" aria-label="System loss breakdown">
+                <div>
+                  <span>System loss</span>
+                  <strong>{`${systemAuditDigest.systemLossBreakdown.score ?? 0}/100 · ${titleizeToken(systemAuditDigest.systemLossBreakdown.severity || "low")}`}</strong>
+                  <p>{systemAuditDigest.systemLossBreakdown.nextAction || "Keep sampling live outcomes."}</p>
+                </div>
+                <div className="fluxos-system-loss-drivers">
+                  {asList(systemAuditDigest.systemLossBreakdown.drivers).slice(0, 4).map(item => (
+                    <article key={item.id || item.title}>
+                      <span>{`${item.lane || "System"} · loss ${item.loss ?? 0}`}</span>
+                      <strong>{item.title || "Loss driver"}</strong>
+                      <p>{item.detail || item.evidence || item.nextAction}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {systemAuditDigest.redTeamEscalation?.historyRows ? (
+              <p>
+                {`Red-team escalation: ${systemAuditDigest.redTeamEscalation.historyRows} rows · `}
+                {`${systemAuditDigest.redTeamEscalation.latestResistanceScore || 0} resistance · `}
+                {`next ${systemAuditDigest.redTeamEscalation.nextAttemptBudget || 0} attempts`}
+              </p>
+            ) : null}
+            {systemAuditDigest.watchdogSelfImprovement?.schema ? (
+              <div className="fluxos-watchdog-trend" aria-label="Watchdog self-improvement trend">
+                <div>
+                  <span>Watchdog self-improvement</span>
+                  <strong>
+                    {`${systemAuditDigest.watchdogSelfImprovement.historyRows || 0} receipts · `}
+                    {`${systemAuditDigest.watchdogSelfImprovement.completedReceipts || 0} completed`}
+                  </strong>
+                  <p>
+                    {systemAuditDigest.watchdogSelfImprovement.trendReady
+                      ? "Cadence trend is ready for release proof."
+                      : systemAuditDigest.watchdogSelfImprovement.nextAction}
+                  </p>
+                </div>
+                <div className="fluxos-watchdog-trend-metrics">
+                  <em>{`Latest ${systemAuditDigest.watchdogSelfImprovement.latestStatus || "missing"}`}</em>
+                  <em>{`History #${systemAuditDigest.watchdogSelfImprovement.latestHistoryIndex || 0}`}</em>
+                  <em>{`Next ${systemAuditDigest.watchdogSelfImprovement.nextAttemptBudget || 0} attempts`}</em>
+                </div>
+                {asList(systemAuditDigest.watchdogSelfImprovement.recentReceipts).length > 0 ? (
+                  <div className="fluxos-watchdog-receipts" aria-label="Recent watchdog self-improvement receipts">
+                    {asList(systemAuditDigest.watchdogSelfImprovement.recentReceipts).slice(-3).map(item => (
+                      <article key={`watchdog-receipt-${item.historyIndex}-${item.generatedAt}`}>
+                        <span>{`#${item.historyIndex || 0} · ${titleizeToken(item.status || "unknown")}`}</span>
+                        <strong>{`${item.completedSteps || 0} step${item.completedSteps === 1 ? "" : "s"}`}</strong>
+                        <p>{item.generatedAt || "No timestamp recorded"}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="fluxos-gap-radar-grid">
+              {asList(systemAuditDigest.deficits).length > 0 ? (
+                asList(systemAuditDigest.deficits).slice(0, 4).map(item => (
+                  <article className={item.delta < 0 ? "bad" : "warn"} key={item.category}>
+                    <span>{`Fluxio ${item.fluxioScore}/20 · T3 ${item.t3Score}/20`}</span>
+                    <strong>{item.category}</strong>
+                    <p>{item.nextAction}</p>
+                  </article>
+                ))
+              ) : (
+                <article className="good">
+                  <span>T3 comparison</span>
+                  <strong>All tracked categories are ahead.</strong>
+                  <p>{systemAuditDigest.nextAction}</p>
+                </article>
+              )}
+              {asList(systemAuditDigest.badFirst).slice(0, 3).map(item => (
+                <article className="warn" key={`bad-first-${item.title || item.detail}`}>
+                  <span>Still weak</span>
+                  <strong>{item.title || "Current gap"}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+            {asList(systemAuditDigest.improvementQueue).length > 0 ? (
+              <div className="fluxos-improvement-queue" aria-label="System improvement queue">
+                <span>System improvement queue</span>
+                {asList(systemAuditDigest.improvementQueue).slice(0, 5).map(item => (
+                  <button
+                    key={item.id || item.title}
+                    onClick={() => onRequestAction?.("system-improvement:open", { item })}
+                    type="button"
+                  >
+                    <strong>{item.title}</strong>
+                    <em>{`${item.lane || "System"} · ${item.status || "open"} · priority ${item.priority || 0}`}</em>
+                    <p>{item.nextAction || item.detail}</p>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="fluxos-gap-radar-strengths" aria-label="T3 strengths to beat">
+              <span>T3 strengths to beat</span>
+              {asList(systemAuditDigest.t3Reference?.strengthsToBeat).slice(0, 5).map(item => (
+                <em key={`t3-strength-${item}`}>{item}</em>
+              ))}
+            </div>
+            {asList(systemAuditDigest.activeGapMissions).length > 0 ? (
+              <div className="fluxos-gap-mission-strip" aria-label="Active missions addressing system gaps">
+                <span>Active gap missions</span>
+                {asList(systemAuditDigest.activeGapMissions).slice(0, 4).map(item => (
+                  <button
+                    key={item.missionId || item.title}
+                    onClick={() => onOpenBuilderDetail?.(item.missionId)}
+                    type="button"
+                  >
+                    <strong>{item.title || item.missionId}</strong>
+                    <em>{`${item.gapSignal || "Route-trust sampling"} · ${item.status || "status unknown"}`}</em>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        {publicLaunchReadiness.status &&
+        publicLaunchReadiness.status !== "ready_for_public_launch" ? (
+          <section className="fluxos-gap-radar fluxos-public-launch-proof-path" aria-label="Live public launch blocker" data-public-launch-proof-path="true">
+            <div className="fluxos-section-head">
+              <span>Live public launch blocker</span>
+              <strong>{titleizeToken(publicLaunchReadiness.status)}</strong>
+            </div>
+            <p>
+              {publicLaunchReadiness.nextAction ||
+                "Public launch is not proven until current web and external publication evidence are present."}
+            </p>
+            <div className="fluxos-public-launch-steps" aria-label="Public launch proof path">
+              {publicLaunchSteps.map((step, index) => (
+                <article className={step.tone} data-public-launch-proof-step={step.id} key={`public-launch-step-${step.id}`}>
+                  <span>{`0${index + 1} · ${step.state}`}</span>
+                  <strong>{step.label}</strong>
+                  <p>{step.detail}</p>
+                  <em>{step.checks.length ? `${step.checks.filter(item => item.passed).length}/${step.checkIds.length} checks passed` : "No live check rows"}</em>
+                </article>
+              ))}
+            </div>
+            {publicLaunchRepairPacket?.schema ? (
+              <div className="fluxos-improvement-queue" aria-label="Public launch repair packet" data-public-launch-repair-packet="true">
+                <span>
+                  Launch repair packet · {publicLaunchRepairPacket.canClaimPublicLaunch ? "claim enabled" : "cannot claim public launch"}
+                </span>
+                <button type="button">
+                  <strong>{titleizeToken(publicLaunchRepairPacket.primaryBlocker || publicLaunchReadiness.status || "Next blocker")}</strong>
+                  <em>
+                    {`${publicLaunchRepairPacket.sourceCoverage || "source coverage unknown"} · ${publicLaunchRepairPacket.releaseBlockingPathCount ?? publicLaunchRepairPacket.releaseBlockingSampleCount ?? 0} release-impacting paths`}
+                  </em>
+                </button>
+                <button type="button">
+                  <strong>Next publish action</strong>
+                  <em>{publicLaunchRepairPacket.nextAction || publicLaunchReadiness.nextAction}</em>
+                </button>
+                {asList(publicLaunchRepairPacket.orderedLanes).slice(0, 5).map(item => (
+                  <button key={`public-launch-repair-lane-${item.lane}`} type="button">
+                    <strong>{`${titleizeToken(item.lane || "lane")} · ${item.count || 0}`}</strong>
+                    <em>{item.nextAction}</em>
+                  </button>
+                ))}
+                {publicLaunchRepairPacket.stagingPlan?.schema ? (
+                  <button data-public-launch-staging-plan="true" type="button">
+                    <strong>{`Release staging plan · ${publicLaunchRepairPacket.stagingPlan.releaseImpactPathCount || 0} release paths`}</strong>
+                    <em>{publicLaunchRepairPacket.stagingPlan.nextAction}</em>
+                  </button>
+                ) : null}
+                {publicLaunchReadiness.stagingProof?.schema ? (
+                  <button data-public-launch-staging-proof="true" type="button">
+                    <strong>{`Staging proof archived · ${publicLaunchReadiness.stagingProof.releaseImpactPathCount || 0} release paths`}</strong>
+                    <em>{publicLaunchReadiness.stagingProof.evidencePath || publicLaunchReadiness.stagingProof.nextAction}</em>
+                  </button>
+                ) : null}
+                {asList(publicLaunchRepairPacket.stagingPlan?.groups).slice(0, 4).map(item => (
+                  <button key={`public-launch-staging-group-${item.lane}`} type="button">
+                    <strong>{`git add ${titleizeToken(item.lane || "lane")} · ${item.pathCount || 0}`}</strong>
+                    <em>{item.command}</em>
+                  </button>
+                ))}
+                {asList(publicLaunchRepairPacket.commands).slice(0, 4).map(item => (
+                  <button key={`public-launch-repair-command-${item.label}`} type="button">
+                    <strong>{item.label}</strong>
+                    <em>{item.command}</em>
+                  </button>
+                ))}
+                {asList(publicLaunchRepairPacket.receiptTargets).slice(0, 3).map(item => (
+                  <button key={`public-launch-repair-receipt-${item.path}`} type="button">
+                    <strong>{item.label}</strong>
+                    <em>{item.path}</em>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="fluxos-gap-radar-grid">
+              {asList(publicLaunchReadiness.missing).map(item => (
+                <article className="warn" key={`public-launch-missing-${item}`}>
+                  <span>Missing proof</span>
+                  <strong>{item}</strong>
+                  <p>Required by the live NAS public-launch readiness verifier.</p>
+                </article>
+              ))}
+              {asList(publicLaunchReadiness.blockers).slice(0, 3).map(item => (
+                <article className="warn" key={`public-launch-blocker-${item.checkId || item.id || item.title}`}>
+                  <span>{item.checkId || item.id || "Blocker"}</span>
+                  <strong>{item.title || item.label || titleizeToken(item.status || "Needs proof")}</strong>
+                  <p>{item.details || item.detail || item.nextAction || item.reason || "Verifier requires current public evidence."}</p>
+                </article>
+              ))}
+            </div>
+            {asList(publicLaunchReadiness.publicWeb?.sourceDirtyPathSample).length > 0 ? (
+              <div className="fluxos-improvement-queue" aria-label="Public web dirty source sample">
+                <span>
+                  Dirty source sample · {publicLaunchReadiness.publicWeb?.sourceDirtyPathCount || 0} paths
+                </span>
+                {publicLaunchReadiness.publicWeb?.dirtySourceTriage?.schema ? (
+                  <button data-public-launch-dirty-source-triage="true" type="button">
+                    <strong>
+                      {`${publicLaunchReadiness.publicWeb.dirtySourceTriage.releaseBlockingSampleCount || 0} release-impacting sample paths`}
+                    </strong>
+                    <em>{publicLaunchReadiness.publicWeb.dirtySourceTriage.nextAction}</em>
+                  </button>
+                ) : null}
+                {asList(publicLaunchReadiness.publicWeb?.sourceDirtyPathSample).slice(0, 8).map(item => (
+                  <button key={`public-web-dirty-${item}`} type="button">
+                    <strong>{item}</strong>
+                    <em>Must be committed, published, or intentionally excluded before current public-web proof can pass.</em>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {publicLaunchReadiness.publicationProof?.nextAction ? (
+              <p>
+                Publication proof: {publicLaunchReadiness.publicationProof.nextAction} Expected receipt:{" "}
+                {publicLaunchReadiness.publicationProof.npmReceiptPath ||
+                  publicLaunchReadiness.publicationProof.signedInstallerReceiptPath ||
+                  ".agent_control/publication/*"}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
+        {isLiveBackend && (selectedMissionId || workbenchState?.missionTitle) ? (
+          <section className="fluxos-selected-agent-preview" aria-label="Selected Agent live thread preview">
+            <div>
+              <span>Selected Agent thread</span>
+              <strong>{workbenchState?.missionTitle || selectedMissionRow?.name || selectedMissionRow?.title || "Live mission"}</strong>
+              <p>{workbenchState?.progress?.nextAction || selectedMissionRow?.turningPoint || "Open Agent for the full live transcript and runtime trace."}</p>
+            </div>
+            {selectedProgressValue == null ? (
+              <em>No live percentage returned</em>
+            ) : (
+              <i aria-label={`Selected mission progress ${selectedProgressValue}%`} style={{ "--progress": `${selectedProgressValue}%` }} />
+            )}
+            <div className="fluxos-selected-agent-events">
+              {selectedThreadRows.length > 0 ? selectedThreadRows.map(item => (
+                <article key={item.id || item.label || item.timestamp} data-mission-id={item.missionId || workbenchState?.missionId || ""}>
+                  <span>{timestampLabel(item.timestamp) || titleizeToken(item.status || "live")}</span>
+                  <strong>{agentPreviewTitle(item)}</strong>
+                  <p>{agentPreviewDetail(item)}</p>
+                </article>
+              )) : (
+                <article>
+                  <span>Live detail</span>
+                  <strong>Open Agent for current messages</strong>
+                </article>
+              )}
+            </div>
+            <button disabled={!selectedMissionId} onClick={() => onOpenBuilderDetail?.(selectedMissionId)} type="button">Open Agent thread</button>
+          </section>
+        ) : null}
         <section className="fluxos-flow-board">
-          {rows.map((row, index) => {
+          {rows.length > 0 ? rows.map((row, index) => {
             const tuple = Array.isArray(row)
               ? row
-              : [row.title || row.name || "Workspace flow", row.kind || row.status || "run", row.status || "active", row.progress || `${70 + index * 3}%`];
+              : [row.title || row.name || "Workspace flow", row.kind || row.status || "run", row.status || "active", row.progress];
+            const width = progressWidth(tuple[3]);
             return (
-              <button className="fluxos-flow-card" key={`${tuple[0]}-${index}`} onClick={() => onSelectFlow?.(row?.id || tuple[0])} type="button">
+              <button className={cx("fluxos-flow-card", isLiveBackend && "live-row")} key={`${tuple[0]}-${index}`} onClick={() => onSelectFlow?.(row?.id || tuple[0])} type="button">
                 <span>{tuple[1]}</span>
                 <strong>{tuple[0]}</strong>
                 <p>{tuple[2]}</p>
-                <div><i style={{ width: tuple[3] }} /></div>
+                {width ? (
+                  <div aria-label={`Live progress ${width}`}><i style={{ width }} /></div>
+                ) : isLiveBackend ? (
+                  <small className="fluxos-live-progress-missing">No numeric progress returned by NAS</small>
+                ) : (
+                  <div><i style={{ width: `${70 + index * 3}%` }} /></div>
+                )}
               </button>
             );
-          })}
+          }) : (
+            <article className="fluxos-flow-empty">
+              <span>{liveLoading ? "Connecting to NAS" : "Waiting for NAS data"}</span>
+              <strong>{liveLoading ? "Loading live mission rows" : "No live mission rows loaded yet"}</strong>
+              <p>{liveLoading ? "The Builder surface is waiting for the authenticated control-room summary and is not showing cached or sample missions." : "Refresh the control room or sign in again; fixture flow cards are hidden in live mode."}</p>
+            </article>
+          )}
+        </section>
+        <section className="fluxos-context-roots" aria-label="Mission context roots">
+          <div className="fluxos-section-head">
+            <span>Mission context roots</span>
+            <strong>
+              {selectedContext?.counts?.totalRoots || missionContextRoots.length || 0} visible root{(selectedContext?.counts?.totalRoots || missionContextRoots.length || 0) === 1 ? "" : "s"}
+            </strong>
+          </div>
+          <p>{selectedContext?.recommendedAction || "Live missions show primary root, execution root, sync mirrors, and related project roots before cross-project edits."}</p>
+          <div className="fluxos-context-root-grid">
+            {missionContextRoots.length > 0 ? (
+              missionContextRoots.map((root, index) => (
+                <button
+                  className={cx("fluxos-context-root", root.blockedMissionCount > 0 && "warn", root.currentMission && "active")}
+                  key={root.rootId || `${root.workspaceId}-${root.role}-${index}`}
+                  onClick={() => onSelectProject?.(root.workspaceId || root.rootPath || root.rootId)}
+                  type="button"
+                >
+                  <span>{titleizeToken(root.role)} · {root.writableByMission ? "writable" : "read-only"}</span>
+                  <strong>{root.folderLabel || root.workspaceName || "Root"}</strong>
+                  <p>{root.rootPath || "No path recorded."}</p>
+                </button>
+              ))
+            ) : (
+              <article className="fluxos-context-root empty">
+                <span>Awaiting live mission</span>
+                <strong>No context roots in this preview</strong>
+                <p>Open a live mission snapshot to inspect write scope and related projects.</p>
+              </article>
+            )}
+          </div>
         </section>
       </section>
 
@@ -6253,7 +8975,7 @@ function FluxioBuilderSurface(props) {
           <span>Execution pipeline</span>
           <strong>Preview to merge</strong>
         </div>
-        {["Plan accepted", "Files changed", "Visual review", "Tests", "Approval", "Merge"].map((step, index) => (
+        {(isLiveBackend ? ["NAS summary loaded", "Mission rows mapped", "Notifications attached", "Slice events visible", "Proof ready", "Operator review"] : ["Plan accepted", "Files changed", "Visual review", "Tests", "Approval", "Merge"]).map((step, index) => (
           <button className={index < 3 ? "complete" : index === 3 ? "active" : ""} key={step} onClick={() => fluxioAction(onRequestAction, `builder:pipeline:${step}`)} type="button">
             <span>{String(index + 1).padStart(2, "0")}</span>
             <strong>{step}</strong>
@@ -6266,10 +8988,10 @@ function FluxioBuilderSurface(props) {
           <span>Review bundle</span>
           <strong>Changes ready for inspection</strong>
         </div>
-        {changes.map((item, index) => {
+        {changes.length > 0 ? changes.map((item, index) => {
           const tuple = Array.isArray(item)
             ? item
-            : [item.path || item.file || "changed-file", item.summary || item.status || "changed", item.kind || "file"];
+            : changedItemTuple(item);
           return (
             <article key={`${tuple[0]}-${index}`}>
               <Code2 size={16} strokeWidth={1.8} />
@@ -6280,43 +9002,315 @@ function FluxioBuilderSurface(props) {
               <span>{tuple[2]}</span>
             </article>
           );
-        })}
+        }) : (
+          <article>
+            <Code2 size={16} strokeWidth={1.8} />
+            <div>
+              <strong>No file-level change rows in the live summary</strong>
+              <p>Open a mission detail or proof digest for file-level evidence.</p>
+            </div>
+            <span>live</span>
+          </article>
+        )}
         <div className="fluxos-review-actions">
-          <button onClick={onOpenBuilderDetail} type="button">Open details</button>
+          <button disabled={!selectedMissionId} onClick={() => onOpenBuilderDetail?.(selectedMissionId)} type="button">Open in Agent</button>
           <button className="primary" onClick={() => onSelectProject?.("current")} type="button">Publish check</button>
         </div>
+        <div className="fluxos-builder-proof-grid">
+          <article>
+            <span>Project health</span>
+            <strong>{projectHealthRows.length} supervised project{projectHealthRows.length === 1 ? "" : "s"}</strong>
+            {projectHealthRows.slice(0, 3).map(item => (
+              <button className={cx("fluxos-proof-row", item.blockedCount > 0 && "warn")} key={item.id} onClick={() => onSelectProject?.(item.id)} type="button">
+                <span>{item.activeCount} active · {item.blockedCount} blocked</span>
+                <strong>{item.title}</strong>
+                <p>{item.detail}</p>
+              </button>
+            ))}
+          </article>
+          <article>
+            <span>Sub-agent lanes</span>
+            <strong>{projectHealthRows.reduce((total, item) => total + item.laneCount, 0)} planner/executor/verifier lane{projectHealthRows.reduce((total, item) => total + item.laneCount, 0) === 1 ? "" : "s"}</strong>
+            <p>Delegated Hermes/OpenClaw lane counts are carried from the live mission rows instead of hidden in logs.</p>
+          </article>
+        </div>
+        {isLiveBackend && proofDiffRows.length === 0 ? (
+          <section className="proof-side-by-side-diff empty-live" aria-label="Supervisor proof state">
+            <div className="proof-side-by-side-head">
+              <div>
+                <span>Supervisor evidence</span>
+                <strong>No live proof diff rows returned</strong>
+                <p>The Builder surface is not inventing proof rows. Open the Agent detail when the mission has emitted review evidence.</p>
+              </div>
+            </div>
+          </section>
+        ) : (
+        <section className={cx("proof-side-by-side-diff", proofDiffWrap ? "wrap" : "no-wrap")} aria-label="Side-by-side proof diff with wrap toggle">
+          <div className="proof-side-by-side-head">
+            <div>
+              <span>Supervisor evidence</span>
+              <strong>Side-by-side proof diff</strong>
+              <p>{visibleProofDiffRows.length} of {proofDiffRows.length} rows · {workbenchState?.proofDiff?.source || "live mission proof drawer"}</p>
+            </div>
+            <button onClick={() => setProofDiffWrap(current => !current)} type="button">
+              {proofDiffWrap ? "Disable wrap" : "Enable wrap"}
+            </button>
+          </div>
+          <div className="proof-diff-table" role="table" aria-label="Expected proof versus captured evidence">
+            <div className="proof-diff-row header" role="row">
+              <span role="columnheader">Expectation</span>
+              <span role="columnheader">Captured evidence</span>
+              <span role="columnheader">State</span>
+            </div>
+            {visibleProofDiffRows.length > 0 ? visibleProofDiffRows.map(row => (
+              <div className={cx("proof-diff-row", row.tone === "warn" && "warn")} key={row.id} role="row">
+                <span role="cell"><small>{row.category}</small>{row.expected}</span>
+                <span role="cell">{row.captured}</span>
+                <span role="cell">{row.status}</span>
+              </div>
+            )) : (
+              <div className="proof-diff-row warn" role="row">
+                <span role="cell">Mission output or review artifact</span>
+                <span role="cell">No proof rows are attached to this Builder snapshot yet.</span>
+                <span role="cell">Missing</span>
+              </div>
+            )}
+          </div>
+          {proofDiffRows.length > proofDiffVisibleCount ? (
+            <button className="proof-list-more" onClick={() => setProofDiffVisibleCount(count => count + 12)} type="button">
+              Show more diff evidence
+            </button>
+          ) : null}
+        </section>
+        )}
       </section>
     </div>
   );
 }
 
-function FluxioSkillsSurface({ onRequestAction, studioState, surface }) {
-  const ruleSets = asList(studioState?.ruleSets).slice(0, 4);
+function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, surface }) {
+  const effectiveStudioState = studioState || skillStudioState || {};
+  const ruleSets = asList(effectiveStudioState?.ruleSets).slice(0, 4);
   const isRuleSets = surface === "rule-sets";
+  const feedbackLoop = effectiveStudioState?.feedbackLoop || {};
+  const routing = feedbackLoop.systemLossRouting || {};
+  const latestFeedback = asList(feedbackLoop.latest).slice(0, 3);
+  const repairProposals = asList(feedbackLoop.repairProposals).slice(0, 3);
+  const measuredSkillCount = Number(feedbackLoop.measuredSkillCount || 0);
+  const repairCount = Number(feedbackLoop.repairCount || 0);
+  const reinforceCount = Number(feedbackLoop.reinforceCount || 0);
+  const heldSkillCount = asList(routing.activeRepairSkillIds).length;
+  const liveSkills = asList(effectiveStudioState?.skills)
+    .filter(item => {
+      if (!effectiveStudioState?.liveReady) {
+        return false;
+      }
+      const status = String(item?.status || item?.promotionState || "").toLowerCase();
+      return status && !["fixture", "sample"].includes(status);
+    })
+    .slice(0, 12);
+  const feedbackSkillRows = effectiveStudioState?.liveReady
+    ? latestFeedback
+      .map(item => ({
+        id: item.skillId || item.skill_id || item.feedbackId || "",
+        name: item.label || item.skillId || item.skill_id || "Measured skill",
+        summary:
+          item.nextAction === "repair"
+            ? "Live mission-slice feedback marked this skill for repair before reuse."
+            : item.nextAction === "reinforce"
+              ? "Live mission-slice feedback marked this skill as useful for future routing."
+              : "Live mission-slice feedback captured this skill in the current system-loss loop.",
+        status: item.nextAction || "measured",
+        sourceType: item.sourceKind || "mission-slice",
+        category: item.missionId || item.mission_id || "mission feedback",
+        feedbackSummary: {
+          latestSystemLoss: item.systemLoss,
+          trend: item.nextAction || "measured",
+          selectionPolicy: { state: item.nextAction || "measured" },
+        },
+      }))
+      .filter(item => item.id || item.name)
+      .slice(0, 8)
+    : [];
+  const displayedSkills = liveSkills.length > 0 ? liveSkills : feedbackSkillRows;
+  const redTeamEscalation =
+    effectiveStudioState?.redTeamEscalation ||
+    studioState?.redTeamEscalation ||
+    skillStudioState?.redTeamEscalation ||
+    {};
+  const redTeamHistory = asList(redTeamEscalation.history).slice(-6);
   return (
     <div className="fluxos-skills">
       <section className="fluxos-skills-list">
         <div className="fluxos-section-head">
           <span>{isRuleSets ? "Rule Sets" : "Skill library"}</span>
-          <strong>{isRuleSets ? "Core policy and Approval gates" : "Reusable agent capabilities"}</strong>
+          <strong>{isRuleSets ? "Core policy and Approval gates" : effectiveStudioState?.liveReady ? "Live measured capabilities" : "Awaiting NAS skill registry"}</strong>
         </div>
-        {SKILL_CARDS.map(([title, copy, effort, harness]) => (
-          <button className="fluxos-skill-card" key={title} onClick={() => fluxioAction(onRequestAction, `skill:open:${title}`)} type="button">
+        {effectiveStudioState?.liveReady && !isRuleSets ? (
+          <section className="fluxos-skill-command-band" aria-label="Live skills command band" data-live-skills-command-band="true">
+            <div>
+              <span>Live skills</span>
+              <strong>System-loss routing</strong>
+              <p>
+                {`${displayedSkills.length} visible NAS skill rows. ${repairCount} repair, ${reinforceCount} reinforce, ${heldSkillCount} held before reuse.`}
+              </p>
+            </div>
+            <div className="fluxos-skill-command-metrics" aria-label="Live skill routing metrics">
+              {[
+                ["Measured", measuredSkillCount, "slices"],
+                ["Repair", repairCount, "hold"],
+                ["Reinforce", reinforceCount, "promote"],
+                ["Held", heldSkillCount, "routing"],
+              ].map(([label, value, detail]) => (
+                <article key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-skill-command-actions">
+              <button onClick={() => fluxioAction(onRequestAction, "skills:review-system-loss")} type="button">Review loss</button>
+              <button onClick={() => fluxioAction(onRequestAction, "skills:open-repair-queue")} type="button">Repair queue</button>
+              <button disabled={repairProposals.length === 0} onClick={() => fluxioAction(onRequestAction, `skills:apply-repair:${repairProposals[0]?.skillId || repairProposals[0]?.proposalId || "next"}`)} type="button">Apply repair</button>
+            </div>
+          </section>
+        ) : null}
+        {effectiveStudioState?.liveReady && !isRuleSets ? (
+          <div className="fluxos-live-skill-summary" aria-label="Live skill catalog source">
+            <span>{effectiveStudioState.liveSource || "control-room skill catalog"}</span>
+            <strong>{`${effectiveStudioState?.totals?.totalSkills || displayedSkills.length} real skill rows`}</strong>
+            <em>{`${measuredSkillCount} measured · ${repairCount} repair · ${reinforceCount} reinforce`}</em>
+          </div>
+        ) : null}
+        {isRuleSets && ruleSets.length > 0 ? ruleSets.map(item => (
+          <button
+            className="fluxos-skill-card"
+            data-live-rule-row={effectiveStudioState?.liveReady ? "true" : "false"}
+            key={item.id || item.name}
+            onClick={() => fluxioAction(onRequestAction, `skill:open:${item.id || item.name}`)}
+            type="button"
+          >
+            <Shield size={20} strokeWidth={1.7} />
+            <div>
+              <strong>{item.name || item.label || "Rule set"}</strong>
+              <p>{item.summary || item.description || "Live rule set returned by the NAS snapshot."}</p>
+            </div>
+            <span>{item.status || "live"}</span>
+            <em>{item.scope || item.badge || "rules"}</em>
+          </button>
+        )) : displayedSkills.length > 0 ? displayedSkills.map(item => (
+          <button
+            className="fluxos-skill-card"
+            data-live-skill-row={effectiveStudioState?.liveReady ? "true" : "false"}
+            data-skill-feedback-state={item?.feedbackSummary?.selectionPolicy?.state || item?.feedbackSummary?.trend || item?.status || "live"}
+            data-skill-id={item.id || item.name || ""}
+            key={item.id || item.name}
+            onClick={() => fluxioAction(onRequestAction, `skill:open:${item.id || item.name}`)}
+            type="button"
+          >
             <WandSparkles size={20} strokeWidth={1.7} />
             <div>
-              <strong>{title}</strong>
-              <p>{copy}</p>
+              <strong>{item.name || item.label || item.id || "Skill"}</strong>
+              <p>{item.summary || item.description || "Live skill returned by the NAS snapshot."}</p>
             </div>
-            <span>{effort}</span>
-            <em>{harness}</em>
+            <span>{item.status || item.promotionState || "live"}</span>
+            <em>
+              {item?.feedbackSummary?.latestSystemLoss != null
+                ? `loss ${item.feedbackSummary.latestSystemLoss} · ${item.feedbackSummary.selectionPolicy?.state || item.feedbackSummary.trend || "measured"}`
+                : asList(item.tags).slice(0, 2).join(" · ") || item.category || "measured"}
+            </em>
           </button>
-        ))}
+        )) : (
+          <article className="fluxos-flow-empty">
+            <span>Live data only</span>
+            <strong>{isRuleSets ? "No live rule sets returned" : "No live skill registry returned yet"}</strong>
+            <p>
+              {effectiveStudioState?.liveReady
+                ? "The NAS snapshot did not include measured skill rows for this surface."
+                : "This surface no longer renders the bundled static skill catalog in live mode. Refresh and wait for the full control-room snapshot."}
+            </p>
+          </article>
+        )}
       </section>
       <section className="fluxos-editor">
         <div className="fluxos-section-head">
-          <span>Ruleset editor</span>
-          <strong>{ruleSets[0]?.name || "Frontend merge policy"}</strong>
+          <span>{isRuleSets ? "Ruleset editor" : "Mission-slice feedback loop"}</span>
+          <strong>{isRuleSets ? ruleSets[0]?.name || "Frontend merge policy" : "System loss routing"}</strong>
         </div>
+        {!isRuleSets ? (
+          <div className="fluxos-loss-routing" aria-label="System loss routing">
+            <div className="fluxos-loss-routing-head">
+              <span>{routing.enabled ? "Active" : "Collecting evidence"}</span>
+              <strong>
+                {`${measuredSkillCount} measured · ${repairCount} repair · ${reinforceCount} reinforce`}
+              </strong>
+              <p>
+                {`Prefer slices at or below ${routing.preferThreshold ?? 0.15} loss. Deprioritize skills at or above ${routing.deprioritizeThreshold ?? 0.55} loss until repair evidence is clean.`}
+              </p>
+            </div>
+            <div className="fluxos-loss-chip-row">
+              <span>{`${asList(routing.preferredSkillIds).length} preferred`}</span>
+              <span>{`${asList(routing.activeRepairSkillIds).length} held for repair`}</span>
+              <span>{`${routing.minimumPromotionSlices ?? 3} clean slices`}</span>
+            </div>
+            <div className="fluxos-loss-events">
+              {latestFeedback.length > 0 ? latestFeedback.map(item => (
+                <article key={item.feedbackId || `${item.skillId}-${item.createdAt}`}>
+                  <span>{item.nextAction || "review"}</span>
+                  <strong>{item.label || item.skillId || "Skill"}</strong>
+                  <p>{`loss ${item.systemLoss ?? "n/a"} · improvement ${item.improvementScore ?? "n/a"}`}</p>
+                </article>
+              )) : (
+                <article>
+                  <span>Awaiting first slice</span>
+                  <strong>No system-loss feedback yet</strong>
+                  <p>Run a mission slice to score the selected skills against execution and verification evidence.</p>
+                </article>
+              )}
+            </div>
+            <div className="fluxos-red-team-trend" aria-label="Red-team escalation trend">
+              <div>
+                <span>Red-team escalation trend</span>
+                <strong>{`${redTeamEscalation.latestResistanceScore || 0} resistance · ${redTeamEscalation.latestDifficultyLevel || 0} -> ${redTeamEscalation.nextDifficultyLevel || 0} difficulty`}</strong>
+                {redTeamEscalation.nextPressureIndex ? (
+                  <em>{`Pressure ${redTeamEscalation.currentPressureIndex || 0} -> ${redTeamEscalation.nextPressureIndex}`}</em>
+                ) : null}
+                <p>{redTeamEscalation.nextAction || "Run a defensive red-team benchmark to start the escalation trend."}</p>
+              </div>
+              <div className="fluxos-red-team-bars" aria-label="Recent red-team difficulty history">
+                {redTeamHistory.length > 0 ? redTeamHistory.map((item, index) => {
+                  const level = Math.max(0, item.nextDifficultyLevel || item.difficultyLevel || 0);
+                  const pressure = Math.max(0, item.nextPressureIndex || item.currentPressureIndex || 0);
+                  const height = Math.max(18, Math.min(66, 18 + level * 8 + Math.min(18, Math.floor(pressure / 8))));
+                  return (
+                    <span
+                      className={item.shouldEscalate ? "escalate" : ""}
+                      key={item.id || `${item.preset}-${index}`}
+                      style={{ "--bar-height": `${height}px` }}
+                    >
+                      {item.nextDifficultyLabel || item.nextDifficultyLevel || item.difficultyLevel || 0}
+                    </span>
+                  );
+                }) : (
+                  <em>No run history</em>
+                )}
+              </div>
+              {redTeamEscalation?.nextBenchmarkPlan?.commandShell ? (
+                <div className="red-team-next-benchmark" aria-label="Next red-team benchmark command">
+                  <div>
+                    <span>Next aggregate benchmark</span>
+                    <strong>
+                      {`${redTeamEscalation.nextBenchmarkPlan.attemptBudget || redTeamEscalation.nextAttemptBudget || 0} attempts · target ${redTeamEscalation.nextBenchmarkPlan.targetResistanceScore || 0}+`}
+                    </strong>
+                    <p>{asList(redTeamEscalation.nextBenchmarkPlan.tactics).join(" · ") || "No tactic families recorded."}</p>
+                  </div>
+                  <code>{redTeamEscalation.nextBenchmarkPlan.commandShell}</code>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div className="fluxos-code-window">
           <pre>{`name: Core policy
 policy: frontend-polish
@@ -6337,8 +9331,23 @@ Approval:
               <span>{item}</span>
               <strong>Allowed</strong>
             </button>
-          ))}
-        </div>
+              ))}
+            </div>
+            <div className="fluxos-loss-events">
+              {repairProposals.length > 0 ? repairProposals.map(item => (
+                <article key={item.proposalId || item.skillId || item.label}>
+                  <span>Repair proposal</span>
+                  <strong>{item.label || item.skillId || "Skill repair"}</strong>
+                  <p>{item.validationGate || item.nextAction || "Validate the repair before reuse."}</p>
+                </article>
+              )) : (
+                <article>
+                  <span>Repair queue</span>
+                  <strong>No live repair proposal returned</strong>
+                  <p>High-loss skills will appear here when mission-slice feedback produces a repair action.</p>
+                </article>
+              )}
+            </div>
       </section>
     </div>
   );
@@ -6461,42 +9470,481 @@ function FluxioImagesSurface({ callBackend, onRequestAction }) {
   );
 }
 
-function FluxioWorkbenchSurface({ onRequestAction, workbenchState }) {
+function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction, onSetSurface, timelineMoments = [], workbenchState }) {
+  const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const runtimeOps = asList(workbenchState?.runtimeOps).slice(0, 8);
+  const artifacts = asList(workbenchState?.artifacts).slice(0, 8);
+  const notificationEvents = asList(workbenchState?.notificationEvents).filter(item => Number(item?.count || 0) > 0).slice(0, 6);
+  const progressValue = clampPercent(workbenchState?.progress?.value);
+  const liveThreadRows = visibleAgentMessages(compactAgentMessages(messages), 12, 6, { requireRuntimeReports: isLiveBackend });
+  const [selectedWorkbenchMessageId, setSelectedWorkbenchMessageId] = useState("");
+  const manualWorkbenchMessageSelectionRef = useRef(false);
+  const liveThreadRowEntries = useMemo(
+    () => liveThreadRows.map((item, index) => ({
+      item,
+      key: stableAgentMessageKey(item, `workbench-thread-${index}`),
+    })),
+    [liveThreadRows],
+  );
+  const liveThreadRowKeySignature = liveThreadRowEntries.map(entry => entry.key).join("|");
+  const workbenchSelectionScope = [
+    liveDataStatus?.previewMode || "preview",
+    workbenchState?.missionId || "",
+    workbenchState?.missionTitle || "",
+    isLiveBackend ? liveThreadRowKeySignature : "",
+  ].join(":");
+  const workbenchSelectionScopeRef = useRef("");
+  useEffect(() => {
+    setSelectedWorkbenchMessageId(current => {
+      const scopeChanged = workbenchSelectionScopeRef.current !== workbenchSelectionScope;
+      workbenchSelectionScopeRef.current = workbenchSelectionScope;
+      if (scopeChanged) {
+        manualWorkbenchMessageSelectionRef.current = false;
+      }
+      const currentEntry = current ? liveThreadRowEntries.find(entry => entry.key === current) : null;
+      const currentEntryMissionId = String(
+        currentEntry?.item?.missionId ||
+          currentEntry?.item?.mission_id ||
+          workbenchState?.missionId ||
+          "",
+      ).trim();
+      const scopedMissionId = String(workbenchState?.missionId || "").trim();
+      if (
+        current &&
+        currentEntry &&
+        manualWorkbenchMessageSelectionRef.current &&
+        (!isLiveBackend || !scopedMissionId || currentEntryMissionId === scopedMissionId)
+      ) {
+        return current;
+      }
+      const runtimeReport = liveThreadRows.find(isRuntimeOutputAgentMessage);
+      const meaningful = runtimeReport || liveThreadRows.find(isMeaningfulDefaultAgentMessage) || liveThreadRows[0] || null;
+      if (!meaningful) return "";
+      const meaningfulEntry = liveThreadRowEntries.find(entry => entry.item === meaningful);
+      return meaningfulEntry?.key || "";
+    });
+  }, [isLiveBackend, liveThreadRowEntries, liveThreadRows, workbenchSelectionScope, liveThreadRowKeySignature, workbenchState?.missionId]);
+  const selectedWorkbenchMessage =
+    liveThreadRowEntries.find(entry => entry.key === selectedWorkbenchMessageId)?.item ||
+    null;
+  const selectedWorkbenchBody = selectedWorkbenchMessage ? agentMessageDisplayDetail(selectedWorkbenchMessage) : "";
+  const messagePreviewCandidates = previewUrlCandidatesForMessage(selectedWorkbenchMessage);
+  const previewUrlCandidates = selectedWorkbenchMessage
+    ? messagePreviewCandidates
+    : [
+        workbenchState?.previewUrl,
+        workbenchState?.liveReview?.previewUrl,
+        workbenchState?.previewActionUrl,
+        workbenchState?.liveReview?.previewActionUrl,
+      ];
+  const previewActionUrl = previewUrlCandidates.find(isUsablePreviewUrl) || "";
+  const previewFrameUrl = selectedWorkbenchMessage || isLiveBackend ? "" : previewUrlCandidates.find(isMissionPreviewUrl) || "";
+  const previewFrameBlocked = Boolean(previewActionUrl && !previewFrameUrl && !selectedWorkbenchMessage);
+  const livePreviewState = selectedWorkbenchMessage
+    ? "selected-message"
+    : previewFrameUrl
+      ? "mission-frame"
+      : previewFrameBlocked
+        ? "frame-blocked"
+        : "empty";
+  const livePreviewStateLabel = selectedWorkbenchMessage
+    ? "Selected message"
+    : previewFrameUrl
+      ? "Served mission frame"
+      : previewFrameBlocked
+        ? "Open in browser"
+        : "No served preview";
+  const selectedWorkbenchTitle = selectedWorkbenchMessage
+    ? agentMessageDisplayTitle(selectedWorkbenchMessage)
+    : workbenchState?.missionTitle || "No message selected";
+  const liveTimelineRows = asList(timelineMoments)
+    .filter(item => !isLowSignalAgentMessage(item))
+    .slice(-8);
+  const operationRows = runtimeOps.length > 0
+    ? runtimeOps
+    : liveTimelineRows.length > 0
+      ? liveTimelineRows.map(item => ({
+          id: item.id || `${item.kind || item.title}-${item.timestamp || item.time || ""}`,
+          label: item.title || item.kind || "Live runtime event",
+          detail: item.detail || item.message || item.status || "Live event returned by the NAS mission thread.",
+          status: item.tone || item.kind || "live",
+          timestamp: item.timestamp || item.createdAt || item.time || "",
+        }))
+      : liveThreadRows
+        .filter(item => item.processMessage || item.emphasis || item.technicalDetail)
+        .map(item => ({
+          id: item.id,
+          label: item.title || item.label || "Live mission message",
+          detail: item.detail || item.technicalDetail || item.meta || "Message returned by the live mission detail endpoint.",
+          status: item.tone || item.label || "live",
+          timestamp: item.createdAt || item.timestamp || "",
+        }));
+  const workbenchProofMetrics = [
+    ["Messages", liveThreadRows.length, selectedWorkbenchMessage ? "runtime reports" : "waiting for thread"],
+    ["Artifacts", artifacts.length, artifacts.length ? "returned by NAS" : "none returned"],
+    ["Operations", operationRows.length, operationRows.length ? "live timeline" : "none returned"],
+    ["Signals", notificationEvents.reduce((total, item) => total + Number(item?.count || 0), 0), "notifications"],
+  ];
+  const noPreviewLabel = liveDataStatus?.loading
+    ? "Connecting to live preview evidence"
+    : artifacts.length > 0
+      ? "Artifact preview is file-based"
+      : "No NAS preview evidence loaded";
+  const noPreviewCopy = liveDataStatus?.loading
+    ? "The NAS summary is still arriving. The preview area stays honest until the backend returns an artifact or served URL."
+    : artifacts.length > 0
+      ? "The selected mission has output artifacts, but no served iframe URL. Open the artifact rows below for review."
+      : "No placeholder preview is drawn. The selected mission thread, progress, and runtime events are the current evidence.";
   return (
     <div className="fluxos-workbench">
+      <section className="fluxos-rail-panel fluxos-workbench-live-state">
+        <div className="fluxos-section-head">
+          <span>Live state</span>
+          <strong>{titleizeToken(workbenchState?.missionStatus || workbenchState?.status || (liveDataStatus?.loading ? "Loading" : "Ready"))}</strong>
+        </div>
+        {workbenchState?.missionTitle ? <strong className="fluxos-workbench-mission-title">{workbenchState.missionTitle}</strong> : null}
+        {progressValue == null ? null : (
+          <div className="fluxos-workbench-progress" aria-label={`Live mission progress ${progressValue}%`}>
+            <span>{workbenchState?.progress?.label || "Progress"}</span>
+            <i style={{ "--progress": `${progressValue}%` }} />
+            <em>{`${progressValue}%`}</em>
+          </div>
+        )}
+        <p>{workbenchState?.progress?.nextAction || "Browser, preview, screenshots, selectors, and replay markers stay attached to the current run."}</p>
+        {notificationEvents.length > 0 ? (
+          <div className="fluxos-workbench-events">
+            {notificationEvents.map(item => (
+              <button key={item.id || item.kind} onClick={() => fluxioAction(onRequestAction, `workbench:event:${item.kind}`)} type="button">
+                <span>{item.count}</span>
+                <strong>{item.label}</strong>
+                <small>{item.detail}</small>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {isLiveBackend ? (
+          <div className="fluxos-workbench-thread" aria-label="Selected mission live thread">
+            <span>Mission thread</span>
+            {liveThreadRowEntries.length > 0 ? liveThreadRowEntries.map(({ item, key: messageKey }) => {
+              const selected = selectedWorkbenchMessageId === messageKey;
+              return (
+              <article
+                aria-pressed={selected}
+                className={selected ? "selected" : ""}
+                data-agent-message-key={messageKey}
+                key={messageKey}
+                onClick={() => {
+                  manualWorkbenchMessageSelectionRef.current = true;
+                  setSelectedWorkbenchMessageId(messageKey);
+                }}
+                onKeyDown={event => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    manualWorkbenchMessageSelectionRef.current = true;
+                    setSelectedWorkbenchMessageId(messageKey);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <strong>{agentMessageDisplayTitle(item)}</strong>
+                <p>{agentMessageDisplayDetail(item) || item.meta || "Live mission message returned by the NAS detail endpoint."}</p>
+              </article>
+            );
+            }) : (
+              <article>
+                <strong>{liveDataStatus?.loading ? "Loading live thread messages" : "No live thread messages loaded"}</strong>
+                <p>The workbench is waiting for the mission detail endpoint. No fallback messages are rendered.</p>
+              </article>
+            )}
+          </div>
+        ) : null}
+      </section>
       <section className="fluxos-browser-pane">
+        {isLiveBackend ? (
+          <section
+            aria-label="Live Workbench proof controls"
+            className="fluxos-workbench-proof-band"
+            data-live-workbench-proof-band="true"
+          >
+            <div className="fluxos-workbench-proof-copy">
+              <span>Live Workbench proof</span>
+              <strong>{selectedWorkbenchTitle}</strong>
+              <p>{livePreviewStateLabel}. This band is built from the current NAS mission detail; no placeholder preview is drawn in live mode.</p>
+            </div>
+            <div className="fluxos-workbench-proof-metrics" aria-label="Live Workbench metrics">
+              {workbenchProofMetrics.map(([label, value, detail]) => (
+                <span key={label}>
+                  <strong>{value}</strong>
+                  <small>{label}</small>
+                  <em>{detail}</em>
+                </span>
+              ))}
+            </div>
+            <div className="fluxos-workbench-proof-actions">
+              <button onClick={() => onSetSurface?.("agent")} type="button">Open Agent</button>
+              <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Capture proof</button>
+              <button disabled={!previewActionUrl} onClick={() => previewActionUrl && window.open(previewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open preview</button>
+            </div>
+          </section>
+        ) : null}
         <div className="fluxos-browser-chrome">
           <span />
-          <strong>localhost preview</strong>
+          <strong>{workbenchState?.previewLabel || (isLiveBackend ? "No live preview frame attached" : "local layout preview")}</strong>
           <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Screenshot</button>
         </div>
-        <div className="fluxos-live-preview workbench">
-          <div className="fluxos-preview-card wide" />
-          <div className="fluxos-preview-card active" />
-          <div className="fluxos-selector one">Click target</div>
-          <div className="fluxos-selector two">Diff region</div>
+        <div
+          className="fluxos-live-preview workbench"
+          data-preview-state={livePreviewState}
+          data-selected-message-id={selectedWorkbenchMessageId}
+        >
+          {isLiveBackend && selectedWorkbenchMessage ? (
+            <article className="fluxos-flow-empty fluxos-selected-message-proof">
+              <span>Selected live message</span>
+              <strong>{agentMessageDisplayTitle(selectedWorkbenchMessage)}</strong>
+              {selectedWorkbenchBody ? (
+                <pre className="fluxos-selected-message-body" data-live-selected-message-body="true">{selectedWorkbenchBody}</pre>
+              ) : (
+                <p>{selectedWorkbenchMessage.meta || "This row has no served preview artifact. The Workbench stays pinned to the selected message instead of reusing an older frame."}</p>
+              )}
+              <div className="fluxos-preview-empty-actions">
+                {previewActionUrl ? (
+                  <button onClick={() => window.open(previewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open preview</button>
+                ) : null}
+                <button onClick={() => fluxioAction(onRequestAction, "run:message-comment", { messageId: selectedWorkbenchMessage.id })} type="button">Comment</button>
+              </div>
+            </article>
+          ) : isLiveBackend && previewFrameUrl ? (
+            <>
+              <iframe
+                className="fluxos-live-preview-frame"
+                key={`${workbenchState?.missionId || "mission"}:${selectedWorkbenchMessageId || "mission"}:${previewFrameUrl}`}
+                src={previewFrameUrl}
+                title="Live workbench preview"
+              />
+              <div className="fluxos-preview-policy-note">
+                <strong>Embedded preview can be refused by the target site.</strong>
+                <p>Open the served URL or artifact directly; this panel will not draw placeholder UI over live mode.</p>
+              </div>
+            </>
+          ) : isLiveBackend && previewFrameBlocked ? (
+            <article className="fluxos-flow-empty fluxos-frame-blocked">
+              <span>Live URL captured</span>
+              <strong>Embedded preview disabled for this target</strong>
+              <p>The target URL is real, but browser frame policy can block it inside Fluxio. Open it directly instead of showing a broken embedded page.</p>
+              <div className="fluxos-preview-empty-actions">
+                <button onClick={() => window.open(previewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open new tab</button>
+                <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Capture proof</button>
+              </div>
+            </article>
+          ) : !isLiveBackend ? (
+            <>
+              <div className="fluxos-preview-card wide" />
+              <div className="fluxos-preview-card active" />
+              <div className="fluxos-selector one">{isLiveBackend ? "Live target" : "Local target"}</div>
+              <div className="fluxos-selector two">Layout diff</div>
+            </>
+          ) : (
+            <article className="fluxos-flow-empty">
+              <span>Live data only</span>
+              <strong>{noPreviewLabel}</strong>
+              <p>{noPreviewCopy}</p>
+              <div className="fluxos-preview-empty-actions">
+                <button onClick={() => onSetSurface?.("agent")} type="button">Open Agent thread</button>
+                <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Capture proof</button>
+              </div>
+            </article>
+          )}
         </div>
+        {isLiveBackend ? (
+          <div className="fluxos-artifact-list" aria-label="Live mission artifacts">
+            {artifacts.length > 0 ? artifacts.map(item => (
+              <article key={item.id}>
+                <span>{titleizeToken(item.status || "artifact")}</span>
+                <strong>{item.title}</strong>
+                {item.detail ? <p>{item.detail}</p> : null}
+              </article>
+            )) : (
+              <article>
+                <span>Live data only</span>
+                <strong>No artifact rows returned</strong>
+                <p>The selected mission has not returned planned scope artifacts yet. The live thread below is the current evidence source.</p>
+              </article>
+            )}
+          </div>
+        ) : null}
       </section>
       <section className="fluxos-action-timeline">
         <div className="fluxos-section-head">
           <span>Runtime operations</span>
-          <strong>OpenClaw and Hermes browser action timeline</strong>
+          <strong>Hermes and browser action timeline</strong>
         </div>
-        <p className="fluxos-proof-line">Runtime operations keep OpenClaw, Hermes, browser actions, screenshots, and replay evidence in one place.</p>
-        {["Open browser", "Navigate to /control", "Click Builder", "Capture screenshot", "Compare visual state"].map((step, index) => (
-          <article key={step}>
-            <span>{`10:${24 + index}:${String(12 + index * 3).padStart(2, "0")}`}</span>
-            <strong>{step}</strong>
-            <p>{index < 3 ? "passed" : "awaiting verification"}</p>
+        <p className="fluxos-proof-line">
+          {isLiveBackend
+            ? "Runtime operations are shown only when the NAS mission summary or detail endpoint returns them."
+            : "Runtime operations keep OpenClaw, Hermes, browser actions, screenshots, and replay evidence in one place."}
+        </p>
+        {(isLiveBackend ? operationRows : ["Open browser", "Navigate to /control", "Click Builder", "Capture screenshot", "Compare visual state"]).map((step, index) => {
+          const item = typeof step === "string" ? { label: step, status: index < 3 ? "passed" : "awaiting verification" } : step;
+          return (
+          <article key={item.id || item.label || index}>
+            <span>{item.timestamp ? timestampLabel(item.timestamp) : isLiveBackend ? titleizeToken(item.status || "live") : `10:${24 + index}:${String(12 + index * 3).padStart(2, "0")}`}</span>
+            <strong>{item.label || item.title || item.kind || "Runtime operation"}</strong>
+            <p>{item.detail || item.status || "No detail recorded."}</p>
+          </article>
+        );})}
+        {isLiveBackend ? (
+          operationRows.length === 0 ? (
+            <article className="fluxos-flow-empty">
+              <span>Live data only</span>
+              <strong>No runtime operation rows loaded</strong>
+              <p>Nothing is synthesized here; this panel waits for NAS proof events.</p>
+            </article>
+          ) : null
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function FluxioPhoneProgressSurface({
+  builderRows = [],
+  liveDataStatus,
+  notificationItems = [],
+  onRequestAction,
+  onSelectFlow,
+  onSetSurface,
+}) {
+  const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const liveRows = isLiveBackend ? sortLiveBuilderRows(builderRows) : [];
+  const runningRows = liveRows.filter(row => {
+    const status = String(row.status || row.statusLabel || "").toLowerCase();
+    return status === "running" || status === "delegated" || status === "active";
+  });
+  const visibleRows = (runningRows.length ? runningRows : liveRows).slice(0, 6);
+  const notifications = isLiveBackend ? asList(notificationItems).slice(0, 8) : [];
+  const sliceNotifications = notifications.filter(item => item.kind === "mission_slice_completed");
+  const topRow = visibleRows[0] || null;
+  const openMission = missionId => {
+    const normalized = String(missionId || "").trim();
+    if (!normalized) return;
+    if (typeof onSelectFlow === "function") {
+      onSelectFlow(normalized);
+      return;
+    }
+    onSetSurface?.("agent");
+  };
+  const phoneMetrics = [
+    ["Running", Number(liveDataStatus?.runningMissionCount || runningRows.length || 0), `${Number(liveDataStatus?.activeMissionCount || liveRows.length || 0)} active`],
+    ["Alerts", Number(liveDataStatus?.notificationCount || notifications.length || 0), `${Number(liveDataStatus?.sliceNotificationCount || sliceNotifications.length || 0)} slice`],
+    ["Queue", Number(liveDataStatus?.queuedMissionCount || 0), "live summary"],
+    ["Blocked", Number(liveDataStatus?.blockedMissionCount || 0), "needs action"],
+  ];
+
+  if (!isLiveBackend) {
+    return (
+      <div className="fluxos-phone-progress unavailable" data-live-phone-progress="true">
+        <section className="fluxos-phone-hero">
+          <span>Phone progress</span>
+          <strong>Live NAS unavailable</strong>
+          <p>This surface does not render cached, fixture, or sample mission data. Reconnect to the NAS live backend to view mobile progress.</p>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fluxos-phone-progress" data-live-phone-progress="true">
+      <section className="fluxos-phone-hero">
+        <span>Phone progress</span>
+        <strong>{topRow?.name || topRow?.title || "Live NAS missions"}</strong>
+        <p>
+          {topRow?.turningPoint ||
+            topRow?.detail ||
+            "A compact live view for checking mission progress, slice notifications, and next actions away from the desktop."}
+        </p>
+        <div className="fluxos-phone-actions">
+          <button disabled={!topRow?.id} onClick={() => openMission(topRow?.id || topRow?.missionId)} type="button">
+            Open top mission
+          </button>
+          <button onClick={() => onSetSurface?.("builder")} type="button">Builder</button>
+          <button onClick={() => fluxioAction(onRequestAction, "notifications:show-live-stack")} type="button">Notifications</button>
+        </div>
+      </section>
+
+      <section className="fluxos-phone-metrics" aria-label="Live phone progress metrics">
+        {phoneMetrics.map(([label, value, detail]) => (
+          <article key={`phone-metric-${label}`}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+            <small>{detail}</small>
           </article>
         ))}
       </section>
-      <section className="fluxos-rail-panel">
-        <div className="fluxos-section-head">
-          <span>Live state</span>
-          <strong>{workbenchState?.status || "Ready"}</strong>
+
+      <section className="fluxos-phone-mission-list" aria-label="Live phone mission list">
+        <div className="fluxos-thread-head">
+          <span>Live missions</span>
+          <strong>{visibleRows.length} shown</strong>
         </div>
-        <p>Browser, preview, screenshots, selectors, and replay markers stay attached to the current run.</p>
+        {visibleRows.length ? visibleRows.map(row => {
+          const progressValue = clampPercent(row.progress);
+          const missionId = row.id || row.missionId || row.mission_id || "";
+          return (
+            <button
+              className={row.selected ? "active" : ""}
+              data-phone-mission-card="true"
+              key={missionId || row.name || row.title}
+              onClick={() => openMission(missionId)}
+              type="button"
+            >
+              <span>{titleizeToken(row.status || row.statusLabel || "live")}</span>
+              <strong>{row.name || row.title || missionId || "Live mission"}</strong>
+              <p>{row.turningPoint || row.detail || row.nextAction || "Waiting for the next live runtime update."}</p>
+              <i aria-label={progressValue == null ? "No live percentage returned" : `Progress ${progressValue}%`}>
+                <b style={{ width: progressValue == null ? "0%" : `${progressValue}%` }} />
+              </i>
+              <small>{progressValue == null ? "No %" : `${progressValue}%`} · {row.runtime || row.runtimeId || "runtime"}</small>
+            </button>
+          );
+        }) : (
+          <article className="fluxos-flow-empty">
+            <span>Live data only</span>
+            <strong>No live mission rows returned</strong>
+            <p>The phone view is connected, but the NAS summary returned no mission rows for this refresh.</p>
+          </article>
+        )}
+      </section>
+
+      <section className="fluxos-phone-notifications" aria-label="Live phone notifications" data-phone-notification-stack="true">
+        <div className="fluxos-thread-head">
+          <span>Notifications</span>
+          <strong>{notifications.length} visible</strong>
+        </div>
+        {notifications.length ? notifications.map(item => {
+          const missionId = item.missionId || item.mission_id || "";
+          const title = item.title || item.headline || item.label || "Mission update";
+          const detail = item.agentMessage || item.detail || item.message || item.summary || "Live mission notification.";
+          return (
+            <button
+              data-phone-notification-card="true"
+              key={item.id || `${missionId}-${title}-${item.createdAt || item.timestamp || ""}`}
+              onClick={() => openMission(missionId)}
+              type="button"
+            >
+              <span>{item.kind === "mission_slice_completed" ? "Slice" : titleizeToken(item.kind || "Update")}</span>
+              <strong>{title}</strong>
+              <p>{detail}</p>
+              <small>{timestampLabel(item.createdAt || item.timestamp || item.time || "")}</small>
+            </button>
+          );
+        }) : (
+          <article className="fluxos-flow-empty">
+            <span>Live data only</span>
+            <strong>No notifications visible</strong>
+            <p>No fallback notification cards are rendered on the phone surface.</p>
+          </article>
+        )}
       </section>
     </div>
   );
@@ -6579,21 +10027,35 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
 function FluxioSurfaceContent(props) {
   if (props.surface === "home") return <FluxioHomeSurface {...props} />;
   if (props.surface === "builder") return <FluxioBuilderSurface {...props} />;
+  if (props.surface === "phone") return <FluxioPhoneProgressSurface {...props} />;
   if (props.surface === "skills" || props.surface === "rule-sets") return <FluxioSkillsSurface {...props} />;
   if (props.surface === "images") return <FluxioImagesSurface {...props} />;
   if (props.surface === "workbench") return <FluxioWorkbenchSurface {...props} />;
   if (props.surface === "settings") return <FluxioSettingsSurface {...props} />;
-  return <FluxioAgentSurface {...props} />;
+  if (props.agentScene === "idle") {
+    return <AgentIdleSurface {...props} onUseSlashCommand={props.onInsertSlashCommand} />;
+  }
+  return (
+    <FluxioAgentSurface
+      key={props.workbenchState?.missionId || props.currentProjectLabel || "agent-run"}
+      {...props}
+      onUseSlashCommand={props.onInsertSlashCommand}
+    />
+  );
 }
 
 function FluxioAgentOS(props) {
   const {
+    agentScene = "run",
     appearance,
     appearanceStyle,
+    builderRows,
     currentProjectLabel,
+    liveDataStatus,
     onHistory,
     onMore,
     onRequestAction,
+    onSelectFlow,
     onSetAgentScene,
     onSetSurface,
     routeControls,
@@ -6605,6 +10067,9 @@ function FluxioAgentOS(props) {
   const route = routeControls?.selectedRoute || {};
   const modelLabel = selectedModelLabel || route.model || "GPT route";
   const harnessLabel = selectedHarnessMeta?.label || route.harness || "Fluxio hybrid";
+  const recentLiveRows = sortLiveBuilderRows(builderRows).slice(0, 3);
+  const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const isLiveLoading = isLiveBackend && liveDataStatus?.loading && recentLiveRows.length === 0;
   const [activeTheme, setActiveTheme] = useState(() => {
     if (typeof window === "undefined") return "noir";
     const stored = window.localStorage?.getItem(FLUXIO_THEME_STORAGE_KEY);
@@ -6654,15 +10119,37 @@ function FluxioAgentOS(props) {
           ))}
         </nav>
         <section className="fluxos-recent-sidebar" aria-label="Recent sessions">
-          <span>Recent sessions</span>
-          <button onClick={() => onSetSurface?.("builder")} type="button">User analytics panel<small>2m ago</small></button>
-          <button onClick={() => onSetSurface?.("builder")} type="button">Stripe integration<small>1h ago</small></button>
-          <button onClick={() => onSetSurface?.("builder")} type="button">Dashboard redesign<small>Yesterday</small></button>
+          <span>{isLiveBackend ? "Live NAS missions" : "Recent sessions"}</span>
+          {recentLiveRows.length > 0 ? recentLiveRows.map(row => (
+            <button
+              aria-current={row.selected ? "true" : undefined}
+              className={row.selected ? "active" : ""}
+              key={row.id || row.name}
+              onClick={() => {
+                const missionId = row.id || row.missionId || row.mission_id || "";
+                if (missionId && typeof onSelectFlow === "function") {
+                  onSelectFlow(missionId);
+                  return;
+                }
+                onSetSurface?.("builder");
+              }}
+              type="button"
+            >
+              {row.name || row.title || "Mission"}
+              <small>{row.status || row.updated || "live"}</small>
+            </button>
+          )) : isLiveLoading ? (
+            <button disabled type="button">Connecting to NAS<small>Live summary loading</small></button>
+          ) : (
+            <>
+              <button onClick={() => onSetSurface?.("builder")} type="button">No live mission rows<small>Refresh required</small></button>
+            </>
+          )}
         </section>
         <div className="fluxos-rail-footer">
           <span className="fluxos-status-dot" />
-          <strong>Local</strong>
-          <small>worktree clean check pending</small>
+          <strong>{isLiveBackend ? "Live NAS" : "Local"}</strong>
+          <small>{liveDataStatus?.source || "worktree clean check pending"}</small>
         </div>
       </aside>
 
@@ -6671,6 +10158,13 @@ function FluxioAgentOS(props) {
           <div className="fluxos-project-switcher">
             <span>Workspace</span>
             <strong>{currentProjectLabel || "Fluxio control"}</strong>
+            {isLiveBackend ? (
+              <small>
+                {isLiveLoading
+                  ? "connecting to NAS live summary"
+                  : `${Number(liveDataStatus?.missionCount || 0)} live mission rows · ${liveDataStatus?.source || "summary"}`}
+              </small>
+            ) : null}
           </div>
           <div className="fluxos-run-config" aria-label="Execution configuration">
             <button onClick={() => fluxioAction(onRequestAction, "config:provider")} type="button">OpenAI</button>
@@ -6682,7 +10176,9 @@ function FluxioAgentOS(props) {
           </div>
           <div className="fluxos-top-actions">
             <button onClick={onHistory} type="button">History</button>
-            <button onClick={() => onSetAgentScene?.("live")} type="button">Preview</button>
+            <button onClick={() => onSetAgentScene?.(agentScene === "live" ? "run" : "live")} type="button">
+              {agentScene === "live" ? "Thread" : "Preview"}
+            </button>
             <button className="primary" onClick={onMore} type="button">Command</button>
           </div>
         </header>

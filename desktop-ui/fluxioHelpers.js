@@ -105,24 +105,13 @@ function preferredMission(snapshot) {
 
 export function selectedWorkspace(snapshot, selectedWorkspaceId) {
   const workspaces = snapshot?.workspaces || [];
-  const mission = preferredMission(snapshot);
   const selected = workspaces.find(item => item.workspace_id === selectedWorkspaceId);
-  const preferred = workspaces.find(item => item.workspace_id === mission?.workspace_id);
-  if (
-    selected &&
-    preferred &&
-    selected.workspace_id !== preferred.workspace_id &&
-    missionControlPriority(mission) > 0
-  ) {
-    const selectedBest = preferredMission({
-      missions: (snapshot?.missions || []).filter(item => item?.workspace_id === selected.workspace_id),
-    });
-    if (missionControlPriority(mission) > missionControlPriority(selectedBest)) {
-      return preferred;
-    }
+  if (selected) {
+    return selected;
   }
+  const mission = preferredMission(snapshot);
+  const preferred = workspaces.find(item => item.workspace_id === mission?.workspace_id);
   return (
-    selected ||
     preferred ||
     workspaces[0] ||
     null
@@ -132,19 +121,10 @@ export function selectedWorkspace(snapshot, selectedWorkspaceId) {
 export function selectedMission(snapshot, selectedMissionId) {
   const missions = snapshot?.missions || [];
   const selected = missions.find(item => item.mission_id === selectedMissionId);
-  const preferred = preferredMission(snapshot);
-  if (
-    selected &&
-    preferred &&
-    selected.mission_id !== preferred.mission_id &&
-    missionControlPriority(preferred) > missionControlPriority(selected)
-  ) {
-    return preferred;
+  if (selected) {
+    return selected;
   }
-  return (
-    selected ||
-    preferred
-  );
+  return preferredMission(snapshot);
 }
 
 export function activeProfileId(snapshot, onboarding, workspace, mission) {

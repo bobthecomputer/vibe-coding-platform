@@ -1,0 +1,79 @@
+name: Fluxio Release Proof
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/archive_release_proofs.py"
+      - "scripts/control_route_responsive_smoke.py"
+      - "desktop-ui/**"
+      - "web/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/release-proof.yml"
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "scripts/archive_release_proofs.py"
+      - "scripts/control_route_responsive_smoke.py"
+      - "desktop-ui/**"
+      - "web/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/release-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: npm ci
+      - run: npm run frontend:build
+      - run: npm run verify:live-data
+      - run: npm run verify:web-distribution -- --require-built-dist
+      - run: npm run verify:self-improvement
+      - run: npm run verify:long-history
+      - name: Record CI proof digest
+        run: |
+          mkdir -p .agent_control/proof_digests
+          python - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          Path(".agent_control/proof_digests/ci-release-proof.md").write_text(
+              "# CI Release Proof\n\n"
+              f"- Generated: `{datetime.now(timezone.utc).isoformat()}`\n"
+              "- `npm run frontend:build` completed in this workflow.\n"
+              "- `npm run verify:long-history` completed in this workflow.\n"
+              "- `npm run verify:release-artifacts` archives this digest and long-history browser reports.\n",
+              encoding="utf-8",
+          )
+          PY
+      - run: npm run verify:release-artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fluxio-release-proof
+          path: |
+            .agent_control/release_artifacts/**
+            .agent_control/self_improvement_evidence/**
+            .agent_control/deployment_evidence/**
+            .agent_control/cross_device_launch_rehearsals/**
+            .agent_control/release_candidates/**
+            tmp-ui-checks/**
+            docs/SYSTEM_GAP_ANALYSIS.current.md
+          if-no-files-found: ignore

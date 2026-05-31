@@ -33,6 +33,24 @@
   - Continues the latest vibe session across multiple cycles using latest checkpoints until complete or paused.
   - Also callable from Fluxio desktop Autonomous Run Dashboard.
 
+- `npm exec -- fluxio --no-open`
+  - Runs Fluxio through the package `bin` entrypoint, matching an npx-style launch path.
+  - Delegates to `scripts/launch_fluxio.py`, builds missing web assets, starts or reuses the local backend, waits for `/health`, and prints the control URL.
+  - Validate the packed package with `npm run verify:launcher-package`.
+
+- `npm run doctor:public-launch`
+  - Writes one public-launch operator receipt at `.agent_control/public_launch_readiness/doctor.json`.
+  - Combines the current public-launch readiness report with the GitHub release publication plan.
+  - Shows whether source parity, external publication proof, or release-candidate assets are the current blocker.
+  - When the release candidate is plan-ready, prints the exact `gh release create ...` command and the follow-up receipt command.
+
+- `python -m grant_agent.cli mission-watchdog --root .`
+  - Scans every mission and writes `.agent_control/mission_watchdog.json` plus `.agent_control/mission_watchdog_problems.json`.
+  - Each open problem includes the mission id, what is wrong, evidence, and the first repair step.
+  - Use `--loop --interval-seconds 1200 --max-runs 0` to run it as an external supervisor loop.
+  - The loop writes `.agent_control/mission_watchdog_supervisor.json` on every pass so Builder, phone notifications, and NAS automations can see the last status.
+  - Use `--notify-telegram` to send a receipt when open problems are found; add `--notify-clear` only when clear pings are wanted.
+
 - `python -m grant_agent.cli profiles`
   - Lists configured personalization profiles and workspace/default resolution rules.
   - Use `--name <profile>` to inspect one resolved profile.
