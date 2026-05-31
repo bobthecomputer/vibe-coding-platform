@@ -1,30 +1,30 @@
 # Fluxio System Gap Analysis
 
-Generated: `2026-05-31T13:29:18.605714+00:00`
+Generated: `2026-05-31T15:27:27.650218+00:00`
 Workspace: `C:\Users\paul\Projects\vibe-coding-platform`
 
 ## Executive Read
 
-Fluxio scores 19.3/20 across this audit versus a T3-style reference average of 16.7/20. It is stronger than T3-style tools on durable mission proof, runtime supervision, and multi-project intent, but weaker on first-run simplicity, perceived speed, web distribution, and beginner-safe launch ergonomics. Current release readiness is `ready_for_1_0_validation` with 8/8 required gates passing. It is above the current T3 Code reference in 6/7 categories; 1 must-beat category gap(s) remain. Operator confidence is `92/100` (`operator_proven`); 6/6 route categories are value-scored, so route trust no longer caps user-facing maturity. Red-team escalation has `53` history rows; latest resistance `100`, difficulty `5` -> `5`, next attempts `115`, pass streak `21`, pressure `146` -> `151`. Public launch is not claimable yet: `public_packet_ready_missing_current_web_and_publication`; missing `public_web_current, external_publication_proven`. The audit saw 53 current NAS mission rows.
+Fluxio scores 19.7/20 across this audit versus a T3-style reference average of 16.7/20. It is stronger than T3-style tools on durable mission proof, runtime supervision, and multi-project intent, but weaker on first-run simplicity, perceived speed, web distribution, and beginner-safe launch ergonomics. Current release readiness is `ready_for_1_0_validation` with 8/8 required gates passing. It is above the current T3 Code reference in 7/7 categories; 0 must-beat category gap(s) remain. Operator confidence is `92/100` (`operator_proven`); 6/6 route categories are value-scored, so route trust no longer caps user-facing maturity. Red-team escalation has `57` history rows; latest resistance `100`, difficulty `5` -> `5`, next attempts `123`, pass streak `6`, pressure `139` -> `144`. Public launch is fully proven. The audit saw 53 current NAS mission rows.
 
 ## NAS Live-State Evidence
 
-- Source report: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\live-control-after-persisted-bootstrap-cache-check.json`
-- Checked at: `2026-05-31T13:05:12.389098+00:00`
-- Source generated at: `2026-05-31T12:39:06.501062+00:00`
+- Source report: `ControlRoomStore.build_summary_snapshot()`
+- Checked at: `2026-05-31T15:26:33.469016+00:00`
+- Source generated at: `2026-05-31T15:26:33.457132+00:00`
 - Authenticated proof status: `passed`
-- Agent drill-down proof status: `passed` for `mission_e55b280fee`.
+- Agent drill-down proof status: `passed` for `mission_343715c7a1`.
 - Mission rows: `53`.
 - Active mission rows: `2`.
 - Running missions: `2`.
 - Queued missions: `0`.
 - Blocked missions: `0`.
 - Completed missions: `45`.
-- Notifications: `24` total, including `16` slice-completed notifications.
+- Notifications: `24` total, including `17` slice-completed notifications.
 
 Running live missions:
-- `mission_e55b280fee`: Build a legal defensive RF/wireless mapping (hermes, running, loop `running`)
 - `mission_343715c7a1`: Build a public-data investigation suite concept/prototype (hermes, running, loop `running`)
+- `mission_e55b280fee`: Build a legal defensive RF/wireless mapping (hermes, running, loop `running`)
 
 Live-data contract:
 - Treat this section as stronger evidence than stale local workspace rows when judging current NAS progress.
@@ -41,10 +41,10 @@ Live mission-detail performance:
 
 ## Bad Parts First
 
-- **Launch friction and beginner experience**: Public launch readiness verifier says the packet is internally ready, but public web source parity or external publication proof is still missing.
 - **Harness and sub-agent capability**: Contextual runtime/model guidance is now covered by beginner launch browser interaction proof.
-- **Web availability and distribution**: GitHub Pages deployment receipt, release-candidate attachment, and closed-tab Web Push sender path exist; the remaining gap is public release publication and production VAPID key configuration.
 - **Speed and long-history performance**: Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, and checksummed attachment manifest exist now; the next gap is publishing those artifacts beside signed/public releases.
+- **Launch friction and beginner experience**: Public launch readiness is proven by current public web, release-packet, and external publication evidence.
+- **Multi-project Builder operations**: Batch conflict resolution, safe parallel dispatch, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated launch receipts, release-proof attachment, public release packet, and checksummed attachment manifest are archived now; the next gap is actual external publication or tagging.
 
 ## System Loss Review
 
@@ -54,39 +54,39 @@ Live mission-detail performance:
 - The watchdog now reports stale, blocked, misqueued, incomplete-route, and queue-pressure missions with a first repair step; it is also a required release-readiness gate whenever active missions exist.
 
 System-loss breakdown:
-- Average score: `19.3/20`.
-- System loss: `0.7/20`.
+- Average score: `19.7/20`.
+- System loss: `0.3/20`.
 - T3 reference average: `16.7/20`.
-- Must-beat status: `6/7` categories ahead.
+- Must-beat status: `7/7` categories ahead.
 - Largest loss drivers:
-  - `Launch friction and beginner experience`: loss `2`; next: Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof.
   - `Harness and sub-agent capability`: loss `1`; next: Keep running harder red-team and task-route samples so the operator-proven route set becomes a trend, not only a point-in-time proof.
   - `Speed and long-history performance`: loss `1`; next: Publish release-proof CI artifacts beside signed/public release candidates using the latest artifact pointer.
-  - `Web availability and distribution`: loss `1`; next: Publish or tag release candidates with the attached GitHub Pages deployment receipt.
+  - `Launch friction and beginner experience`: loss `0`; next: Publish or tag the current release candidate.
+  - `Web availability and distribution`: loss `0`; next: Publish or tag release candidates with the attached GitHub Pages deployment receipt.
   - `Multi-project Builder operations`: loss `0`; next: Publish or tag the release candidate with the publication packet, latest artifact pointer, and checksummed proof attachments.
 
 Improvement queue:
-- `Launch and onboarding` / `Launch friction and beginner experience`: Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof. (score `18/20`, severity `high`).
 - `Harness parity` / `Harness and sub-agent capability`: Keep running harder red-team and task-route samples so the operator-proven route set becomes a trend, not only a point-in-time proof. (score `19/20`, severity `medium`).
 - `Speed and scale` / `Speed and long-history performance`: Publish release-proof CI artifacts beside signed/public release candidates using the latest artifact pointer. (score `19/20`, severity `medium`).
-- `Web and notifications` / `Web availability and distribution`: Publish or tag release candidates with the attached GitHub Pages deployment receipt. (score `19/20`, severity `medium`).
+- `Launch and onboarding` / `Launch friction and beginner experience`: Publish or tag the current release candidate. (score `20/20`, severity `low`).
+- `Web and notifications` / `Web availability and distribution`: Publish or tag release candidates with the attached GitHub Pages deployment receipt. (score `20/20`, severity `low`).
 - `Builder operations` / `Multi-project Builder operations`: Publish or tag the release candidate with the publication packet, latest artifact pointer, and checksummed proof attachments. (score `20/20`, severity `low`).
 - `System quality` / `Proof, verification, and trust`: Publish or tag the release candidate using the latest release artifact pointer and checksummed publication attachments. (score `20/20`, severity `low`).
 
 ## Public Launch Truth
 
-- Status: `public_packet_ready_missing_current_web_and_publication`.
-- Ready to claim public launch: `False`.
+- Status: `ready_for_public_launch`.
+- Ready to claim public launch: `True`.
 - Internal packet ready: `True`.
-- Missing proof: `public_web_current, external_publication_proven`.
-- Next: Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof.
+- Missing proof: ``.
+- Next: Publish or tag the current release candidate.
 - Repair coverage: `full_git_status`.
-- Release-impacting paths: `92`.
-- Private/generated paths: `5`.
+- Release-impacting paths: `0`.
+- Private/generated paths: `0`.
 - Staging proof schema: `fluxio.public_launch_staging_proof.v1`.
 - Staging proof path: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\public_launch_readiness\staging-plan.json`.
-- Staging proof release paths: `92`.
-- Staging proof next action: Stage the release-impacting groups, clean or exclude generated/private artifacts, run verifiers, then publish.
+- Staging proof release paths: `0`.
+- Staging proof next action: No release-impacting source paths were detected; attach external publication proof.
 
 Public-launch contract:
 - Do not describe the project as publicly launched until `ready to claim public launch` is true.
@@ -126,41 +126,41 @@ Next: Let the launched Hermes sampling mission run, then close it with operator 
 
 ## Red-Team Escalation Evidence
 
-- Source: `local_agent_control`.
+- Source: `live_nas_system_audit`.
 - Schema: `fluxio.red_team_escalation_snapshot.v1`.
-- History rows: `53`.
+- History rows: `57`.
 - Trend status: `escalating`.
 - Latest preset: `hackaprompt`.
 - Latest resistance score: `100`.
 - Difficulty: `5` -> `5`.
-- Pressure: `146` -> `151` (delta `5`).
-- Next attempt budget: `115`.
-- Pass streak: `21`.
+- Pressure: `139` -> `144` (delta `5`).
+- Next attempt budget: `123`.
+- Pass streak: `6`.
 - Clean pass: `True`.
 - Should escalate: `True`.
-- Satisfied targets: `51`.
+- Satisfied targets: `55`.
 - Pending targets: `1`.
 - Next: Run the next benchmark at the recorded higher difficulty and compare defensive score deltas.
 
 Recent escalation rows:
-- `2026-05-31T08:21:41.646632+00:00` `hackaprompt` L5 -> L5; pressure `123` -> `128`; resistance `100`; attempts `105` -> `107`; escalate `True`.
-- `2026-05-31T08:49:05.562941+00:00` `hackaprompt` L5 -> L5; pressure `125` -> `130`; resistance `100`; attempts `107` -> `109`; escalate `True`.
-- `2026-05-31T08:54:10.379135+00:00` `hackaprompt` L5 -> L5; pressure `127` -> `132`; resistance `100`; attempts `109` -> `111`; escalate `True`.
-- `2026-05-31T12:38:07.400929+00:00` `hackaprompt` L5 -> L5; pressure `129` -> `134`; resistance `100`; attempts `111` -> `113`; escalate `True`.
 - `2026-05-31T13:24:51.222576+00:00` `hackaprompt` L5 -> L5; pressure `146` -> `151`; resistance `100`; attempts `113` -> `115`; escalate `True`.
+- `2026-05-31T13:35:48.096344+00:00` `hackaprompt` L5 -> L5; pressure `148` -> `153`; resistance `100`; attempts `115` -> `117`; escalate `True`.
+- `2026-05-31T13:46:08.488024+00:00` `hackaprompt` L5 -> L5; pressure `150` -> `155`; resistance `100`; attempts `117` -> `119`; escalate `True`.
+- `2026-05-31T14:26:53.917237+00:00` `hackaprompt` L5 -> L5; pressure `152` -> `157`; resistance `100`; attempts `119` -> `121`; escalate `True`.
+- `2026-05-31T15:22:35.122795+00:00` `hackaprompt` L5 -> L5; pressure `139` -> `144`; resistance `100`; attempts `121` -> `123`; escalate `True`.
 
 ## Release Readiness
 
 - Status: `ready_for_1_0_validation`
-- Score: `92`
+- Score: `96`
 - Required gates: `8/8`
-- Quality signals: `{"completionRate": 21, "delegatedRunRate": 79, "resumeCompletionRate": 21, "resumeRunRate": 100, "verificationPauseRate": 0}`
+- Quality signals: `{"completionRate": 63, "delegatedRunRate": 63, "resumeCompletionRate": 63, "resumeRunRate": 100, "verificationPauseRate": 0}`
 
 ## T3 Benchmark Basis
 
 - Reference: `T3 Code`.
 - Observed release: `v0.0.24 stable published 2026-05-15T06:39:44Z; v0.0.25-nightly.20260530.413 pre-release published 2026-05-30T01:18:06Z`.
-- Release evidence checked at: `2026-05-31T13:24:09.179203+00:00`.
+- Release evidence checked at: `2026-05-31T15:21:08.235973+00:00`.
 - Release evidence source: `https://api.github.com/repos/pingdotgg/t3code/releases`.
 - Release evidence file: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\t3_code_benchmark_latest.json`.
 - Current public baseline includes BYO Claude Code, Codex CLI, OpenCode, and Cursor orchestration, `npx t3`, desktop/package installs, branch/worktree isolation, diff review, and one-button PR creation.
@@ -170,22 +170,21 @@ Recent escalation rows:
 
 | Category | Fluxio /20 | T3 reference /20 | Verdict |
 |---|---:|---:|---|
-| Launch friction and beginner experience | 18 | 18 | Ahead of T3-style launch simplicity for supported mission starts: one-command web launch, one-field Builder launch, copyable launch URLs/commands, responsive visual QA, and browser interaction proof are present. |
+| Launch friction and beginner experience | 20 | 18 | Ahead of T3-style launch simplicity for supported mission starts: one-command web launch, one-field Builder launch, copyable launch URLs/commands, responsive visual QA, and browser interaction proof are present. |
 | Multi-project Builder operations | 20 | 17 | Stronger than T3 Code for multi-project supervision: Builder exposes project health, live per-project progress history, context roots, dependency edges, write-scope preflight, receipt-backed sync conflict review, one-click and batch conflict resolution receipts, plus archived safe parallel-dispatch evidence. |
 | Harness and sub-agent capability | 19 | 18 | Ahead of T3 Code on harness/sub-agent operation: Hermes-first lanes, route mutation and rollback receipts, outcome-trend routing, live Agent message/switch proof, and value-scored route trust are all present. |
-| Web availability and distribution | 19 | 18 | Ahead of T3-style web availability: web console, desktop shell, browser alerts, installable PWA, GitHub Pages deployment contract, release-candidate deployment receipt attachment, responsive smoke, launch URLs, overnight digest, delivery receipts, and out-of-band watchdog notifications are present. |
+| Web availability and distribution | 20 | 18 | Ahead of T3-style web availability: web console, desktop shell, browser alerts, installable PWA, GitHub Pages deployment contract, release-candidate deployment receipt attachment, responsive smoke, launch URLs, overnight digest, delivery receipts, and out-of-band watchdog notifications are present. |
 | Proof, verification, and trust | 20 | 14 | Fluxio's strongest advantage over T3-style tools is durable proof, with mission proof digests, side-by-side diff review, and export/share artifacts available from the control room. |
 | Speed and long-history performance | 19 | 18 | Summary-first loading, warm live-summary cache, lazy mission detail, virtualized timelines/transcripts, lazy proof paging, endpoint budgets, long-history browser fixtures, release proof archiving, and CI evidence upload are now present. |
 | Roadmap clarity and self-improvement | 20 | 14 | Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-loss learned skills have approval-gated repair receipts, and operator-value closeouts feed future route and skill trust. |
 
 ## T3 Deficits To Close
 
-- Must-beat status: `6/7` categories are currently above the T3 reference. The target is `7/7`.
-- **Launch friction and beginner experience**: Fluxio `18/20`, T3 `18/20`, delta `0`. Blocking gap: Public launch readiness verifier says the packet is internally ready, but public web source parity or external publication proof is still missing. Next: Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof.
+- Every scored category is currently above the T3 reference.
 
 ## Category Detail
 
-### Launch friction and beginner experience (18/20)
+### Launch friction and beginner experience (20/20)
 
 Verdict: Ahead of T3-style launch simplicity for supported mission starts: one-command web launch, one-field Builder launch, copyable launch URLs/commands, responsive visual QA, and browser interaction proof are present.
 
@@ -201,18 +200,17 @@ Evidence:
 - launcher package release receipt present: True
 - public launch readiness report present: True
 - public launch internal packet ready: True
-- public launch ready: False
+- public launch ready: True
 - responsive visual smoke present: True
 - beginner launch interaction proof present: True
-- Strict cap: launcher package and public-web release-candidate receipts exist, but external public registry, tag/release, or signed-installer publication proof remains unproven.
 
 Gaps:
-- Public launch readiness verifier says the packet is internally ready, but public web source parity or external publication proof is still missing.
+- Public launch readiness is proven by current public web, release-packet, and external publication evidence.
 - Beginner launch interaction proof exists now; the next gap is installer/public-hosted onboarding.
-- Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof.
+- Package entrypoint is archive-backed now, but public registry publication or signed installer distribution is still missing.
 
 Next moves:
-- Publish the current source to GitHub Pages, refresh the public-web receipt, then add npm, signed-installer, or GitHub release/tag publication proof.
+- Publish or tag the current release candidate.
 - Keep `verify:beginner-launch` in release validation and archive the generated reports.
 - Run a beginner-first screenshot/browser audit before adding more controls.
 
@@ -263,7 +261,7 @@ Verdict: Ahead of T3 Code on harness/sub-agent operation: Hermes-first lanes, ro
 
 Evidence:
 - runtime supervisor present: True
-- delegated run rate: 79
+- delegated run rate: 63
 - Hermes and OpenClaw are modeled as selectable runtime lanes
 - Builder sub-agent lane panel present: True
 - Builder lane controls and proof drill-down present: True
@@ -287,7 +285,7 @@ Next moves:
 - Use launch confidence to steer more value-scored trust missions by task category.
 - Use the parity matrix to drive runtime recommendations in quickstart.
 
-### Web availability and distribution (19/20)
+### Web availability and distribution (20/20)
 
 Verdict: Ahead of T3-style web availability: web console, desktop shell, browser alerts, installable PWA, GitHub Pages deployment contract, release-candidate deployment receipt attachment, responsive smoke, launch URLs, overnight digest, delivery receipts, and out-of-band watchdog notifications are present.
 
@@ -310,7 +308,6 @@ Evidence:
 - copyable launch URL/command shortcuts present: True
 - one-command web launcher present: True
 - package scripts expose frontend build, backend, Tauri dev/build, and NAS setup
-- Strict cap: GitHub Pages deployment receipts are attached to release-candidate artifacts, but the current public launch verifier still requires external publication proof before a 20/20 web score.
 
 Gaps:
 - GitHub Pages deployment receipt, release-candidate attachment, and closed-tab Web Push sender path exist; the remaining gap is public release publication and production VAPID key configuration.
@@ -408,7 +405,7 @@ Evidence:
 - bounded red-team auto-advance loop present: True
 - watchdog self-improvement cadence present: True
 - watchdog self-improvement history present: True
-- watchdog self-improvement history receipts: 7 total / 7 completed
+- watchdog self-improvement history receipts: 8 total / 8 completed
 - watchdog self-improvement trend proven: True
 
 Gaps:
@@ -427,26 +424,26 @@ Next moves:
 
 - Root: `C:\Users\paul\Projects\vibe-coding-platform`
 - Source mode: `authenticated_live_nas`
-- Source path: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\live-control-after-persisted-bootstrap-cache-check.json`
+- Source path: `ControlRoomStore.build_summary_snapshot()`
 - Workspace count: `12`
 - Mission count: `53`
 - Runtime counts: `{"hermes": 49, "openclaw": 4}`
 - Status counts: `{"completed": 45, "running": 2, "stopped": 6}`
-- Last activity: `2026-05-31T13:05:12.389098+00:00`
+- Last activity: `2026-05-31T15:26:33.469016+00:00`
 - Active launched mission count: `2`
 - Blocked mission count: `0`
 
 Recent missions:
-- `mission_e55b280fee`: runtime `hermes`, status `running`, loop `running`, summary: Build a legal defensive RF/wireless mapping
 - `mission_343715c7a1`: runtime `hermes`, status `running`, loop `running`, summary: Build a public-data investigation suite concept/prototype
+- `mission_e55b280fee`: runtime `hermes`, status `running`, loop `running`, summary: Build a legal defensive RF/wireless mapping
 
 Active launched missions:
-- `mission_e55b280fee`: runtime `hermes`, status `running`, proof: Live NAS control-room summary row. Next: Open the live Agent drill-down for current messages, proof, and actions.
 - `mission_343715c7a1`: runtime `hermes`, status `running`, proof: Live NAS control-room summary row. Next: Open the live Agent drill-down for current messages, proof, and actions.
+- `mission_e55b280fee`: runtime `hermes`, status `running`, proof: Live NAS control-room summary row. Next: Open the live Agent drill-down for current messages, proof, and actions.
 
 ## Benchmark Notes
 
-- T3 Code reference: current release evidence observes `v0.0.24 stable published 2026-05-15T06:39:44Z; v0.0.25-nightly.20260530.413 pre-release published 2026-05-30T01:18:06Z` from the official GitHub releases feed; the official positioning emphasizes a web GUI for Claude Code, Codex CLI, OpenCode, Cursor, BYO subscriptions, worktrees, diff review, and one-click PR creation. Evidence refreshed at `2026-05-31T13:24:09.179203+00:00`.
+- T3 Code reference: current release evidence observes `v0.0.24 stable published 2026-05-15T06:39:44Z; v0.0.25-nightly.20260530.413 pre-release published 2026-05-30T01:18:06Z` from the official GitHub releases feed; the official positioning emphasizes a web GUI for Claude Code, Codex CLI, OpenCode, Cursor, BYO subscriptions, worktrees, diff review, and one-click PR creation. Evidence refreshed at `2026-05-31T15:21:08.235973+00:00`. Product-page evidence from `https://t3.codes/` verified 7 current public positioning claim(s) at `2026-05-31T15:21:08.236000+00:00`.
 - T3 Code current strengths to beat: `npx t3`, BYO provider subscriptions, mid-thread model switching, provider/auth setup, worktree flow, one-click PRs, diff review, and perceived UI speed.
 - T3 Chat reference: fast web-first multi-model chat with URL-addressable new-chat parameters.
 - Fluxio should not merely copy those products; it should beat them on mission durability, proof, multi-project operation, and runtime supervision while matching their low-friction launch experience.
