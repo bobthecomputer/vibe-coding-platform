@@ -8265,6 +8265,26 @@ function FluxioBuilderSurface(props) {
   const t3AheadCount = Number(systemAuditDigest?.mustBeatStatus?.ahead || 0);
   const t3TotalCount = Number(systemAuditDigest?.mustBeatStatus?.total || 0);
   const t3DeficitCount = Number(systemAuditDigest?.mustBeatStatus?.deficitCount || t3DeficitRows.length || 0);
+  const systemLossBreakdown = systemAuditDigest?.systemLossBreakdown || {};
+  const systemLossHasOutOf20 = Number.isFinite(Number(systemLossBreakdown.averageScoreOutOf20));
+  const systemLossScore = Number(systemLossBreakdown.averageScoreOutOf20 || 0).toFixed(1).replace(/\.0$/, "");
+  const systemLossAmount = Number(systemLossBreakdown.averageLossOutOf20 || 0).toFixed(1).replace(/\.0$/, "");
+  const systemLossAhead = Number(systemLossBreakdown.mustBeatStatus?.ahead ?? t3AheadCount);
+  const systemLossTotal = Number(systemLossBreakdown.mustBeatStatus?.total ?? (t3TotalCount || 7));
+  const systemLossHeadline = systemLossHasOutOf20
+    ? `${systemLossScore}/20 · loss ${systemLossAmount}/20`
+    : `loss pressure ${Number(systemLossBreakdown.score || 0)}/100 · ${titleizeToken(systemLossBreakdown.severity || "low")}`;
+  const systemLossSubline = systemLossHasOutOf20
+    ? `${systemLossAhead}/${systemLossTotal} T3 categories ahead`
+    : systemLossBreakdown.nextAction || "Keep sampling live outcomes.";
+  const systemLossDriverRows = asList(systemLossBreakdown.drivers).slice(0, 4).map((item, index) => ({
+    id: item.id || item.category || item.title || `system-loss-${index}`,
+    lane: item.lane || item.category || "System",
+    loss: item.lossOutOf20 ?? item.loss ?? 0,
+    title: item.category || item.title || "Loss driver",
+    detail: item.primaryGap || item.detail || item.evidence || item.nextAction || "Keep collecting live proof.",
+    nextAction: item.nextAction || "",
+  }));
   const topQueueRow = schedulingQueueRows[0] || null;
   const queueFirstHeldCount = schedulingQueueRows.filter(item => item.safeToLaunch === false).length;
   const queueFirstNotificationCount = Number(liveDataStatus?.notificationCount || 0);
@@ -8639,19 +8659,24 @@ function FluxioBuilderSurface(props) {
                 )}
               </div>
             </div>
-            {systemAuditDigest.systemLossBreakdown?.schema ? (
-              <div className="fluxos-system-loss" aria-label="System loss breakdown">
+            {systemLossBreakdown?.schema ? (
+              <div
+                className="fluxos-system-loss"
+                aria-label="System loss breakdown"
+                data-system-loss-current="true"
+              >
                 <div>
                   <span>System loss</span>
-                  <strong>{`${systemAuditDigest.systemLossBreakdown.score ?? 0}/100 · ${titleizeToken(systemAuditDigest.systemLossBreakdown.severity || "low")}`}</strong>
-                  <p>{systemAuditDigest.systemLossBreakdown.nextAction || "Keep sampling live outcomes."}</p>
+                  <strong>{systemLossHeadline}</strong>
+                  <p>{systemLossSubline}</p>
                 </div>
                 <div className="fluxos-system-loss-drivers">
-                  {asList(systemAuditDigest.systemLossBreakdown.drivers).slice(0, 4).map(item => (
-                    <article key={item.id || item.title}>
-                      <span>{`${item.lane || "System"} · loss ${item.loss ?? 0}`}</span>
-                      <strong>{item.title || "Loss driver"}</strong>
-                      <p>{item.detail || item.evidence || item.nextAction}</p>
+                  {systemLossDriverRows.map(item => (
+                    <article key={item.id}>
+                      <span>{`${item.lane} · loss ${item.loss}`}</span>
+                      <strong>{item.title}</strong>
+                      <p>{item.detail}</p>
+                      {item.nextAction ? <em>{item.nextAction}</em> : null}
                     </article>
                   ))}
                 </div>

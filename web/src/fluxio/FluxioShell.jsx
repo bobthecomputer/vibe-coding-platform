@@ -15400,6 +15400,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   </p>
                 ) : null}
                 {(() => {
+                  const digest = snapshot.systemAuditDigest || summarySnapshot.systemAuditDigest || {};
+                  const breakdown = digest.systemLossBreakdown || {};
+                  if (!breakdown.schema) {
+                    return null;
+                  }
+                  const hasOutOf20 = Number.isFinite(Number(breakdown.averageScoreOutOf20));
+                  const scoreText = Number(breakdown.averageScoreOutOf20 || 0).toFixed(1).replace(/\.0$/, "");
+                  const lossText = Number(breakdown.averageLossOutOf20 || 0).toFixed(1).replace(/\.0$/, "");
+                  const ahead = Number(breakdown.mustBeatStatus?.ahead ?? digest.mustBeatStatus?.ahead ?? 0);
+                  const total = Number(breakdown.mustBeatStatus?.total ?? digest.mustBeatStatus?.total ?? 7);
+                  const drivers = asList(breakdown.drivers).slice(0, 2);
+                  return (
+                    <article className="drawer-card warn" data-system-loss-current="true">
+                      <span>System loss</span>
+                      <strong>
+                        {hasOutOf20
+                          ? `${scoreText}/20 · loss ${lossText}/20`
+                          : `loss pressure ${Number(breakdown.score || 0)}/100`}
+                      </strong>
+                      <p>
+                        {hasOutOf20
+                          ? `${ahead}/${total} T3 categories ahead`
+                          : breakdown.nextAction || "Keep sampling live outcomes."}
+                      </p>
+                      {drivers.map(item => (
+                        <p key={`system-loss-${item.id || item.category || item.title}`}>
+                          {`${item.category || item.title || "Loss driver"}: ${
+                            item.primaryGap || item.detail || item.nextAction || "Keep collecting live proof."
+                          }`}
+                        </p>
+                      ))}
+                    </article>
+                  );
+                })()}
+                {(() => {
                   const publicLaunch = (snapshot.systemAuditDigest || summarySnapshot.systemAuditDigest).publicLaunchReadiness || {};
                   const missing = Array.isArray(publicLaunch.missing) ? publicLaunch.missing : [];
                   const blockers = Array.isArray(publicLaunch.blockers) ? publicLaunch.blockers : [];

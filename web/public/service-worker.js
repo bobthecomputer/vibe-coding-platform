@@ -1,4 +1,4 @@
-const CACHE_VERSION = "fluxio-pwa-v22-reference-agent-proof-ready-20260531";
+const CACHE_VERSION = "fluxio-pwa-v23-system-loss-truth-20260531";
 const APP_SHELL = [
   "/offline.html",
   "/manifest.webmanifest",
