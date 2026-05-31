@@ -10631,6 +10631,9 @@ def _load_compact_system_audit_digest(root: Path, evidence_path: Path, fallback_
     digest = payload.get("digest") if isinstance(payload.get("digest"), dict) else {}
     if not digest:
         return {}
+    compact_breakdown = digest.get("systemLossBreakdown") if isinstance(digest.get("systemLossBreakdown"), dict) else {}
+    if "averageScoreOutOf20" not in compact_breakdown or "averageLossOutOf20" not in compact_breakdown:
+        return {}
     live_progress = dict(digest.get("liveProjectProgress") or {})
     current_progress = fallback_digest.get("liveProjectProgress")
     if isinstance(current_progress, dict):
@@ -10993,6 +10996,24 @@ def _system_loss_breakdown(
 ) -> dict:
     drivers: list[dict] = []
     seen: set[str] = set()
+    scored_categories = [
+        item
+        for item in categories
+        if isinstance(item, dict)
+        and str(item.get("category") or "").strip()
+        and str(item.get("fluxioScore") or "").strip() != ""
+    ]
+    category_scores = [
+        max(0.0, min(20.0, float(item.get("fluxioScore") or 0)))
+        for item in scored_categories
+    ]
+    average_score = round(sum(category_scores) / max(len(category_scores), 1), 1) if category_scores else 0.0
+    average_loss = round(max(0.0, 20.0 - average_score), 1)
+    ahead_count = sum(
+        1
+        for item in scored_categories
+        if float(item.get("fluxioScore") or 0) > float(item.get("t3Score") or 0)
+    )
 
     def add_driver(
         driver_id: str,
@@ -11013,9 +11034,12 @@ def _system_loss_breakdown(
             {
                 "id": normalized_id,
                 "title": title,
+                "category": title,
                 "lane": lane,
                 "loss": capped,
+                "lossOutOf20": round(capped / 100 * 20, 1),
                 "severity": _severity_label(capped),
+                "primaryGap": detail,
                 "detail": detail,
                 "nextAction": next_action,
                 "evidence": evidence,
@@ -11121,11 +11145,22 @@ def _system_loss_breakdown(
     score = max(int(item.get("loss") or 0) for item in drivers) if drivers else 0
     return {
         "schema": "fluxio.system_loss_breakdown.v1",
+        "averageScoreOutOf20": average_score,
+        "averageLossOutOf20": average_loss,
+        "mustBeatStatus": {
+            "ahead": ahead_count,
+            "total": len(scored_categories),
+            "deficitCount": len(deficits),
+        },
         "score": score,
         "severity": _severity_label(score),
         "driverCount": len(drivers),
         "drivers": drivers[:8],
-        "nextAction": str(drivers[0].get("nextAction") if drivers else ""),
+        "nextAction": str(
+            drivers[0].get("nextAction")
+            if drivers
+            else "Keep value-scored missions, release proof, and red-team escalation current."
+        ),
     }
 
 

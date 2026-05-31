@@ -152,6 +152,16 @@ async def _verify_async(args: argparse.Namespace) -> dict:
         counts = summary.get("counts", {}) if isinstance(summary, dict) else {}
         missions = summary.get("missions", []) if isinstance(summary, dict) and isinstance(summary.get("missions"), list) else []
         notifications = summary.get("notifications", []) if isinstance(summary, dict) and isinstance(summary.get("notifications"), list) else []
+        system_audit_digest = (
+            summary.get("systemAuditDigest", {})
+            if isinstance(summary, dict) and isinstance(summary.get("systemAuditDigest"), dict)
+            else {}
+        )
+        system_loss_breakdown = (
+            system_audit_digest.get("systemLossBreakdown", {})
+            if isinstance(system_audit_digest.get("systemLossBreakdown"), dict)
+            else {}
+        )
         skill_library = summary.get("skillLibrary", {}) if isinstance(summary, dict) and isinstance(summary.get("skillLibrary"), dict) else {}
         skill_feedback_loop = skill_library.get("feedbackLoop", {}) if isinstance(skill_library.get("feedbackLoop"), dict) else {}
         project_progress_history = (
@@ -568,6 +578,63 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             runningAdvancementRows=[text[:260] for text in running_advancement_rows],
             runningRowsWithProgress=len(running_advancement_rows_with_progress),
             expectedRunningTitles=expected_titles,
+            skipped=not is_builder_surface,
+        )
+        system_loss_count = await page.locator('[data-system-loss-current="true"]').count()
+        system_loss_text = ""
+        if system_loss_count > 0:
+            try:
+                system_loss_text = await page.locator('[data-system-loss-current="true"]').first.inner_text(timeout=args.timeout_ms)
+            except Exception:
+                system_loss_text = ""
+        system_loss_lower = system_loss_text.lower()
+        expected_system_score = ""
+        expected_system_loss = ""
+        if system_loss_breakdown.get("averageScoreOutOf20") is not None:
+            try:
+                expected_system_score = f"{float(system_loss_breakdown.get('averageScoreOutOf20')):g}/20"
+            except Exception:
+                expected_system_score = ""
+        if system_loss_breakdown.get("averageLossOutOf20") is not None:
+            try:
+                expected_system_loss = f"loss {float(system_loss_breakdown.get('averageLossOutOf20')):g}/20"
+            except Exception:
+                expected_system_loss = ""
+        system_loss_driver_titles = [
+            str(item.get("category") or item.get("title") or "").strip()
+            for item in (
+                system_loss_breakdown.get("drivers", [])
+                if isinstance(system_loss_breakdown.get("drivers"), list)
+                else []
+            )
+            if isinstance(item, dict) and str(item.get("category") or item.get("title") or "").strip()
+        ][:2]
+        visible_system_loss_driver_titles = [
+            title for title in system_loss_driver_titles if title.lower() in system_loss_lower
+        ]
+        record(
+            "live-builder-system-loss-truth-visible",
+            (not is_builder_surface)
+            or (
+                system_loss_count >= 1
+                and "system loss" in system_loss_lower
+                and (
+                    not expected_system_score
+                    or expected_system_score.lower() in system_loss_lower
+                )
+                and (
+                    not expected_system_loss
+                    or expected_system_loss.lower() in system_loss_lower
+                )
+                and len(visible_system_loss_driver_titles) >= min(1, len(system_loss_driver_titles))
+            ),
+            "Builder renders the current system-loss audit values and top remaining drivers from the live NAS digest.",
+            systemLossCardCount=system_loss_count,
+            expectedSystemScore=expected_system_score,
+            expectedSystemLoss=expected_system_loss,
+            expectedDriverTitles=system_loss_driver_titles,
+            visibleDriverTitles=visible_system_loss_driver_titles,
+            systemLossText=system_loss_text[:520],
             skipped=not is_builder_surface,
         )
         guided_steps = page.locator('[data-live-guided-next-steps="true"] [data-guided-step]')
