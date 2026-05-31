@@ -1577,6 +1577,19 @@ def _score_categories(
     )
     has_public_launch_internal_packet_ready = bool(public_launch_readiness.get("internalPacketReady"))
     has_public_launch_ready = bool(public_launch_readiness.get("ok"))
+    publication_proof = (
+        public_launch_readiness.get("publicationProof")
+        if isinstance(public_launch_readiness.get("publicationProof"), dict)
+        else {}
+    )
+    has_external_publication_proof = bool(
+        has_public_launch_ready
+        and (
+            publication_proof.get("githubReleaseReceiptPresent")
+            or publication_proof.get("npmReceiptPresent")
+            or publication_proof.get("signedInstallerReceiptPresent")
+        )
+    )
     has_responsive_smoke = (root / "scripts" / "control_route_responsive_smoke.py").exists()
     visual_smoke_text = _safe_read(root / "scripts" / "control_route_visual_smoke.py")
     responsive_smoke_text = _safe_read(root / "scripts" / "control_route_responsive_smoke.py")
@@ -2134,6 +2147,7 @@ def _score_categories(
                 f"public launch readiness report present: {has_public_launch_readiness_report}",
                 f"public launch internal packet ready: {has_public_launch_internal_packet_ready}",
                 f"public launch ready: {has_public_launch_ready}",
+                f"external publication proof present: {has_external_publication_proof}",
                 f"responsive visual smoke present: {has_responsive_smoke}",
                 f"beginner launch interaction proof present: {has_beginner_launch_interaction_gate}",
             ],
@@ -2169,6 +2183,8 @@ def _score_categories(
                 (
                     str(public_launch_readiness.get("nextAction") or "Public launch readiness needs rerun.")
                     if has_public_launch_readiness_report and not has_public_launch_ready
+                    else "Public GitHub release/tag proof is attached; remaining launch work is optional registry or signed-installer distribution."
+                    if has_external_publication_proof
                     else "Package entrypoint is archive-backed now, but public registry publication or signed installer distribution is still missing."
                     if has_launcher_package_release_receipt
                     else "Local package bin exists now; public registry publication or signed installer distribution is still missing."
@@ -2182,7 +2198,9 @@ def _score_categories(
             ],
             next_moves=[
                 (
-                    "Publish or tag the current release candidate."
+                    "Keep the GitHub release receipt, public-web receipt, and release packet current for each candidate."
+                    if has_external_publication_proof
+                    else "Publish or tag the current release candidate."
                     if has_public_launch_ready
                     else str(public_launch_readiness.get("nextAction") or "Refresh public launch readiness evidence.")
                     if has_public_launch_readiness_report
@@ -2256,6 +2274,7 @@ def _score_categories(
                 f"repeated cross-device launch rehearsal receipts present: {has_repeated_cross_device_launch_rehearsal_receipts}",
                 f"cross-device launch receipts attached to release proof: {has_cross_device_launch_receipts_release_proof}",
                 f"public release publication packet present: {has_public_release_publication_packet}",
+                f"external publication proof present: {has_external_publication_proof}",
                 f"latest release artifact pointer present: {has_latest_release_artifact_pointer}",
                 f"checksummed public release attachment manifest present: {has_public_release_attachment_manifest}",
                 f"mission context roots present: {has_mission_context_roots}",
@@ -2271,6 +2290,9 @@ def _score_categories(
             ],
             gaps=[
                 (
+                    "Batch conflict resolution, safe parallel dispatch, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated launch receipts, release-proof attachment, public release packet, checksummed attachment manifest, and external release receipt are archived now; the next gap is keeping the trend current on each release candidate."
+                    if has_parallel_dispatch_evidence and has_batch_sync_conflict_resolution and has_project_progress_history and has_dependency_aware_project_scheduler and has_beginner_safe_sync_authority and has_cross_device_launch_rehearsal and has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Batch conflict resolution, safe parallel dispatch, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated launch receipts, release-proof attachment, public release packet, and checksummed attachment manifest are archived now; the next gap is actual external publication or tagging."
                     if has_parallel_dispatch_evidence and has_batch_sync_conflict_resolution and has_project_progress_history and has_dependency_aware_project_scheduler and has_beginner_safe_sync_authority and has_cross_device_launch_rehearsal and has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest
                     else
@@ -2331,6 +2353,9 @@ def _score_categories(
                     else "Project picker/search/visual identity is still called out as partial in the roadmap."
                 ),
                 (
+                    "Batch sync conflict choices, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated receipt proof, release-proof attachment, publication packet generation, checksummed attachment manifest, and external release receipt now share the Builder/release surface; the next gap is keeping these receipts fresh over multiple candidates."
+                    if has_batch_sync_conflict_resolution and has_project_progress_history and has_dependency_aware_project_scheduler and has_beginner_safe_sync_authority and has_cross_device_launch_rehearsal and has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Batch sync conflict choices, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated receipt proof, release-proof attachment, publication packet generation, and checksummed attachment manifest now share the Builder/release surface; the next gap is publishing or tagging it externally."
                     if has_batch_sync_conflict_resolution and has_project_progress_history and has_dependency_aware_project_scheduler and has_beginner_safe_sync_authority and has_cross_device_launch_rehearsal and has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest
                     else
@@ -2373,6 +2398,9 @@ def _score_categories(
                     else "Mission-level multi-folder context remains limited."
                 ),
                 (
+                    "Repeated cross-device launch receipts are attached to release proof, summarized in the publication packet, listed in a checksummed attachment manifest, and externally published now; the next gap is keeping repeated proof attached to future candidates."
+                    if has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Repeated cross-device launch receipts are attached to release proof, summarized in the publication packet, and listed in a checksummed attachment manifest now; the next gap is actual external release publication."
                     if has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest
                     else
@@ -2398,6 +2426,9 @@ def _score_categories(
             ],
             next_moves=[
                 (
+                    "Keep the external release receipt attached when Builder produces the next proof/archive candidate."
+                    if has_batch_sync_conflict_resolution and has_project_progress_history and has_dependency_aware_project_scheduler and has_beginner_safe_sync_authority and has_cross_device_launch_rehearsal and has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Publish or tag the release candidate with the publication packet, latest artifact pointer, and checksummed proof attachments."
                     if has_batch_sync_conflict_resolution and has_project_progress_history and has_dependency_aware_project_scheduler and has_beginner_safe_sync_authority and has_cross_device_launch_rehearsal and has_repeated_cross_device_launch_rehearsal_receipts and has_cross_device_launch_receipts_release_proof and has_public_release_publication_packet and has_public_release_attachment_manifest
                     else
@@ -2625,6 +2656,7 @@ def _score_categories(
                 f"installable PWA shell and offline fallback present: {has_installable_pwa_shell}",
                 f"public web distribution contract present: {has_public_web_distribution_contract}",
                 f"public web release-candidate attachment present: {has_public_web_release_candidate_attachment}",
+                f"external publication proof present: {has_external_publication_proof}",
                 f"external mission watchdog supervisor loop present: {has_external_watchdog_supervisor_loop}",
                 f"backend watchdog autostart present: {has_external_watchdog_autostart}",
                 f"durable watchdog problem registry present: {has_watchdog_problem_registry}",
@@ -2635,6 +2667,9 @@ def _score_categories(
             ],
             gaps=[
                 (
+                    "GitHub Pages deployment receipt, release-candidate attachment, external release proof, and closed-tab Web Push sender path exist; the remaining web gap is production VAPID key configuration."
+                    if has_public_web_distribution_contract and has_public_web_release_candidate_attachment and has_closed_tab_web_push_sender and has_external_publication_proof
+                    else
                     "GitHub Pages deployment receipt, release-candidate attachment, and closed-tab Web Push sender path exist; the remaining gap is public release publication and production VAPID key configuration."
                     if has_public_web_distribution_contract and has_public_web_release_candidate_attachment and has_closed_tab_web_push_sender
                     else
@@ -2683,6 +2718,9 @@ def _score_categories(
             ],
             next_moves=[
                 (
+                    "Keep Pages deployment, GitHub release receipt, and notification receipts current on each candidate."
+                    if has_public_web_release_candidate_attachment and has_external_publication_proof
+                    else
                     "Publish or tag release candidates with the attached GitHub Pages deployment receipt."
                     if has_public_web_release_candidate_attachment
                     else
@@ -2744,9 +2782,13 @@ def _score_categories(
                 f"release proof CI enforcement present: {has_release_proof_ci}",
                 f"latest release artifact pointer present: {has_latest_release_artifact_pointer}",
                 f"checksummed public release attachment manifest present: {has_public_release_attachment_manifest}",
+                f"external publication proof present: {has_external_publication_proof}",
             ],
             gaps=[
                 (
+                    "Proof digest, side-by-side diff, export/share, release-proof archiving, CI upload, latest artifact pointer, checksummed public attachments, and external release receipt are present now; the next gap is keeping that proof bundle fresh across candidates."
+                    if has_release_proof_ci and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Proof digest, side-by-side diff, export/share, release-proof archiving, CI upload, latest artifact pointer, and checksummed public attachments are present now; the next gap is external publication/tagging of the candidate."
                     if has_release_proof_ci and has_public_release_attachment_manifest
                     else
@@ -2774,6 +2816,9 @@ def _score_categories(
             ],
             next_moves=[
                 (
+                    "Keep the release receipt and checksummed attachment manifest refreshed for every release candidate."
+                    if has_release_proof_ci and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Publish or tag the release candidate using the latest release artifact pointer and checksummed publication attachments."
                     if has_release_proof_ci and has_public_release_attachment_manifest
                     else
@@ -2864,9 +2909,13 @@ def _score_categories(
                 f"release proof CI enforcement present: {has_release_proof_ci}",
                 f"latest release artifact pointer present: {has_latest_release_artifact_pointer}",
                 f"checksummed public release attachment manifest present: {has_public_release_attachment_manifest}",
+                f"external publication proof present: {has_external_publication_proof}",
             ],
             gaps=[
                 (
+                    "Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, checksummed attachment manifest, and external release receipt exist now; the next gap is proving this publication cadence across future candidates."
+                    if has_release_proof_ci and has_public_release_attachment_manifest and has_bootstrap_summary_cache and has_external_publication_proof
+                    else
                     "Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, and checksummed attachment manifest exist now; the next gap is publishing those artifacts beside signed/public releases."
                     if has_release_proof_ci and has_public_release_attachment_manifest and has_bootstrap_summary_cache
                     else
@@ -2893,6 +2942,9 @@ def _score_categories(
                     else "No proven virtualized transcript/timeline path."
                 ),
                 (
+                    "Side-by-side diff review is included in the long-history CI release gate, uploaded as release proof, listed in checksummed public attachments, and attached to an external release receipt."
+                    if has_release_proof_ci and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Side-by-side diff review is included in the long-history CI release gate, uploaded as release proof, and listed in checksummed public attachments; the next gap is release-candidate publication."
                     if has_release_proof_ci and has_public_release_attachment_manifest
                     else
@@ -2943,6 +2995,9 @@ def _score_categories(
             ],
             next_moves=[
                 (
+                    "Keep release-proof CI artifacts attached to each external release candidate using the latest artifact pointer."
+                    if has_release_proof_ci and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Publish release-proof CI artifacts beside signed/public release candidates using the latest artifact pointer."
                     if has_release_proof_ci and has_public_release_attachment_manifest
                     else
@@ -2992,6 +3047,9 @@ def _score_categories(
                     else "Split control-room payload into summary plus lazy detail endpoints."
                 ),
                 (
+                    "Keep uploaded CI proof archives and their checksummed attachment manifest in release notes/downloads."
+                    if has_release_proof_ci and has_public_release_attachment_manifest and has_external_publication_proof
+                    else
                     "Promote uploaded CI proof archives and their checksummed attachment manifest into release notes/downloads."
                     if has_release_proof_ci and has_public_release_attachment_manifest
                     else
@@ -3270,6 +3328,7 @@ def _score_categories(
         "has_public_launch_readiness_report": has_public_launch_readiness_report,
         "has_public_launch_internal_packet_ready": has_public_launch_internal_packet_ready,
         "has_public_launch_ready": has_public_launch_ready,
+        "has_external_publication_proof": has_external_publication_proof,
         "has_in_process_summary_endpoint": has_in_process_summary_endpoint,
         "has_bootstrap_summary_cache": has_bootstrap_summary_cache,
     }
@@ -3606,6 +3665,11 @@ def _apply_strict_score_caps(
             else 15
         ),
         "Speed and long-history performance": (
+            20
+            if evidence.get("has_release_proof_ci")
+            and evidence.get("has_public_release_attachment_manifest")
+            and evidence.get("has_external_publication_proof")
+            else
             19
             if evidence.get("has_release_proof_ci")
             else 18
@@ -3695,6 +3759,11 @@ def _apply_strict_score_caps(
             else "Strict cap: private NAS web is working, but closed-tab mobile push/public distribution is not proven."
         ),
         "Speed and long-history performance": (
+            "Strict cap cleared: release proof CI enforcement, checksummed publication attachments, and external release publication proof are present."
+            if evidence.get("has_release_proof_ci")
+            and evidence.get("has_public_release_attachment_manifest")
+            and evidence.get("has_external_publication_proof")
+            else
             "Strict cap: release proof CI enforcement and checksummed publication attachments exist; public release-candidate publication/tagging is still pending."
             if evidence.get("has_release_proof_ci") and evidence.get("has_public_release_attachment_manifest")
             else
