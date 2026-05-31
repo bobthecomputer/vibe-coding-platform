@@ -3,7 +3,7 @@ type FluxioPwaStatus = {
   detail: string;
 };
 
-const FLUXIO_PWA_BUILD = "20260531-live-message-cache-reset-v25";
+const FLUXIO_PWA_BUILD = "20260531-live-message-hard-reset-v26";
 const FLUXIO_PWA_UPDATE_INTERVAL_MS = 60_000;
 const FLUXIO_PWA_BUILD_STORAGE_KEY = "fluxio:pwa-build";
 const FLUXIO_PWA_RELOAD_STORAGE_KEY = "fluxio:pwa-reloaded-build";
