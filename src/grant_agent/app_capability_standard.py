@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import urllib.error
 import urllib.request
 import uuid
@@ -170,6 +171,57 @@ def build_connected_apps_snapshot(root: Path) -> dict:
     }
 
 
+def record_connected_app_action_receipt(
+    root: Path,
+    *,
+    app_id: str,
+    app_name: str,
+    command_surface: str,
+    result_summary: str,
+    ok: bool,
+    health_online: bool,
+    payload: dict,
+) -> None:
+    normalized_app_id = str(app_id or "").strip()
+    if not normalized_app_id:
+        return
+    state = _load_session_state(root)
+    previous = dict(state.get(normalized_app_id, {}))
+    task_history = [
+        item for item in previous.get("task_history", []) if isinstance(item, dict)
+    ]
+    receipt = {
+        "taskId": str(payload.get("workspaceActionId") or command_surface or "bridge-action"),
+        "label": _connected_app_action_label(command_surface, app_name),
+        "status": "completed" if ok else "blocked",
+        "sourceKind": "workspace_action",
+        "resultSummary": result_summary,
+        "createdAt": utc_now_iso(),
+        "completedAt": utc_now_iso(),
+        "approvalStatus": "not_required",
+        "payload": {
+            **payload,
+            "bridgeOnline": bool(health_online),
+            "commandSurface": command_surface,
+        },
+    }
+    state[normalized_app_id] = {
+        **previous,
+        "session_id": previous.get("session_id") or f"bridge_{normalized_app_id}",
+        "task_history": [*task_history, receipt][-4:],
+        "latest_task_result": receipt,
+    }
+    _save_session_state(root, state)
+
+
+def _connected_app_action_label(command_surface: str, app_name: str) -> str:
+    if command_surface == "bridge.app_health":
+        return f"Check {app_name or 'connected app'} health"
+    if command_surface == "bridge.start_app":
+        return f"Start {app_name or 'connected app'}"
+    return app_name or "Connected app action"
+
+
 def _build_live_session(
     *,
     root: Path,
@@ -212,6 +264,11 @@ def _build_live_session(
         )
 
     if app_root is None or not app_root.exists():
+        context_preview = _missing_context_preview_for_app(manifest.app_id, app_root, manifest)
+        latest_task_result = _stable_task_result(
+            _missing_task_result_for_app(manifest, app_root),
+            previous_state.get("latest_task_result", {}),
+        )
         session = ConnectedAppSession(
             session_id=session_id,
             app_id=manifest.app_id,
@@ -227,19 +284,37 @@ def _build_live_session(
                 "The manifest loaded, but the local sibling app repository was not found.",
                 "Keep this integration in review until the app root is available on disk.",
             ],
+            app_root=str(app_root) if app_root else "",
+            context_preview=context_preview,
+            action_hooks=_manifest_action_hooks(manifest),
+            latest_task_result=latest_task_result,
+            ui_hints=dict(manifest.ui_hints),
         )
         return session, asdict(handshake)
+
+    bridge_endpoint = str(manifest.bridge.get("endpoint", ""))
+    bridge_healthcheck = str(manifest.bridge.get("healthcheck", "/health") or "/health")
+    runtime_details = _app_runtime_details(manifest.app_id, app_root, manifest)
+    runtime_health_url = str(runtime_details.get("healthUrl") or "").strip()
+    bridge_status_payload = (
+        _read_json_url(runtime_health_url) or _read_bridge_json(bridge_endpoint, bridge_healthcheck)
+        if runtime_health_url
+        else _read_bridge_json(bridge_endpoint, bridge_healthcheck)
+    )
+    bridge_online = bool(bridge_status_payload)
 
     context_preview = _context_preview_for_app(manifest.app_id, app_root, manifest)
     task_history = _task_history_for_app(
         manifest=manifest,
         app_root=app_root,
         previous_task_history=previous_state.get("task_history", []),
+        bridge_online=bridge_online,
+        runtime_details=runtime_details,
     )
     latest_task_result = task_history[-1] if task_history else {}
     approval_callback = _approval_callback_for_app(manifest.app_id, app_root)
-    status = "connected"
-    bridge_health = "healthy"
+    status = "connected" if bridge_online else "available"
+    bridge_health = "healthy" if bridge_online else "offline"
     active_tasks = [
         item.get("label", item.get("taskId", "task"))
         for item in task_history
@@ -249,8 +324,20 @@ def _build_live_session(
         f"Handshake resolved against {app_root}.",
         "Capability grants stay scoped to the app manifest and bridge contract.",
     ]
+    if bridge_online:
+        bridge_message = str(bridge_status_payload.get("message") or "Bridge health endpoint responded.")
+        notes.insert(0, bridge_message)
+    else:
+        notes.insert(
+            0,
+            "App files and catalog were found, but the configured bridge endpoint did not respond.",
+        )
     if approval_callback.get("available"):
         notes.append(approval_callback.get("detail", "Approval callback is available."))
+    if runtime_details.get("startCommand"):
+        notes.append(f"Start command: {runtime_details.get('startCommand')}")
+    if runtime_details.get("healthUrl"):
+        notes.append(f"Health check: {runtime_details.get('healthUrl')}")
 
     session = ConnectedAppSession(
         session_id=session_id,
@@ -263,14 +350,16 @@ def _build_live_session(
         active_tasks=active_tasks,
         last_seen_at=utc_now_iso(),
         notes=notes,
-        handshake_status="connected",
+        handshake_status="connected" if bridge_online else "endpoint_offline",
         bridge_transport=manifest.bridge.get("transport", ""),
-        bridge_endpoint=manifest.bridge.get("endpoint", ""),
+        bridge_endpoint=bridge_endpoint,
         app_root=str(app_root),
         context_preview=context_preview,
+        action_hooks=_manifest_action_hooks(manifest),
         task_history=task_history[-4:],
         latest_task_result=latest_task_result,
         approval_callback=approval_callback,
+        ui_hints={**manifest.ui_hints, **runtime_details},
     )
     return session, asdict(handshake)
 
@@ -341,6 +430,7 @@ def _build_synology_fast_sync_session(
         bridge_endpoint=bridge_endpoint,
         app_root=str(app_root),
         context_preview=context_preview,
+        action_hooks=_manifest_action_hooks(manifest),
         task_history=task_history[-4:],
         latest_task_result=latest_task_result,
         approval_callback={
@@ -424,6 +514,7 @@ def _build_cloud_drive_session(
         bridge_endpoint=manifest.bridge.get("endpoint", "local://cloud-drive"),
         app_root=str(root),
         context_preview=context_preview,
+        action_hooks=_manifest_action_hooks(manifest),
         task_history=task_history[-4:],
         latest_task_result=latest_task_result,
         approval_callback={
@@ -453,6 +544,12 @@ def _build_cloud_drive_session(
 
 def _build_follow_on_session(root: Path, manifest: AppCapabilityManifest) -> ConnectedAppSession:
     app_root = _resolve_app_root(root, manifest)
+    task = manifest.tasks[0] if manifest.tasks else None
+    surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+    follow_on_slice = str(
+        manifest.ui_hints.get("followOnSlice")
+        or (f"{task.label} plus approval-aware app action" if task else "approval-aware app action")
+    )
     return ConnectedAppSession(
         session_id=f"bridge_{manifest.app_id}",
         app_id=manifest.app_id,
@@ -471,25 +568,36 @@ def _build_follow_on_session(root: Path, manifest: AppCapabilityManifest) -> Con
         bridge_endpoint=manifest.bridge.get("endpoint", ""),
         app_root=str(app_root) if app_root else "",
         context_preview=[],
+        action_hooks=_manifest_action_hooks(manifest),
         task_history=[],
         latest_task_result={
-            "taskId": manifest.tasks[0].task_id if manifest.tasks else "",
-            "label": manifest.tasks[0].label if manifest.tasks else "Follow-on task",
+            "taskId": task.task_id if task else "",
+            "label": task.label if task else "Follow-on task",
             "status": "deferred",
             "sourceKind": "connected_app",
-            "resultSummary": "Solantir stays in follow-on review for the first post-1.0 bridge activation.",
+            "resultSummary": (
+                f"{manifest.name} stays in follow-on review until its local bridge exposes "
+                "health, context, task execution, and approval callbacks."
+            ),
             "createdAt": utc_now_iso(),
             "completedAt": utc_now_iso(),
             "approvalStatus": "deferred",
             "payload": {
-                "followOnSlice": "watchlist read plus approval-aware terminal action",
+                "followOnSlice": follow_on_slice,
+                "contextSurface": surface.label if surface else "",
+                "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
+                "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
             },
         },
         approval_callback={
             "available": True,
-            "channel": "terminal",
-            "detail": "Approval-aware terminal callback is part of the follow-on slice definition.",
+            "channel": str(manifest.ui_hints.get("approvalChannel") or "terminal"),
+            "detail": (
+                manifest.ui_hints.get("approvalDetail")
+                or "Approval-aware callback is part of the follow-on slice definition."
+            ),
         },
+        ui_hints=dict(manifest.ui_hints),
     )
 
 
@@ -499,10 +607,7 @@ def _context_preview_for_app(
     manifest: AppCapabilityManifest,
 ) -> list[dict]:
     if app_id == "oratio-viva":
-        worker_files = sorted(
-            path.stem.replace("_worker", "")
-            for path in (app_root / "backend").glob("*worker.py")
-        )
+        worker_files = _oratio_worker_names(app_root)
         package_name, package_version = _read_package_name_version(
             app_root / "frontend" / "package.json"
         )
@@ -518,7 +623,233 @@ def _context_preview_for_app(
                 "access": manifest.context_surfaces[0].access if manifest.context_surfaces else "read",
             }
         ]
+    if app_id == "mind-tower":
+        package_name, package_version = _read_package_name_version(app_root / "package.json")
+        skills = sorted(path.name for path in (app_root / "skills").glob("*") if path.is_dir())
+        services = sorted(path.name for path in (app_root / "services").glob("*") if path.is_dir())
+        app_dirs = sorted(path.name for path in (app_root / "apps").glob("*") if path.is_dir())
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "tower-focus-board",
+                "label": surface.label if surface else "Tower Focus Board",
+                "summary": (
+                    "Mind Tower workspace detected"
+                    + (f" as {package_name} {package_version}" if package_name else "")
+                    + f"; {len(skills)} skill pack(s), {len(app_dirs)} app(s), {len(services)} service(s)."
+                ),
+                "items": [
+                    *(f"app:{item}" for item in app_dirs[:3]),
+                    *(f"service:{item}" for item in services[:3]),
+                    *(f"skill:{item}" for item in skills[:4]),
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
+    if app_id == "jbheaven":
+        skill_names = sorted(path.parent.name for path in (app_root / "skills").rglob("SKILL.md"))
+        script_count = _count_matching_files(app_root / "scripts", "*.py")
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "jbhabcn-skills",
+                "label": surface.label if surface else "JBheaven Skills",
+                "summary": (
+                    f"JBheaven/JBHABCN API workspace detected with {len(skill_names)} Hermes skill file(s) "
+                    f"and {script_count} Python script(s)."
+                ),
+                "items": [
+                    *(f"skill:{item}" for item in skill_names[:5]),
+                    "api:/api/health",
+                    "api:/api/tool/list",
+                    "api:/api/generation/run",
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
     return []
+
+
+def _missing_context_preview_for_app(
+    app_id: str,
+    app_root: Path | None,
+    manifest: AppCapabilityManifest,
+) -> list[dict]:
+    if app_id == "oratio-viva":
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "voice-catalog",
+                "label": surface.label if surface else "Voice Catalog",
+                "summary": "Voice and relax engines are not connected until the Oratio Viva app folder or bridge is available.",
+                "items": [
+                    f"Expected app root: {app_root}" if app_root else "Expected app root was not reported.",
+                    f"Bridge endpoint: {manifest.bridge.get('endpoint', 'Not reported')}",
+                    "Use in Agent should plan setup before running a preview.",
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
+    if app_id == "mind-tower":
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "tower-focus-board",
+                "label": surface.label if surface else "Tower Focus Board",
+                "summary": "Mind Tower is not connected until the workspace folder and bridge or admin app are available.",
+                "items": [
+                    f"Expected app root: {app_root}" if app_root else "Expected app root was not reported.",
+                    f"Bridge endpoint: {manifest.bridge.get('endpoint', 'Not reported')}",
+                    "Use in Agent should plan setup before queuing timebox or skill actions.",
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
+    if app_id == "jbheaven":
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "jbhabcn-skills",
+                "label": surface.label if surface else "JBheaven Skills",
+                "summary": "JBheaven/JBHABCN is not connected until the local app folder or API server is available.",
+                "items": [
+                    f"Expected app root: {app_root}" if app_root else "Expected app root was not reported.",
+                    f"Bridge endpoint: {manifest.bridge.get('endpoint', 'Not reported')}",
+                    "Use in Agent should verify the skill pack before claiming a route ran.",
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
+    if app_id == "mind-tower":
+        package_name, package_version = _read_package_name_version(app_root / "package.json")
+        skills = sorted(path.name for path in (app_root / "skills").glob("*") if path.is_dir())
+        services = sorted(path.name for path in (app_root / "services").glob("*") if path.is_dir())
+        app_dirs = sorted(path.name for path in (app_root / "apps").glob("*") if path.is_dir())
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "tower-focus-board",
+                "label": surface.label if surface else "Tower Focus Board",
+                "summary": (
+                    "Mind Tower workspace detected"
+                    + (f" as {package_name} {package_version}" if package_name else "")
+                    + f"; {len(skills)} skill pack(s), {len(app_dirs)} app(s), {len(services)} service(s)."
+                ),
+                "items": [
+                    *(f"app:{item}" for item in app_dirs[:3]),
+                    *(f"service:{item}" for item in services[:3]),
+                    *(f"skill:{item}" for item in skills[:4]),
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
+    if app_id == "jbheaven":
+        skill_names = sorted(path.parent.name for path in (app_root / "skills").rglob("SKILL.md"))
+        script_count = _count_matching_files(app_root / "scripts", "*.py")
+        surface = manifest.context_surfaces[0] if manifest.context_surfaces else None
+        return [
+            {
+                "surfaceId": surface.surface_id if surface else "jbhabcn-skills",
+                "label": surface.label if surface else "JBheaven Skills",
+                "summary": (
+                    f"JBheaven/JBHABCN API workspace detected with {len(skill_names)} Hermes skill file(s) "
+                    f"and {script_count} Python script(s)."
+                ),
+                "items": [
+                    *(f"skill:{item}" for item in skill_names[:5]),
+                    "api:/api/health",
+                    "api:/api/tool/list",
+                    "api:/api/generation/run",
+                ],
+                "access": surface.access if surface else "read",
+            }
+        ]
+    return []
+
+
+def _missing_task_result_for_app(
+    manifest: AppCapabilityManifest,
+    app_root: Path | None,
+) -> dict:
+    if manifest.app_id == "oratio-viva":
+        task = manifest.tasks[0] if manifest.tasks else None
+        return {
+            "taskId": task.task_id if task else "render-voice-preview",
+            "label": task.label if task else "Render voice preview",
+            "status": "blocked",
+            "sourceKind": "connected_app",
+            "resultSummary": (
+                "Oratio Viva voice and relax engine preview is not connected yet; "
+                "the Agent can plan setup, but should not claim a render ran."
+            ),
+            "createdAt": utc_now_iso(),
+            "completedAt": utc_now_iso(),
+            "approvalStatus": "not_requested",
+            "payload": {
+                "expectedAppRoot": str(app_root) if app_root else "",
+                "bridgeEndpoint": manifest.bridge.get("endpoint", ""),
+                "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
+                "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
+                "safeDirections": [
+                    "Confirm the Oratio Viva app folder exists.",
+                    "Confirm the local bridge endpoint responds.",
+                    "Only then queue the render-voice-preview task.",
+                ],
+            },
+        }
+    if manifest.app_id == "mind-tower":
+        task = manifest.tasks[0] if manifest.tasks else None
+        return {
+            "taskId": task.task_id if task else "plan-timebox",
+            "label": task.label if task else "Plan timebox",
+            "status": "blocked",
+            "sourceKind": "connected_app",
+            "resultSummary": (
+                "Mind Tower timebox and skill manager is not connected yet; "
+                "the Agent can plan setup, but should not claim a timebox or skill proposal ran."
+            ),
+            "createdAt": utc_now_iso(),
+            "completedAt": utc_now_iso(),
+            "approvalStatus": "not_requested",
+            "payload": {
+                "expectedAppRoot": str(app_root) if app_root else "",
+                "bridgeEndpoint": manifest.bridge.get("endpoint", ""),
+                "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
+                "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
+                "safeDirections": [
+                    "Confirm the Mind Tower app folder exists.",
+                    "Start the admin app or Fluxio bridge.",
+                    "Only then queue timebox or skill-proposal actions.",
+                ],
+            },
+        }
+    if manifest.app_id == "jbheaven":
+        task = manifest.tasks[0] if manifest.tasks else None
+        return {
+            "taskId": task.task_id if task else "inspect-jbhabcn-skills",
+            "label": task.label if task else "Inspect JBheaven skills",
+            "status": "blocked",
+            "sourceKind": "connected_app",
+            "resultSummary": (
+                "JBheaven/JBHABCN skill and API workspace is not connected yet; "
+                "the Agent can plan setup, but should not claim an API or skill action ran."
+            ),
+            "createdAt": utc_now_iso(),
+            "completedAt": utc_now_iso(),
+            "approvalStatus": "not_requested",
+            "payload": {
+                "expectedAppRoot": str(app_root) if app_root else "",
+                "bridgeEndpoint": manifest.bridge.get("endpoint", ""),
+                "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
+                "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
+                "safeDirections": [
+                    "Confirm the JBheaven app folder exists.",
+                    "Start api_server.py and verify /api/health.",
+                    "Only then inspect or run JBheaven skill/API actions.",
+                ],
+            },
+        }
+    return {}
 
 
 def _task_history_for_app(
@@ -526,16 +857,69 @@ def _task_history_for_app(
     manifest: AppCapabilityManifest,
     app_root: Path,
     previous_task_history: list[dict],
+    bridge_online: bool,
+    runtime_details: dict | None = None,
 ) -> list[dict]:
     if previous_task_history:
+        if manifest.app_id == "oratio-viva":
+            return [
+                _enrich_oratio_task_receipt(
+                    item,
+                    app_root,
+                    manifest,
+                    bridge_online=bridge_online,
+                )
+                for item in previous_task_history
+            ]
+        if manifest.app_id in {"mind-tower", "jbheaven"}:
+            return [
+                _enrich_generic_app_task_receipt(
+                    item,
+                    app_root,
+                    manifest,
+                    bridge_online=bridge_online,
+                    runtime_details=runtime_details or {},
+                )
+                for item in previous_task_history
+            ]
         return list(previous_task_history)
 
     if manifest.app_id == "oratio-viva":
-        workers = sorted(
-            path.stem.replace("_worker", "")
-            for path in (app_root / "backend").glob("*worker.py")
-        )
+        workers = _oratio_worker_names(app_root)
         selected = workers[0] if workers else "default"
+        if not bridge_online:
+            return [
+                {
+                    "taskId": manifest.tasks[0].task_id,
+                    "label": manifest.tasks[0].label,
+                    "status": "blocked",
+                    "sourceKind": "connected_app",
+                    "resultSummary": (
+                        f"{len(workers)} voice and relax engine(s) were detected, but the Oratio "
+                        "bridge endpoint is offline; Agent can draft Queue Render, but must not "
+                        "claim a render ran."
+                    ),
+                    "createdAt": utc_now_iso(),
+                    "completedAt": utc_now_iso(),
+                    "approvalStatus": "not_requested",
+                    "payload": {
+                        "selectedEngine": selected,
+                        "engineCount": len(workers),
+                        "availableEngines": workers[:6],
+                        "workspaceRoot": str(app_root),
+                        "bridgeEndpoint": manifest.bridge.get("endpoint", ""),
+                        "bridgeOnline": False,
+                        "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
+                        "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
+                        "surfaceRead": "voice-catalog",
+                        "safeDirections": [
+                            "Start the Oratio Viva bridge service.",
+                            "Confirm the configured health endpoint responds.",
+                            "Only then queue the render-voice-preview task.",
+                        ],
+                    },
+                }
+            ]
         return [
             {
                 "taskId": manifest.tasks[0].task_id,
@@ -548,14 +932,171 @@ def _task_history_for_app(
                 "approvalStatus": "not_required",
                 "payload": {
                     "selectedEngine": selected,
+                    "engineCount": len(workers),
+                    "availableEngines": workers[:6],
                     "workspaceRoot": str(app_root),
+                    "bridgeEndpoint": manifest.bridge.get("endpoint", ""),
+                    "bridgeOnline": True,
+                    "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
+                    "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
                     "surfaceRead": "voice-catalog",
                     "previewPrompt": "Fluxio bridge preview",
                 },
             }
         ]
 
+    if manifest.app_id == "mind-tower":
+        return _generic_app_task_history(
+            manifest=manifest,
+            app_root=app_root,
+            bridge_online=bridge_online,
+            runtime_details=runtime_details or {},
+            offline_summary=(
+                "Mind Tower files were detected, but the timebox and skill bridge endpoint is offline; "
+                "Agent can draft Queue Timebox or Propose Skill, but must not claim an action ran."
+            ),
+            online_summary="Mind Tower bridge health responded; timebox and skill actions can be routed with approval receipts.",
+            surface_read="tower-focus-board",
+        )
+
+    if manifest.app_id == "jbheaven":
+        return _generic_app_task_history(
+            manifest=manifest,
+            app_root=app_root,
+            bridge_online=bridge_online,
+            runtime_details=runtime_details or {},
+            offline_summary=(
+                "JBheaven/JBHABCN files were detected, but the API/skill endpoint is offline; "
+                "Agent can draft a skill inspection, but must not claim an API action ran."
+            ),
+            online_summary="JBheaven/JBHABCN API health responded; skill and API inspection actions can be routed with receipts.",
+            surface_read="jbhabcn-skills",
+        )
+
     return []
+
+
+def _generic_app_task_history(
+    *,
+    manifest: AppCapabilityManifest,
+    app_root: Path,
+    bridge_online: bool,
+    runtime_details: dict,
+    offline_summary: str,
+    online_summary: str,
+    surface_read: str,
+) -> list[dict]:
+    task = manifest.tasks[0] if manifest.tasks else None
+    status = "completed" if bridge_online else "blocked"
+    return [
+        {
+            "taskId": task.task_id if task else f"inspect-{manifest.app_id}",
+            "label": task.label if task else f"Inspect {manifest.name}",
+            "status": status,
+            "sourceKind": "connected_app",
+            "resultSummary": online_summary if bridge_online else offline_summary,
+            "createdAt": utc_now_iso(),
+            "completedAt": utc_now_iso(),
+            "approvalStatus": "not_required" if bridge_online else "not_requested",
+            "payload": {
+                "workspaceRoot": str(app_root),
+                "bridgeEndpoint": manifest.bridge.get("endpoint", ""),
+                "bridgeOnline": bridge_online,
+                "runtimeManager": manifest.ui_hints.get("runtimeManager", ""),
+                "skillCandidate": manifest.ui_hints.get("skillCandidate", ""),
+                "surfaceRead": surface_read,
+                "startCommand": runtime_details.get("startCommand", ""),
+                "healthUrl": runtime_details.get("healthUrl", ""),
+                "appUrl": runtime_details.get("appUrl", ""),
+                "apiOnline": bool(runtime_details.get("apiOnline")),
+                "safeDirections": [
+                    *(["Start the local app service."] if not bridge_online else []),
+                    "Confirm the configured health endpoint responds.",
+                    "Record the exact runtime/app action receipt before claiming completion.",
+                ],
+            },
+        }
+    ]
+
+
+def _enrich_generic_app_task_receipt(
+    item: dict,
+    app_root: Path,
+    manifest: AppCapabilityManifest,
+    *,
+    bridge_online: bool,
+    runtime_details: dict,
+) -> dict:
+    enriched = dict(item)
+    payload = dict(enriched.get("payload") or {})
+    payload.setdefault("workspaceRoot", str(app_root))
+    payload.setdefault("bridgeEndpoint", manifest.bridge.get("endpoint", ""))
+    payload["bridgeOnline"] = bridge_online
+    payload.setdefault("runtimeManager", manifest.ui_hints.get("runtimeManager", ""))
+    payload.setdefault("skillCandidate", manifest.ui_hints.get("skillCandidate", ""))
+    payload.setdefault("startCommand", runtime_details.get("startCommand", ""))
+    payload.setdefault("healthUrl", runtime_details.get("healthUrl", ""))
+    payload.setdefault("appUrl", runtime_details.get("appUrl", ""))
+    payload["apiOnline"] = bool(runtime_details.get("apiOnline"))
+    if not bridge_online and str(enriched.get("status", "")) == "completed":
+        enriched["status"] = "blocked"
+        enriched["approvalStatus"] = "not_requested"
+        enriched["resultSummary"] = (
+            f"{manifest.name} endpoint is offline; this old receipt was downgraded so "
+            "the Agent does not claim an app action ran."
+        )
+    enriched["payload"] = payload
+    return enriched
+
+
+def _oratio_worker_names(app_root: Path) -> list[str]:
+    return sorted(
+        path.stem.replace("_worker", "")
+        for path in (app_root / "backend").glob("*worker.py")
+    )
+
+
+def _enrich_oratio_task_receipt(
+    item: dict,
+    app_root: Path,
+    manifest: AppCapabilityManifest,
+    *,
+    bridge_online: bool,
+) -> dict:
+    workers = _oratio_worker_names(app_root)
+    enriched = dict(item)
+    payload = dict(enriched.get("payload") or {})
+    payload.setdefault("selectedEngine", workers[0] if workers else "default")
+    payload.setdefault("engineCount", len(workers))
+    payload.setdefault("availableEngines", workers[:6])
+    payload.setdefault("workspaceRoot", str(app_root))
+    payload.setdefault("bridgeEndpoint", manifest.bridge.get("endpoint", ""))
+    payload["bridgeOnline"] = bridge_online
+    payload.setdefault("runtimeManager", manifest.ui_hints.get("runtimeManager", ""))
+    payload.setdefault("skillCandidate", manifest.ui_hints.get("skillCandidate", ""))
+    payload.setdefault("surfaceRead", "voice-catalog")
+    if (
+        not bridge_online
+        and str(enriched.get("resultSummary", "")).startswith(
+            "Queued and completed a local preview bridge task"
+        )
+    ):
+        enriched["status"] = "blocked"
+        enriched["approvalStatus"] = "not_requested"
+        enriched["resultSummary"] = (
+            f"{len(workers)} voice and relax engine(s) were detected, but the Oratio "
+            "bridge endpoint is offline; this old receipt was downgraded so the Agent "
+            "does not claim a render ran."
+        )
+    elif bridge_online and str(enriched.get("status", "")).lower() == "blocked":
+        enriched["status"] = "completed"
+        enriched["approvalStatus"] = "not_required"
+        enriched["resultSummary"] = (
+            f"Oratio Viva health responded; {len(workers)} voice and relax engine(s) "
+            "are available for queued render actions with receipts."
+        )
+    enriched["payload"] = payload
+    return enriched
 
 
 def _synology_context_preview(
@@ -1042,6 +1583,37 @@ def _build_grants(manifest: AppCapabilityManifest) -> list[CapabilityGrant]:
     ]
 
 
+def _manifest_action_hooks(manifest: AppCapabilityManifest) -> list[dict]:
+    return [
+        {
+            "hookId": hook.hook_id,
+            "label": hook.label,
+            "description": hook.description,
+            "mutability": hook.mutability,
+            "riskLevel": hook.risk_level,
+            "requiresApproval": hook.requires_approval,
+            "executionKind": hook.execution_kind,
+            "executionCommand": hook.execution_command,
+            "healthUrl": hook.health_url,
+            "appUrl": hook.app_url,
+        }
+        for hook in manifest.action_hooks
+    ]
+
+
+def _stable_task_result(generated: dict, previous: object) -> dict:
+    if not generated or not isinstance(previous, dict):
+        return generated
+    stable_keys = ("taskId", "label", "status", "resultSummary", "approvalStatus")
+    if all(str(generated.get(key, "")) == str(previous.get(key, "")) for key in stable_keys):
+        next_result = dict(generated)
+        for key in ("createdAt", "completedAt"):
+            if previous.get(key):
+                next_result[key] = previous.get(key)
+        return next_result
+    return generated
+
+
 def _resolve_app_root(root: Path, manifest: AppCapabilityManifest) -> Path | None:
     configured_root = manifest.bridge.get("workspace_root") or manifest.ui_hints.get(
         "workspaceRoot"
@@ -1057,13 +1629,143 @@ def _resolve_app_root(root: Path, manifest: AppCapabilityManifest) -> Path | Non
 
 
 def _candidate_app_roots(root: Path, app_id: str) -> list[Path]:
-    base = root.resolve().parent
-    lookup = {
-        "oratio-viva": [base / "OratioViva", base / "oratio-viva"],
-        "solantir-terminal": [base / "Solantir", base / "solantir"],
-        "synology-fast-sync": [base / "Cowork"],
+    candidates: list[Path] = []
+    for base in _candidate_project_bases(root):
+        lookup = {
+            "oratio-viva": [
+                base / "OratioViva",
+                base / "oratio-viva",
+                base / "Projects" / "OratioViva",
+                base / "Projects" / "oratio-viva",
+            ],
+            "solantir-terminal": [base / "Solantir", base / "solantir"],
+            "mind-tower": [base / "MindTower", base / "mind-tower", base / "Tower"],
+            "jbheaven": [base / "Jbheaven", base / "JBheaven", base / "JBHABCN"],
+            "synology-fast-sync": [base / "Cowork"],
+        }
+        candidates.extend(lookup.get(app_id, [base / app_id]))
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            deduped.append(candidate)
+            seen.add(key)
+    return deduped
+
+
+def _candidate_project_bases(root: Path) -> list[Path]:
+    resolved = root.resolve()
+    bases = [resolved.parent]
+    for parent in resolved.parents:
+        if parent.name.lower() == "projects":
+            bases.append(parent)
+            bases.append(parent / "Projects")
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for base in bases:
+        key = str(base)
+        if key not in seen:
+            deduped.append(base)
+            seen.add(key)
+    return deduped
+
+
+def _app_runtime_details(app_id: str, app_root: Path, manifest: AppCapabilityManifest) -> dict:
+    bridge_endpoint = str(manifest.bridge.get("endpoint") or "").rstrip("/")
+    bridge_healthcheck = str(manifest.bridge.get("healthcheck") or "/health")
+    bridge_health_url = _join_url(bridge_endpoint, bridge_healthcheck)
+    if app_id == "oratio-viva":
+        health_url = "http://127.0.0.1:8000/health"
+        python_command = _app_python_command(app_root, fallback="python")
+        return {
+            "startCommand": f'cd "{app_root}" && {python_command} -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload',
+            "healthUrl": health_url,
+            "bridgeHealthUrl": bridge_health_url,
+            "appUrl": "http://127.0.0.1:5173",
+            "apiOnline": bool(_read_json_url(health_url)),
+            "launchKind": "local_fastapi_plus_vite",
+        }
+    if app_id == "mind-tower":
+        pnpm_command = "pnpm"
+        fallback_bridge = Path(__file__).resolve().parents[2] / "scripts" / "mind_tower_bridge.py"
+        if shutil.which("pnpm"):
+            health_url = "http://127.0.0.1:3000/api/connections/status"
+            start_command = f'cd "{app_root}" && {pnpm_command} --filter @mindtower/admin dev'
+            launch_kind = "next_admin_app"
+            app_url = "http://127.0.0.1:3000/control"
+        else:
+            bridge_port = os.environ.get("FLUXIO_MIND_TOWER_BRIDGE_PORT", "3001").strip() or "3001"
+            health_url = f"http://127.0.0.1:{bridge_port}/api/connections/status"
+            python_command = _app_python_command(app_root, fallback="python")
+            start_command = (
+                f'{python_command} "{fallback_bridge}" --root "{app_root}" '
+                f"--host 127.0.0.1 --port {bridge_port}"
+            )
+            launch_kind = "python_workspace_bridge"
+            app_url = f"http://127.0.0.1:{bridge_port}/api/skills"
+        return {
+            "startCommand": start_command,
+            "healthUrl": health_url,
+            "bridgeHealthUrl": bridge_health_url,
+            "appUrl": app_url,
+            "apiOnline": bool(_read_json_url(health_url)),
+            "launchKind": launch_kind,
+        }
+    if app_id == "jbheaven":
+        health_url = "http://127.0.0.1:8081/api/health"
+        python_command = _app_python_command(app_root, fallback="python")
+        return {
+            "startCommand": f'cd "{app_root}" && {python_command} api_server.py',
+            "healthUrl": health_url,
+            "bridgeHealthUrl": bridge_health_url,
+            "appUrl": "http://127.0.0.1:8081/api/health",
+            "apiOnline": bool(_read_json_url(health_url)),
+            "launchKind": "local_python_api",
+        }
+    return {
+        "startCommand": str(manifest.ui_hints.get("startCommand") or ""),
+        "healthUrl": bridge_health_url,
+        "bridgeHealthUrl": bridge_health_url,
+        "appUrl": str(manifest.ui_hints.get("appUrl") or ""),
+        "apiOnline": bool(_read_json_url(bridge_health_url)) if bridge_health_url else False,
+        "launchKind": str(manifest.ui_hints.get("launchKind") or ""),
     }
-    return lookup.get(app_id, [base / app_id])
+
+
+def _app_python_command(app_root: Path, *, fallback: str) -> str:
+    posix_python = app_root / ".venv_fluxio" / "bin" / "python"
+    windows_python = app_root / ".venv_fluxio" / "Scripts" / "python.exe"
+    if posix_python.exists():
+        return _quote_shell_path(str(posix_python))
+    if windows_python.exists():
+        return _quote_shell_path(str(windows_python))
+    return fallback
+
+
+def _quote_shell_path(path: str) -> str:
+    return f'"{path.replace(chr(34), chr(34) + chr(34))}"'
+
+
+def _join_url(base: str, path: str) -> str:
+    if not base:
+        return ""
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    if base.endswith("/fluxio"):
+        base = base[: -len("/fluxio")]
+    return f"{base}{normalized_path}"
+
+
+def _read_json_url(url: str) -> dict:
+    if not url:
+        return {}
+    try:
+        with urllib.request.urlopen(url, timeout=BRIDGE_HTTP_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _read_package_name_version(path: Path) -> tuple[str, str]:
@@ -1080,6 +1782,12 @@ def _count_files(root: Path) -> int:
     if not root.exists():
         return 0
     return sum(1 for path in root.rglob("*") if path.is_file())
+
+
+def _count_matching_files(root: Path, pattern: str) -> int:
+    if not root.exists():
+        return 0
+    return sum(1 for path in root.rglob(pattern) if path.is_file())
 
 
 def _load_manifest_payloads(config_path: Path) -> list[dict]:
@@ -1131,7 +1839,15 @@ def _load_manifest_payloads(config_path: Path) -> list[dict]:
                     "requires_approval": False,
                 }
             ],
-            "ui_hints": {"category": "speech", "requiresUserPresent": False},
+            "ui_hints": {
+                "category": "speech",
+                "bridgeRole": "voice_runtime",
+                "runtimeManager": "voice-and-relax-engine-manager",
+                "skillCandidate": "voice-preview-workflow",
+                "followOnSlice": "voice catalog read plus preview render queue with proof",
+                "aliases": ["relax engines", "voice engines", "Oratio", "Oratio Viva"],
+                "requiresUserPresent": False,
+            },
         },
         {
             "manifest_id": "manifest_solantir_terminal",

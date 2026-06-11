@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -15,7 +17,10 @@ from .mission_control import (
     _inspect_workspace_git,
     _profile_parameter_snapshot,
 )
-from .app_capability_standard import build_connected_apps_snapshot
+from .app_capability_standard import (
+    build_connected_apps_snapshot,
+    record_connected_app_action_receipt,
+)
 from .models import (
     ActionApprovalGate,
     ActionExecutionRecord,
@@ -40,6 +45,7 @@ TELEGRAM_ENV_KEYS = (
     "TELEGRAM_CHAT_ID",
     "TELEGRAM_DESTINATION",
 )
+APP_RUNTIME_BRIDGE_IDS = {"oratio-viva", "mind-tower", "jbheaven"}
 
 def execute_control_room_workspace_action(
     *,
@@ -127,12 +133,17 @@ def execute_control_room_workspace_action(
             spec=spec,
             record=record_dict,
         )
+    snapshot = (
+        _bridge_app_action_snapshot(root, history_key=history_key, record=record_dict)
+        if spec.get("commandSurface") in {"bridge.app_health", "bridge.start_app"}
+        else store.build_snapshot()
+    )
     return {
         "ok": record_dict.get("result", {}).get("ok", False),
         "surface": surface,
         "workspaceId": workspace.workspace_id if workspace is not None else "",
         "record": record_dict,
-        "snapshot": store.build_snapshot(),
+        "snapshot": snapshot,
     }
 
 
@@ -240,6 +251,8 @@ def _build_bridge_actions(root: Path) -> list[dict]:
             "nas_storage",
             "cloud_storage",
         }:
+            if app_id in APP_RUNTIME_BRIDGE_IDS:
+                actions.extend(_build_app_runtime_bridge_actions(session))
             continue
         is_cloud = app_id == "cloud-drive-sync" or bridge_role == "cloud_storage"
         latest_task = session.get("latest_task_result", {})
@@ -351,6 +364,98 @@ def _build_bridge_actions(root: Path) -> list[dict]:
     return actions
 
 
+def _build_app_runtime_bridge_actions(session: dict) -> list[dict]:
+    app_id = str(session.get("app_id", "")).strip()
+    if not app_id:
+        return []
+    app_name = str(session.get("app_name") or session.get("label") or app_id)
+    ui_hints = session.get("ui_hints", {}) if isinstance(session.get("ui_hints"), dict) else {}
+    latest_task = (
+        session.get("latest_task_result", {})
+        if isinstance(session.get("latest_task_result"), dict)
+        else {}
+    )
+    latest_payload = (
+        latest_task.get("payload", {}) if isinstance(latest_task.get("payload"), dict) else {}
+    )
+    start_command = str(ui_hints.get("startCommand") or latest_payload.get("startCommand") or "").strip()
+    health_url = str(
+        ui_hints.get("healthUrl")
+        or latest_payload.get("healthUrl")
+        or ui_hints.get("bridgeHealthUrl")
+        or ""
+    ).strip()
+    app_url = str(ui_hints.get("appUrl") or latest_payload.get("appUrl") or "").strip()
+    app_root = str(session.get("app_root") or latest_payload.get("workspaceRoot") or "").strip()
+    actions: list[dict] = []
+    if health_url:
+        actions.append(
+            {
+                "actionId": f"check-{app_id}-health",
+                "label": f"Check {app_name} health",
+                "description": "Probe the local app health endpoint and save a readable bridge receipt.",
+                "commandSurface": "bridge.app_health",
+                "requiresApproval": False,
+                "kind": "status",
+                "appId": app_id,
+                "appName": app_name,
+                "healthUrl": health_url,
+                "appUrl": app_url,
+                "appRoot": app_root,
+                "platform": "local",
+            }
+        )
+    if start_command:
+        actions.append(
+            {
+                "actionId": f"start-{app_id}",
+                "label": f"Start {app_name}",
+                "description": (
+                    "Start the local app service in the background, then check health and record "
+                    "the exact command, PID, log path, and readiness state."
+                ),
+                "commandSurface": "bridge.start_app",
+                "requiresApproval": False,
+                "kind": "start",
+                "appId": app_id,
+                "appName": app_name,
+                "command": start_command,
+                "healthUrl": health_url,
+                "appUrl": app_url,
+                "appRoot": app_root,
+                "platform": "local",
+            }
+        )
+    return actions
+
+
+def _bridge_app_action_snapshot(root: Path, *, history_key: str, record: dict) -> dict:
+    payload = record.get("result", {}).get("payload", {}) if isinstance(record, dict) else {}
+    return {
+        "summaryMode": "workspace_action_receipt",
+        "source": "bridge_app_action",
+        "workspaceActionHistoryKey": history_key,
+        "latestWorkspaceAction": record,
+        "connectedApp": _compact_connected_app_from_action_payload(payload),
+    }
+
+
+def _compact_connected_app_from_action_payload(payload: dict) -> dict:
+    return {
+        "appId": payload.get("appId", ""),
+        "appName": payload.get("appName", ""),
+        "status": "ready" if payload.get("healthOnline") else "offline",
+        "bridgeHealth": "healthy" if payload.get("healthOnline") else "offline",
+        "appRoot": payload.get("appRoot", ""),
+        "startCommand": payload.get("startCommand") or payload.get("command", ""),
+        "healthUrl": payload.get("healthUrl", ""),
+        "appUrl": payload.get("appUrl", ""),
+        "pid": payload.get("pid"),
+        "logPath": payload.get("logPath", ""),
+        "alreadyRunning": bool(payload.get("alreadyRunning")),
+    }
+
+
 def _resolve_workspace_for_setup(
     store: ControlRoomStore,
     workspace_id: str | None,
@@ -459,6 +564,132 @@ def _run_action(
                 "followUpExitCode": None,
             },
             result_summary=str(setup.get("summary", "")),
+            target_path=proposal.target_path,
+        )
+        record.executed_at = utc_now_iso()
+        return record
+
+    if spec.get("commandSurface") == "bridge.app_health":
+        health_url = str(spec.get("healthUrl") or "").strip()
+        health_payload = _probe_health_url(health_url)
+        app_name = str(spec.get("appName") or spec.get("appId") or "Connected app")
+        result_payload = {
+            "workspaceActionId": spec.get("actionId", ""),
+            "surface": surface,
+            "commandSurface": spec.get("commandSurface", ""),
+            "appId": spec.get("appId", ""),
+            "appName": app_name,
+            "healthUrl": health_url,
+            "appUrl": spec.get("appUrl", ""),
+            "appRoot": spec.get("appRoot", ""),
+            "healthOnline": bool(health_payload),
+            "healthPayload": health_payload,
+        }
+        result_summary = (
+            f"{app_name} health responded at {health_url}."
+            if health_payload
+            else f"{app_name} health did not respond at {health_url}."
+        )
+        record_connected_app_action_receipt(
+            root,
+            app_id=str(spec.get("appId") or ""),
+            app_name=app_name,
+            command_surface=str(spec.get("commandSurface") or ""),
+            result_summary=result_summary,
+            ok=bool(health_payload),
+            health_online=bool(health_payload),
+            payload=result_payload,
+        )
+        record.result = ActionResultEnvelope(
+            ok=bool(health_payload),
+            exit_code=0 if health_payload else 1,
+            duration_ms=round((time.monotonic() - start) * 1000),
+            payload=result_payload,
+            result_summary=result_summary,
+            target_path=proposal.target_path,
+        )
+        record.executed_at = utc_now_iso()
+        return record
+
+    if spec.get("commandSurface") == "bridge.start_app":
+        app_name = str(spec.get("appName") or spec.get("appId") or "Connected app")
+        start_command = str(spec.get("command") or "").strip()
+        health_url = str(spec.get("healthUrl") or "").strip()
+        health_before = _probe_health_url(health_url)
+        launch_receipt: dict[str, object] = {}
+        launch_ok = bool(health_before)
+        launch_error = ""
+        process_running = False
+        if not health_before:
+            launch_receipt = _launch_background_app_command(
+                root=root,
+                app_id=str(spec.get("appId") or "connected-app"),
+                command=start_command,
+                app_root=str(spec.get("appRoot") or ""),
+            )
+            launch_ok = bool(launch_receipt.get("ok"))
+            launch_error = str(launch_receipt.get("error") or "")
+            time.sleep(1.25)
+        health_after = _probe_health_url(health_url)
+        ready = bool(health_before or health_after)
+        if launch_receipt.get("pid"):
+            process_running = _process_is_running(int(launch_receipt.get("pid") or 0))
+        if launch_ok and not ready and launch_receipt.get("pid") and not process_running:
+            launch_ok = False
+            log_tail = _tail_text(Path(str(launch_receipt.get("logPath") or "")), limit=900)
+            launch_error = (
+                "Process exited during startup."
+                + (f" Latest log: {log_tail}" if log_tail else "")
+            )
+        result_payload = {
+            "workspaceActionId": spec.get("actionId", ""),
+            "surface": surface,
+            "commandSurface": spec.get("commandSurface", ""),
+            "appId": spec.get("appId", ""),
+            "appName": app_name,
+            "command": start_command,
+            "startCommand": start_command,
+            "healthUrl": health_url,
+            "appUrl": spec.get("appUrl", ""),
+            "appRoot": spec.get("appRoot", ""),
+            "pid": launch_receipt.get("pid"),
+            "logPath": launch_receipt.get("logPath", ""),
+            "alreadyRunning": bool(health_before),
+            "processRunning": process_running,
+            "healthOnline": ready,
+            "healthPayload": health_after or health_before,
+        }
+        result_summary = (
+            f"{app_name} was already running and health responded at {health_url}."
+            if health_before
+            else (
+                f"{app_name} start command launched; health responded at {health_url}."
+                if ready
+                else (
+                    f"{app_name} start command launched, but health is still warming up at {health_url}. "
+                    "Use Check health again in a moment."
+                )
+                if launch_ok
+                else f"{app_name} could not be started: {launch_error or 'no launch receipt was produced'}."
+            )
+        )
+        record_connected_app_action_receipt(
+            root,
+            app_id=str(spec.get("appId") or ""),
+            app_name=app_name,
+            command_surface=str(spec.get("commandSurface") or ""),
+            result_summary=result_summary,
+            ok=bool(launch_ok or ready),
+            health_online=ready,
+            payload=result_payload,
+        )
+        record.result = ActionResultEnvelope(
+            ok=bool(launch_ok or ready),
+            exit_code=0 if (launch_ok or ready) else 1,
+            error=launch_error,
+            duration_ms=round((time.monotonic() - start) * 1000),
+            payload=result_payload,
+            result_summary=result_summary,
             target_path=proposal.target_path,
         )
         record.executed_at = utc_now_iso()
@@ -869,13 +1100,13 @@ def _build_proposal(
     command_surface = str(spec.get("commandSurface", ""))
     command_kind = "setup_verify" if command_surface == "setup.verify" else (
         "bridge_status"
-        if command_surface == "bridge.status"
+        if command_surface in {"bridge.status", "bridge.app_health"}
         else (
             "bridge_verify"
             if command_surface == "bridge.verify"
             else (
                 "bridge_activate"
-                if command_surface == "bridge.activate"
+                if command_surface in {"bridge.activate", "bridge.start_app"}
                 else (
                     "bridge_sync"
                     if command_surface == "bridge.sync"
@@ -894,7 +1125,13 @@ def _build_proposal(
     )
     mutability_class = (
         "read"
-        if command_surface in {"git.inspect", "setup.verify", "bridge.status", "bridge.verify"}
+        if command_surface in {
+            "git.inspect",
+            "setup.verify",
+            "bridge.status",
+            "bridge.verify",
+            "bridge.app_health",
+        }
         else ("execute" if command_surface == "validate.workspace" else "write")
     )
     action_uuid = uuid.uuid4().hex[:10]
@@ -1141,6 +1378,86 @@ def _load_json_list(path: Path) -> list[dict]:
     return [item for item in payload if isinstance(item, dict)]
 
 
+def _probe_health_url(url: str) -> dict:
+    if not url:
+        return {}
+    try:
+        with urllib.request.urlopen(url, timeout=1) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except (OSError, urllib.error.URLError, TimeoutError):
+        return {}
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return {"status": "responded", "body": body[:500]}
+    return payload if isinstance(payload, dict) else {"status": "responded", "body": body[:500]}
+
+
+def _launch_background_app_command(
+    *,
+    root: Path,
+    app_id: str,
+    command: str,
+    app_root: str,
+) -> dict[str, object]:
+    if not command:
+        return {"ok": False, "error": "No start command was configured."}
+    cwd = Path(app_root).resolve() if app_root else root
+    if app_root and not cwd.exists():
+        return {"ok": False, "error": f"App root does not exist: {cwd}"}
+    log_dir = root / ".agent_control" / "bridge_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    safe_app_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in app_id)
+    log_path = log_dir / f"{safe_app_id}-{int(time.time())}.log"
+    stdout_handle = log_path.open("a", encoding="utf-8")
+    stderr_handle = stdout_handle
+    try:
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            shell=True,
+            cwd=str(cwd),
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            **hidden_windows_subprocess_kwargs(),
+        )
+    except OSError as exc:
+        stdout_handle.close()
+        return {"ok": False, "error": str(exc), "logPath": str(log_path)}
+    stdout_handle.close()
+    return {"ok": True, "pid": process.pid, "logPath": str(log_path)}
+
+
+def _process_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    proc_stat = Path(f"/proc/{pid}/stat")
+    if proc_stat.exists():
+        try:
+            stat_text = proc_stat.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            stat_text = ""
+        parts = stat_text.split()
+        if len(parts) >= 3 and parts[2] == "Z":
+            return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _tail_text(path: Path, *, limit: int = 900) -> str:
+    if not path or not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-limit:].strip()
+
+
 def _run_shell_action(
     *,
     command: str,
@@ -1179,7 +1496,7 @@ def _timeout_for_action(spec: dict) -> int:
         return 600
     if command_surface in {"git.pull", "git.push", "deploy.pages"}:
         return 180
-    if command_surface in {"bridge.activate", "bridge.verify"}:
+    if command_surface in {"bridge.activate", "bridge.verify", "bridge.start_app"}:
         return 120
     if command_surface.startswith("bridge."):
         return 15

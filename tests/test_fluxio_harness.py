@@ -579,7 +579,7 @@ class FluxioHarnessTests(unittest.TestCase):
         self.assertEqual(planner.provider, "openai-codex")
         self.assertEqual(planner.model, "gpt-5.5")
         self.assertEqual(executor.provider, "minimax")
-        self.assertEqual(executor.model, "MiniMax-M2.7-highspeed")
+        self.assertEqual(executor.model, "MiniMax-M3")
         self.assertIn("override", executor.explanation.lower())
 
     def test_recommended_routes_use_task_fit_for_frontend_execution(self) -> None:
@@ -595,7 +595,7 @@ class FluxioHarnessTests(unittest.TestCase):
         self.assertEqual(planner.provider, "openai-codex")
         self.assertEqual(planner.model, "gpt-5.5")
         self.assertEqual(executor.provider, "minimax")
-        self.assertEqual(executor.model, "MiniMax-M2.7")
+        self.assertEqual(executor.model, "MiniMax-M3")
         self.assertEqual(executor.task_type, "frontend_design")
         self.assertEqual(executor.route_intent, "visual_interface_execution")
         self.assertGreaterEqual(executor.fit_score, 70)
@@ -669,7 +669,7 @@ class FluxioHarnessTests(unittest.TestCase):
             executor = next(item for item in routes if item.role == "executor")
 
             self.assertEqual(executor.provider, "minimax")
-            self.assertEqual(executor.model, "MiniMax-M2.7")
+            self.assertEqual(executor.model, "MiniMax-M3")
             self.assertEqual(executor.task_type, "data_f1_analytics")
             self.assertEqual(executor.route_intent, "outcome_trend_execution")
             self.assertEqual(executor.outcome_sample_count, 2)
@@ -732,6 +732,56 @@ class FluxioHarnessTests(unittest.TestCase):
             self.assertEqual(executor.route_intent, "outcome_trend_execution")
             self.assertIn("operator value 90/100", executor.outcome_trend)
 
+    def test_frontend_specialist_route_keeps_minimax_m3_despite_codex_outcome_trend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            missions = [
+                {
+                    "mission_id": "mission_frontend_codex_closeout",
+                    "workspace_id": "workspace_default",
+                    "runtime_id": "hermes",
+                    "objective": "Fix a React frontend UI and mobile Builder surface.",
+                    "updated_at": "2026-06-02T10:00:00+00:00",
+                    "route_configs": [
+                        {
+                            "role": "executor",
+                            "provider": "openai-codex",
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                            "budget_class": "specialist",
+                            "task_type": "frontend_design",
+                        }
+                    ],
+                    "state": {
+                        "status": "completed",
+                        "operator_value_feedback": {
+                            "schema": "fluxio.mission_operator_value_feedback.v1",
+                            "score": 86,
+                            "outcome": "useful",
+                            "trustSignal": "promote",
+                            "routeTrustTaskType": "frontend_design",
+                        },
+                    },
+                }
+            ]
+            (control_dir / "missions.json").write_text(json.dumps(missions, indent=2), encoding="utf-8")
+
+            trends = build_route_outcome_trends(root)
+            routes = recommended_model_routes(
+                "builder",
+                routing_strategy_override="profile_default",
+                objective="Fix the React frontend UI with MiniMax M3 inside Hermes.",
+                route_outcome_trends=trends,
+            )
+            executor = next(item for item in routes if item.role == "executor")
+
+            self.assertEqual(executor.provider, "minimax")
+            self.assertEqual(executor.model, "MiniMax-M3")
+            self.assertEqual(executor.route_intent, "visual_interface_execution")
+            self.assertIn("Frontend/UI/design work routes execution to MiniMax", executor.explanation)
+
     def test_low_value_route_closeouts_quarantine_task_fit_route(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -783,11 +833,9 @@ class FluxioHarnessTests(unittest.TestCase):
             self.assertEqual(quarantined["model"], "MiniMax-M2.7")
             self.assertEqual(quarantined["operatorValueSampleCount"], 2)
             self.assertEqual(quarantined["operatorDeprioritizeCount"], 2)
-            self.assertEqual(executor.provider, "openai-codex")
-            self.assertEqual(executor.model, "gpt-5.5")
-            self.assertEqual(executor.route_intent, "route_outcome_quarantine_reroute")
-            self.assertIn("operator value", executor.outcome_trend)
-            self.assertIn("quarantine", executor.explanation.lower())
+            self.assertEqual(executor.provider, "minimax")
+            self.assertEqual(executor.model, "MiniMax-M3")
+            self.assertEqual(executor.route_intent, "visual_interface_execution")
 
     def test_explicit_executor_override_wins_over_task_fit(self) -> None:
         routes = recommended_model_routes(

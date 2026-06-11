@@ -50,6 +50,7 @@ from .reporting import write_run_report
 from .runtime_supervisor import DelegatedRuntimeSupervisor
 from .session_store import SessionStore
 from .skill_library import SkillLibrary
+from .safety import risk_level_for_command
 from .verification import VerificationRunner
 
 DEFAULT_FLUXIO_MAX_TOKENS = 2600
@@ -62,7 +63,15 @@ EFFICIENT_OPENAI_MODEL = "gpt-5.4-mini"
 CODEX_PLANNING_PROVIDER = "openai-codex"
 CODEX_PLANNING_MODEL = "gpt-5.5"
 CODEX_EFFICIENT_PLANNING_MODEL = "gpt-5.5"
-FRONTEND_MINIMAX_MODEL = "MiniMax-M2.7"
+FRONTEND_MINIMAX_MODEL = "MiniMax-M3"
+MINIMAX_PROVIDER_IDS = {"minimax", "minimax-cn", "minimax-portal", "minimax-oauth"}
+LEGACY_MINIMAX_MODELS = {
+    "minimax-m2.7",
+    "minimax-m2.7-highspeed",
+    "minimax/m2.7",
+    "minimax/minimax-m2.7",
+    "minimax/minimax-m2.7-highspeed",
+}
 TASK_AWARE_ROUTE_PROFILES = {
     "frontend_design": {
         "keywords": (
@@ -173,6 +182,14 @@ TASK_AWARE_ROUTE_PROFILES = {
         "reason": "Security/red-team missions use premium execution and verification so difficulty can escalate without losing defensive proof quality.",
     },
 }
+
+
+def canonical_route_model(provider: object, model: object) -> str:
+    normalized_provider = str(provider or "").strip().lower()
+    value = str(model or "").strip()
+    if normalized_provider in MINIMAX_PROVIDER_IDS and value.lower() in LEGACY_MINIMAX_MODELS:
+        return FRONTEND_MINIMAX_MODEL
+    return value
 TASK_AWARE_ROUTE_KEYWORDS = {
     task_type: tuple(profile["keywords"])
     for task_type, profile in TASK_AWARE_ROUTE_PROFILES.items()
@@ -270,7 +287,7 @@ def guided_profile_defaults(name: str) -> dict:
     return defaults.get(legacy_mapping.get(normalized, "builder"), defaults["builder"])
 
 
-def normalize_route_overrides(route_overrides: object) -> list[dict]:
+def normalize_route_overrides(route_overrides: object, *, canonicalize_models: bool = True) -> list[dict]:
     if not isinstance(route_overrides, list):
         return []
     normalized: list[dict] = []
@@ -279,7 +296,11 @@ def normalize_route_overrides(route_overrides: object) -> list[dict]:
             continue
         role = str(item.get("role", "")).strip().lower()
         provider = str(item.get("provider", "")).strip().lower()
-        model = str(item.get("model", "")).strip()
+        model = (
+            canonical_route_model(provider, item.get("model", ""))
+            if canonicalize_models
+            else str(item.get("model", "")).strip()
+        )
         if role not in {"planner", "executor", "verifier"} or not provider or not model:
             continue
         row = {
@@ -492,7 +513,8 @@ def _append_route_outcome_sample(
         if role not in {"planner", "executor", "verifier"}:
             continue
         provider = str(route.get("provider") or "").strip()
-        model = str(route.get("model") or "").strip()
+        raw_model = str(route.get("model") or "").strip()
+        model = canonical_route_model(provider, raw_model) if succeeded and not failed else raw_model
         if not provider or not model:
             continue
         key = (task_type, role, provider, model)
@@ -537,11 +559,18 @@ def _append_route_outcome_sample(
 
 def build_route_outcome_trends(root: Path, limit: int = AUTONOMY_HISTORY_LIMIT) -> dict:
     runs_root = root / ".agent_runs"
-    session_paths = sorted(
-        [path for path in runs_root.glob("session_*") if path.is_dir()],
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    ) if runs_root.exists() else []
+    session_rows: list[tuple[float, Path]] = []
+    if runs_root.exists():
+        for path in runs_root.glob("session_*"):
+            try:
+                if not path.is_dir():
+                    continue
+                session_rows.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    session_paths = [
+        path for _mtime, path in sorted(session_rows, key=lambda item: item[0], reverse=True)
+    ]
     stats: dict[tuple[str, str, str, str], dict[str, object]] = {}
     scanned = 0
     for session_path in session_paths[: max(1, int(limit))]:
@@ -807,7 +836,19 @@ def recommended_model_routes(
             str(task_profile["executorProvider"]),
             str(task_profile["executorModel"]),
         )
-    if executor_outcome and "executor" not in override_map and strategy_source == "profile_default":
+    specialist_executor_locked = bool(
+        task_type == "frontend_design"
+        and str(executor[0]).lower() == "minimax"
+        and str(executor[1]) == FRONTEND_MINIMAX_MODEL
+        and "executor" not in override_map
+        and strategy != "budget_first"
+    )
+    if (
+        executor_outcome
+        and "executor" not in override_map
+        and strategy_source == "profile_default"
+        and not specialist_executor_locked
+    ):
         executor = (
             str(executor_outcome.get("provider") or executor[0]),
             str(executor_outcome.get("model") or executor[1]),
@@ -900,11 +941,17 @@ def recommended_model_routes(
                     if executor_outcome
                     and "executor" not in override_map
                     and strategy_source == "profile_default"
+                    and not specialist_executor_locked
                     else (
-                    task_profile["reason"]
-                    if task_profile.get("executorProvider")
-                    and "executor" not in override_map
-                    and strategy != "budget_first"
+                    (
+                        task_profile["reason"]
+                        + (
+                            f" Outcome history remains attached for scoring but does not override this specialist route ({executor_outcome_summary})."
+                            if executor_outcome_summary
+                            else ""
+                        )
+                    )
+                    if specialist_executor_locked
                     else (
                         "Executor route resolved from workspace strategy."
                         if strategy_source == "strategy"
@@ -921,6 +968,7 @@ def recommended_model_routes(
                     if executor_outcome
                     and "executor" not in override_map
                     and strategy_source == "profile_default"
+                    and not specialist_executor_locked
                     else str(task_profile.get("routeIntent") or "workspace_strategy_execution")
                 )
             ),
@@ -1064,7 +1112,7 @@ class FluxioHarness:
         max_handoffs: int,
         max_runtime_seconds: int,
         mission_id: str | None = None,
-        runtime_id: str = "openclaw",
+        runtime_id: str = "hermes",
         profile_name: str = "builder",
         selected_profile: PersonalizationProfile | None = None,
         resume_from_session_id: str | None = None,
@@ -1430,6 +1478,7 @@ class FluxioHarness:
             parallel_agents=resolved_parallel_agents,
             merge_policy=resolved_merge_policy,
             max_tokens=resolved_max_tokens,
+            requested_strategy_override=routing_strategy_override,
             objective=objective,
             workspace_root=repo_path,
         )
@@ -1600,6 +1649,7 @@ class FluxioHarness:
                 parallel_agents=resolved_parallel_agents,
                 merge_policy=resolved_merge_policy,
                 max_tokens=resolved_max_tokens,
+                requested_strategy_override=routing_strategy_override,
                 objective=objective,
                 workspace_root=repo_path,
             )
@@ -1900,6 +1950,31 @@ class FluxioHarness:
                 "system",
                 self._execution_result_summary(execution_record),
             )
+
+            high_risk_verification_commands = [
+                command for command in verify_commands if risk_level_for_command(command) == "high"
+            ]
+            if high_risk_verification_commands:
+                autopilot_status = "paused"
+                autopilot_pause_reason = "approval_required"
+                risks.append("A high-risk verification command is waiting for operator approval.")
+                blocker_history, latest_blocker = self._remember_blocker(
+                    blocker=self._classify_blocker(
+                        reason="approval_required",
+                        detail=(
+                            "Verification command requires approval before execution: "
+                            f"{high_risk_verification_commands[0]}"
+                        ),
+                        phase="verify",
+                        runtime_id=runtime_id,
+                    ),
+                    blocker_history=blocker_history,
+                )
+                context_manager.record(
+                    "system",
+                    "Verification command requires operator approval before execution.",
+                )
+                break
 
             last_verification_results = self.verification_runner.run(
                 verify_commands, execution_root
@@ -2217,6 +2292,7 @@ class FluxioHarness:
             parallel_agents=resolved_parallel_agents,
             merge_policy=resolved_merge_policy,
             max_tokens=resolved_max_tokens,
+            requested_strategy_override=routing_strategy_override,
             objective=objective,
             workspace_root=repo_path,
         )
@@ -2693,7 +2769,7 @@ class FluxioHarness:
                 if api_present:
                     return True, "minimax-api", "API key"
                 if oauth_present:
-                    return True, "minimax-portal-oauth", "MiniMax OpenClaw OAuth"
+                    return True, "minimax-portal-oauth", "MiniMax broker OAuth"
                 return False, "none", "not configured"
             return bool(provider_id), "", ""
 
@@ -2835,6 +2911,7 @@ class FluxioHarness:
         parallel_agents: int,
         merge_policy: str,
         max_tokens: int,
+        requested_strategy_override: str | None = None,
         objective: str | None = None,
         workspace_root: Path | None = None,
     ) -> tuple[list[ModelRouteConfig], ExecutionPolicy, dict, bool, int]:
@@ -2844,6 +2921,8 @@ class FluxioHarness:
         target_delegation = execution_policy.delegation_aggressiveness
         policy_name = "steady_state"
         reason = "Runtime posture stayed unchanged."
+        explicit_strategy = str(requested_strategy_override or "").strip().lower()
+        explicit_route_lock = bool(explicit_strategy and explicit_strategy != "profile_default")
 
         if verification_failures or repeated_failure_count >= 2:
             target_strategy = "uniform_quality"
@@ -2851,13 +2930,13 @@ class FluxioHarness:
             target_delegation = "low"
             policy_name = "verification_guardrail"
             reason = "Verification pressure moved the mission onto the high-confidence route and reduced delegation."
-        elif context_status in {"rollover", "hard_stop"}:
+        elif not explicit_route_lock and context_status in {"rollover", "hard_stop"}:
             target_strategy = "planner_premium_executor_efficient"
             target_approval_mode = "tiered"
             target_delegation = "low"
             policy_name = "context_compaction"
             reason = "Context pressure reduced delegation and kept execution on the efficient route."
-        elif stable_success_streak >= 2 and delegated_status != "waiting_for_approval":
+        elif not explicit_route_lock and stable_success_streak >= 2 and delegated_status != "waiting_for_approval":
             target_strategy = "planner_premium_executor_efficient"
             if profile_name != "beginner":
                 target_delegation = "high" if profile_name == "experimental" else "balanced"

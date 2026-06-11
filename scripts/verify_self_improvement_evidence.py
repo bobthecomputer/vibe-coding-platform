@@ -7,7 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+WORKING_ROOT = Path.cwd().resolve()
+ROOT = (
+    WORKING_ROOT
+    if (WORKING_ROOT / ".agent_control").exists()
+    and (WORKING_ROOT / "src" / "grant_agent").exists()
+    else SCRIPT_ROOT
+)
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -30,6 +37,7 @@ TASK_KEYWORDS = {
     "general_coding": (),
 }
 REQUIRED_VALUE_SAMPLES = 2
+NAS_STORAGE_PRESSURE_PATH = Path(".agent_control") / "nas_storage_pressure_latest.json"
 
 
 def _red_team_command(preset: str, objective: str) -> dict:
@@ -359,6 +367,98 @@ def _feedback_signal(feedback: object) -> dict:
     }
 
 
+def _load_nas_storage_pressure(root: Path) -> dict:
+    payload = _load_json(root / NAS_STORAGE_PRESSURE_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _operator_sampling_command(*, dry_run: bool, max_new: int = 1) -> dict:
+    argv = [
+        "npm",
+        "run",
+        "sample:route-trust-live",
+        "--",
+        "--max-new",
+        str(max_new),
+        "--runtime",
+        "hermes",
+    ]
+    if dry_run:
+        argv.extend(["--dry-run", "--write"])
+    return {
+        "argv": argv,
+        "shell": " ".join(json.dumps(part) if " " in part else part for part in argv),
+    }
+
+
+def _operator_value_sampling_plan(operator_route_trust: dict, nas_storage_pressure: dict) -> dict:
+    missing_categories = [
+        str(item).strip()
+        for item in operator_route_trust.get("missingTaskCategories", [])
+        if str(item).strip()
+    ]
+    coverage_by_task = {
+        str(row.get("taskType") or ""): row
+        for row in operator_route_trust.get("taskCoverage", [])
+        if isinstance(row, dict)
+    }
+    nas_status = str(nas_storage_pressure.get("status") or "").strip().lower()
+    probe_timed_out = bool(nas_storage_pressure.get("probeTimedOut"))
+    storage_blocked = nas_status == "critical" or probe_timed_out
+    sample_rows = []
+    for priority, task_type in enumerate(missing_categories, start=1):
+        row = coverage_by_task.get(task_type, {})
+        missing = int(row.get("missingOperatorValueSamples") or REQUIRED_VALUE_SAMPLES)
+        sample_rows.append(
+            {
+                "priority": priority,
+                "taskType": task_type,
+                "requiredUsefulSamples": REQUIRED_VALUE_SAMPLES,
+                "missingUsefulSamples": max(0, missing),
+                "currentOperatorValueSamples": int(row.get("operatorValueSamples") or 0),
+                "promoteCount": int(row.get("promoteCount") or 0),
+                "deprioritizeCount": int(row.get("deprioritizeCount") or 0),
+                "lowValueOperatorValueSamples": int(row.get("lowValueOperatorValueSamples") or 0),
+                "runtime": "hermes",
+                "mustAttach": [
+                    "concrete runtime-output body",
+                    "served artifact, artifact path, or preview URL",
+                    "operator value score >= 80 before route promotion",
+                ],
+            }
+        )
+    if not missing_categories:
+        status = "proven"
+        next_action = "Operator value route trust has enough useful samples for every task category."
+    elif storage_blocked:
+        status = "blocked_by_nas_storage"
+        next_action = (
+            "Do not launch value-scored NAS sampling missions until NAS storage/I/O pressure clears; "
+            "keep this plan queued and rerun the dry run locally."
+        )
+    else:
+        status = "ready"
+        next_action = "Launch one Hermes route-trust sampling mission, then close it with operator value feedback."
+    return {
+        "schema": "fluxio.operator_value_sampling_plan.v1",
+        "status": status,
+        "canLaunch": bool(missing_categories) and not storage_blocked,
+        "runtime": "hermes",
+        "missingTaskCategories": missing_categories,
+        "sampleRows": sample_rows,
+        "nasStorageGate": {
+            "status": nas_status or "unknown",
+            "probeTimedOut": probe_timed_out,
+            "source": str(nas_storage_pressure.get("source") or ""),
+            "checkedAt": str(nas_storage_pressure.get("checkedAt") or ""),
+            "nextAction": str(nas_storage_pressure.get("nextAction") or ""),
+        },
+        "dryRunCommand": _operator_sampling_command(dry_run=True),
+        "launchCommand": _operator_sampling_command(dry_run=False) if missing_categories and not storage_blocked else {},
+        "nextAction": next_action,
+    }
+
+
 def build_self_improvement_evidence(
     root: Path,
     *,
@@ -444,13 +544,17 @@ def build_self_improvement_evidence(
 
     coverage_rows = []
     for row in coverage.values():
-        missing = max(0, REQUIRED_VALUE_SAMPLES - int(row["operatorValueSamples"]))
+        promote_count = int(row["promoteCount"])
+        deprioritize_count = int(row["deprioritizeCount"])
+        missing = max(0, REQUIRED_VALUE_SAMPLES - promote_count)
         coverage_rows.append(
             {
                 **row,
                 "requiredOperatorValueSamples": REQUIRED_VALUE_SAMPLES,
+                "requiredUsefulOperatorValueSamples": REQUIRED_VALUE_SAMPLES,
                 "missingOperatorValueSamples": missing,
-                "status": "proven" if missing == 0 else "sampling",
+                "lowValueOperatorValueSamples": deprioritize_count,
+                "status": "proven" if missing == 0 and deprioritize_count == 0 else "sampling",
             }
         )
     coverage_rows.sort(key=lambda item: (item["status"] != "sampling", item["taskType"]))
@@ -468,6 +572,8 @@ def build_self_improvement_evidence(
         "source": "local_mission_operator_value_feedback",
     }
     effective_missing_categories = list(operator_route_trust.get("missingTaskCategories") or [])
+    nas_storage_pressure = _load_nas_storage_pressure(root)
+    operator_sampling_plan = _operator_value_sampling_plan(operator_route_trust, nas_storage_pressure)
 
     payload = {
         "schema": "fluxio.self_improvement_evidence.v1",
@@ -477,6 +583,7 @@ def build_self_improvement_evidence(
         "redTeam": red_team_summary,
         "recordedRedTeamSample": recorded_red_team_sample or {},
         "operatorValueRouteTrust": operator_route_trust,
+        "operatorValueSamplingPlan": operator_sampling_plan,
         "selfImprovementActions": [
             {
                 "kind": "red_team_next_benchmark",
@@ -486,16 +593,17 @@ def build_self_improvement_evidence(
             },
             {
                 "kind": "operator_value_sampling",
-                "status": "sampling" if effective_missing_categories else "proven",
+                "status": operator_sampling_plan["status"],
                 "summary": (
-                    "Execute value-scored live missions for: " + ", ".join(effective_missing_categories[:5])
+                    operator_sampling_plan["nextAction"]
                     if effective_missing_categories
                     else "Operator value route trust has enough samples for every task category."
                 ),
+                "command": operator_sampling_plan["launchCommand"] or operator_sampling_plan["dryRunCommand"],
             },
         ],
         "nextAction": (
-            "Execute value-scored live missions for: " + ", ".join(effective_missing_categories[:5])
+            operator_sampling_plan["nextAction"]
             if effective_missing_categories
             else red_team_summary["nextAction"]
         ),

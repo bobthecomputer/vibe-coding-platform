@@ -1,4 +1,4 @@
-const CACHE_VERSION = "fluxio-pwa-v26-live-message-hard-reset-20260531";
+const CACHE_VERSION = "fluxio-pwa-v31-web-push-diagnostics-20260602";
 const APP_SHELL = [
   "/offline.html",
   "/manifest.webmanifest",

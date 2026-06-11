@@ -6,9 +6,10 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
-from control_route_visual_smoke import find_browser, image_stats
-from verify_authenticated_live_control import _api_url, _load_login
+from control_route_visual_smoke import browser_launch_diagnostics, find_browser_or_playwright_managed, image_stats
+from verify_authenticated_live_control import _api_url, _display_title, _load_login
 
 try:
     from playwright.async_api import async_playwright
@@ -23,6 +24,23 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_URL = "https://sysnology.tail602108.ts.net:47880/control?mode=builder&surface=phone"
 
 
+async def _summary_payload(context, url: str, timeout_ms: int) -> tuple[object, dict]:
+    response = await context.request.post(
+        _api_url(url, "/api/backend"),
+        data=json.dumps(
+            {
+                "command": "get_control_room_summary_command",
+                "payload": {"payload": {"root": None, "summaryMode": "bootstrap"}},
+            }
+        ),
+        headers={"Content-Type": "application/json"},
+        timeout=timeout_ms,
+    )
+    payload = await response.json()
+    summary = payload.get("data", {}) if isinstance(payload, dict) else {}
+    return response, summary if isinstance(summary, dict) else {}
+
+
 async def _verify_async(args: argparse.Namespace) -> dict:
     if async_playwright is None:
         return {
@@ -32,7 +50,7 @@ async def _verify_async(args: argparse.Namespace) -> dict:
         }
 
     username, password = _load_login(Path(args.password_file), args.username, args.password)
-    browser_path = find_browser(args.browser, args.browser_path)
+    browser_path = find_browser_or_playwright_managed(args.browser, args.browser_path)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     screenshot_path = out_dir / f"{args.name}.png"
@@ -44,11 +62,36 @@ async def _verify_async(args: argparse.Namespace) -> dict:
         checks.append({"checkId": check_id, "passed": bool(passed), "detail": detail, **extra})
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(
-            executable_path=browser_path,
-            headless=True,
-            args=["--disable-gpu", "--no-sandbox"],
-        )
+        try:
+            browser = await playwright.chromium.launch(
+                executable_path=browser_path,
+                headless=not args.headed,
+                args=["--disable-gpu", "--no-sandbox"],
+            )
+        except Exception as exc:
+            diagnostics = browser_launch_diagnostics(exc)
+            record(
+                "browser-launch",
+                False,
+                "Chromium could not start for authenticated phone-progress verification.",
+                **diagnostics,
+            )
+            result = {
+                "schema": "fluxio.authenticated_phone_progress.v1",
+                "checkedAt": datetime.now(timezone.utc).isoformat(),
+                "url": args.url,
+                "ok": False,
+                "checks": checks,
+                "summary": {},
+                "artifacts": {
+                    "screenshotPath": str(screenshot_path),
+                    "domPath": str(dom_path),
+                    "reportPath": str(report_path),
+                },
+                "nextAction": str(diagnostics.get("nextAction") or "Fix browser launch before trusting NAS-local phone proof."),
+            }
+            report_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            return result
         context = await browser.new_context(
             ignore_https_errors=True,
             viewport={"width": args.width, "height": args.height},
@@ -62,28 +105,18 @@ async def _verify_async(args: argparse.Namespace) -> dict:
         )
         record("account-login", login_response.ok, f"Login endpoint returned HTTP {login_response.status}.", status=login_response.status)
 
-        summary_response = await context.request.post(
-            _api_url(args.url, "/api/backend"),
-            data=json.dumps(
-                {
-                    "command": "get_control_room_summary_command",
-                    "payload": {"payload": {"root": None, "summaryMode": "bootstrap"}},
-                }
-            ),
-            headers={"Content-Type": "application/json"},
-            timeout=args.timeout_ms,
-        )
-        summary_payload = await summary_response.json()
-        summary = summary_payload.get("data", {}) if isinstance(summary_payload, dict) else {}
+        summary_response, summary = await _summary_payload(context, args.url, args.timeout_ms)
         missions = summary.get("missions", []) if isinstance(summary.get("missions"), list) else []
         notifications = summary.get("notifications", []) if isinstance(summary.get("notifications"), list) else []
         counts = summary.get("counts", {}) if isinstance(summary.get("counts"), dict) else {}
+        web_push_status = summary.get("webPushStatus", {}) if isinstance(summary.get("webPushStatus"), dict) else {}
+        ntfy_status = summary.get("ntfyStatus", {}) if isinstance(summary.get("ntfyStatus"), dict) else {}
         running = [item for item in missions if item.get("status") == "running"]
         slice_notifications = [item for item in notifications if item.get("kind") == "mission_slice_completed"]
-        running_titles = [str(item.get("title") or "") for item in running if str(item.get("title") or "").strip()]
+        running_titles = [_display_title(item.get("title") or "") for item in running if str(item.get("title") or "").strip()]
         record(
             "summary-api-authenticated",
-            summary_response.ok and summary_payload.get("ok") is not False and len(missions) > 0,
+            summary_response.ok and len(missions) > 0,
             "Authenticated browser context can read the NAS live summary for the phone progress view.",
             status=summary_response.status,
             missionCount=len(missions),
@@ -91,6 +124,31 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             notificationCount=len(notifications),
             sliceNotificationCount=len(slice_notifications),
         )
+        record(
+            "summary-web-push-status-live",
+            web_push_status.get("schema") == "fluxio.web_push_status.v1"
+            and bool(web_push_status.get("senderConfigured"))
+            and bool(web_push_status.get("dependencyAvailable")),
+            "Live summary exposes closed-tab Web Push sender status for phone setup.",
+            senderConfigured=bool(web_push_status.get("senderConfigured")),
+            dependencyAvailable=bool(web_push_status.get("dependencyAvailable")),
+            subscriptionCount=int(web_push_status.get("subscriptionCount") or 0),
+            nextAction=web_push_status.get("nextAction", ""),
+        )
+        record(
+            "summary-ntfy-status-live",
+            ntfy_status.get("schema") == "fluxio.ntfy_status.v1"
+            and ntfy_status.get("channel") == "ntfy",
+            "Live summary exposes ntfy phone push setup state for the open-source iOS notification path.",
+            configured=bool(ntfy_status.get("configured")),
+            senderConfigured=bool(ntfy_status.get("senderConfigured")),
+            topic=ntfy_status.get("topic", ""),
+            nextAction=ntfy_status.get("nextAction", ""),
+        )
+
+        parsed_url = urlparse(args.url)
+        if args.register_web_push:
+            await context.grant_permissions(["notifications"], origin=f"{parsed_url.scheme}://{parsed_url.netloc}")
 
         page = await context.new_page()
         await page.goto(args.url, wait_until="domcontentloaded", timeout=args.timeout_ms)
@@ -99,6 +157,79 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             await page.wait_for_selector('[data-live-phone-progress="true"]', timeout=args.timeout_ms)
         except Exception:
             pass
+
+        registration_result = {}
+        if args.register_web_push:
+            initial_subscription_count = int(web_push_status.get("subscriptionCount") or 0)
+            permission = await page.evaluate("() => (window.Notification && window.Notification.permission) || 'unsupported'")
+            push_permission_state = await page.evaluate(
+                """async () => {
+                    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+                    try {
+                        const registration = await navigator.serviceWorker.ready;
+                        if (!registration.pushManager || !registration.pushManager.permissionState) return 'unavailable';
+                        return await registration.pushManager.permissionState({ userVisibleOnly: true });
+                    } catch (error) {
+                        return `error:${String(error && error.message || error)}`;
+                    }
+                }"""
+            )
+            action_locator = page.locator('[data-phone-web-push-action="true"], [data-web-push-action="true"]').first
+            action_count = await page.locator('[data-phone-web-push-action="true"], [data-web-push-action="true"]').count()
+            if action_count > 0 and initial_subscription_count <= 0:
+                try:
+                    await action_locator.click(timeout=args.timeout_ms)
+                    await page.wait_for_timeout(args.settle_ms)
+                except Exception as exc:
+                    registration_result["clickError"] = str(exc)
+            browser_web_push_state = await page.evaluate(
+                """() => {
+                    const state = window.__fluxioWebPushState || window.__FLUXIO_WEB_PUSH_STATE || null;
+                    if (state && typeof state === 'object') return state;
+                    const marker = document.querySelector('[data-web-push-proof-status], [data-phone-web-push-status]');
+                    return {
+                        status: marker ? (marker.getAttribute('data-web-push-proof-status') || marker.getAttribute('data-phone-web-push-status') || '') : '',
+                        text: marker ? marker.textContent : ''
+                    };
+                }"""
+            )
+            _, refreshed_summary = await _summary_payload(context, args.url, args.timeout_ms)
+            refreshed_web_push_status = (
+                refreshed_summary.get("webPushStatus", {})
+                if isinstance(refreshed_summary.get("webPushStatus"), dict)
+                else {}
+            )
+            refreshed_subscription_count = int(refreshed_web_push_status.get("subscriptionCount") or 0)
+            record(
+                "web-push-browser-registration",
+                permission == "granted"
+                and refreshed_subscription_count > 0
+                and (action_count > 0 or initial_subscription_count > 0),
+                "Phone verifier registered this authenticated browser with PushManager and the NAS counted the subscription.",
+                permission=permission,
+                pushPermissionState=push_permission_state,
+                actionCount=action_count,
+                initialSubscriptionCount=initial_subscription_count,
+                subscriptionCount=refreshed_subscription_count,
+                webPushStatus=refreshed_web_push_status.get("status", ""),
+                browserWebPushState=browser_web_push_state,
+                **registration_result,
+            )
+            if refreshed_web_push_status:
+                summary = refreshed_summary
+                missions = summary.get("missions", []) if isinstance(summary.get("missions"), list) else missions
+                notifications = summary.get("notifications", []) if isinstance(summary.get("notifications"), list) else notifications
+                counts = summary.get("counts", {}) if isinstance(summary.get("counts"), dict) else counts
+                web_push_status = refreshed_web_push_status
+                ntfy_status = (
+                    summary.get("ntfyStatus", {})
+                    if isinstance(summary.get("ntfyStatus"), dict)
+                    else ntfy_status
+                )
+                running = [item for item in missions if item.get("status") == "running"]
+                slice_notifications = [item for item in notifications if item.get("kind") == "mission_slice_completed"]
+                running_titles = [_display_title(item.get("title") or "") for item in running if str(item.get("title") or "").strip()]
+
         body_text = await page.locator("body").inner_text(timeout=args.timeout_ms)
         html = await page.content()
         lowered = body_text.lower()
@@ -108,6 +239,34 @@ async def _verify_async(args: argparse.Namespace) -> dict:
         mission_card_count = await page.locator('[data-phone-mission-card="true"]').count()
         notification_card_count = await page.locator('[data-phone-notification-card="true"]').count()
         notification_stack_count = await page.locator('[data-phone-notification-stack="true"]').count()
+        phone_web_push_proof_count = await page.locator('[data-phone-web-push-proof="true"]').count()
+        phone_ntfy_proof_count = await page.locator('[data-phone-ntfy-proof="true"]').count()
+        phone_web_push_status = ""
+        phone_web_push_text = ""
+        phone_ntfy_status = ""
+        phone_ntfy_text = ""
+        if phone_web_push_proof_count > 0:
+            try:
+                phone_web_push_status = await page.locator(
+                    '[data-phone-web-push-proof="true"]'
+                ).first.get_attribute("data-phone-web-push-status", timeout=args.timeout_ms) or ""
+                phone_web_push_text = await page.locator(
+                    '[data-phone-web-push-proof="true"]'
+                ).first.inner_text(timeout=args.timeout_ms)
+            except Exception:
+                phone_web_push_status = ""
+                phone_web_push_text = ""
+        if phone_ntfy_proof_count > 0:
+            try:
+                phone_ntfy_status = await page.locator(
+                    '[data-phone-ntfy-proof="true"]'
+                ).first.get_attribute("data-phone-ntfy-status", timeout=args.timeout_ms) or ""
+                phone_ntfy_text = await page.locator(
+                    '[data-phone-ntfy-proof="true"]'
+                ).first.inner_text(timeout=args.timeout_ms)
+            except Exception:
+                phone_ntfy_status = ""
+                phone_ntfy_text = ""
         visible_running_titles = [title for title in running_titles[: args.max_expected_titles] if title.lower() in lowered]
         record(
             "phone-progress-surface-visible",
@@ -133,6 +292,49 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             notificationCardCount=notification_card_count,
             notificationCount=len(notifications),
             sliceNotificationCount=len(slice_notifications),
+        )
+        expected_phone_push_status = (
+            "ready"
+            if int(web_push_status.get("subscriptionCount") or 0) > 0 and web_push_status.get("senderConfigured")
+            else "needs_subscription"
+            if web_push_status.get("senderConfigured")
+            else "needs_sender"
+        )
+        record(
+            "phone-web-push-proof-visible",
+            phone_web_push_proof_count == 1
+            and phone_web_push_status == expected_phone_push_status
+            and "closed-tab push" in phone_web_push_text.lower()
+            and (
+                "sender ready" in phone_web_push_text.lower()
+                or "closed-tab push is registered" in phone_web_push_text.lower()
+                or "provision web push sender" in phone_web_push_text.lower()
+            ),
+            "Phone progress view shows the live closed-tab Web Push setup state and next action.",
+            proofCount=phone_web_push_proof_count,
+            expectedStatus=expected_phone_push_status,
+            domStatus=phone_web_push_status,
+            proofText=phone_web_push_text[:520],
+            senderConfigured=bool(web_push_status.get("senderConfigured")),
+            subscriptionCount=int(web_push_status.get("subscriptionCount") or 0),
+        )
+        expected_ntfy_status = "ready" if ntfy_status.get("senderConfigured") else "needs_topic"
+        record(
+            "phone-ntfy-proof-visible",
+            phone_ntfy_proof_count == 1
+            and phone_ntfy_status == expected_ntfy_status
+            and "ntfy phone push" in phone_ntfy_text.lower()
+            and (
+                "open-source ios channel ready" in phone_ntfy_text.lower()
+                or "configure ntfy topic" in phone_ntfy_text.lower()
+            ),
+            "Phone progress view shows the live ntfy setup state for the open-source iOS push path.",
+            proofCount=phone_ntfy_proof_count,
+            expectedStatus=expected_ntfy_status,
+            domStatus=phone_ntfy_status,
+            proofText=phone_ntfy_text[:520],
+            senderConfigured=bool(ntfy_status.get("senderConfigured")),
+            topicConfigured=bool(ntfy_status.get("configured")),
         )
         record(
             "phone-live-only-copy",
@@ -175,6 +377,10 @@ async def _verify_async(args: argparse.Namespace) -> dict:
             "runningMissionCount": len(running),
             "notificationCount": len(notifications),
             "sliceNotificationCount": len(slice_notifications),
+            "webPushSenderConfigured": bool(web_push_status.get("senderConfigured")),
+            "webPushSubscriptionCount": int(web_push_status.get("subscriptionCount") or 0),
+            "ntfySenderConfigured": bool(ntfy_status.get("senderConfigured")),
+            "ntfyTopicConfigured": bool(ntfy_status.get("configured")),
         },
         "artifacts": {
             "screenshotPath": str(screenshot_path),
@@ -196,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--password-file", default=str(ROOT / ".agent_control" / "grand_agent_admin_password.txt"))
     parser.add_argument("--browser", choices=["auto", "chrome", "chromium", "edge", "zen"], default="auto")
     parser.add_argument("--browser-path", default="")
+    parser.add_argument("--headed", action="store_true", help="Run Chromium in headed mode for PushManager registration checks that fail in headless browsers.")
     parser.add_argument("--timeout-ms", type=int, default=30000)
     parser.add_argument("--settle-ms", type=int, default=2200)
     parser.add_argument("--width", type=int, default=390)
@@ -205,6 +412,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-running", type=int, default=1)
     parser.add_argument("--min-notifications", type=int, default=3)
     parser.add_argument("--max-expected-titles", type=int, default=3)
+    parser.add_argument(
+        "--register-web-push",
+        action="store_true",
+        help="Grant notification permission, click the phone Web Push registration action, and require the NAS subscription count to increase above zero.",
+    )
     args = parser.parse_args(argv)
     result = asyncio.run(_verify_async(args))
     print(json.dumps(result, indent=2))

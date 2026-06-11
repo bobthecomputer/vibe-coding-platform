@@ -58,6 +58,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(status.latest_version, "2026.4.14")
         self.assertTrue(status.update_available)
         self.assertGreaterEqual(len(status.capabilities), 1)
+        self.assertIn("opencode_go_provider", {item.key for item in status.capabilities})
 
     @mock.patch("grant_agent.runtimes.hermes.shutil.which")
     def test_hermes_adapter_reports_missing_runtime(self, which_mock: mock.Mock) -> None:
@@ -69,6 +70,7 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertFalse(status.detected)
         self.assertIn("Install Hermes", status.doctor_summary)
+        self.assertIn("code_mod_skills", {item.key for item in status.capabilities})
 
     def test_runtime_env_loads_bundled_home_and_provider_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -211,6 +213,54 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertIn("--local", str(launch["launch_command"]))
 
+    def test_openclaw_launch_supports_opencodego_route(self) -> None:
+        adapter = OpenClawRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_opencodego",
+            objective="Use OpenCodeGo for this mission",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "opencodego",
+                    "model": "opencode-go/kimi-k2.5",
+                    "effort": "high",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        launch = adapter.start_mission(mission, workspace)
+
+        self.assertEqual(launch["route_contract"]["provider"], "opencode-go")
+        self.assertEqual(
+            launch["route_contract"]["canonical_model_id"],
+            "opencode-go/kimi-k2.5",
+        )
+        self.assertIn("--model opencode-go/kimi-k2.5", str(launch["launch_command"]))
+
+    def test_hermes_launch_supports_opencodego_route(self) -> None:
+        adapter = HermesRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_opencodego",
+            objective="Use OpenCodeGo through Hermes",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "opencode-go",
+                    "model": "opencode-go/kimi-k2.5",
+                    "effort": "high",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        with mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes"):
+            launch = adapter.start_mission(mission, workspace)
+
+        self.assertEqual(launch["route_contract"]["provider"], "opencode-go")
+        self.assertIn("--provider opencode-go", str(launch["launch_command"]))
+        self.assertIn("--model opencode-go/kimi-k2.5", str(launch["launch_command"]))
+
     def test_hermes_launch_uses_wsl_bash_lc_when_hermes_only_in_wsl(self) -> None:
         adapter = HermesRuntimeAdapter()
         mission = mock.Mock(
@@ -315,7 +365,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                 {
                     "role": "executor",
                     "provider": "minimax",
-                    "model": "MiniMax-M2.7",
+                    "model": "MiniMax-M3",
                     "effort": "high",
                 }
             ],
@@ -327,8 +377,110 @@ class RuntimeAdapterTests(unittest.TestCase):
             launch = adapter.start_mission(mission, workspace)
 
         self.assertEqual(launch["route_contract"]["provider"], "minimax")
-        self.assertEqual(launch["route_contract"]["model"], "minimax-m2.7")
-        self.assertIn("--model minimax-m2.7", str(launch["launch_command"]))
+        self.assertEqual(launch["route_contract"]["model"], "MiniMax-M3")
+        self.assertIn("--model MiniMax-M3", str(launch["launch_command"]))
+
+    def test_hermes_resume_carries_operator_artifact_repair_gate(self) -> None:
+        adapter = HermesRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_repair1234",
+            title="Repair live mission proof",
+            objective="Build a polished phone/tablet Builder progress surface",
+            route_configs=[
+                {
+                    "role": "verifier",
+                    "provider": "openai",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                }
+            ],
+            state=SimpleNamespace(
+                current_cycle_phase="verify",
+                status="running",
+                stop_reason="",
+                last_error="",
+                code_execution={},
+            ),
+            proof=SimpleNamespace(
+                summary="Artifact gate passed but transcript is missing_runtime_output.",
+                blocked_by=["runtime transcript missing_runtime_output"],
+                failed_checks=[],
+                artifacts=[],
+            ),
+            code_execution=SimpleNamespace(artifacts=[]),
+            delegated_runtime_sessions=[
+                SimpleNamespace(
+                    latest_events=[
+                        {
+                            "kind": "operator.followup",
+                            "message": (
+                                "Required repair evidence: create or update a file under "
+                                ".agent_control/mission_artifacts for this mission."
+                            ),
+                        }
+                    ]
+                )
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        with mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes"):
+            launch = adapter.resume_mission(mission, workspace)
+
+        command = str(launch["launch_command"])
+        self.assertIn("Required repair evidence", command)
+        self.assertIn(".agent_control/mission_artifacts", command)
+        self.assertIn("Hard artifact/runtime-output gate", command)
+        self.assertIn("Do not mark the mission completed", command)
+        self.assertEqual(launch["route_contract"]["role"], "verifier")
+
+    def test_openclaw_resume_carries_same_artifact_repair_context(self) -> None:
+        adapter = OpenClawRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_openclaw_repair",
+            title="Repair fallback proof",
+            objective="Repair a mission artifact",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "openai",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                }
+            ],
+            state=SimpleNamespace(
+                current_cycle_phase="execute",
+                status="running",
+                stop_reason="",
+                last_error="",
+                code_execution={},
+            ),
+            proof=SimpleNamespace(
+                summary="Needs hard artifact repair.",
+                blocked_by=[],
+                failed_checks=["missing served artifact"],
+                artifacts=[],
+            ),
+            code_execution=SimpleNamespace(artifacts=[]),
+            delegated_runtime_sessions=[
+                SimpleNamespace(
+                    latest_events=[
+                        {
+                            "kind": "operator.followup",
+                            "message": "Attach a verifier receipt from Workbench.",
+                        }
+                    ]
+                )
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        launch = adapter.resume_mission(mission, workspace)
+
+        command = str(launch["launch_command"])
+        self.assertIn("Attach a verifier receipt from Workbench", command)
+        self.assertIn("Hard artifact/runtime-output gate", command)
+        self.assertIn("--message", command)
 
     @mock.patch("grant_agent.runtimes.hermes.shutil.which", return_value="hermes")
     def test_hermes_update_prefers_native_command_when_available(

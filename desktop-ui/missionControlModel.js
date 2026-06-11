@@ -2859,7 +2859,7 @@ function deriveLiveReviewStudio({
   const previewSourceDetail = hasServedLivePreview
     ? rawPreviewUrl
     : previewMode === "live"
-      ? "No mission app preview has been captured yet; open the selected mission inside the live Agent surface."
+      ? "No browser-served preview URL has been captured; open the selected mission inside the live Agent surface."
       : "Fixture mode is useful for repeatable layout review, but it is not production proof.";
   const screenshotPath =
     mission?.proof?.latest_screenshot_path ||

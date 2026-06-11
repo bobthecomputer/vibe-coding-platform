@@ -239,6 +239,11 @@ def review_closeouts(args: argparse.Namespace) -> dict:
             missing.append({"missionId": mission_id, "taskType": item.get("taskType", ""), "reason": "mission_not_found"})
             continue
         proposal = _proposal_for_mission(mission, item)
+        if str(proposal.get("status") or "") == "already_scored":
+            task_type = str(proposal.get("taskType") or item.get("taskType") or "").strip()
+            if task_type:
+                _annotate_feedback_task_type(root, mission_id, task_type)
+                proposal["annotatedRouteTrustTaskType"] = task_type
         proposals.append(proposal)
         if (
             args.auto_apply

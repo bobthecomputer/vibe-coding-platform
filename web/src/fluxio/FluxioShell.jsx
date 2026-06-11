@@ -90,6 +90,7 @@ const PROVIDER_AUTH_URLS = {
   openaiApiKeys: "https://platform.openai.com/api-keys",
   minimaxOpenClawDocs: "https://platform.minimax.io/docs/token-plan/openclaw",
   minimaxApiKeys: "https://platform.minimax.io/user-center/basic-information/interface-key",
+  opencodeGoDocs: "https://open-claw.bot/docs/providers/opencode-go/",
 };
 
 const DEFAULT_WORKSPACE_FORM = {
@@ -126,9 +127,26 @@ const DEFAULT_MISSION_FORM = {
   modelProvider: "openai-codex",
   model: "gpt-5.5",
   modelEffort: "high",
+  selectedSkill: "hermes:simplify-code",
+  messageChannel: "telegram",
   objective: "",
   successChecks: "",
 };
+
+const MISSION_SKILL_OPTIONS = [
+  { value: "hermes:simplify-code", label: "Hermes code mod" },
+  { value: "hermes:test-driven-development", label: "Hermes TDD" },
+  { value: "hermes:codex", label: "Hermes Codex skill" },
+  { value: "hermes:opencode", label: "Hermes OpenCode skill" },
+  { value: "openclaw:workspace-skill", label: "OpenClaw workspace skill" },
+];
+
+const MESSAGE_CHANNEL_OPTIONS = [
+  { value: "telegram", label: "Telegram" },
+  { value: "browser_notification", label: "Browser" },
+  { value: "web_push", label: "Closed-tab push" },
+  { value: "none", label: "None" },
+];
 
 const MISSION_STARTER_TEMPLATES = [
   {
@@ -185,10 +203,10 @@ const MISSION_STARTER_TEMPLATES = [
   {
     id: "frontend-polish-pass",
     label: "Frontend polish pass",
-    route: "MiniMax M2.7",
+    route: "MiniMax M3",
     runtime: "hermes",
     modelProvider: "minimax",
-    model: "MiniMax-M2.7",
+    model: "MiniMax-M3",
     modelEffort: "high",
     budgetHours: 6,
     objective:
@@ -215,7 +233,7 @@ const ROUTING_STRATEGY_OPTIONS = [
 
 const MINIMAX_AUTH_OPTIONS = [
   { value: "none", label: "Not Configured" },
-  { value: "minimax-portal-oauth", label: "MiniMax OpenClaw OAuth" },
+  { value: "minimax-portal-oauth", label: "MiniMax broker OAuth" },
   { value: "minimax-api", label: "MiniMax API Key" },
 ];
 const OPENAI_CODEX_AUTH_OPTIONS = [
@@ -258,8 +276,14 @@ const PROVIDER_SECRET_OPTIONS = [
   {
     id: "minimax",
     label: "MiniMax",
-    env: "MINIMAX_API_KEY / minimax-portal OAuth",
-    note: "Used when a route targets MiniMax with API-key auth. Portal/OAuth setup alone does not mark model auth ready.",
+    env: "MINIMAX_API_KEY / broker OAuth",
+    note: "Used when a Hermes route targets MiniMax. Broker OAuth or an API key must be visible to Hermes before MiniMax is marked ready.",
+  },
+  {
+    id: "opencode-go",
+    label: "OpenCodeGo",
+    env: "OPENCODE_API_KEY",
+    note: "Used when a Hermes/OpenClaw route targets OpenCodeGo. The key is stored under .agent_control and exposed only as a runtime env var.",
   },
 ];
 const PROVIDER_AUTH_PRESENCE_IDS = [
@@ -272,13 +296,16 @@ const ROUTE_MODEL_OPTIONS = [
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "MiniMax-M3",
+  "MiniMax-M3-thinking",
+  "opencode-go/kimi-k2.5",
+  "opencode-go/glm-5",
+  "opencode-go/minimax-m2.5",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
   "codex",
   "claude-sonnet-4.5",
   "claude-opus-4.1",
-  "MiniMax-M2.7",
-  "MiniMax-M2.7-highspeed",
 ];
 const MODEL_QUICK_PRESETS = [
   {
@@ -306,7 +333,7 @@ const MODEL_QUICK_PRESETS = [
     id: "budget_route",
     label: "MiniMax Frontend",
     provider: "minimax",
-    model: "MiniMax-M2.7",
+    model: "MiniMax-M3",
     effort: "high",
   },
 ];
@@ -351,6 +378,28 @@ function preferredCodexHighRoute(row = {}, role = "executor") {
     source: row.source || "operator_preferred_default",
     preferenceApplied: "codex_5_5_high",
   };
+}
+
+function buildMissionRouteOverrides(provider, model, effort) {
+  const selectedProvider = String(provider || "openai-codex").trim() || "openai-codex";
+  const selectedModel = String(model || "").trim();
+  const selectedEffort = normalizeRouteEffort(effort, "high");
+  if (!selectedModel) {
+    return [];
+  }
+  if (selectedProvider.toLowerCase().includes("minimax") || selectedModel.toLowerCase().includes("minimax")) {
+    return [
+      { role: "planner", provider: "openai-codex", model: "gpt-5.5", effort: "high" },
+      { role: "executor", provider: "minimax", model: selectedModel, effort: selectedEffort },
+      { role: "verifier", provider: "openai-codex", model: "gpt-5.5", effort: "high" },
+    ];
+  }
+  return ROUTE_ROLE_OPTIONS.map(role => ({
+    role,
+    provider: selectedProvider,
+    model: selectedModel,
+    effort: selectedEffort,
+  }));
 }
 const DEFAULT_OPENAI_CODEX_OAUTH_FLOW = {
   open: false,
@@ -1046,6 +1095,12 @@ function mergeStudioProposal(item, proposal) {
 
 function detectRouteModel(prompt) {
   const normalized = String(prompt || "").toLowerCase();
+  if (/\b(minimax\s*m3|m3\s*frontend|frontend\s*m3)\b/.test(normalized)) {
+    return "MiniMax-M3";
+  }
+  if (/\b(minimax\s*m2\.?7|m2\.?7)\b/.test(normalized)) {
+    return "MiniMax-M3";
+  }
   return ROUTE_MODEL_OPTIONS.find(option => normalized.includes(option.toLowerCase())) || "";
 }
 
@@ -1123,8 +1178,176 @@ function launchTrustEvidence(taskType, routeTrustCoverage) {
   };
 }
 
+function connectedAppSkillId(session) {
+  const raw = String(session?.app_id || session?.app_name || "connected-app")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `skill-connected-app-${raw || "app"}`;
+}
+
+function connectedAppSkillDraft(session, promptText, routeOverrides, selectedAction = null) {
+  const base = buildDefaultReferenceStudio(routeOverrides).skills[0];
+  const appName = session?.app_name || session?.app_id || "Connected app";
+  const skillCandidate =
+    session?.latest_task_result?.payload?.skillCandidate ||
+    session?.ui_hints?.skillCandidate ||
+    `${appName} workflow`;
+  const skillLabel = titleizeToken(String(skillCandidate || "").replace(/[-_]+/g, " "));
+  const bridgeRole =
+    session?.ui_hints?.bridgeRole ||
+    session?.ui_hints?.runtimeManager ||
+    session?.bridge_transport ||
+    "app bridge";
+  const appRoot =
+    session?.app_root ||
+    session?.latest_task_result?.payload?.workspaceRoot ||
+    session?.latest_task_result?.payload?.expectedAppRoot ||
+    "";
+  const bridgeEndpoint =
+    session?.bridge_endpoint ||
+    session?.latest_task_result?.payload?.bridgeEndpoint ||
+    "";
+  const contextSummary =
+    asList(session?.context_preview).map(item => item?.summary).find(Boolean) ||
+    session?.latest_task_result?.resultSummary ||
+    "No live context body reported yet.";
+  const aliasTags = asList(session?.ui_hints?.aliases).filter(Boolean);
+  const selectedActionLabel = selectedAction?.label || selectedAction?.hookId || selectedAction?.hook_id || "";
+  const selectedActionId = selectedAction?.hookId || selectedAction?.hook_id || "";
+  const visibleContext = asList(session?.context_preview)
+    .flatMap(surface => asList(surface?.items))
+    .filter(Boolean)
+    .slice(0, 6);
+  const followOnSlice =
+    session?.latest_task_result?.payload?.followOnSlice ||
+    session?.ui_hints?.followOnSlice ||
+    "";
+  const approvalChannel =
+    session?.approval_callback?.channel ||
+    session?.ui_hints?.approvalChannel ||
+    "";
+  return {
+    ...base,
+    id: connectedAppSkillId(session),
+    kind: "skill",
+    status: "Draft",
+    badge: "Connected app",
+    name: `${appName} Skill`,
+    summary: `${skillLabel} from ${appName}${aliasTags.length ? ` (aliases: ${aliasTags.join(", ")}).` : "."}`,
+    description: [
+      `${appName} connected-app workflow draft for ${bridgeRole}.`,
+      contextSummary,
+      followOnSlice ? `Follow-on slice: ${followOnSlice}.` : "",
+      appRoot ? `App root: ${appRoot}.` : "",
+      bridgeEndpoint ? `Bridge endpoint: ${bridgeEndpoint}.` : "",
+    ].filter(Boolean).join(" "),
+    triggerConditions: [
+      `Use when the operator asks for ${appName}, ${skillCandidate}, or one of these aliases: ${aliasTags.join(", ") || appName}.`,
+      "Use only when the connected-app manager shows the app state and proof receipt.",
+    ].join(" "),
+    instructions: [
+      "Read the connected-app card first: app status, bridge health, app root, endpoint, latest receipt, and visible context.",
+      "Choose the Agent runtime/harness route before running any app task.",
+      "For time-management or manager workflows, propose the plan/timebox and wait for review before writing app state.",
+      "Record the exact connected-app task, runtime, provider/model route, and proof receipt in the mission thread.",
+      "If the bridge is missing, offline, or manifest-only, return setup steps instead of claiming the app task ran.",
+    ],
+    outputStyle: [
+      "Start with what is ready, what is missing, and the next safe action.",
+      "Show the runtime/provider/model route and connected-app proof source.",
+      "End with a short receipt: app, task, status, files or app state changed, and proof links.",
+    ],
+    guardrails: [
+      "Do not execute app writes silently.",
+      "Do not claim a bridge task ran without a latest task receipt or matching app proof.",
+      approvalChannel ? `Use ${approvalChannel} approval for app writes or skill proposals.` : "Use review approval for app writes or skill proposals.",
+      "Keep secrets, tokens, and local credentials out of visible skill instructions.",
+    ],
+    assistant: {
+      ...(base.assistant || {}),
+      prompt: promptText,
+      conversation: [
+        {
+          role: "assistant",
+          author: "Skill Studio",
+          body: `Drafted from ${appName}. Validate and test before publish.`,
+          meta: "Connected app draft",
+        },
+      ],
+      proposal: null,
+    },
+    sourceType: "connected_app",
+    learnedPromotion: "Not proposed",
+    testStatus: "Not run",
+    validationStatus: "Pending",
+    publishReadiness: "Needs review",
+    reviewRequired: true,
+    lastValidationSummary: "Connected-app draft created. Validation pending.",
+    lastTestSummary: "No tests executed.",
+    category: String(session?.ui_hints?.category || bridgeRole || "connected_app"),
+    tags: uniq([
+      "connected app",
+      session?.app_id || "",
+      ...aliasTags,
+      skillCandidate,
+      bridgeRole,
+      selectedActionLabel,
+      ...visibleContext,
+    ].filter(Boolean)).slice(0, 10),
+    connectedApp: {
+      appId: session?.app_id || "",
+      appName,
+      status: session?.status || "",
+      bridgeHealth: session?.bridge_health || "",
+      appRoot,
+      bridgeEndpoint,
+      runtimeManager: session?.ui_hints?.runtimeManager || "",
+      skillCandidate,
+      followOnSlice,
+      selectedAction: selectedActionLabel
+        ? {
+            hookId: selectedActionId,
+            label: selectedActionLabel,
+            requiresApproval: Boolean(selectedAction?.requiresApproval || selectedAction?.requires_approval),
+            riskLevel: selectedAction?.riskLevel || selectedAction?.risk_level || "",
+          }
+        : null,
+    },
+  };
+}
+
 function escapeRegExpText(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function objectiveRequestsOpenClaw(objective) {
+  const normalized = String(objective || "").toLowerCase();
+  const negatedOpenClaw = [
+    "do not use openclaw",
+    "do not relaunch through openclaw",
+    "do not launch through openclaw",
+    "don't use openclaw",
+    "dont use openclaw",
+    "avoid openclaw",
+    "not openclaw",
+    "no openclaw",
+    "without openclaw",
+  ].some(needle => normalized.includes(needle));
+  if (negatedOpenClaw) {
+    return false;
+  }
+  return [
+    "openclaw",
+    "openclaw proof",
+    "openclaw parity",
+    "compare openclaw",
+    "test openclaw",
+    "debug openclaw",
+    "openclaw setup",
+    "openclaw auth",
+  ].some(needle => normalized.includes(needle));
 }
 
 function missionLaunchRecommendation(form, workspace, shortcuts = [], routeTrustCoverage = {}) {
@@ -1146,16 +1369,7 @@ function missionLaunchRecommendation(form, workspace, shortcuts = [], routeTrust
   let runtime = base.runtime || workspace?.default_runtime || form?.runtime || "hermes";
   let reason = base.reason || "Workspace default runtime.";
   let confidence = Number(base.confidence || 55);
-  const explicitOpenClaw = hasAny(
-    "openclaw",
-    "openclaw proof",
-    "openclaw parity",
-    "compare openclaw",
-    "test openclaw",
-    "debug openclaw",
-    "openclaw setup",
-    "openclaw auth",
-  );
+  const explicitOpenClaw = objectiveRequestsOpenClaw(objective);
   if (explicitOpenClaw) {
     runtime = "openclaw";
     reason = "OpenClaw was explicitly requested for this launch.";
@@ -1175,7 +1389,7 @@ function missionLaunchRecommendation(form, workspace, shortcuts = [], routeTrust
     taskLabel = "Frontend/UI/design";
     taskType = "frontend_design";
     modelProvider = "minimax";
-    model = "MiniMax-M2.7";
+    model = "MiniMax-M3";
     modelReason = "Frontend work should use MiniMax for execution while Hermes keeps proof in the mission loop.";
     if (!explicitOpenClaw) {
       runtime = "hermes";
@@ -1236,7 +1450,9 @@ function missionLaunchRecommendation(form, workspace, shortcuts = [], routeTrust
       provider: runtime,
       model: "durable harness",
       effort: "resume",
-      reason: "Hermes/OpenClaw owns continuity, approvals, watchdogs, and resumability.",
+      reason: runtime === "openclaw"
+        ? "OpenClaw was explicitly requested for this mission; it owns continuity, approvals, watchdogs, and resumability."
+        : "Hermes owns continuity, approvals, watchdogs, and resumability.",
     },
   ];
   return {
@@ -1501,6 +1717,26 @@ function fixturesAllowedForSearch(searchParams) {
   return Boolean(import.meta.env?.DEV && searchParams.get("preview-control") === "1");
 }
 
+function localPreviewUrlFromSearch(searchParams) {
+  if (!fixturesAllowedForSearch(searchParams)) {
+    return "";
+  }
+  const source = String(searchParams.get("previewUrl") || searchParams.get("targetUrl") || "").trim();
+  if (!source || !/^https?:\/\//i.test(source)) {
+    return "";
+  }
+  try {
+    const parsed = new URL(source);
+    const host = parsed.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return parsed.href;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 function resolveInitialPreviewMode(searchParams, allowFixtureMode = fixturesAllowedForSearch(searchParams)) {
   const explicitFixture = searchParams.get("fixture");
   if (allowFixtureMode && explicitFixture) {
@@ -1552,14 +1788,50 @@ function urlBase64ToUint8Array(value) {
   return output;
 }
 
+function browserErrorSummary(error) {
+  const name = String(error?.name || "").trim();
+  const message = String(error?.message || error || "").trim();
+  return {
+    name,
+    message,
+    label: [name, message].filter(Boolean).join(": ") || "Unknown browser error",
+  };
+}
+
+function sanitizeVisibleModelText(value) {
+  return String(value || "")
+    .replace(/MiniMax-M2\.7-highspeed/gi, "legacy MiniMax frontend route")
+    .replace(/MiniMax-M2\.7/gi, "legacy MiniMax frontend route")
+    .replace(/minimax-m2\.7-highspeed/gi, "legacy-minimax-frontend-route")
+    .replace(/minimax-m2\.7/gi, "legacy-minimax-frontend-route")
+    .replace(/\bsystem-loss improvement mission\b/gi, "system improvement mission")
+    .replace(/\bsystem loss improvement mission\b/gi, "system improvement mission")
+    .replace(/\bsystem-loss\b/gi, "system improvement")
+    .replace(/\bsystem loss\b/gi, "system improvement");
+}
+
+function sanitizeAgentMessageRow(row) {
+  if (!row || typeof row !== "object") {
+    return row;
+  }
+  return {
+    ...row,
+    title: sanitizeVisibleModelText(row.title),
+    detail: sanitizeVisibleModelText(row.detail),
+    technicalDetail: sanitizeVisibleModelText(row.technicalDetail),
+    meta: sanitizeVisibleModelText(row.meta),
+    chips: asList(row.chips).map(sanitizeVisibleModelText),
+  };
+}
+
 function notificationTitle(item) {
   const messageStart = notificationAgentMessage(item).slice(0, 72);
-  const title = messageStart || String(item?.title || item?.kind || "Mission update").trim();
+  const title = messageStart || sanitizeVisibleModelText(item?.title || item?.kind || "Mission update").trim();
   return title ? `Fluxio: ${title}` : "Fluxio mission update";
 }
 
 function notificationAgentMessage(item) {
-  return String(
+  return sanitizeVisibleModelText(
     item?.agentMessage ||
       item?.messagePreview ||
       item?.agent_message ||
@@ -1612,6 +1884,21 @@ function overnightDigestNotificationIdentity(digest) {
 
 function notificationMissionId(item) {
   return String(item?.missionId || item?.mission_id || item?.metadata?.missionId || item?.metadata?.mission_id || "").trim();
+}
+
+function notificationProvenance(item) {
+  const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  return {
+    originRuntime: String(item?.originRuntime || item?.origin_runtime || metadata.originRuntime || metadata.runtimeId || metadata.runtime || "").trim(),
+    originProvider: String(item?.originProvider || item?.origin_provider || metadata.originProvider || metadata.provider || metadata.modelProvider || "").trim(),
+    originModel: String(item?.originModel || item?.origin_model || metadata.originModel || metadata.model || "").trim(),
+    transportProvider: String(item?.transportProvider || item?.transport_provider || metadata.transportProvider || item?.channel || "").trim(),
+    producer: String(item?.producer || metadata.producer || item?.kind || "").trim(),
+    missionTitle: String(item?.missionTitle || item?.mission_title || metadata.missionTitle || item?.title || "").trim(),
+    sourceSessionId: String(item?.sourceSessionId || item?.source_session_id || metadata.sourceSessionId || metadata.sessionId || "").trim(),
+    evidencePath: String(item?.evidencePath || item?.evidence_path || metadata.evidencePath || "").trim(),
+    screenshotPath: String(item?.screenshotPath || item?.screenshot_path || metadata.screenshotPath || "").trim(),
+  };
 }
 
 function notificationTargetUrl(item) {
@@ -1679,6 +1966,8 @@ function deriveLiveMissionProgress(mission, missionDetailSnapshot = {}) {
       status: liveProgress.timeBudgetStatus || mission?.state?.status || mission?.status || "",
       nextAction: liveProgress.nextAction || missionDetailSnapshot?.nextAction || "",
       source: liveProgress.source || "mission_state_runtime_budget",
+      progressKind: liveProgress.progressKind || "",
+      displayAsCompletion: liveProgress.displayAsCompletion !== false,
       entries: [],
     };
   }
@@ -1744,6 +2033,10 @@ function deriveLiveMissionProgress(mission, missionDetailSnapshot = {}) {
         : totalSignals > 0
           ? "mission_events_actions_lanes"
           : "mission_status_live_summary",
+    progressKind: status === "failed" || status === "verification_failed" || verificationFailures.length > 0
+      ? "proof_repair"
+      : "runtime_progress",
+    displayAsCompletion: !(status === "failed" || status === "verification_failed" || verificationFailures.length > 0),
     entries: plannedScopeEntries,
   };
 }
@@ -2005,6 +2298,240 @@ function asList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function cleanRuntimeReplyText(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      const nested = cleanRuntimePayloadReply(parsed);
+      if (nested) return nested;
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function cleanRuntimePayloadReply(payload) {
+  if (!payload) return "";
+  if (typeof payload === "string") return cleanRuntimeReplyText(payload);
+  if (Array.isArray(payload)) {
+    for (const item of payload.slice().reverse()) {
+      const nested = cleanRuntimePayloadReply(item);
+      if (nested) return nested;
+    }
+    return "";
+  }
+  if (typeof payload !== "object") return "";
+  const timeline = Array.isArray(payload.toolTimeline) ? payload.toolTimeline : [];
+  for (const item of timeline.slice().reverse()) {
+    if (!item || typeof item !== "object") continue;
+    const kind = String(item.kind || "").toLowerCase();
+    const summary = String(item.summary || "").trim();
+    if (summary && ["runtime.model_message", "model.message", "assistant.message"].includes(kind)) {
+      return summary;
+    }
+  }
+  for (const item of timeline.slice().reverse()) {
+    if (!item || typeof item !== "object") continue;
+    const kind = String(item.kind || "").toLowerCase();
+    const summary = String(item.summary || "").trim();
+    if (summary && !kind.startsWith("operator.")) return summary;
+  }
+  for (const key of ["reply", "text", "outputText", "output_text", "content", "message", "response", "assistant", "completion", "finalMessage"]) {
+    const nested = cleanRuntimePayloadReply(payload[key]);
+    if (nested) return nested;
+  }
+  return "";
+}
+
+function summaryGeneratedAtMs(summary) {
+  const value = summary?.generatedAt || summary?.updatedAt || "";
+  const parsed = timeValue(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function mergeAuthenticatedLiveSummaries(bootstrapSummary, enrichedSummary) {
+  const bootstrap = bootstrapSummary && typeof bootstrapSummary === "object" ? bootstrapSummary : null;
+  const enriched = enrichedSummary && typeof enrichedSummary === "object" ? enrichedSummary : null;
+  if (!bootstrap) {
+    return enriched;
+  }
+  if (!enriched) {
+    return bootstrap;
+  }
+  const bootstrapMs = summaryGeneratedAtMs(bootstrap);
+  const enrichedMs = summaryGeneratedAtMs(enriched);
+  const newest = bootstrapMs > enrichedMs ? bootstrap : enriched;
+  const older = newest === bootstrap ? enriched : bootstrap;
+  const mergedSystemAudit = {
+    ...(older.systemAuditDigest && typeof older.systemAuditDigest === "object" ? older.systemAuditDigest : {}),
+    ...(newest.systemAuditDigest && typeof newest.systemAuditDigest === "object" ? newest.systemAuditDigest : {}),
+  };
+  const bootstrapAudit = bootstrap.systemAuditDigest && typeof bootstrap.systemAuditDigest === "object"
+    ? bootstrap.systemAuditDigest
+    : {};
+  const isBlocked = item => String(item?.status || "").trim().toLowerCase() === "blocked";
+  const chooseStricterGoalAudit = (left, right) => {
+    if (!left || typeof left !== "object") {
+      return right;
+    }
+    if (!right || typeof right !== "object") {
+      return left;
+    }
+    const leftBlocked = Number(left.blockedCount || 0);
+    const rightBlocked = Number(right.blockedCount || 0);
+    if (leftBlocked !== rightBlocked) {
+      return leftBlocked > rightBlocked ? left : right;
+    }
+    return Number(left.completionPercent || 0) <= Number(right.completionPercent || 0) ? left : right;
+  };
+  const chooseStricterMissionAdvancement = (left, right) => {
+    if (!left || typeof left !== "object") {
+      return right;
+    }
+    if (!right || typeof right !== "object") {
+      return left;
+    }
+    return Number(left.repairMissionCount || 0) >= Number(right.repairMissionCount || 0) ? left : right;
+  };
+  const chooseStricterOperatorPath = (left, right) => {
+    if (!left || typeof left !== "object") {
+      return right;
+    }
+    if (!right || typeof right !== "object") {
+      return left;
+    }
+    return Number(left.blockedStepCount || 0) >= Number(right.blockedStepCount || 0) ? left : right;
+  };
+  const chooseStricterStorage = (left, right) => {
+    if (!left || typeof left !== "object") {
+      return right;
+    }
+    if (!right || typeof right !== "object") {
+      return left;
+    }
+    if (isBlocked(left) !== isBlocked(right)) {
+      return isBlocked(left) ? left : right;
+    }
+    return Number(left.availableBytes || 0) <= Number(right.availableBytes || 0) ? left : right;
+  };
+  for (const key of [
+    "deploymentDurabilitySummary",
+    "goalCompletionAudit",
+    "missionAdvancementSummary",
+    "operatorNextPath",
+    "speedSupervisorSummary",
+    "storageTriageSummary",
+  ]) {
+    if (!mergedSystemAudit[key] && bootstrapAudit?.[key]) {
+      mergedSystemAudit[key] = bootstrapAudit[key];
+    }
+  }
+  mergedSystemAudit.goalCompletionAudit = chooseStricterGoalAudit(
+    bootstrapAudit.goalCompletionAudit,
+    mergedSystemAudit.goalCompletionAudit,
+  );
+  mergedSystemAudit.missionAdvancementSummary = chooseStricterMissionAdvancement(
+    bootstrapAudit.missionAdvancementSummary,
+    mergedSystemAudit.missionAdvancementSummary,
+  );
+  mergedSystemAudit.operatorNextPath = chooseStricterOperatorPath(
+    bootstrapAudit.operatorNextPath,
+    mergedSystemAudit.operatorNextPath,
+  );
+  mergedSystemAudit.storageTriageSummary = chooseStricterStorage(
+    bootstrapAudit.storageTriageSummary,
+    mergedSystemAudit.storageTriageSummary,
+  );
+  const notifications =
+    asList(newest.notifications).length > 0
+      ? newest.notifications
+      : asList(bootstrap.notifications).length > 0
+        ? bootstrap.notifications
+        : enriched.notifications;
+  return {
+    ...older,
+    ...newest,
+    notifications,
+    systemAuditDigest: mergedSystemAudit,
+    summaryCache: newest.summaryCache || older.summaryCache || null,
+  };
+}
+
+function isNasStorageBlockedFromDigest(systemAuditDigest) {
+  const pressure = systemAuditDigest?.nasStoragePressure || {};
+  const status = String(pressure.status || "").trim().toLowerCase();
+  const availableBytes = Number(pressure.availableBytes || 0);
+  const usedPercent = Number(pressure.usedPercent || 0);
+  const probeFailed = Boolean(pressure.probeTimedOut) || Boolean(pressure.probeConnectFailed);
+  const measuredUsageAvailable = Boolean(pressure.measuredUsageAvailable ?? !probeFailed);
+  const hasStorageEvidence = Boolean(pressure.schema || pressure.checkedAt || pressure.source || status);
+  const measuredStoragePressure =
+    measuredUsageAvailable &&
+    (status === "critical" || status === "full" || availableBytes <= 0 || usedPercent >= 99);
+  return (
+    !hasStorageEvidence ||
+    probeFailed ||
+    !measuredUsageAvailable ||
+    measuredStoragePressure
+  );
+}
+
+function workspaceUsesNasStorage(workspace) {
+  if (!workspace || typeof workspace !== "object") {
+    return true;
+  }
+  const joined = [
+    workspace.root_path,
+    workspace.rootPath,
+    workspace.path,
+    workspace.nasProjectPath,
+    workspace.nas_project_path,
+    workspace.remoteRoot,
+    workspace.remote_root,
+    workspace.execution_target_preference,
+    workspace.executionTargetPreference,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return (
+    joined.includes("/volume1/") ||
+    joined.includes("\\volume1\\") ||
+    joined.includes("nas") ||
+    joined.includes("synology")
+  );
+}
+
+function missionLaunchStorageBlockReason(systemAuditDigest, workspace) {
+  if (!isNasStorageBlockedFromDigest(systemAuditDigest) || !workspaceUsesNasStorage(workspace)) {
+    return "";
+  }
+  const pressure = systemAuditDigest?.nasStoragePressure || {};
+  const mount = pressure.mount || "/volume1/Saclay";
+  const probeFailed = Boolean(pressure.probeTimedOut) || Boolean(pressure.probeConnectFailed);
+  const measuredUsageAvailable = Boolean(pressure.measuredUsageAvailable ?? !probeFailed);
+  const hasStorageEvidence = Boolean(
+    pressure.schema || pressure.checkedAt || pressure.source || String(pressure.status || "").trim(),
+  );
+  const availableBytes = Number(pressure.availableBytes || 0);
+  if (!hasStorageEvidence) {
+    return `${mount} mission writes need a live NAS storage check because no current evidence is loaded. Run the bounded storage probe before launching NAS work.`;
+  }
+  if (!measuredUsageAvailable) {
+    const reason = pressure.probeConnectFailed
+      ? "the bounded SSH probe could not connect"
+      : pressure.probeTimedOut
+        ? "the bounded SSH probe timed out"
+        : "the current probe did not return df data";
+    return `${mount} mission writes need a live NAS storage check because ${reason}; usage is unverified, not measured full. Select a local workspace or restore NAS reachability before launching.`;
+  }
+  const usedPercent = Number(pressure.usedPercent || 0);
+  return `${mount} is blocked for mission writes (${usedPercent}% used, ${availableBytes} available bytes). Select a local workspace or clear NAS storage before launching.`;
+}
+
 const PUBLIC_LAUNCH_PROOF_GROUPS = [
   {
     id: "launcher",
@@ -2263,25 +2790,299 @@ function isRuntimeOutputTurn(item) {
   return text.includes("runtime output:") || text.includes("raw action output");
 }
 
+function runtimeOutputText(message) {
+  const reportSourceText = [
+    message?.detail,
+    message?.message,
+    message?.content,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const match = reportSourceText.match(/(?:runtime output|raw action output)\s*:\s*([\s\S]+)/i);
+  const rawBody = String(match?.[1] || "").trim();
+  if (!rawBody) return "";
+  return rawBody
+    .split(/\s+[·]\s+(?:Action|Target|Command|Gate|Result|Error|Revision|Active step)\s*:/i)[0]
+    .split(/\n\s*\{\s*["{]/)[0]
+    .trim();
+}
+
+function firstUsefulRuntimeLine(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map(line => line.replace(/^#{1,6}\s*/, "").replace(/^[-*]\s*/, "").trim())
+    .find(line =>
+      line &&
+      !/^objective\s*:/i.test(line) &&
+      !/^triggered by step\s*:/i.test(line) &&
+      !/^(what changed|concrete verification|live-only inputs|status|runtime output)\b.*:\s*$/i.test(line)
+    ) || "";
+}
+
+function finalAssistantMessageFromRuntimeOutput(text) {
+  const cleaned = String(text || "")
+    .replace(/^\s*(?:runtime output|raw action output)\s*:\s*/i, "")
+    .replace(/^\s*Mission\s+\S+\s+live runtime output\s*\([^)]+\)\s*/i, "")
+    .trim();
+  if (/^OpenRuntime returned a real result for this mission\b/i.test(cleaned)) {
+    return cleaned;
+  }
+  if (!cleaned || !/(^|\n)\s*(?:artifact|preview url|route)\s*:/i.test(cleaned)) {
+    return "";
+  }
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map(line => line.replace(/^[-*]\s*/, "").trim())
+    .filter(Boolean);
+  const headline =
+    lines.find(line =>
+      !/^(artifact|preview url|route|command|status)\s*:/i.test(line) &&
+        !/^\/volume\d+\//i.test(line) &&
+        !/^https?:\/\//i.test(line) &&
+        !/^\/api\/artifact\b/i.test(line),
+    ) || "";
+  const route = lines.find(line => /^route\s*:/i.test(line)) || "";
+  const facts = lines
+    .filter(line =>
+      line !== headline &&
+      !/^(artifact|preview url|route|command|status)\s*:/i.test(line) &&
+      !/^\/volume\d+\//i.test(line) &&
+      !/^https?:\/\//i.test(line) &&
+      !/^\/api\/artifact\b/i.test(line),
+    )
+    .slice(0, 4);
+  const parts = [];
+  if (headline) {
+    parts.push(`OpenRuntime returned a real result for this mission: ${headline}.`);
+  } else {
+    parts.push("OpenRuntime returned a real result for this mission.");
+  }
+  if (facts.length) {
+    parts.push(`Key output: ${facts.join(" ")}`);
+  }
+  if (route) {
+    parts.push(route);
+  }
+  return parts.join("\n").trim();
+}
+
+function compactRuntimeAnswerSection(text) {
+  const cleaned = String(text || "")
+    .replace(/^\s*(?:runtime output|raw action output)\s*:\s*/i, "")
+    .replace(/^\s*Mission\s+\S+\s+live runtime output\s*\([^)]+\)\s*/i, "")
+    .trim();
+  if (!cleaned) return "";
+  const sectionMatch = cleaned.match(
+    /(^|\n)\s*(What changed(?: in this resume)?\s*:\s*[\s\S]*?)(?=\n\s*(?:Concrete verification|Live-only inputs|Status)\s*:|\n\s*Status\s*:|$)/i,
+  );
+  const answer = String(sectionMatch?.[2] || "").trim();
+  const source = answer || cleaned;
+  const lines = source
+    .split(/\r?\n/)
+    .map(line => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean)
+    .filter(line => !/^runtime output\s*:\s*$/i.test(line))
+    .filter(line => !/^mission\s+\S+\s+live runtime output/i.test(line));
+  if (!lines.length) return "";
+  const kept = [];
+  for (const line of lines) {
+    if (/^(Concrete verification|Live-only inputs)\s*:/i.test(line)) break;
+    if (/^-?\s*(PASS|FAIL|BLOCKED|WAIT|STATUS)\s*:/i.test(line) && kept.length > 0) break;
+    kept.push(line);
+    if (kept.length >= 7) break;
+  }
+  const compact = kept.join("\n").trim();
+  const assistantMessage = finalAssistantMessageFromRuntimeOutput(compact);
+  if (assistantMessage) return assistantMessage;
+  if (compact.length <= 1100) return compact;
+  return `${compact.slice(0, 1097).trim()}...`;
+}
+
+function runtimeReceiptModelMessageFromMissionDetail(snapshot) {
+  const transcriptMessages = asList(snapshot?.runtimeTranscript?.messages);
+  const detailMessages = asList(snapshot?.agentMessages);
+  const runtimeRows = [...transcriptMessages, ...detailMessages].filter(item => {
+    if (!item || item.traceOnly) return false;
+    return Boolean(item.runtimeOutput || isRuntimeOutputTurn(item));
+  });
+  if (!runtimeRows.length) return "";
+  const preferred =
+    runtimeRows.find(item => /^what changed$/i.test(String(item?.title || "").trim())) ||
+    runtimeRows.find(item => !/^(concrete verification|live-only inputs|status)$/i.test(String(item?.title || "").trim())) ||
+    runtimeRows[0];
+  const body = runtimeOutputText(preferred) || String(preferred?.detail || preferred?.message || preferred?.content || "").trim();
+  const answer = compactRuntimeAnswerSection(body);
+  const message = answer || firstUsefulRuntimeLine(body);
+  if (!message) return null;
+  const transcript = snapshot?.runtimeTranscript && typeof snapshot.runtimeTranscript === "object" ? snapshot.runtimeTranscript : {};
+  return {
+    message: sanitizeVisibleModelText(message),
+    source: "runtime_transcript",
+    sourceLabel: preferred?.label || preferred?.roleLabel || "Runtime output artifact",
+    sourceTitle: preferred?.title || "",
+    sourceId: preferred?.id || transcript.sessionId || "",
+    transcriptSessionId: transcript.sessionId || "",
+    runtime: preferred?.runtimeId || snapshot?.mission?.runtime_id || snapshot?.summary?.runtime_id || "",
+  };
+}
+
+function runtimeReceiptAssistantMessageFromMissionDetail(snapshot) {
+  const modelMessage = runtimeReceiptModelMessageFromMissionDetail(snapshot);
+  if (modelMessage?.message) return modelMessage.message;
+  const transcriptMessages = asList(snapshot?.runtimeTranscript?.messages);
+  const detailMessages = asList(snapshot?.agentMessages);
+  const runtimeRows = [...transcriptMessages, ...detailMessages].filter(item => {
+    if (!item || item.traceOnly) return false;
+    return Boolean(item.runtimeOutput || isRuntimeOutputTurn(item));
+  });
+  if (!runtimeRows.length) return "";
+  const preferred = runtimeRows[0];
+  const body = runtimeOutputText(preferred) || String(preferred?.detail || preferred?.message || preferred?.content || "").trim();
+  const line = firstUsefulRuntimeLine(body);
+  return line ? sanitizeVisibleModelText(line) : "";
+}
+
+function isOperatorFollowUpTurn(item) {
+  if (!item || isRuntimeOutputTurn(item)) {
+    return false;
+  }
+  const label = String(item?.label || item?.roleLabel || "").toLowerCase();
+  const kind = String(item?.kind || item?.messageKind || "").toLowerCase();
+  const id = String(item?.id || "").toLowerCase();
+  const text = `${item?.title || ""} ${item?.detail || ""} ${item?.message || ""} ${item?.content || ""}`.trim();
+  if (!text) {
+    return false;
+  }
+  if (isGeneratedContextFollowUpTurnText(text)) {
+    return false;
+  }
+  return Boolean(
+    label === "mission.follow_up" ||
+      label === "operator.followup" ||
+      label === "operator.follow_up" ||
+      label === "operator.message" ||
+      kind === "mission.follow_up" ||
+      kind === "operator.followup" ||
+      kind === "operator.follow_up" ||
+      kind === "operator.message" ||
+      id.includes(":mission.follow_up:") ||
+      id.includes(":operator.followup:"),
+  );
+}
+
+function isGeneratedContextFollowUpTurnText(text) {
+  const normalizedText = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const contextMarkers = [
+    "active rule set:",
+    "workspace:",
+    "workspace path:",
+    "mission context:",
+    "mission id:",
+    "rule intent:",
+    "rule set intent:",
+    "approval-sensitive actions:",
+    "active skills:",
+    "route for ",
+    "runtime focus:",
+    "attachment metadata:",
+    "do not restate this routing/context block",
+  ];
+  const markerCount = contextMarkers.filter(marker => normalizedText.includes(marker)).length;
+  return Boolean(
+    normalizedText.startsWith("you are replying inside fluxio agent live") ||
+    normalizedText.startsWith("you are hermes, the runtime answering a fluxio-selected mission follow-up") ||
+      normalizedText.startsWith("mission context:") ||
+      markerCount >= 2 ||
+      (
+        markerCount >= 1 &&
+        (
+          normalizedText.includes("do not restate this routing/context block") ||
+          normalizedText.includes("provided mission context") ||
+          normalizedText.includes("normal chat behavior")
+        )
+      ) ||
+      normalizedText.startsWith("active rule set:") ||
+      normalizedText.startsWith("workspace:") ||
+      normalizedText.startsWith("workspace path:") ||
+      normalizedText.startsWith("mission id:") ||
+      normalizedText.startsWith("mission:") ||
+      normalizedText.startsWith("rule intent:") ||
+      normalizedText.startsWith("rule set intent:") ||
+      normalizedText.startsWith("rule-set route for") ||
+      normalizedText.startsWith("approval-sensitive actions:") ||
+      normalizedText.startsWith("active skills:") ||
+      normalizedText.startsWith("route preference for") ||
+      normalizedText.startsWith("route for ") ||
+      normalizedText.startsWith("runtime focus:") ||
+      normalizedText.startsWith("runtime preference:") ||
+      normalizedText.startsWith("attachment metadata:") ||
+      normalizedText.startsWith("do not restate this routing/context block"),
+  );
+}
+
+function isVerificationProbeDialogueTurnText(text) {
+  const normalizedText = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return Boolean(
+    normalizedText.startsWith("in one sentence, tell me what you can verify about this fluxio agent live mission thread") ||
+      normalizedText.startsWith("in one sentence, what can you verify about this f1 telemetry agent live thread") ||
+      (
+        normalizedText.startsWith("i can verify") &&
+        normalizedText.includes("hermes cli agent") &&
+        normalizedText.includes("agent live mission thread")
+      ) ||
+      (
+        normalizedText.startsWith("i can verify") &&
+        normalizedText.includes("thread is specifically about f1 telemetry") &&
+        normalizedText.includes("workspace")
+      ) ||
+      (
+        normalizedText.startsWith("i can verify only that this is the first turn of the thread") &&
+        normalizedText.includes("no prior mission state")
+      )
+  );
+}
+
+function isHermesDialogueReplyTurn(item) {
+  if (!item || isRuntimeOutputTurn(item) || isOperatorFollowUpTurn(item)) {
+    return false;
+  }
+  const label = String(item?.label || item?.roleLabel || "").toLowerCase();
+  const text = String(item?.title || item?.detail || item?.message || item?.content || "").trim();
+  if (!text || text.length < 24 || isVerificationProbeDialogueTurnText(text)) {
+    return false;
+  }
+  if (!(label.includes("hermes runtime output") || label.includes("hermes reply"))) {
+    return false;
+  }
+  if (label.includes("lane_control") || label.includes("lane control")) {
+    return false;
+  }
+  if (/^\s*(?:[-*]|\d+[.)])\s+/.test(text)) {
+    return false;
+  }
+  if (/\b(?:pass|fail|wait|status)\s*:|runtime output:|raw action output|proof_digest|delivery_receipts?|nas audit|python -m|lane control receipt|recorded runtime for planner|\.json\b|\.py\b/i.test(text)) {
+    return false;
+  }
+  return /[.!?]/.test(text);
+}
+
 function isAgentConversationTurn(item) {
   if (!item) {
+    return false;
+  }
+  const text = `${item?.title || ""} ${item?.detail || ""} ${item?.message || ""} ${item?.content || ""}`.trim();
+  if (!text || isGeneratedContextFollowUpTurnText(text) || isVerificationProbeDialogueTurnText(text)) {
     return false;
   }
   if (item.traceOnly && !(item.chatPreferred || isRuntimeOutputTurn(item))) {
     return false;
   }
-  if (item.chatPreferred) {
-    return true;
-  }
   if (item.role === "operator") {
     return true;
   }
-  if (isRuntimeOutputTurn(item)) {
+  if (isHermesDialogueReplyTurn(item)) {
     return true;
-  }
-  if (item.processMessage && item.role !== "operator") {
-    const text = `${item.label || ""} ${item.title || ""} ${item.detail || ""}`.toLowerCase();
-    return /runtime output|slice|phase|delegate|verification|feedback|mission detail|hermes|planner|executor/.test(text);
   }
   return false;
 }
@@ -2306,7 +3107,7 @@ function preserveRuntimeOutputTurns(rows, limit = 48, priorityLimit = 8) {
       .join(":") || `row-${index}`;
   const tailKeys = new Set(tailRows.map(rowKey));
   const priorityRows = sourceRows
-    .filter(isRuntimeOutputTurn)
+    .filter(item => isOperatorFollowUpTurn(item) || isHermesDialogueReplyTurn(item))
     .filter((item, index) => !tailKeys.has(rowKey(item, index)))
     .slice(-priorityLimit);
   return [...priorityRows, ...tailRows];
@@ -2353,8 +3154,28 @@ function phaseRouteRole(phase) {
   return "executor";
 }
 
+function liveRoutePolicyLabel(value) {
+  const normalized = String(value || "strict_live")
+    .trim()
+    .toLowerCase()
+    .replace(/fallback/g, "contingency");
+  if (normalized === "no_contingency" || normalized === "strict_live") {
+    return "Strict live";
+  }
+  return titleizeToken(normalized || "strict_live");
+}
+
 function isIgnorableAgentRuntimeEvent(event) {
   return isHeartbeatRuntimeKind(event?.kind);
+}
+
+function shouldStartNotificationStackCollapsed() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  const searchParams = new URLSearchParams(window.location.search || "");
+  const surface = String(searchParams.get("surface") || searchParams.get("mode") || "").toLowerCase();
+  return surface === "builder" || surface === "workbench" || window.matchMedia("(max-width: 760px)").matches;
 }
 
 function ToastHost({ items }) {
@@ -2377,6 +3198,7 @@ function NotificationStack({
   dismissedCount = 0,
   expanded = false,
   items = [],
+  notificationChannels = null,
   onClearAll = () => {},
   onDismiss = () => {},
   onOpenMission = () => {},
@@ -2384,15 +3206,105 @@ function NotificationStack({
   onDisableBrowser = () => {},
   onEnableBrowser = () => {},
   onProvisionWebPush = () => {},
+  onRegisterWebPush = () => {},
   onTestBrowser = () => {},
   onToggleCollapsed = () => {},
   onToggleExpanded = () => {},
   overnightDigest = null,
   performance = null,
+  surface = "",
   webPushState = null,
 }) {
   const allItems = asList(items);
+  const notificationSurface = String(surface || "unknown").trim().toLowerCase() || "unknown";
   const digest = overnightDigest && typeof overnightDigest === "object" ? overnightDigest : null;
+  const channelMatrix = notificationChannels && typeof notificationChannels === "object"
+    ? notificationChannels
+    : null;
+  const delivery = digest?.delivery && typeof digest.delivery === "object" ? digest.delivery : {};
+  const webPushSubscriptionCount = Number(delivery.webPushSubscriptionCount || webPushState?.subscriptionCount || 0);
+  const webPushSenderConfigured = Boolean(
+    delivery.webPushSenderConfigured
+      || webPushState?.senderConfigured
+      || webPushState?.configured
+      || channelMatrix?.webPush?.senderConfigured,
+  );
+  const webPushReady = Boolean(
+    delivery.webPushReady
+      || (webPushSenderConfigured && webPushSubscriptionCount > 0)
+      || ["subscribed", "delivered"].includes(webPushState?.status),
+  );
+  const webPushProofStatus = webPushReady
+    ? "ready"
+    : webPushSenderConfigured
+      ? "needs_subscription"
+      : "needs_sender";
+  const webPushProofTone = webPushReady ? "good" : webPushSenderConfigured ? "warn" : "bad";
+  const webPushProofHeadline = webPushReady
+    ? "Closed-tab push is registered"
+    : webPushSenderConfigured
+      ? "Sender ready, this browser is not registered"
+      : "Closed-tab push sender is not configured";
+  const webPushFailureStates = new Set([
+    "service_worker_not_ready",
+    "subscription_lookup_error",
+    "subscription_failed",
+    "record_failed",
+    "error",
+  ]);
+  const webPushFailureMessage = webPushFailureStates.has(String(webPushState?.status || ""))
+    ? webPushState?.message
+    : "";
+  const webPushProofDetail = webPushReady
+    ? "Mission slice notifications can reach registered browsers even when the Fluxio tab is closed."
+    : webPushFailureMessage
+      || delivery.webPushNextAction
+      || channelMatrix?.webPush?.nextAction
+      || webPushState?.message
+      || (webPushSenderConfigured
+        ? "Register this browser before relying on phone or closed-tab progress alerts."
+        : "Provision Web Push sender keys before browser subscriptions can be recorded.");
+  const webPushProofAction = webPushSenderConfigured ? "Register this browser" : "Provision push";
+  const normalizedChannelRows = [
+    {
+      key: "inAppStack",
+      label: "In-app stack",
+      status: channelMatrix?.inAppStack?.status || "available",
+      detail: channelMatrix?.inAppStack?.nextAction || "Visible in this Fluxio tab.",
+    },
+    {
+      key: "browserNotification",
+      label: "Browser",
+      status: browserPermission === "granted" && browserEnabled
+        ? "enabled"
+        : channelMatrix?.browserNotification?.status || browserPermission || "unknown",
+      detail:
+        browserPermission === "granted" && browserEnabled
+          ? "This browser can receive foreground mission notifications."
+          : channelMatrix?.browserNotification?.nextAction || "Enable browser notification permission.",
+    },
+    {
+      key: "telegram",
+      label: "Telegram",
+      status: channelMatrix?.telegram?.status || (delivery.telegramReady ? "ready" : "not_configured"),
+      detail: channelMatrix?.telegram?.nextAction || (delivery.telegramReady ? "Watchdog receipts are configured." : "Telegram receipt delivery is not configured."),
+    },
+    {
+      key: "webPush",
+      label: "Closed-tab push",
+      status:
+        delivery.webPushReady
+          ? "ready"
+          : delivery.webPushSenderConfigured
+            ? "register_browser"
+            : channelMatrix?.webPush?.status || webPushState?.status || "setup_required",
+      detail:
+        delivery.webPushReady
+          ? "Closed-tab Web Push can send to this browser."
+          : webPushFailureMessage || delivery.webPushNextAction || channelMatrix?.webPush?.nextAction || webPushState?.message || "Register this browser before closed-tab push can send.",
+      count: webPushSubscriptionCount,
+    },
+  ];
   const visibleItemLimit = expanded ? allItems.length : 4;
   const visibleItems = allItems.slice(0, visibleItemLimit);
   const hiddenItemCount = Math.max(0, allItems.length - visibleItems.length);
@@ -2413,15 +3325,35 @@ function NotificationStack({
         : browserPermission === "unsupported"
           ? "In tab"
           : "Enable browser";
+  const latestNotification = visibleItems[0] || null;
+  const collapsedHeadline = latestNotification
+    ? notificationHeadline(latestNotification)
+    : digest?.headline || "No mission update selected";
+  const collapsedBody = latestNotification
+    ? notificationBody(latestNotification)
+    : digest?.phoneSummary || digest?.nextAction || "Open the stack for live mission progress.";
   return (
     <aside
       aria-label="Mission notifications"
       aria-live="polite"
-      className={`notification-stack ${collapsed ? "notification-stack-compact" : ""}`.trim()}
+      className={`notification-stack ${collapsed ? "notification-stack-compact notification-stack-collapsed-mode" : ""}`.trim()}
       data-notification-stack-compact={collapsed ? "true" : "false"}
+      data-notification-stack-expanded={expanded ? "true" : "false"}
+      data-notification-surface={notificationSurface}
       role="status"
     >
-      <div className="notification-stack-header">
+      {collapsed ? (
+        <button className="notification-stack-collapsed" onClick={onToggleCollapsed} type="button">
+          <span>Mission updates</span>
+          <strong>{collapsedHeadline}</strong>
+          <small>{collapsedBody}</small>
+          <em>
+            {visibleCount} visible notification{visibleCount === 1 ? "" : "s"}
+            {hiddenItemCount > 0 ? ` - ${hiddenItemCount} more in live feed` : ""}
+          </em>
+        </button>
+      ) : null}
+      {!collapsed ? <div className="notification-stack-header">
         <span>
           Mission updates
           <small>{visibleCount} visible</small>
@@ -2437,9 +3369,9 @@ function NotificationStack({
               Push: {titleizeToken(webPushState.status || "unknown")}
             </span>
           ) : null}
-          {webPushState?.status === "not_configured" ? (
-            <button onClick={onProvisionWebPush} type="button">
-              Provision push
+          {!webPushReady ? (
+            <button onClick={webPushSenderConfigured ? onRegisterWebPush : onProvisionWebPush} type="button">
+              {webPushProofAction}
             </button>
           ) : null}
           {browserPermission === "granted" && browserEnabled ? (
@@ -2477,14 +3409,7 @@ function NotificationStack({
             Mark visible read
           </button>
         </div>
-      </div>
-      {collapsed ? (
-        <button className="notification-stack-collapsed" onClick={onToggleCollapsed} type="button">
-          <span>Live update stack</span>
-          <strong>{visibleCount} live notification{visibleCount === 1 ? "" : "s"}</strong>
-          {hiddenItemCount > 0 ? <small>{hiddenItemCount} older updates stay in the feed</small> : null}
-        </button>
-      ) : null}
+      </div> : null}
       {!collapsed && browserTestStatus?.message ? (
         <div className={`notification-test-status ${toneClass(browserTestStatus.status === "delivered" ? "good" : browserTestStatus.status === "error" ? "bad" : "neutral")}`}>
           <span>Desktop notification test</span>
@@ -2502,6 +3427,30 @@ function NotificationStack({
             </small>
           ) : null}
         </div>
+      ) : null}
+      {!collapsed ? (
+        <section
+          aria-label="Phone push proof"
+          className={`notification-push-proof ${toneClass(webPushProofTone)}`}
+          data-web-push-proof="true"
+          data-web-push-proof-status={webPushProofStatus}
+        >
+          <span>Phone push proof</span>
+          <strong>{webPushProofHeadline}</strong>
+          <p>{webPushProofDetail}</p>
+          <small>
+            {webPushSubscriptionCount} browser subscription{webPushSubscriptionCount === 1 ? "" : "s"} · sender {webPushSenderConfigured ? "ready" : "not ready"}
+          </small>
+          {!webPushReady ? (
+            <button
+              data-web-push-action="true"
+              onClick={webPushSenderConfigured ? onRegisterWebPush : onProvisionWebPush}
+              type="button"
+            >
+              {webPushProofAction}
+            </button>
+          ) : null}
+        </section>
       ) : null}
       {!collapsed && digest?.schema ? (
         <article
@@ -2537,6 +3486,24 @@ function NotificationStack({
               ))}
             </div>
           ) : null}
+          <div
+            aria-label="Live notification channel truth"
+            className="notification-channel-truth"
+            data-notification-channel-truth="true"
+          >
+            {normalizedChannelRows.map(channel => (
+              <article
+                className={`notification-channel-truth-card ${toneClass(["available", "enabled", "ready", "delivered", "duplicate_suppressed"].includes(channel.status) ? "good" : ["register_browser", "setup_required", "not_configured", "not_requested"].includes(channel.status) ? "warn" : channel.status === "error" ? "bad" : "neutral")}`}
+                data-notification-channel={channel.key}
+                key={`notification-channel-truth-${channel.key}`}
+              >
+                <span>{channel.label}</span>
+                <strong>{titleizeToken(channel.status || "unknown")}</strong>
+                <p>{channel.detail}</p>
+                {channel.key === "webPush" ? <small>{channel.count} browser subscription{channel.count === 1 ? "" : "s"}</small> : null}
+              </article>
+            ))}
+          </div>
           <div className="notification-card-actions">
             <button
               className="notification-card-dismiss-inline"
@@ -2550,9 +3517,19 @@ function NotificationStack({
         </article>
       ) : null}
       {!collapsed ? visibleItems.map(item => (
+        (() => {
+          const provenance = notificationProvenance(item);
+          const provenanceRows = [
+            ["Runtime", provenance.originRuntime],
+            ["Provider/model", [provenance.originProvider, provenance.originModel].filter(Boolean).join(" / ")],
+            ["Transport", provenance.transportProvider],
+            ["Producer", provenance.producer],
+          ].filter(([, value]) => value);
+          return (
         <article
           className={`notification-card ${toneClass(item.severity === "success" ? "good" : item.severity === "action" ? "warn" : "neutral")}`}
           data-notification-card="true"
+          data-notification-provenance={provenanceRows.length ? "true" : "false"}
           key={item.id || `${item.kind}-${item.createdAt}`}
         >
           <div className="notification-card-title">
@@ -2568,13 +3545,25 @@ function NotificationStack({
               <em>Dismiss</em>
             </button>
           </div>
-          {item.title && item.title !== notificationHeadline(item) ? <strong>{item.title}</strong> : null}
+          {item.title && sanitizeVisibleModelText(item.title) !== notificationHeadline(item) ? (
+            <strong>{sanitizeVisibleModelText(item.title)}</strong>
+          ) : null}
           <p>{notificationBody(item)}</p>
           {notificationTimestamp(item) ? (
             <small className="notification-card-time">{timestampLabel(notificationTimestamp(item))}</small>
           ) : null}
-          {item.detail && notificationBody(item) !== item.detail ? (
-            <small className="notification-card-context">{item.detail}</small>
+          {item.detail && notificationBody(item) !== sanitizeVisibleModelText(item.detail) ? (
+            <small className="notification-card-context">{sanitizeVisibleModelText(item.detail)}</small>
+          ) : null}
+          {provenanceRows.length ? (
+            <div className="notification-provenance-row" aria-label="Message provenance">
+              {provenanceRows.map(([label, value]) => (
+                <span key={`${notificationId(item)}-${label}`}>
+                  <em>{label}</em>
+                  <strong>{value}</strong>
+                </span>
+              ))}
+            </div>
           ) : null}
           <div className="notification-card-actions">
             {notificationMissionId(item) ? (
@@ -2596,6 +3585,8 @@ function NotificationStack({
             </button>
           </div>
         </article>
+          );
+        })()
       )) : null}
     </aside>
   );
@@ -2803,6 +3794,7 @@ function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }
           </div>
         ) : null}
       </div>
+      {!isUser && item.turnReceipt ? <TurnReceiptStrip compact receipt={item.turnReceipt} /> : null}
       {!isUser && hasTraceDetail ? (
         <div className="agent-chat-actions">
           <ActionButton onClick={() => onFocusTrace(item.id)} type="button">
@@ -2811,6 +3803,196 @@ function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }
         </div>
       ) : null}
     </article>
+  );
+}
+
+function normalizeTurnReceipt(value, fallback = {}) {
+  const receipt = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const route = receipt.route && typeof receipt.route === "object" ? receipt.route : fallback.route || {};
+  const changedFiles = uniqBy(
+    [
+      ...asList(receipt.changedFiles),
+      ...asList(receipt.filesChanged),
+      ...asList(fallback.changedFiles),
+      ...asList(fallback.filesChanged),
+    ]
+      .map(item => String(item || "").trim())
+      .filter(Boolean),
+    item => item,
+  );
+  const toolTimeline = asList(receipt.toolTimeline || fallback.toolTimeline).filter(Boolean);
+  const provider = receipt.provider || route.provider || fallback.provider || "";
+  const model = receipt.model || route.model_id || route.model || fallback.model || "";
+  const effort = receipt.effort || route.effort || fallback.effort || "";
+  const command = receipt.command || fallback.command || "Not reported";
+  const assistantMessage = normalizeReceiptAssistantMessage(
+    [
+      receipt.assistantMessage,
+      receipt.modelMessage,
+      receipt.openRuntimeMessage,
+      receipt.agentMessage,
+      receipt.finalMessage,
+      fallback.assistantMessage,
+      fallback.modelMessage,
+      fallback.openRuntimeMessage,
+      fallback.agentMessage,
+      fallback.finalMessage,
+    ],
+    command,
+  );
+  return {
+    ...receipt,
+    schema: receipt.schema || "fluxio.turn_receipt.v1",
+    command,
+    runtime: receipt.runtime || fallback.runtime || "Not reported",
+    provider: provider || "Not reported",
+    model: model || "Not reported",
+    effort: effort || "Not reported",
+    status: receipt.status || fallback.status || "recorded",
+    durationMs: receipt.durationMs ?? fallback.durationMs ?? "",
+    changedFiles,
+    toolTimeline,
+    assistantMessage,
+    finalMessage: assistantMessage,
+    modelMessageSource: receipt.modelMessageSource || fallback.modelMessageSource || "",
+    modelMessageSourceLabel: receipt.modelMessageSourceLabel || fallback.modelMessageSourceLabel || "",
+    modelMessageSourceTitle: receipt.modelMessageSourceTitle || fallback.modelMessageSourceTitle || "",
+    modelMessageSourceId: receipt.modelMessageSourceId || fallback.modelMessageSourceId || "",
+    transcriptSessionId: receipt.transcriptSessionId || fallback.transcriptSessionId || "",
+    runSummary: receipt.runSummary || fallback.runSummary || "",
+    sourceType: receipt.sourceType || fallback.sourceType || "",
+    sourceMessageId: receipt.sourceMessageId || fallback.sourceMessageId || "",
+    sourceZone: receipt.sourceZone || fallback.sourceZone || "",
+    commentText: receipt.commentText || fallback.commentText || "",
+  };
+}
+
+function normalizeReceiptAssistantMessage(value, command = "") {
+  const candidates = Array.isArray(value) ? value : [value];
+  for (const candidate of candidates) {
+    const normalized = normalizeReceiptAssistantCandidate(candidate, command);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function normalizeReceiptAssistantCandidate(value, command = "") {
+  const text = sanitizeVisibleModelText(String(value || ""))
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!text) return "";
+  const collapsedText = text.replace(/\s+/g, " ").trim();
+  if (isCommandLikeReceiptText(collapsedText, command)) return "";
+  const assistantMessage = finalAssistantMessageFromRuntimeOutput(text);
+  if (assistantMessage) return assistantMessage;
+  return text;
+}
+
+function routeModelReceiptLabel(route = {}, fallback = "") {
+  return (
+    route?.model_id ||
+    route?.model ||
+    fallback ||
+    route?.provider ||
+    "Not reported"
+  );
+}
+
+function hasTurnReceiptSignal(receipt) {
+  if (!receipt || typeof receipt !== "object") return false;
+  return Boolean(
+    receipt.command ||
+      receipt.runtime ||
+      receipt.assistantMessage ||
+      asList(receipt.changedFiles).length ||
+      asList(receipt.toolTimeline).length,
+  );
+}
+
+function executableCommentPayload(activeCommentTarget, commentText, route, runtime) {
+  if (!activeCommentTarget?.id) return {};
+  return {
+    sourceType: "comment",
+    sourceMessageId: String(activeCommentTarget.id || ""),
+    sourceZone: String(activeCommentTarget.zone || activeCommentTarget.kind || "selected-message"),
+    selectedText: String(activeCommentTarget.title || ""),
+    commentText: String(commentText || ""),
+    runtime: String(runtime || ""),
+    provider: String(route?.provider || ""),
+    model: String(route?.model_id || route?.model || ""),
+    effort: String(route?.effort || ""),
+  };
+}
+
+function TurnReceiptStrip({ receipt, compact = false }) {
+  const normalized = normalizeTurnReceipt(receipt);
+  if (!hasTurnReceiptSignal(normalized)) return null;
+  const changedFiles = asList(normalized.changedFiles);
+  const timeline = asList(normalized.toolTimeline);
+  const duration = Number(normalized.durationMs);
+  const durationLabel = Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)}ms` : "Not reported";
+  const modelSourceParts = [
+    normalized.modelMessageSourceLabel,
+    normalized.modelMessageSourceTitle,
+    normalized.transcriptSessionId ? `session ${normalized.transcriptSessionId}` : "",
+  ].filter(Boolean);
+  return (
+    <section
+      className={`agent-turn-receipt ${compact ? "compact" : ""}`.trim()}
+      data-turn-receipt="true"
+      data-modified-files-strip="true"
+      aria-label="Run receipt and modified files"
+    >
+      <div className="agent-turn-receipt-head">
+        <span>Run receipt</span>
+        <strong>{titleizeToken(normalized.status || "recorded")}</strong>
+      </div>
+      <div className="agent-turn-receipt-grid">
+        <span>Runtime: {titleizeToken(normalized.runtime)}</span>
+        <span>Provider: {titleizeToken(normalized.provider)}</span>
+        <span>Model: {normalized.model}</span>
+        <span>Thinking: {titleizeToken(normalized.effort)}</span>
+        <span>Duration: {durationLabel}</span>
+      </div>
+      <div className={`agent-turn-agent-message ${normalized.assistantMessage ? "" : "empty"}`.trim()} data-final-model-message="true">
+        <span>Model / OpenRuntime message</span>
+        <p>{normalized.assistantMessage || "No model or OpenRuntime message was returned for this run."}</p>
+        {modelSourceParts.length ? (
+          <small data-model-message-source="true">{modelSourceParts.join(" · ")}</small>
+        ) : null}
+      </div>
+      {normalized.sourceType === "comment" ? (
+        <p className="agent-turn-comment-source">
+          Executed comment{normalized.sourceMessageId ? ` from ${normalized.sourceZone || "selected row"} ${normalized.sourceMessageId}` : ""}.
+        </p>
+      ) : null}
+      <div className="agent-modified-files">
+        <strong>{changedFiles.length ? `Modified files (${changedFiles.length})` : "No files modified"}</strong>
+        {changedFiles.length ? (
+          <div>
+            {changedFiles.slice(0, 4).map(file => <code key={`receipt-file-${file}`}>{file}</code>)}
+          </div>
+        ) : (
+          <span>Run completed without a changed-file receipt.</span>
+        )}
+      </div>
+      {(normalized.command || changedFiles.length > 4 || timeline.length || normalized.runSummary || normalized.assistantMessage) ? (
+        <details className="agent-turn-receipt-details">
+          <summary>Trace available</summary>
+          <p className="agent-turn-command">Command: {normalized.command || "Not reported"}</p>
+          {changedFiles.length > 4 ? (
+            <pre>{changedFiles.join("\n")}</pre>
+          ) : null}
+          {timeline.length ? (
+              <pre>{JSON.stringify(timeline.slice(-12), null, 2)}</pre>
+          ) : null}
+          {normalized.runSummary ? <p>Run summary: {normalized.runSummary}</p> : null}
+          {normalized.assistantMessage ? <p>Model / OpenRuntime message: {normalized.assistantMessage}</p> : null}
+        </details>
+      ) : null}
+    </section>
   );
 }
 
@@ -3142,6 +4324,17 @@ function routeEffortLabel(value, fallback = "default") {
   return option?.label || titleizeToken(normalized);
 }
 
+function routeProviderModelLabel(route = {}, fallback = "Not resolved") {
+  const provider = String(route?.provider || route?.providerId || route?.provider_id || "").trim();
+  const model = String(route?.model_id || route?.model || route?.modelId || "").trim();
+  if (!provider && !model) {
+    return fallback;
+  }
+  const providerLabel = provider ? titleizeToken(provider) : "Provider not reported";
+  const modelLabel = model && model.toLowerCase() !== "default" ? model : "model not reported";
+  return `${providerLabel} · ${modelLabel}`;
+}
+
 function authModesForRouteProfile(profile, providerPresence = {}) {
   const nextProfile = {
     ...profile,
@@ -3154,7 +4347,8 @@ function authModesForRouteProfile(profile, providerPresence = {}) {
   const usesMiniMax =
     providers.has("minimax") ||
     providers.has("minimax-cn") ||
-    providers.has("minimax-portal");
+    providers.has("minimax-portal") ||
+    providers.has("minimax-oauth");
 
   if (usesOpenAI && nextProfile.openaiCodexAuthMode === "none") {
     if (providerPresence.openai) {
@@ -3165,7 +4359,7 @@ function authModesForRouteProfile(profile, providerPresence = {}) {
   }
 
   if (usesMiniMax && nextProfile.minimaxAuthMode === "none") {
-    if (providerPresence["minimax-portal"]) {
+    if (providerPresence["minimax-portal"] || providerPresence["minimax-oauth"]) {
       nextProfile.minimaxAuthMode = "minimax-portal-oauth";
     } else if (providerPresence.minimax || providerPresence["minimax-cn"]) {
       nextProfile.minimaxAuthMode = "minimax-api";
@@ -3262,7 +4456,7 @@ function summarizeChatSessionTitle(seedText) {
 
 function isRouteMetadataText(value) {
   const text = String(value || "").trim();
-  if (!text) {
+  if (!text || isVerificationProbeDialogueTurnText(text)) {
     return false;
   }
   return (
@@ -3270,6 +4464,29 @@ function isRouteMetadataText(value) {
     /^(Codex|OpenClaw|Hermes|Syntelos)\s+chat$/i.test(text) ||
     /^chat:(openclaw|codex|hermes):/i.test(text)
   );
+}
+
+function isCommandLikeReceiptText(value, command = "") {
+  const collapsedText = sanitizeVisibleModelText(String(value || ""))
+    .replace(/\s+/g, " ")
+    .trim();
+  const commandText = String(command || "").replace(/\s+/g, " ").trim();
+  if (!collapsedText) return true;
+  if (commandText && collapsedText === commandText) return true;
+  if (isRouteMetadataText(collapsedText)) return true;
+  if (/^(command|feedback|response|reply)\s*:?\s+(\/volume\d+\/|[A-Z]:\\|wsl\s+|python\s+-m\s+|node\s+|npm\s+|pnpm\s+|yarn\s+|hermes\s+|opencode\s+|openclaw\s+|codex\s+)/i.test(collapsedText)) {
+    return true;
+  }
+  if (/^(\/volume\d+\/|[A-Z]:\\|wsl\s+|python\s+-m\s+|node\s+|npm\s+|pnpm\s+|yarn\s+|hermes\s+|opencode\s+|openclaw\s+|codex\s+)/i.test(collapsedText)) {
+    return true;
+  }
+  if (/\b(mission one-shot|execute model mission|--objective|--mission-id|--provider|--model)\b/i.test(collapsedText)) {
+    return true;
+  }
+  if (/\b(delegated runtime lane launched|delegated lane launched|file mutation completed|workspace search completed|approval required before|waiting for operator approval|lane action routed)\b/i.test(collapsedText)) {
+    return true;
+  }
+  return false;
 }
 
 function normalizeChatSessions(payload) {
@@ -3304,6 +4521,7 @@ function normalizeChatTranscriptEntry(item) {
   const role = String(item?.role || "user").trim().toLowerCase() === "assistant" ? "assistant" : "user";
   const title = String(item?.title || item?.text || "").trim();
   const detail = String(item?.detail || "").trim();
+  const messageKind = String(item?.messageKind || item?.kind || "").trim();
   if (!title && !detail) {
     return null;
   }
@@ -3315,10 +4533,47 @@ function normalizeChatTranscriptEntry(item) {
     meta: String(item?.meta || "").trim(),
     tone: String(item?.tone || "neutral").trim(),
     pending: Boolean(item?.pending),
+    conversationTurn: Boolean(item?.conversationTurn) || ["dialogue", "chat"].includes(messageKind.toLowerCase()),
+    messageKind,
+    source: String(item?.source || "").trim(),
     technicalDetail: String(item?.technicalDetail || "").trim(),
+    turnReceipt: item?.turnReceipt && typeof item.turnReceipt === "object" ? item.turnReceipt : null,
     chips: asList(item?.chips).map(value => String(value || "").trim()).filter(Boolean).slice(0, 6),
     createdAt: String(item?.createdAt || new Date().toISOString()),
   };
+}
+
+function isRealAgentDialogueTranscriptTurn(item) {
+  if (!item || item.pending) {
+    return false;
+  }
+  const role = String(item?.role || "").toLowerCase();
+  if (!["assistant", "user", "operator"].includes(role)) {
+    return false;
+  }
+  const text = [item?.title, item?.detail, item?.text, item?.message, item?.content]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!text || isGeneratedContextFollowUpTurnText(text) || isVerificationProbeDialogueTurnText(text)) {
+    return false;
+  }
+  const source = String(item?.source || "").trim().toLowerCase();
+  return [
+    "operator-submitted",
+    "backend-model-message",
+    "backend-runtime-reply",
+    "runtime-compartment",
+    "runtime_compartment",
+  ].includes(source);
+}
+
+function transcriptHasRealRuntimeReply(turns) {
+  return asList(turns).some(item => {
+    const role = String(item?.role || "").toLowerCase();
+    const source = String(item?.source || "").trim().toLowerCase();
+    return role === "assistant" && ["backend-model-message", "backend-runtime-reply", "runtime-compartment", "runtime_compartment"].includes(source);
+  });
 }
 
 function normalizeChatSessionTranscripts(payload, legacyNotes = []) {
@@ -3361,6 +4616,8 @@ function normalizeChatSessionTranscripts(payload, legacyNotes = []) {
       meta: note.meta || "",
       tone: note.tone || "neutral",
       pending: Boolean(note.pending),
+      conversationTurn: Boolean(note.conversationTurn),
+      messageKind: note.messageKind || "",
       technicalDetail: note.technicalDetail || "",
       chips: asList(note.chips),
       createdAt: note.createdAt || new Date().toISOString(),
@@ -3419,6 +4676,13 @@ function transcriptTurnsFromRuntimeCompartment(compartment, sessionId = "") {
       detail: "",
       meta: timestampLabel(createdAt),
       tone: "neutral",
+      conversationTurn: true,
+      messageKind: "dialogue",
+      source: item?.source || "runtime-compartment",
+      turnReceipt:
+        role === "assistant" && compartment?.turnReceipt && typeof compartment.turnReceipt === "object"
+          ? compartment.turnReceipt
+          : null,
       createdAt,
     });
     if (normalized) {
@@ -3438,6 +4702,11 @@ function buildChatSession(workspaceId, seedText = "") {
     updatedAt: now,
     lastPreview: summarizeChatSessionTitle(seedText),
   };
+}
+
+function missionChatSessionIdFor(missionId = "") {
+  const normalizedMissionId = String(missionId || "").trim();
+  return normalizedMissionId ? `mission-chat-${normalizedMissionId}` : "";
 }
 
 function parseWorkspaceSyncStatus(workspacePayload) {
@@ -3463,7 +4732,7 @@ function recommendedRouteForLane(item) {
     return {
       role,
       provider: "minimax",
-      model: "MiniMax-M2.7",
+      model: "MiniMax-M3",
       effort: "high",
       budgetClass: "balanced",
       reason: "Builder route receipt: MiniMax is preferred for frontend/design/prototype execution.",
@@ -3841,7 +5110,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       : "home",
   );
   const [agentScene, setAgentScene] = useState(
-    ["idle", "run", "live"].includes(requestedAgentScene) ? requestedAgentScene : "idle",
+    ["run", "live"].includes(requestedAgentScene) ? requestedAgentScene : "run",
   );
   const [builderDetailOpen, setBuilderDetailOpen] = useState(
     requestedBuilderDetail || Boolean(storedUiState.builderDetailOpen),
@@ -3938,7 +5207,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [activeCommentTarget, setActiveCommentTarget] = useState(null);
   const [agentRouteRole, setAgentRouteRole] = useState("executor");
   const [agentRuntimeFocus, setAgentRuntimeFocus] = useState("all");
-  const [showThinkingTrace, setShowThinkingTrace] = useState(true);
+  const [showThinkingTrace, setShowThinkingTrace] = useState(false);
   const [pinnedNexusIds, setPinnedNexusIds] = useState(storedUiState.pinnedNexusIds || []);
   const [highlightedTurnId, setHighlightedTurnId] = useState("");
   const [selectedReviewTargetId, setSelectedReviewTargetId] = useState(
@@ -3997,10 +5266,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     configured: false,
     message: webPushSupported() ? "Web Push status has not been checked yet." : "Web Push is not supported in this browser.",
   });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.__fluxioWebPushState = webPushState;
+    }
+  }, [webPushState]);
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState(
     () => new Set(normalizeStoredIdList(loadStoredJson(STORAGE_KEYS.dismissedNotificationIds, []))),
   );
-  const [notificationStackCollapsed, setNotificationStackCollapsed] = useState(false);
+  const [notificationStackCollapsed, setNotificationStackCollapsed] = useState(() => shouldStartNotificationStackCollapsed());
   const [notificationStackExpanded, setNotificationStackExpanded] = useState(false);
   const [browserNotificationTestStatus, setBrowserNotificationTestStatus] = useState(null);
   const [data, setData] = useState({
@@ -4037,6 +5311,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const authPromptedRef = useRef(false);
   const oauthSessionCheckedRef = useRef(false);
   const skillsSummaryRefreshRef = useRef("");
+  const phoneSummaryRefreshRef = useRef("");
   const studioAssistantPendingRef = useRef(null);
   const goalModeLastResumeRef = useRef("");
   const { items: toasts, push: pushToast } = useToastQueue();
@@ -4172,6 +5447,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setUiMode("agent");
     }
   }, [surface, uiMode]);
+
+  useEffect(() => {
+    if (surface !== "workbench") {
+      return;
+    }
+    setNotificationStackCollapsed(true);
+    setNotificationStackExpanded(false);
+  }, [surface]);
 
   useEffect(() => {
     if (!previewModeOptions.some(option => option.id === previewMode)) {
@@ -4596,10 +5879,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           return;
         }
 
-        const liveSummary =
-          enrichedSummary && typeof enrichedSummary === "object"
-            ? enrichedSummary
-            : summary;
+        const liveSummary = mergeAuthenticatedLiveSummaries(summary, enrichedSummary) || summary;
         const providerSecretPresence =
           (liveSummary?.providerSecretPresence && typeof liveSummary.providerSecretPresence === "object"
             ? liveSummary.providerSecretPresence
@@ -4884,6 +6164,59 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [previewMode, surface, data.summary?.generatedAt, data.summary?.summaryMode, data.summary?.skillLibrary, data.snapshot?.skillLibrary]);
 
   useEffect(() => {
+    if (previewMode !== "live" || surface !== "phone" || !hasCommandBackend()) {
+      return undefined;
+    }
+    const missionCount = asList(data.summary?.missions).length;
+    const notificationCount = asList(data.summary?.notifications).length;
+    const hasPushState = Boolean(data.summary?.webPushStatus?.schema || data.summary?.ntfyStatus?.schema);
+    if (data.summary?.schema && missionCount > 0 && notificationCount > 0 && hasPushState) {
+      return undefined;
+    }
+    const refreshKey = `${surface}:${data.summary?.generatedAt || data.summary?.summaryMode || "pending"}:${missionCount}:${notificationCount}:${Number(hasPushState)}`;
+    if (phoneSummaryRefreshRef.current === refreshKey) {
+      return undefined;
+    }
+    phoneSummaryRefreshRef.current = refreshKey;
+    let cancelled = false;
+    callBackendWithTimeout(
+      "get_control_room_summary_command",
+      { payload: { root: null, reason: "phone_surface_full_summary" } },
+      CONTROL_ROOM_SUMMARY_TIMEOUT_MS * 2,
+    ).then(summary => {
+      if (cancelled || !summary || typeof summary !== "object") {
+        return;
+      }
+      setData(current => ({
+        ...current,
+        summary: {
+          ...(current.summary && typeof current.summary === "object" ? current.summary : {}),
+          ...summary,
+        },
+        providerSecretPresence:
+          summary.providerSecretPresence && typeof summary.providerSecretPresence === "object"
+            ? summary.providerSecretPresence
+            : current.providerSecretPresence,
+      }));
+    }).catch(() => {
+      // The phone route renders an explicit loading/live-only state until the NAS summary arrives.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    previewMode,
+    surface,
+    data.summary?.generatedAt,
+    data.summary?.summaryMode,
+    data.summary?.schema,
+    data.summary?.missions,
+    data.summary?.notifications,
+    data.summary?.webPushStatus,
+    data.summary?.ntfyStatus,
+  ]);
+
+  useEffect(() => {
     const handleVisibility = () => {
       const hidden = document.visibilityState !== "visible";
       const browserNotificationsActive =
@@ -5128,6 +6461,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           eventKind: String(item?.kind || "notification.sent"),
           eventMessage: notificationBody(item),
           status,
+          ...notificationProvenance(item),
           ...extra,
         },
       });
@@ -5151,50 +6485,186 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       });
       return "local_only";
     }
+    let pushPermissionState = "";
+    let latestStatus = {};
     try {
       const status = await callBackend("get_web_push_status_command", { payload: { root: null } }, { throwOnError: true });
+      latestStatus = status || {};
       if (!status?.configured || !status?.publicKey) {
         setWebPushState({
           status: "not_configured",
           configured: false,
           senderConfigured: Boolean(status?.senderConfigured),
-          message: status?.nextAction || "Web Push sender keys are not configured yet.",
+          dependencyAvailable: Boolean(status?.dependencyAvailable),
+          message: status?.nextAction || "Web Push sender keys need setup.",
         });
         return "not_configured";
       }
-      const registration = await navigator.serviceWorker.ready;
-      const existing = await registration.pushManager.getSubscription();
-      const subscription = existing || await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(status.publicKey),
-      });
+      if (typeof window !== "undefined" && "Notification" in window) {
+        const permission = window.Notification.permission === "default"
+          ? await window.Notification.requestPermission()
+          : window.Notification.permission;
+        setBrowserNotifications({
+          enabled: permission === "granted",
+          permission,
+        });
+        if (permission !== "granted") {
+          setWebPushState({
+            status: "permission_required",
+            configured: true,
+            senderConfigured: Boolean(status?.senderConfigured),
+            dependencyAvailable: Boolean(status?.dependencyAvailable),
+            subscriptionCount: Number(status?.subscriptionCount || 0),
+            message: permission === "denied"
+              ? "Browser or Windows notification permission is blocked for this site."
+              : "Notification permission is required before this browser can register for closed-tab Web Push.",
+          });
+          return "permission_required";
+        }
+      }
+      let registration = null;
+      try {
+        registration = await navigator.serviceWorker.ready;
+      } catch (error) {
+        const errorSummary = browserErrorSummary(error);
+        setWebPushState({
+          status: "service_worker_not_ready",
+          configured: true,
+          senderConfigured: Boolean(status?.senderConfigured),
+          dependencyAvailable: Boolean(status?.dependencyAvailable),
+          subscriptionCount: Number(status?.subscriptionCount || 0),
+          pushPermissionState,
+          errorName: errorSummary.name,
+          errorMessage: errorSummary.message,
+          message: `Service worker is not ready for Web Push registration: ${errorSummary.label}`,
+        });
+        return "service_worker_not_ready";
+      }
+      const applicationServerKey = urlBase64ToUint8Array(status.publicKey);
+      if (registration.pushManager?.permissionState) {
+        try {
+          pushPermissionState = await registration.pushManager.permissionState({
+            userVisibleOnly: true,
+            applicationServerKey,
+          });
+        } catch {
+          pushPermissionState = "";
+        }
+      }
+      if (pushPermissionState === "denied") {
+        setWebPushState({
+          status: "push_permission_denied",
+          configured: true,
+          senderConfigured: Boolean(status?.senderConfigured),
+          dependencyAvailable: Boolean(status?.dependencyAvailable),
+          subscriptionCount: Number(status?.subscriptionCount || 0),
+          pushPermissionState,
+          message: "Foreground notifications are granted, but this browser profile denies PushManager subscriptions for this origin.",
+        });
+        return "push_permission_denied";
+      }
+      let existing = null;
+      try {
+        existing = await registration.pushManager.getSubscription();
+      } catch (error) {
+        const errorSummary = browserErrorSummary(error);
+        setWebPushState({
+          status: "subscription_lookup_error",
+          configured: true,
+          senderConfigured: Boolean(status?.senderConfigured),
+          dependencyAvailable: Boolean(status?.dependencyAvailable),
+          subscriptionCount: Number(status?.subscriptionCount || 0),
+          pushPermissionState,
+          errorName: errorSummary.name,
+          errorMessage: errorSummary.message,
+          message: `PushManager.getSubscription failed: ${errorSummary.label}`,
+        });
+        return "subscription_lookup_error";
+      }
+      let subscription = existing;
+      if (!subscription) {
+        try {
+          subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey,
+          });
+        } catch (error) {
+          const errorSummary = browserErrorSummary(error);
+          setWebPushState({
+            status: "subscription_failed",
+            configured: true,
+            senderConfigured: Boolean(status?.senderConfigured),
+            dependencyAvailable: Boolean(status?.dependencyAvailable),
+            subscriptionCount: Number(status?.subscriptionCount || 0),
+            pushPermissionState: pushPermissionState || "unknown",
+            errorName: errorSummary.name,
+            errorMessage: errorSummary.message,
+            publicKeyLength: String(status.publicKey || "").length,
+            message: `PushManager.subscribe failed before the NAS could record this browser: ${errorSummary.label}`,
+          });
+          return "subscription_failed";
+        }
+      }
       const payload = subscription.toJSON ? subscription.toJSON() : subscription;
-      const receipt = await callBackend(
-        "record_web_push_subscription_command",
-        {
-          payload: {
-            root: null,
-            subscription: payload,
-            userAgent: navigator.userAgent,
-            status: "subscribed",
+      let receipt = null;
+      try {
+        receipt = await callBackend(
+          "record_web_push_subscription_command",
+          {
+            payload: {
+              root: null,
+              subscription: payload,
+              userAgent: navigator.userAgent,
+              status: "subscribed",
+            },
           },
-        },
-        { throwOnError: true },
-      );
+          { throwOnError: true },
+        );
+      } catch (error) {
+        const errorSummary = browserErrorSummary(error);
+        setWebPushState({
+          status: "record_failed",
+          configured: true,
+          senderConfigured: Boolean(status?.senderConfigured),
+          dependencyAvailable: Boolean(status?.dependencyAvailable),
+          subscriptionCount: Number(status?.subscriptionCount || 0),
+          pushPermissionState: pushPermissionState || "granted",
+          endpointPresent: Boolean(payload?.endpoint),
+          errorName: errorSummary.name,
+          errorMessage: errorSummary.message,
+          message: `Browser subscription exists, but NAS record_web_push_subscription failed: ${errorSummary.label}`,
+        });
+        return "record_failed";
+      }
+      let updatedStatus = {};
+      try {
+        updatedStatus = await callBackend("get_web_push_status_command", { payload: { root: null } }, { throwOnError: true });
+      } catch {
+        updatedStatus = {};
+      }
       setWebPushState({
         status: "subscribed",
         configured: true,
-        senderConfigured: Boolean(status?.senderConfigured),
+        senderConfigured: Boolean(updatedStatus?.senderConfigured ?? status?.senderConfigured),
+        dependencyAvailable: Boolean(updatedStatus?.dependencyAvailable ?? status?.dependencyAvailable),
         message: "Closed-tab Web Push subscription is registered for this browser.",
         subscriptionId: receipt?.subscriptionId || "",
-        subscriptionCount: Number(status?.subscriptionCount || 0) + 1,
+        subscriptionCount: Number(updatedStatus?.subscriptionCount ?? (Number(status?.subscriptionCount || 0) + 1)),
+        pushPermissionState: pushPermissionState || "granted",
       });
       return "subscribed";
     } catch (error) {
+      const errorSummary = browserErrorSummary(error);
       setWebPushState({
         status: "error",
-        configured: false,
-        message: String(error),
+        configured: Boolean(latestStatus?.configured),
+        senderConfigured: Boolean(latestStatus?.senderConfigured),
+        dependencyAvailable: Boolean(latestStatus?.dependencyAvailable),
+        subscriptionCount: Number(latestStatus?.subscriptionCount || 0),
+        pushPermissionState,
+        errorName: errorSummary.name,
+        errorMessage: errorSummary.message,
+        message: `Web Push registration failed: ${errorSummary.label}`,
       });
       return "error";
     }
@@ -5489,6 +6959,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       workspaces,
     ],
   );
+  const liveSystemAuditDigest = {
+    ...(snapshot?.systemAuditDigest || {}),
+    ...(summarySnapshot?.systemAuditDigest || {}),
+  };
   const inboxItems = Array.isArray(snapshot.inbox) ? snapshot.inbox : EMPTY_ARRAY;
   const initialLiveSnapshotPending =
     previewMode === "live" && data.snapshot === null && data.previewMeta === null;
@@ -5674,6 +7148,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     if (workspaces.length === 0) {
       return;
     }
+    if (previewMode === "live") {
+      return;
+    }
     if (previewMode === "live" && missions.length > 0) {
       return;
     }
@@ -5709,17 +7186,26 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
   useEffect(() => {
     const sessionIds = new Set(chatSessions.map(item => item.id));
+    const missionSessionIds = new Set(
+      missionOptions
+        .map(item => missionChatSessionIdFor(item?.mission_id))
+        .filter(Boolean),
+    );
     setChatSessionTranscripts(current => {
       const next = {};
       for (const [sessionId, turns] of Object.entries(current || {})) {
-        if (!sessionIds.has(sessionId)) {
+        const missionScopedSession = String(sessionId || "").startsWith("mission-chat-");
+        if (
+          !sessionIds.has(sessionId) &&
+          !(missionScopedSession && (missionOptions.length === 0 || missionSessionIds.has(sessionId)))
+        ) {
           continue;
         }
         next[sessionId] = asList(turns).slice(-MAX_CHAT_SESSION_TRANSCRIPT_TURNS);
       }
       return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
-  }, [chatSessions]);
+  }, [chatSessions, missionOptions]);
 
   useEffect(() => {
     if (!activeChatSessionId) {
@@ -6256,7 +7742,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
       if (control?.action === "proof") {
         setActiveDrawer("proof");
-        await refreshAll("lane-proof-receipt");
+        void refreshAll("lane-proof-receipt");
         return laneControlResponse;
       }
       if (control?.action === "reroute") {
@@ -6293,7 +7779,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
       if (control?.action === "runtime") {
         setActiveDrawer("runtime");
-        await refreshAll("lane-runtime-receipt");
+        void refreshAll("lane-runtime-receipt");
         return laneControlResponse;
       }
       setActiveDrawer("context");
@@ -6603,6 +8089,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       return;
     }
     setActiveDrawer("context");
+  }, [markAction]);
+
+  const prefillAgentInstruction = useCallback((message, actionLabel = "agent:prefill") => {
+    markAction(actionLabel);
+    setOperatorDraft(message);
+    window.requestAnimationFrame(() => {
+      document.getElementById("thread-note")?.focus();
+    });
   }, [markAction]);
 
   const openMissionDialog = useCallback(() => {
@@ -7108,6 +8602,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      const targetWorkspace = workspaces.find(item => item?.workspace_id === missionForm.workspaceId) || null;
+      const storageBlockReason = missionLaunchStorageBlockReason(liveSystemAuditDigest, targetWorkspace);
+      if (storageBlockReason) {
+        pushToast(storageBlockReason, "error");
+        return;
+      }
+
       try {
         const relativeStopMinutes = Math.max(
           0,
@@ -7125,12 +8626,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           : [];
         const selectedRouteModel = String(missionForm.model || "").trim();
         const missionRouteOverrides = selectedRouteModel
-          ? ROUTE_ROLE_OPTIONS.map(role => ({
-              role,
-              provider: missionForm.modelProvider || "openai",
-              model: selectedRouteModel,
-              effort: normalizeRouteEffort(missionForm.modelEffort, "high"),
-            }))
+          ? buildMissionRouteOverrides(
+              missionForm.modelProvider || "openai-codex",
+              selectedRouteModel,
+              missionForm.modelEffort,
+            )
           : baselineRouteOverrides;
         let workspacePolicySaved = true;
         if (workspace && missionTargetsSelectedWorkspace) {
@@ -7145,7 +8645,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             );
           }
         }
-        await callBackendWithRetry(
+        const launchResult = await callBackendWithRetry(
           "start_control_room_mission_command",
           {
             payload: {
@@ -7162,6 +8662,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               relativeStopMinutes: relativeStopMinutes > 0 ? relativeStopMinutes : undefined,
               runUntil: missionForm.runUntil,
               routeOverrides: missionRouteOverrides,
+              selectedSkill: missionForm.selectedSkill,
+              messageChannel: missionForm.messageChannel,
+              missionProvenance: {
+                originRuntime: missionForm.runtime,
+                originProvider: missionForm.modelProvider,
+                originModel: missionForm.model,
+                producer: "mission_launcher",
+                transportProvider: missionForm.messageChannel,
+                selectedSkill: missionForm.selectedSkill,
+              },
               profile: missionForm.profile,
               escalationDestination: telegramChatId.trim() || null,
               codeExecution: codeExecutionEnabled,
@@ -7177,6 +8687,26 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             : "Mission launched with route overrides while workspace-policy save is pending.",
           "info",
         );
+        const launchedMissionId = String(
+          launchResult?.mission_id ||
+            launchResult?.missionId ||
+            launchResult?.mission?.mission_id ||
+            launchResult?.mission?.missionId ||
+            "",
+        ).trim();
+        setUiMode("agent");
+        setActiveChatSessionId("");
+        if (launchedMissionId) {
+          selectLiveMission(launchedMissionId, {
+            nextSurface: "agent",
+            nextAgentScene: "run",
+            openBuilderDetail: false,
+            actionLabel: "mission-launch",
+          });
+        } else {
+          setSurface("agent");
+          setAgentScene("run");
+        }
         setShowMissionDialog(false);
         setMissionForm(DEFAULT_MISSION_FORM);
         await refreshAll("mission-start");
@@ -7194,32 +8724,50 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushToast,
       refreshAll,
       saveWorkspacePolicy,
+      selectLiveMission,
       telegramChatId,
       workspace,
       workspaceProfileForm,
+      workspaces,
+      liveSystemAuditDigest,
     ],
   );
 
-  const handleMissionQuickstart = useCallback(async () => {
+  const handleMissionQuickstart = useCallback(async (objectiveOverride = "") => {
     markAction("submit:mission-quickstart");
-    const objective = missionForm.objective.trim();
+    const objective = String(
+      typeof objectiveOverride === "string" ? objectiveOverride : missionForm.objective,
+    ).trim();
     if (!objective) {
       pushToast("Enter a mission objective first.", "warn");
       return;
     }
     if (previewMode !== "live" || !hasCommandBackend()) {
       pushToast("Preview mode cannot launch missions.", "warn");
-      setShowMissionDialog(false);
+      if (showMissionDialog) {
+        setShowMissionDialog(false);
+      }
+      return;
+    }
+    const targetWorkspace = missionForm.workspaceId
+      ? workspaces.find(item => item?.workspace_id === missionForm.workspaceId) || null
+      : workspace || workspaces.find(item => !workspaceUsesNasStorage(item)) || null;
+    const storageBlockReason = missionLaunchStorageBlockReason(liveSystemAuditDigest, targetWorkspace);
+    if (storageBlockReason) {
+      pushToast(storageBlockReason, "error");
       return;
     }
     try {
-      await callBackendWithRetry(
+      const quickstartResult = await callBackendWithRetry(
         "quickstart_control_room_mission_command",
         {
           payload: {
             root: null,
             objective,
-            workspaceId: missionForm.workspaceId || null,
+            workspaceId:
+              missionForm.workspaceId ||
+              targetWorkspace?.workspace_id ||
+              null,
             runtime: "auto",
             mode: missionForm.mode || "Autopilot",
             budgetHours: Number(missionForm.budgetHours || 4),
@@ -7232,13 +8780,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         { attempts: 3 },
       );
       pushToast("Quick mission launched.", "info");
+      const launchedMissionId = String(
+        quickstartResult?.mission_id ||
+          quickstartResult?.missionId ||
+          quickstartResult?.mission?.mission_id ||
+          quickstartResult?.mission?.missionId ||
+          "",
+      ).trim();
+      setUiMode("agent");
+      setActiveChatSessionId("");
+      if (launchedMissionId) {
+        selectLiveMission(launchedMissionId, {
+          nextSurface: "agent",
+          nextAgentScene: "run",
+          openBuilderDetail: false,
+          actionLabel: "mission-quickstart",
+        });
+      } else {
+        setSurface("agent");
+        setAgentScene("run");
+      }
       setShowMissionDialog(false);
       setMissionForm(DEFAULT_MISSION_FORM);
       await refreshAll("mission-quickstart");
     } catch (error) {
       pushToast(`Quick mission failed: ${error}`, "error");
     }
-  }, [markAction, missionForm, previewMode, pushToast, refreshAll]);
+  }, [
+    liveSystemAuditDigest,
+    markAction,
+    missionForm,
+    previewMode,
+    pushToast,
+    refreshAll,
+    selectLiveMission,
+    showMissionDialog,
+    workspace,
+    workspaces,
+  ]);
 
   const handleMissionTemplateApply = useCallback(
     template => {
@@ -7892,159 +9471,228 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     ],
   );
 
-  const handleAgentFollowUp = useCallback(async () => {
-    const followUp = operatorDraft.trim();
+  const handleAgentFollowUp = useCallback(async (options = {}) => {
+    const runOptions = options && typeof options === "object" && !("nativeEvent" in options) ? options : {};
+    const followUp = String(runOptions.message ?? operatorDraft).trim();
     if (!followUp) {
       pushToast("Write a follow-up first.", "warn");
       return;
     }
     if (previewMode !== "live" || !hasCommandBackend()) {
-      pushToast("Preview mode cannot send runtime follow-ups.", "warn");
+      pushToast("Preview mode cannot send runtime chat.", "warn");
       return;
     }
     if (!mission?.mission_id) {
-      pushToast("Select a mission before sending a follow-up.", "warn");
+      pushToast("Select a mission before sending a mission chat turn.", "warn");
       return;
     }
 
-    markAction("composer:send-follow-up");
-    let commentEntry = null;
+    markAction("composer:send-mission-chat");
+    const missionSessionId = missionChatSessionIdFor(mission.mission_id);
+    const missionChatRouteRole = "executor";
+    const selectedRoute =
+      workspaceProfileForm.routeOverrides.find(item => item.role === missionChatRouteRole) || {};
+    const missionActiveRoute =
+      mission?.providerCapabilities?.activeRoute ||
+      mission?.provider_capabilities?.activeRoute ||
+      {};
+    const missionRoute =
+      asList(mission?.effectiveRouteContract?.roles).find(item => item.role === missionChatRouteRole) ||
+      (missionActiveRoute?.role === missionChatRouteRole ? missionActiveRoute : {}) ||
+      {};
+    const routeCandidate =
+      String(missionRoute.model || "").trim()
+        ? missionRoute
+        : String(selectedRoute.model || "").trim()
+          ? selectedRoute
+          : {
+              role: missionChatRouteRole,
+              provider: missionRoute.provider || selectedRoute.provider || "openai",
+              model: missionRoute.model || selectedRoute.model || "",
+              effort: missionRoute.effort || selectedRoute.effort || "medium",
+            };
+    const route = preferredCodexHighRoute({
+      role: missionChatRouteRole,
+      provider: routeCandidate.provider || "openai",
+      model: routeCandidate.model || "",
+      effort: normalizeRouteEffort(routeCandidate.effort || routeCandidate.reasoningEffort, "medium"),
+    }, missionChatRouteRole);
+    const runtime =
+      agentRuntimeFocus === "all"
+        ? mission.runtime_id || mission.runtime || workspace?.default_runtime || missionForm.runtime || "hermes"
+        : agentRuntimeFocus;
+    const commentPayload =
+      runOptions.sourceType === "comment"
+        ? executableCommentPayload(activeCommentTarget, followUp, route, runtime)
+        : {};
+    const workspaceId = workspace?.workspace_id || selectedWorkspaceId || workspaces[0]?.workspace_id || "";
+    const workspacePath = workspace?.root_path || workspaces[0]?.root_path || "";
+    const sessionTranscript = asList(chatSessionTranscripts?.[missionSessionId]);
+    const chatHistory = sessionTranscript
+      .filter(item => !item.pending)
+      .slice(-10)
+      .map(item => ({
+        role: String(item.role || "").toLowerCase() === "assistant" ? "assistant" : "user",
+        text: item.title || item.detail || "",
+      }))
+      .filter(item => item.text);
+
+    const activeRuleSet =
+      findStudioItem(referenceStudio, "rule", referenceStudio.activeRuleSetId) ||
+      findStudioItem(referenceStudio, "rule", referenceStudio.selectedRuleId);
+    const activeSkills = asList(referenceStudio.activeSkillIds)
+      .map(skillId => findStudioItem(referenceStudio, "skill", skillId))
+      .filter(Boolean)
+      .slice(0, 2);
+    const memorySnippets = [];
+    if (memoryPolicy.includeInFollowUps) {
+      if (memoryPolicy.projectScoped && workspace?.workspace_id) {
+        const workspaceMemo = String(memoryStore?.workspace?.[workspace.workspace_id] || "").trim();
+        if (workspaceMemo) {
+          memorySnippets.push(`Workspace memory: ${workspaceMemo}`);
+        }
+      }
+      if (memoryPolicy.missionScoped && mission?.mission_id) {
+        const missionMemo = String(memoryStore?.mission?.[mission.mission_id] || "").trim();
+        if (missionMemo) {
+          memorySnippets.push(`Mission memory: ${missionMemo}`);
+        }
+      }
+    }
+    const attachmentLines = operatorAttachments.map(
+      item => `${item.name || "attachment"} (${item.mime || "file"}, ${Math.max(1, Math.round(Number(item.size || 0) / 1024))}KB)`,
+    );
+    const systemContextLines = [
+      "You are Hermes, the runtime answering a Fluxio-selected mission follow-up. Answer the operator directly; use the provided mission context and ask for missing details instead of pretending.",
+      mission?.mission_id ? `Mission id: ${mission.mission_id}.` : "",
+      mission?.title || mission?.objective ? `Mission: ${mission.title || mission.objective}.` : "",
+      workspace?.name ? `Workspace: ${workspace.name}.` : "",
+      workspacePath ? `Workspace path: ${workspacePath}.` : "",
+      activeCommentTarget?.title
+        ? `The operator targeted this UI item: ${activeCommentTarget.kind || "message"} "${activeCommentTarget.title}".`
+        : "",
+      commentPayload.sourceType === "comment"
+        ? `Executable comment source: ${commentPayload.sourceZone || "selected row"} ${commentPayload.sourceMessageId || ""}.`
+        : "",
+      agentRuntimeFocus !== "all" ? `Runtime focus: ${runtimeLabel(agentRuntimeFocus)}.` : "",
+      `Route for ${titleizeToken(missionChatRouteRole)}: ${titleizeToken(route.provider)} / ${routeModelReceiptLabel(route)} / ${routeEffortLabel(route.effort, "medium")}.`,
+      codeExecutionEnabled && ["openai", "openai-codex"].includes(String(route.provider || "").toLowerCase())
+        ? `If useful, ground code work with tool execution using about ${codeExecutionMemory} memory.`
+        : "",
+      activeRuleSet?.name ? `Active rule set: ${activeRuleSet.name}.` : "",
+      activeRuleSet?.description ? `Rule intent: ${activeRuleSet.description}` : "",
+      asList(activeRuleSet?.requiresApproval).length
+        ? `Approval-sensitive actions: ${asList(activeRuleSet.requiresApproval).slice(0, 4).join(", ")}.`
+        : "",
+      activeSkills.length ? `Active skills: ${activeSkills.map(item => item.name).join(", ")}.` : "",
+      memorySnippets.join("\n"),
+      attachmentLines.length ? `Attachment metadata: ${attachmentLines.join("; ")}.` : "",
+      "Do not restate this routing/context block unless the operator asks. Do not invent tool results.",
+    ].filter(Boolean);
+
+    appendChatSessionTurn(missionSessionId, {
+      role: "user",
+      title: followUp,
+      detail: "",
+      meta: timestampLabel(new Date().toISOString()) || "Now",
+      tone: "neutral",
+      conversationTurn: true,
+      messageKind: "dialogue",
+      source: "operator-submitted",
+    });
+    const pendingChatTurn = appendChatSessionTurn(missionSessionId, {
+      role: "assistant",
+      title: "Thinking...",
+      detail: `Routing to ${titleizeToken(runtime)} with ${route.model || titleizeToken(route.provider)} for a real mission reply.`,
+      meta: "Hermes",
+      tone: "neutral",
+      pending: true,
+      conversationTurn: true,
+      messageKind: "dialogue",
+      source: "runtime-pending",
+      technicalDetail: `chat:${runtime}:${route.provider}/${routeModelReceiptLabel(route)}:${route.effort || "medium"}`,
+    });
+    setOperatorDraft("");
+    setActiveCommentTarget(null);
+    clearOperatorAttachments();
+    setAgentScene("run");
+    setShowThinkingTrace(true);
+    setChatRequestsInFlight(current => current + 1);
+    const requestStartedAt = Date.now();
     try {
-      const steeringLines = [];
-      if (mission && agentRuntimeFocus !== "all") {
-        steeringLines.push(`Runtime preference: ${runtimeLabel(agentRuntimeFocus)}.`);
-      }
-      const selectedRoute =
-        workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {};
-      const effectiveRoute =
-        asList(mission?.effectiveRouteContract?.roles).find(item => item.role === agentRouteRole) ||
-        {};
-      const routeChanged =
-        (selectedRoute.provider || "openai") !== (effectiveRoute.provider || "openai") ||
-        (selectedRoute.model || "").trim() !== (effectiveRoute.model || "").trim() ||
-        (selectedRoute.effort || "default") !== (effectiveRoute.effort || "default");
-      if (routeChanged && selectedRoute.model?.trim()) {
-        steeringLines.push(
-          `Route preference for ${titleizeToken(agentRouteRole)}: ${titleizeToken(selectedRoute.provider)} / ${selectedRoute.model.trim()}${
-            selectedRoute.effort && selectedRoute.effort !== "default"
-              ? ` / ${selectedRoute.effort}`
-              : ""
-          }.`,
-        );
-      }
-      const activeProvider = String(
-        selectedRoute.provider || effectiveRoute.provider || "openai",
-      ).trim().toLowerCase();
-      if (codeExecutionEnabled && ["openai", "openai-codex"].includes(activeProvider)) {
-        steeringLines.push(
-          `If the OpenAI route is active, use the python tool / code execution when it will ground the work. Prefer a ${codeExecutionMemory} container budget.`,
-        );
-      }
-      const activeRuleSet =
-        findStudioItem(referenceStudio, "rule", referenceStudio.activeRuleSetId) ||
-        findStudioItem(referenceStudio, "rule", referenceStudio.selectedRuleId);
-      if (activeRuleSet) {
-        steeringLines.push(`Active rule set: ${activeRuleSet.name}.`);
-        const activeRuleRoute = activeRuleSet.routePlan?.[agentRouteRole];
-        if (activeRuleRoute?.model) {
-          steeringLines.push(
-            `Rule-set route for ${titleizeToken(agentRouteRole)}: ${titleizeToken(activeRuleRoute.provider || "openai")} / ${activeRuleRoute.model}${activeRuleRoute.effort ? ` / ${routeEffortLabel(activeRuleRoute.effort, "medium")}` : ""}.`,
-          );
-        }
-        if (asList(activeRuleSet.requiresApproval).length > 0) {
-          steeringLines.push(
-            `Approval-sensitive actions: ${asList(activeRuleSet.requiresApproval).slice(0, 3).join(", ")}.`,
-          );
-        }
-      }
-      const activeSkills = asList(referenceStudio.activeSkillIds)
-        .map(skillId => findStudioItem(referenceStudio, "skill", skillId))
-        .filter(Boolean)
-        .slice(0, 2);
-      if (activeSkills.length > 0) {
-        steeringLines.push(`Active skills: ${activeSkills.map(item => item.name).join(", ")}.`);
-        const skillGuardrails = activeSkills
-          .flatMap(item => asList(item.guardrails).slice(0, 2))
-          .slice(0, 4);
-        if (skillGuardrails.length > 0) {
-          steeringLines.push(`Guardrails: ${skillGuardrails.join(" ")}`);
-        }
-      }
-      const memorySnippets = [];
-      if (memoryPolicy.includeInFollowUps) {
-        if (memoryPolicy.projectScoped && workspace?.workspace_id) {
-          const workspaceMemo = String(memoryStore?.workspace?.[workspace.workspace_id] || "").trim();
-          if (workspaceMemo) {
-            memorySnippets.push(`Workspace memory: ${workspaceMemo}`);
-          }
-        }
-        if (memoryPolicy.missionScoped && mission?.mission_id) {
-          const missionMemo = String(memoryStore?.mission?.[mission.mission_id] || "").trim();
-          if (missionMemo) {
-            memorySnippets.push(`Mission memory: ${missionMemo}`);
-          }
-        }
-      }
-      const attachmentLines = operatorAttachments.map(
-        item => `[attachment:${item.name}|${item.mime}|${Math.max(1, Math.round(item.size / 1024))}KB]`,
+      const result = await callBackendWithRetry(
+        "send_agent_chat_command",
+        {
+          payload: {
+            message: followUp,
+            runtime,
+            route,
+            workspaceId,
+            workspacePath,
+            missionId: mission.mission_id,
+            history: chatHistory,
+            sessionId: missionSessionId,
+            systemContext: systemContextLines.join("\n"),
+            requestStartedAt: new Date(requestStartedAt).toISOString(),
+            ...commentPayload,
+          },
+        },
+        { attempts: 2 },
       );
-      const composedFollowUpParts = [];
-      if (steeringLines.length > 0) {
-        composedFollowUpParts.push(steeringLines.join(" "));
-      }
-      if (memorySnippets.length > 0) {
-        composedFollowUpParts.push(memorySnippets.join("\n"));
-      }
-      composedFollowUpParts.push(followUp);
-      if (attachmentLines.length > 0) {
-        composedFollowUpParts.push(`Attachments:\n${attachmentLines.join("\n")}`);
-      }
-      if (activeCommentTarget?.title) {
-        composedFollowUpParts.unshift(
-          `Live UI comment target: ${activeCommentTarget.kind || "message"} "${activeCommentTarget.title}".`,
-        );
-      }
-      const composedFollowUp = composedFollowUpParts.filter(Boolean).join("\n\n");
-      commentEntry = appendOperatorEntry({
-        title: followUp,
-        detail: activeCommentTarget?.title
-          ? `Target: ${activeCommentTarget.title}`
-          : "Live mission comment",
-        meta: "Sending to mission",
-        tone: "neutral",
-        channel: "comment",
-        role: "operator",
-        pending: true,
-        missionId: mission.mission_id,
-        target: activeCommentTarget || null,
-      });
-      const hasActiveDelegatedRuntime = asList(mission?.delegated_runtime_sessions).some(session =>
-        ["waiting_for_approval", "running", "launching"].includes(
-          String(session?.status || "").trim().toLowerCase(),
-        ),
+      const roundtripMs = Math.max(
+        0,
+        Number(result?.elapsedMs) || Date.now() - requestStartedAt,
       );
-      let sentLive = false;
-      if (
-        mission.runtime_id === "openclaw" &&
-        data.openClawStatus?.connected &&
-        !hasActiveDelegatedRuntime
-      ) {
-        try {
-          await callBackend(
-            "send_openclaw_message",
-            { payload: { message: composedFollowUp } },
-            { throwOnError: true },
-          );
-          sentLive = true;
-        } catch (error) {
-          pushToast(`OpenClaw live send failed, keeping the follow-up in mission thread: ${error}`, "warn");
-        }
-      }
-      await callBackendWithRetry(
-        "send_control_room_mission_follow_up_command",
-        { payload: { missionId: mission.mission_id, message: composedFollowUp, root: null } },
-        { attempts: 3 },
+      const reply = cleanRuntimeReplyText(result?.reply || result?.finalMessage || result?.message);
+      const compartment = result?.compartment && typeof result.compartment === "object" ? result.compartment : {};
+      const compartmentChips = [
+        compartment.runtime ? `runtime ${titleizeToken(compartment.runtime)}` : `runtime ${titleizeToken(result?.runtime || runtime)}`,
+        compartment.route?.model || result?.route?.model_id || result?.route?.model || route.model || "",
+        roundtripMs > 0 ? `${roundtripMs}ms` : "",
+      ].filter(Boolean);
+      const compartmentTrace = JSON.stringify(
+        {
+          sessionId: compartment.sessionId || missionSessionId,
+          runtime: compartment.runtime || result?.runtime || runtime,
+          cwd: compartment.cwd || workspacePath,
+          route: compartment.route || result?.route || route,
+          state: compartment.state,
+          streaming: compartment.streaming,
+          restartControls: compartment.restartControls,
+          toolTimeline: compartment.toolTimeline,
+          filesChanged: compartment.filesChanged,
+          lastRoundtripMs: compartment.lastRoundtripMs ?? roundtripMs,
+        },
+        null,
+        2,
       );
+      if (pendingChatTurn?.id) {
+        updateChatSessionTurn(missionSessionId, pendingChatTurn.id, current => ({
+          ...current,
+          title: reply || "The runtime finished without a readable reply.",
+          detail: reply ? "" : "The model call completed, but no assistant text was returned.",
+          meta: timestampLabel(new Date().toISOString()) || "Now",
+          tone: reply ? "neutral" : "warn",
+          pending: false,
+          conversationTurn: true,
+          messageKind: "dialogue",
+          source: reply ? "backend-runtime-reply" : "backend-runtime-empty",
+          chips: compartmentChips,
+          technicalDetail: compartmentTrace,
+          turnReceipt: normalizeTurnReceipt(compartment.turnReceipt || result?.turnReceipt, {
+            runtime: compartment.runtime || result?.runtime || runtime,
+            route: compartment.route || result?.route || route,
+            changedFiles: compartment.filesChanged || result?.filesChanged,
+            toolTimeline: compartment.toolTimeline || result?.toolTimeline,
+            durationMs: compartment.lastRoundtripMs ?? roundtripMs,
+            finalMessage: reply,
+            sourceType: commentPayload.sourceType,
+            sourceMessageId: commentPayload.sourceMessageId,
+            sourceZone: commentPayload.sourceZone,
+            commentText: commentPayload.commentText,
+          }),
+        }));
+      }
       setMemoryStore(current => ({
         ...current,
         mission: {
@@ -8058,39 +9706,36 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             }
           : current.workspace,
       }));
-      setOperatorDraft("");
-      setActiveCommentTarget(null);
-      clearOperatorAttachments();
-      updateOperatorEntry(commentEntry.id, current => ({
-        ...current,
-        meta: sentLive ? "Sent live and recorded" : "Recorded in mission thread",
-        tone: "good",
-        pending: false,
-      }));
-      pushToast(sentLive ? "Follow-up sent live and recorded in the mission thread." : "Follow-up recorded in the mission thread.", "info");
-      void refreshAll("mission-follow-up");
+      pushToast("Mission chat reply returned from the runtime.", "info");
     } catch (error) {
-      if (commentEntry?.id) {
-        updateOperatorEntry(commentEntry.id, current => ({
+      if (pendingChatTurn?.id) {
+        updateChatSessionTurn(missionSessionId, pendingChatTurn.id, current => ({
           ...current,
-          meta: "Send failed",
+          title: "The runtime could not answer this mission turn.",
+          detail: String(error),
+          meta: "Runtime error",
           tone: "bad",
           pending: false,
-          detail: `${current.detail || ""}\n\n${String(error)}`.trim(),
         }));
       }
-      pushToast(`Mission follow-up failed: ${error}`, "error");
+      pushToast(`Mission chat failed: ${error}`, "error");
+    } finally {
+      setChatRequestsInFlight(current => Math.max(0, current - 1));
+      setShowThinkingTrace(false);
+      void refreshAll("mission-chat-turn-complete");
     }
   }, [
     activeCommentTarget,
-    appendOperatorEntry,
+    appendChatSessionTurn,
     codeExecutionEnabled,
     codeExecutionMemory,
     agentRouteRole,
     agentRuntimeFocus,
-    data.openClawStatus?.connected,
+    chatSessionTranscripts,
+    clearOperatorAttachments,
     markAction,
     mission,
+    missionForm.runtime,
     memoryPolicy.includeInFollowUps,
     memoryPolicy.missionScoped,
     memoryPolicy.projectScoped,
@@ -8102,11 +9747,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     pushToast,
     refreshAll,
     referenceStudio,
+    selectedWorkspaceId,
+    setChatRequestsInFlight,
+    updateChatSessionTurn,
+    workspace?.default_runtime,
+    workspace?.name,
+    workspace?.root_path,
     workspace?.workspace_id,
     workspaceProfileForm.routeOverrides,
+    workspaces,
     mission?.effectiveRouteContract?.roles,
-    clearOperatorAttachments,
-    updateOperatorEntry,
   ]);
 
   const handleOpenClawConnect = useCallback(async () => {
@@ -8250,6 +9900,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const runtimeCompartmentState =
     snapshot?.runtimeCompartments && typeof snapshot.runtimeCompartments === "object"
       ? snapshot.runtimeCompartments
+      : summarySnapshot?.runtimeCompartments && typeof summarySnapshot.runtimeCompartments === "object"
+        ? summarySnapshot.runtimeCompartments
       : EMPTY_OBJECT;
   const runtimeCompartments = useMemo(
     () => asList(runtimeCompartmentState.items),
@@ -8306,6 +9958,49 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     () => asList(nasDeployReadiness.checks),
     [nasDeployReadiness.checks],
   );
+  const integrationReadiness =
+    snapshot?.integrationReadiness && typeof snapshot.integrationReadiness === "object"
+      ? snapshot.integrationReadiness
+      : summarySnapshot?.integrationReadiness && typeof summarySnapshot.integrationReadiness === "object"
+        ? summarySnapshot.integrationReadiness
+        : EMPTY_OBJECT;
+  const integrationReadinessCategories = useMemo(
+    () => asList(integrationReadiness.categories),
+    [integrationReadiness.categories],
+  );
+  const integrationReadinessPercent = Number(integrationReadiness.percent || 0);
+  const integrationRoadmapTracks = useMemo(
+    () =>
+      integrationReadinessCategories.map(item => {
+        const state = String(item?.state || "not_reported").toLowerCase();
+        return {
+          id: item?.id || item?.label || "integration",
+          label: item?.label || "Integration evidence",
+          state,
+          tone:
+            state === "ready"
+              ? "good"
+              : state === "blocked"
+                ? "bad"
+                : state === "needs_login"
+                  ? "warn"
+                  : "neutral",
+          detail:
+            item?.detail ||
+            item?.statusLabel ||
+            "Live NAS evidence has not reported this integration yet.",
+          hint:
+            item?.receiptPath ||
+            item?.screenshotPath ||
+            item?.command ||
+            item?.source ||
+            "No receipt path reported.",
+          suggestedAction: state === "ready" ? "Inspect proof" : "Open setup",
+          integrationEvidence: true,
+        };
+      }),
+    [integrationReadinessCategories],
+  );
   const generatedImageArtifactState =
     snapshot?.generatedImageArtifacts && typeof snapshot.generatedImageArtifacts === "object"
       ? snapshot.generatedImageArtifacts
@@ -8315,8 +10010,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [generatedImageArtifactState.items],
   );
   const bridgeSessions = useMemo(
-    () => (Array.isArray(snapshot?.bridgeLab?.connectedSessions) ? snapshot.bridgeLab.connectedSessions : []),
-    [snapshot?.bridgeLab?.connectedSessions],
+    () => {
+      const liveSessions = summarySnapshot?.bridgeLab?.connectedSessions;
+      if (Array.isArray(liveSessions)) {
+        return liveSessions;
+      }
+      return Array.isArray(snapshot?.bridgeLab?.connectedSessions) ? snapshot.bridgeLab.connectedSessions : [];
+    },
+    [snapshot?.bridgeLab?.connectedSessions, summarySnapshot?.bridgeLab?.connectedSessions],
   );
   const effectiveRouteRows = useMemo(
     () => (Array.isArray(mission?.effectiveRouteContract?.roles) ? mission.effectiveRouteContract.roles : []),
@@ -8359,10 +10060,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   mission?.state?.provider_runtime_truth ||
                   {};
                 const active = truth?.activeRoute || {};
-                if (!active?.provider && !active?.model) {
-                  return "Not resolved";
-                }
-                return `${titleizeToken(active.provider)} · ${active.model || "default"}`;
+                return routeProviderModelLabel(active, "Not resolved");
               })(),
             },
             {
@@ -8585,6 +10283,24 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [builderBoard.activeConversations],
   );
   const builderTopQueueItem = builderSchedulingQueue[0] || null;
+  const builderLiveControlState = useMemo(
+    () => asRecord(summarySnapshot.liveControlState),
+    [summarySnapshot.liveControlState],
+  );
+  const builderZeroActiveQueueHealthy = Boolean(
+    builderLiveControlState.zeroActiveQueueHealthy ||
+      (builderSchedulingQueue.length > 0 && builderBoard.activeConversations.length === 0),
+  );
+  const builderLiveStateLabel = builderZeroActiveQueueHealthy
+    ? "Healthy zero-active state"
+    : builderBoard.activeConversations.length > 0
+      ? "Active mission state"
+      : "Ready for launch";
+  const builderLiveStateDetail = builderZeroActiveQueueHealthy
+    ? (builderLiveControlState.detail ||
+        "No mission is running; the live NAS scheduler queue remains visible and actionable.")
+    : (builderLiveControlState.detail || builderPrimaryConversation?.next ||
+        "Builder is reading the current NAS summary without demo rows.");
   const builderQueueFirstStats = useMemo(
     () => ({
       activeProjects: builderProjectHealthItems.filter(item => Number(item.activeCount || 0) > 0).length,
@@ -8610,6 +10326,59 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
   const continuationSupervisor = liveReviewStudio.continuationSupervisor || null;
   const missionWatchdog = liveReviewStudio.missionWatchdog || null;
+  const builderQueuePressureRows = useMemo(() => {
+    if (!missionWatchdog) {
+      return [];
+    }
+    const seen = new Set();
+    const rows = [];
+    const pushQueuePressure = (sourceItem, sourceIndex) => {
+      const item = asRecord(sourceItem);
+      if ((item.kind || "").toString() !== "workspace_queue_pressure") {
+        return;
+      }
+      const evidence = asList(item.evidence).map(value => String(value || ""));
+      const evidenceValue = key => {
+        const prefix = `${key}=`;
+        const match = evidence.find(value => value.startsWith(prefix));
+        return match ? match.slice(prefix.length) : "";
+      };
+      const scopeEvidence = asRecord(item.scopeEvidence);
+      const missionId = item.missionId || item.mission_id || "";
+      const blockingMissionId = item.blockingMissionId || evidenceValue("blockingMissionId");
+      const rowKey =
+        item.problemId ||
+        item.issueId ||
+        `${missionId || "mission"}-${blockingMissionId || "slot"}-${sourceIndex}`;
+      if (seen.has(rowKey)) {
+        return;
+      }
+      seen.add(rowKey);
+      const scopeSafety = item.scopeSafety || evidenceValue("scopeSafety") || "unknown";
+      rows.push({
+        key: rowKey,
+        missionId,
+        blockingMissionId,
+        workspaceId: item.workspaceId || evidenceValue("workspaceId") || "",
+        missionTitle: item.missionTitle || item.title || "Queued mission",
+        title: item.title || "Queued mission is waiting behind a long-running workspace slot",
+        detail: item.detail || "The watchdog is holding this mission because another mission owns the active workspace slot.",
+        firstRepairStep:
+          item.firstRepairStep ||
+          item.firstStep ||
+          "Keep it queued or split the objective into a non-overlapping lane.",
+        severity: item.severity || "info",
+        scopeSafety,
+        activeFileCount: Number(scopeEvidence.activeFileCount || evidenceValue("activeScopeFiles") || 0),
+        queuedFileCount: Number(scopeEvidence.queuedFileCount || evidenceValue("queuedScopeFiles") || 0),
+        overlapFiles: asList(scopeEvidence.overlapFiles).slice(0, 3),
+        canParallelize: scopeSafety === "safe",
+      });
+    };
+    asList(missionWatchdog.issues).forEach(pushQueuePressure);
+    asList(missionWatchdog.problemRegistry?.problems).forEach(pushQueuePressure);
+    return rows;
+  }, [missionWatchdog]);
   const connectedDeviceBridge = asRecord(snapshot.connectedDeviceBridge);
   const bridgeSyncRows = asList(connectedDeviceBridge.sync);
   const bridgePendingApprovals = asList(connectedDeviceBridge.pendingApprovals);
@@ -9022,12 +10791,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       connected,
       callbackReady,
       mobileReady,
-      totalApps: asList(snapshot?.bridgeLab?.discoveredApps).length,
+      totalApps: asList(summarySnapshot?.bridgeLab?.discoveredApps || snapshot?.bridgeLab?.discoveredApps).length,
       recommendation:
+        summarySnapshot?.bridgeLab?.recommendation ||
         snapshot?.bridgeLab?.recommendation ||
         "Bridge hand-offs between runtimes and connected apps will appear here.",
     };
-  }, [bridgeSessions, snapshot?.bridgeLab?.discoveredApps, snapshot?.bridgeLab?.recommendation]);
+  }, [bridgeSessions, snapshot?.bridgeLab?.discoveredApps, snapshot?.bridgeLab?.recommendation, summarySnapshot?.bridgeLab?.discoveredApps, summarySnapshot?.bridgeLab?.recommendation]);
   const selectedAgentRoute = useMemo(
     () => {
       const explicit = workspaceProfileForm.routeOverrides.find(item => item.role === agentRouteRole) || {};
@@ -9458,24 +11228,42 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const missionDetailApplies = mission?.mission_id && detailMissionId === mission.mission_id;
     if (missionDetailApplies) {
       for (const message of asList(missionDetailSnapshot.agentMessages)) {
+        const label = message.label || "Mission detail";
+        const messageKind = message.messageKind || message.kind || "";
+        const generatedContextTurn = isGeneratedContextFollowUpTurnText(
+          `${message.title || ""} ${message.detail || ""} ${message.message || ""} ${message.content || ""}`,
+        );
+        const followUpTurn = !generatedContextTurn && isOperatorFollowUpTurn({
+          ...message,
+          label,
+          messageKind,
+        });
+        const hermesReplyTurn = !generatedContextTurn && isHermesDialogueReplyTurn({
+          ...message,
+          label,
+          messageKind,
+          runtimeId: message.runtimeId || message.runtime_id || mission?.runtime_id || "",
+        });
         pushTurn({
           id: `detail-message-${message.id || message.createdAt || message.title}`,
           dedupeKey: `detail-message:${message.id || ""}:${message.createdAt || ""}:${message.title || ""}`,
-          role: message.role || "runtime",
+          role: followUpTurn ? "operator" : message.role || "runtime",
           runtimeId: message.runtimeId || message.runtime_id || mission?.runtime_id || "",
           roleLabel: message.roleLabel || message.runtimeLabel || runtimeLabel(message.runtimeId || mission?.runtime_id),
           roleIcon: (message.runtimeId || mission?.runtime_id) === "hermes" ? "⬢" : "◇",
-          label: message.label || "Mission detail",
+          label,
+          messageKind: followUpTurn || hermesReplyTurn ? "dialogue" : messageKind,
+          conversationTurn: followUpTurn || hermesReplyTurn || (!generatedContextTurn && Boolean(message.conversationTurn)),
           title: message.title || message.message || "Mission detail update",
           detail: message.detail || message.message || "",
           meta: timestampLabel(message.createdAt || message.timestamp),
           timestampRaw: message.createdAt || message.timestamp,
           tone: message.tone || "neutral",
           technicalDetail: message.technicalDetail || "",
-          processMessage: Boolean(message.processMessage),
-          emphasis: Boolean(message.emphasis || message.processMessage),
-          traceOnly: Boolean(message.traceOnly),
-          chatPreferred: message.chatPreferred !== false,
+          processMessage: followUpTurn || hermesReplyTurn ? false : Boolean(message.processMessage),
+          emphasis: followUpTurn || hermesReplyTurn ? false : Boolean(message.emphasis || message.processMessage),
+          traceOnly: followUpTurn || hermesReplyTurn ? false : Boolean(message.traceOnly),
+          chatPreferred: followUpTurn || hermesReplyTurn ? true : message.chatPreferred !== false,
           chips: asList(message.chips).slice(0, 4),
         });
       }
@@ -9792,17 +11580,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     }
     const cachedTurns = transcriptCacheRef.current[splitMission.mission_id] || [];
     const directTurns = preserveRuntimeOutputTurns(cachedTurns.filter(isAgentConversationTurn), 12, 4);
-    const reviewTurns = cachedTurns.filter(isAgentReviewTurn).slice(-6).map(agentReviewTurn);
-    return preserveRuntimeOutputTurns(uniqBy([...directTurns, ...reviewTurns], item => item.id), 16, 4);
+    return preserveRuntimeOutputTurns(uniqBy(directTurns, item => item.id), 16, 4);
   }, [agentTranscript, splitMission?.mission_id]);
   const agentConversationTurns = useMemo(
     () => {
       const directConversation = preserveRuntimeOutputTurns(agentTranscript.filter(isAgentConversationTurn), 18, 6);
-      const reviewTurns = agentTranscript
-        .filter(isAgentReviewTurn)
-        .slice(-8)
-        .map(agentReviewTurn);
-      return preserveRuntimeOutputTurns(uniqBy([...directConversation, ...reviewTurns], item => item.id), 24, 6);
+      return preserveRuntimeOutputTurns(uniqBy(directConversation, item => item.id), 24, 6);
     },
     [agentTranscript],
   );
@@ -9859,11 +11642,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setShowWorkspaceDialog(true);
       return;
     }
-    openMissionDialog();
-  }, [openMissionDialog, workspaces.length]);
-  const agentRuntimeSelectValue = mission ? agentRuntimeFocus : missionForm.runtime;
-  const handleAgentIdleChat = useCallback(async () => {
     const text = operatorDraft.trim();
+    if (!mission?.mission_id && text) {
+      void handleMissionQuickstart(text);
+      return;
+    }
+    openMissionDialog();
+  }, [handleMissionQuickstart, mission?.mission_id, openMissionDialog, operatorDraft, workspaces.length]);
+  const agentRuntimeSelectValue = mission ? agentRuntimeFocus : missionForm.runtime;
+  const handleAgentIdleChat = useCallback(async (options = {}) => {
+    const runOptions = options && typeof options === "object" && !("nativeEvent" in options) ? options : {};
+    const text = String(runOptions.message ?? operatorDraft).trim();
     if (!text) {
       pushToast("Write a message first.", "warn");
       return;
@@ -9902,6 +11691,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     });
     const activeSessionId = activeSession?.id || "";
     const runtime = agentRuntimeSelectValue === "all" ? workspace?.default_runtime || missionForm.runtime || "hermes" : agentRuntimeSelectValue;
+    const commentPayload =
+      runOptions.sourceType === "comment"
+        ? executableCommentPayload(activeCommentTarget, text, route, runtime)
+        : {};
     const workspaceId = workspace?.workspace_id || selectedWorkspaceId || workspaces[0]?.workspace_id || "";
     const workspacePath = workspace?.root_path || workspaces[0]?.root_path || "";
     const sessionTranscript = asList(chatSessionTranscripts?.[activeSessionId]);
@@ -9929,6 +11722,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         ? `Approval-sensitive actions: ${asList(activeRuleSet.requiresApproval).slice(0, 4).join(", ")}.`
         : "",
       activeSkills.length ? `Active skills: ${activeSkills.map(item => item.name).join(", ")}.` : "",
+      commentPayload.sourceType === "comment"
+        ? `Executable comment source: ${commentPayload.sourceZone || "selected row"} ${commentPayload.sourceMessageId || ""}.`
+        : "",
       "Use normal chat behavior: answer directly, do not expose routing metadata unless the user asks.",
     ].filter(Boolean);
     appendOperatorEntry({
@@ -9945,6 +11741,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       detail: "",
       meta: timestampLabel(new Date().toISOString()) || "Now",
       tone: "neutral",
+      conversationTurn: true,
+      messageKind: "dialogue",
+      source: "operator-submitted",
     });
     touchChatSession(activeSessionId, text);
     const pendingChatTurn = appendChatSessionTurn(activeSessionId, {
@@ -9954,7 +11753,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       meta: "Syntelos",
       tone: "neutral",
       pending: true,
-      technicalDetail: `chat:${runtime}:${route.provider}/${route.model || "default"}:${route.effort || "medium"}`,
+      conversationTurn: true,
+      messageKind: "dialogue",
+      source: "runtime-pending",
+      technicalDetail: `chat:${runtime}:${route.provider}/${routeModelReceiptLabel(route)}:${route.effort || "medium"}`,
     });
     const pendingReply = appendOperatorEntry({
       title: "Thinking...",
@@ -9965,11 +11767,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       role: "assistant",
       pending: true,
       sessionId: activeSessionId || undefined,
-      technicalDetail: `chat:${runtime}:${route.provider}/${route.model || "default"}:${route.effort || "medium"}`,
+      conversationTurn: true,
+      messageKind: "dialogue",
+      technicalDetail: `chat:${runtime}:${route.provider}/${routeModelReceiptLabel(route)}:${route.effort || "medium"}`,
     });
     setOperatorDraft("");
+    setActiveCommentTarget(null);
     clearOperatorAttachments();
     setAgentScene("run");
+    setShowThinkingTrace(true);
     const requestStartedAt = Date.now();
     if (previewMode !== "live" || !hasCommandBackend()) {
       if (pendingChatTurn?.id) {
@@ -10006,6 +11812,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             history: chatHistory,
             sessionId: activeSessionId || `syntelos-chat-${workspaceId || "workspace"}`,
             systemContext: systemContextLines.join("\n"),
+            requestStartedAt: new Date(requestStartedAt).toISOString(),
+            ...commentPayload,
           },
         },
         { attempts: 2 },
@@ -10014,7 +11822,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         0,
         Number(result?.elapsedMs) || Date.now() - requestStartedAt,
       );
-      const reply = String(result?.reply || "").trim();
+      const reply = cleanRuntimeReplyText(result?.reply || result?.finalMessage || result?.message);
       const compartment = result?.compartment && typeof result.compartment === "object" ? result.compartment : {};
       const compartmentChips = [
         compartment.sessionId ? `session ${compartment.sessionId}` : "",
@@ -10048,26 +11856,55 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           ...current,
           title: reply || "The runtime finished without a readable reply.",
           detail: result?.route
-            ? `${titleizeToken(result.runtime || runtime)} · ${result.route.model_id || result.route.model || "default"} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
+            ? `${titleizeToken(result.runtime || runtime)} · ${routeModelReceiptLabel(result.route)} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
             : "",
           meta: timestampLabel(new Date().toISOString()) || "Now",
           tone: reply ? "neutral" : "warn",
           pending: false,
+          conversationTurn: true,
+          messageKind: "dialogue",
+          source: reply ? "backend-runtime-reply" : "backend-runtime-empty",
           chips: compartmentChips,
           technicalDetail: compartmentTrace,
+          turnReceipt: normalizeTurnReceipt(compartment.turnReceipt || result?.turnReceipt, {
+            runtime: compartment.runtime || result?.runtime || runtime,
+            route: compartment.route || result?.route || route,
+            changedFiles: compartment.filesChanged || result?.filesChanged,
+            toolTimeline: compartment.toolTimeline || result?.toolTimeline,
+            durationMs: compartment.lastRoundtripMs ?? roundtripMs,
+            finalMessage: reply,
+            sourceType: commentPayload.sourceType,
+            sourceMessageId: commentPayload.sourceMessageId,
+            sourceZone: commentPayload.sourceZone,
+            commentText: commentPayload.commentText,
+          }),
         }));
       }
       updateOperatorEntry(pendingReply.id, current => ({
         ...current,
         title: reply || "The runtime finished without a readable reply.",
         detail: result?.route
-          ? `${titleizeToken(result.runtime || runtime)} · ${result.route.model_id || result.route.model || "default"} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
+          ? `${titleizeToken(result.runtime || runtime)} · ${routeModelReceiptLabel(result.route)} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
           : "",
         meta: timestampLabel(new Date().toISOString()),
         tone: reply ? "neutral" : "warn",
         pending: false,
+        conversationTurn: true,
+        messageKind: "dialogue",
         chips: compartmentChips,
         technicalDetail: compartmentTrace,
+        turnReceipt: normalizeTurnReceipt(compartment.turnReceipt || result?.turnReceipt, {
+          runtime: compartment.runtime || result?.runtime || runtime,
+          route: compartment.route || result?.route || route,
+          changedFiles: compartment.filesChanged || result?.filesChanged,
+          toolTimeline: compartment.toolTimeline || result?.toolTimeline,
+          durationMs: compartment.lastRoundtripMs ?? roundtripMs,
+          finalMessage: reply,
+          sourceType: commentPayload.sourceType,
+          sourceMessageId: commentPayload.sourceMessageId,
+          sourceZone: commentPayload.sourceZone,
+          commentText: commentPayload.commentText,
+        }),
       }));
     } catch (error) {
       if (pendingChatTurn?.id) {
@@ -10091,9 +11928,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushToast(`Chat runtime failed: ${error}`, "error");
     } finally {
       setChatRequestsInFlight(current => Math.max(0, current - 1));
+      setShowThinkingTrace(false);
       void refreshAll("chat-turn-complete");
     }
   }, [
+    activeCommentTarget,
     activeEffectiveRoute.effort,
     activeEffectiveRoute.model,
     activeEffectiveRoute.provider,
@@ -10132,7 +11971,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setShowWorkspaceDialog(true);
       return;
     }
-    if (chatConversationActive) {
+    if (chatConversationActive && !(previewMode === "live" && !mission?.mission_id)) {
       const text = operatorDraft.trim();
       if (!text) {
         pushToast("Write a message first.", "warn");
@@ -10150,13 +11989,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushToast("Write a message first.", "warn");
       return;
     }
-    handleAgentIdleChat();
+    void handleMissionQuickstart(text);
   }, [
     chatConversationActive,
     handleAgentFollowUp,
     handleAgentIdleChat,
+    handleMissionQuickstart,
     mission?.mission_id,
     operatorDraft,
+    previewMode,
     pushToast,
     workspaces.length,
   ]);
@@ -10176,8 +12017,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setAgentRouteRole(agentCycleRole);
     }
   }, [agentCycleRole, agentRouteRole, mission?.mission_id]);
-  const agentRouteStatus = `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "gpt-5.5"} · ${
-    routeEffortLabel(activeEffectiveRoute.effort || selectedAgentRoute.effort, "high")
+  const frontendExecutorRoute = effectiveRouteRows.find(item => {
+    const provider = String(item?.provider || "").toLowerCase();
+    const model = String(item?.model || "").toLowerCase();
+    return item?.role === "executor" && (provider.includes("minimax") || model.includes("minimax"));
+  });
+  const agentRouteProviderModel =
+    frontendExecutorRoute && String(mission?.runtime_id || mission?.runtime || "").toLowerCase().includes("hermes")
+      ? `Hermes · ${frontendExecutorRoute.model || "MiniMax-M3"}`
+      : `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "gpt-5.5"}`;
+  const agentRouteStatus = `${agentRouteProviderModel} · ${
+    routeEffortLabel(frontendExecutorRoute?.effort || activeEffectiveRoute.effort || selectedAgentRoute.effort, "high")
   }`;
   const activeDelegatedRuntimeLane = useMemo(
     () =>
@@ -10242,36 +12092,51 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
   const minimaxAuthPath = String(
     minimaxProviderStatus?.authPath ||
-      (minimaxOpenClawOAuthReady ? "MiniMax OpenClaw OAuth" : minimaxSecretReady ? "API key" : "not configured"),
+      (minimaxOpenClawOAuthReady ? "MiniMax broker OAuth" : minimaxSecretReady ? "API key" : "not configured"),
   );
-  const modelAuthReady = openAICodexAuthReady || minimaxAuthReady;
+  const openCodeGoAuthReady = Boolean(
+    providerSecretPresence["opencode-go"] || providerSecretPresence.opencodego,
+  );
+  const modelAuthReady = openAICodexAuthReady || minimaxAuthReady || openCodeGoAuthReady;
   const launchRecommendedProviderKey = String(
     launchRecommendation.modelProvider || missionForm.modelProvider || "",
   ).toLowerCase();
   const launchRecommendedProviderIsMiniMax = launchRecommendedProviderKey.includes("minimax");
+  const launchRecommendedProviderIsOpenCodeGo =
+    launchRecommendedProviderKey.includes("opencodego") ||
+    launchRecommendedProviderKey.includes("opencode-go") ||
+    launchRecommendedProviderKey.includes("opencode");
   const launchRecommendedProviderIsOpenAI =
     launchRecommendedProviderKey.includes("openai") ||
     launchRecommendedProviderKey.includes("codex") ||
-    !launchRecommendedProviderIsMiniMax;
+    (!launchRecommendedProviderIsMiniMax && !launchRecommendedProviderIsOpenCodeGo);
   const launchProviderName = launchRecommendedProviderIsMiniMax
     ? "MiniMax"
+    : launchRecommendedProviderIsOpenCodeGo
+      ? "OpenCodeGo"
     : launchRecommendedProviderIsOpenAI
       ? "OpenAI/Codex"
       : titleizeToken(launchRecommendedProviderKey || "provider");
   const launchProviderReady = launchRecommendedProviderIsMiniMax
     ? minimaxAuthReady
+    : launchRecommendedProviderIsOpenCodeGo
+      ? openCodeGoAuthReady
     : launchRecommendedProviderIsOpenAI
       ? openAICodexAuthReady
       : modelAuthReady;
   const launchProviderAuthPath = launchRecommendedProviderIsMiniMax
     ? minimaxAuthPath
+    : launchRecommendedProviderIsOpenCodeGo
+      ? openCodeGoAuthReady
+        ? "API key"
+        : "not configured"
     : launchRecommendedProviderIsOpenAI
       ? openAICodexAuthPath
       : "provider status unavailable";
   const launchProviderAdmissionLabel = launchProviderReady ? "Admission ready" : "Auth required";
   const launchProviderQuotaDetail = launchProviderReady
     ? `${launchProviderName} auth is visible to the runtime. Quota unreported means no live quota/rate-window report is available; it is not a provider-limit or exhausted-usage claim.`
-    : `Connect ${launchProviderName} first. A provider account page showing unused quota does not prove Hermes/OpenClaw can use it until credentials are visible here.`;
+    : `Connect ${launchProviderName} first. A provider account page showing unused quota does not prove the Hermes runtime can use it until credentials are visible here.`;
   const browserNotificationPermissionState = browserNotifications.permission || "default";
   const launchBrowserNotificationReady =
     browserNotifications.enabled && browserNotificationPermissionState === "granted";
@@ -10295,6 +12160,96 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         : browserNotificationPermissionState === "unsupported"
           ? "This browser cannot create desktop notifications."
           : "Grant permission once to receive mission slice-complete alerts.";
+  const launchNasStoragePressure = liveSystemAuditDigest?.nasStoragePressure || {};
+  const launchNasStorageAvailableBytes = Number(launchNasStoragePressure.availableBytes || 0);
+  const launchNasStorageUsedPercent = Number(launchNasStoragePressure.usedPercent || 0);
+  const launchNasStorageStatusKey = String(launchNasStoragePressure.status || "").trim().toLowerCase();
+  const launchNasStorageProbeFailed =
+    Boolean(launchNasStoragePressure.probeTimedOut) || Boolean(launchNasStoragePressure.probeConnectFailed);
+  const launchNasStorageMeasuredUsageAvailable = Boolean(
+    launchNasStoragePressure.measuredUsageAvailable ?? !launchNasStorageProbeFailed,
+  );
+  const launchNasStorageHasEvidence = Boolean(
+    launchNasStoragePressure.schema ||
+      launchNasStoragePressure.checkedAt ||
+      launchNasStoragePressure.source ||
+      launchNasStorageStatusKey,
+  );
+  const launchNasStorageMeasuredPressure =
+    launchNasStorageHasEvidence &&
+    launchNasStorageMeasuredUsageAvailable &&
+    (launchNasStorageStatusKey === "critical" ||
+      launchNasStorageStatusKey === "full" ||
+      launchNasStorageAvailableBytes <= 0 ||
+      launchNasStorageUsedPercent >= 99);
+  const launchNasStorageBlocked =
+    !launchNasStorageHasEvidence ||
+    launchNasStorageProbeFailed ||
+    !launchNasStorageMeasuredUsageAvailable ||
+    launchNasStorageMeasuredPressure;
+  const launchNasStorageStatus = launchNasStorageBlocked
+    ? launchNasStorageMeasuredPressure
+      ? "NAS measured storage pressure"
+      : "NAS write check required"
+    : "NAS write headroom ready";
+  const launchNasStorageDetail = launchNasStorageBlocked
+    ? launchNasStorageMeasuredPressure
+      ? `${launchNasStoragePressure.mount || "/volume1/Saclay"} reports ${launchNasStorageUsedPercent}% used with ${launchNasStorageAvailableBytes} available bytes. Free volume/snapshot space or use a local workspace before unattended NAS work.`
+      : `${launchNasStoragePressure.mount || "/volume1/Saclay"} usage is unverified because the bounded storage probe did not return current df data. This is not a measured full disk; use a local workspace or restore NAS reachability before unattended NAS work.`
+    : `${launchNasStoragePressure.mount || "NAS workspace"} has live storage headroom for mission writes.`;
+  const launchTargetWorkspace =
+    workspaces.find(item => item?.workspace_id === missionForm.workspaceId) ||
+    workspace ||
+    null;
+  const launchMissionStorageBlockReason = missionLaunchStorageBlockReason(
+    liveSystemAuditDigest,
+    launchTargetWorkspace,
+  );
+  const launchLocalFallbackWorkspace = workspaces.find(item => !workspaceUsesNasStorage(item)) || null;
+  const launchCanSwitchToLocalWorkspace = Boolean(
+    launchMissionStorageBlockReason &&
+      launchLocalFallbackWorkspace?.workspace_id &&
+      launchLocalFallbackWorkspace.workspace_id !== launchTargetWorkspace?.workspace_id,
+  );
+  const launchMissionBlockedByStorage = Boolean(launchMissionStorageBlockReason);
+  const launchArtifactRepair = liveSystemAuditDigest?.liveMissionOutputQuality || {};
+  const launchMissionArtifactRepairPlan = liveSystemAuditDigest?.missionArtifactRepairPlan || {};
+  const launchMissionArtifactRepairRows = asList(launchMissionArtifactRepairPlan.repairs);
+  const launchMissionArtifactRepairStorage = launchMissionArtifactRepairPlan.storagePreflight || {};
+  const launchArtifactRepairRows = launchMissionArtifactRepairRows.length > 0
+    ? launchMissionArtifactRepairRows
+    : asList(launchArtifactRepair.repairMissionRows);
+  const launchArtifactRepairCount = Number(
+    launchMissionArtifactRepairPlan.repairMissionCount ||
+      launchMissionArtifactRepairRows.length ||
+      launchArtifactRepair.repairMissionCount ||
+      launchArtifactRepairRows.length ||
+      launchArtifactRepair.weakMissionCount ||
+      0,
+  );
+  const launchArtifactRepairCanResume = launchMissionArtifactRepairRows.length > 0
+    ? launchMissionArtifactRepairRows.some(item => item?.canResumeNow !== false)
+    : launchMissionArtifactRepairStorage?.canResume !== false;
+  const launchArtifactRepairBlockedByCurrentStorage =
+    launchArtifactRepairCanResume === false && launchMissionBlockedByStorage;
+  const launchArtifactRepairBlocked =
+    String(launchMissionArtifactRepairPlan.status || "").trim().toLowerCase() === "repairs_blocked_by_nas_storage" ||
+    String(launchMissionArtifactRepairPlan.status || "").trim().toLowerCase() === "repairs_ready" ||
+    String(launchArtifactRepair.status || "").trim().toLowerCase() === "needs_artifact_repair" ||
+    launchArtifactRepairCount > 0;
+  const launchArtifactRepairStatus = launchArtifactRepairBlocked
+    ? launchArtifactRepairCanResume === false
+      ? launchArtifactRepairBlockedByCurrentStorage
+        ? `${launchArtifactRepairCount || 1} repairs blocked by NAS storage`
+        : `${launchArtifactRepairCount || 1} repairs waiting for proof`
+      : `${launchArtifactRepairCount || 1} repair gates open`
+    : "Artifact gate clean";
+  const launchArtifactRepairDetail = launchArtifactRepairBlocked
+    ? launchArtifactRepairCanResume === false && !launchArtifactRepairBlockedByCurrentStorage
+      ? "Repair rows are visible, but resume is disabled by stale or missing proof preflight, not a measured NAS-full state."
+      : launchMissionArtifactRepairPlan.nextAction ||
+        "F1/Hermes repairs need a concrete runtime-output body plus artifact or Workbench proof before new overnight launch claims are trusted."
+    : "Live mission rows have runtime output or artifact proof attached.";
   const missionRuntimeCompartment = useMemo(() => {
     if (!mission?.mission_id) {
       return null;
@@ -10335,13 +12290,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           "Mission action",
         status: action?.result?.ok === false ? "failed" : "recorded",
       }));
+    const latestAction = asList(mission?.action_history).slice(-1)[0] || {};
+    const latestActionResult = latestAction?.result || {};
+    const latestActionProposal = latestAction?.proposal || {};
     const state = activeDelegated?.status || mission?.state?.status || "recorded";
+    const filesChanged = [
+      ...asList(mission?.proof?.changed_files),
+      ...asList(activeDelegated?.changed_files),
+      ...asList(latestActionResult?.changed_files),
+      ...asList(latestActionResult?.changedFiles),
+    ].filter(Boolean);
+    const runtimeValue = activeDelegated?.runtime_id || mission.runtime_id || agentRuntimeSelectValue;
+    const runtimeArtifactModelMessage = runtimeReceiptModelMessageFromMissionDetail(missionDetailSnapshot);
+    const runtimeArtifactAssistantMessage = runtimeArtifactModelMessage?.message || "";
     return {
       sessionId:
         activeDelegated?.delegated_id ||
         mission?.state?.latest_session_id ||
         mission.mission_id,
-      runtime: activeDelegated?.runtime_id || mission.runtime_id || agentRuntimeSelectValue,
+      runtime: runtimeValue,
       cwd:
         activeDelegated?.execution_root ||
         executionScope.execution_root ||
@@ -10361,10 +12328,56 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         ? "live"
         : mission?.state?.planner_loop_status || "recorded",
       toolTimeline: [...latestEvents, ...recentActions].slice(-12),
-      filesChanged: [
-        ...asList(mission?.proof?.changed_files),
-        ...asList(activeDelegated?.changed_files),
-      ].filter(Boolean),
+      filesChanged: filesChanged,
+      turnReceipt: normalizeTurnReceipt(latestActionResult?.turnReceipt, {
+        command:
+          latestActionProposal?.command ||
+          activeDelegated?.launch_command ||
+          activeDelegated?.launchCommand ||
+          "Not reported",
+        runtime: runtimeValue,
+        route: activeRoute,
+        provider: activeRoute?.provider,
+        model: activeRoute?.model_id || activeRoute?.model,
+        effort: activeRoute?.effort,
+        status: state,
+        exitCode: latestActionResult?.exit_code ?? latestActionResult?.exitCode ?? "",
+        durationMs: latestActionResult?.duration_ms ?? latestActionResult?.durationMs ?? "",
+        changedFiles: filesChanged,
+        toolTimeline: [...latestEvents, ...recentActions].slice(-12),
+        openRuntimeMessage:
+          latestActionResult?.openRuntimeMessage ||
+          latestActionResult?.modelMessage ||
+          runtimeArtifactAssistantMessage ||
+          "",
+        modelMessage:
+          latestActionResult?.modelMessage ||
+          latestActionResult?.openRuntimeMessage ||
+          runtimeArtifactAssistantMessage ||
+          "",
+        assistantMessage:
+          runtimeArtifactAssistantMessage ||
+          latestActionResult?.assistantMessage ||
+          latestActionResult?.openRuntimeMessage ||
+          latestActionResult?.modelMessage ||
+          latestActionResult?.agentMessage ||
+          latestActionResult?.finalMessage ||
+          (isCommandLikeReceiptText(latestActionResult?.reply, latestActionProposal?.command || activeDelegated?.launch_command || activeDelegated?.launchCommand || "") ? "" : latestActionResult?.reply) ||
+          "",
+        modelMessageSource: runtimeArtifactModelMessage?.source || "",
+        modelMessageSourceLabel: runtimeArtifactModelMessage?.sourceLabel || "",
+        modelMessageSourceTitle: runtimeArtifactModelMessage?.sourceTitle || "",
+        modelMessageSourceId: runtimeArtifactModelMessage?.sourceId || "",
+        transcriptSessionId: runtimeArtifactModelMessage?.transcriptSessionId || "",
+        runSummary:
+          latestActionResult?.result_summary ||
+          latestActionResult?.resultSummary ||
+          latestActionResult?.error ||
+          (runtimeArtifactAssistantMessage ? "Runtime output artifact is attached to the selected mission detail." : "") ||
+          activeDelegated?.last_event ||
+          activeDelegated?.detail ||
+          "",
+      }),
       approvals: [
         ...asList(activeDelegated?.approval_history),
         ...asList(mission?.state?.approval_history),
@@ -10384,6 +12397,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     agentCycleRole,
     agentRuntimeSelectValue,
     mission,
+    missionDetailSnapshot,
     missionProviderTruth,
     workspace?.root_path,
   ]);
@@ -10443,20 +12457,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ? `http://127.0.0.1:${localhostPort}`
       : "";
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
+  const selectedRouteProviderLabel = titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider || "");
   const selectedModelLabel =
     activeEffectiveRoute.model || selectedAgentRoute.model
       ? `${activeEffectiveRoute.model || selectedAgentRoute.model}`
-      : `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} default`;
+      : selectedRouteProviderLabel && !/^default$/i.test(selectedRouteProviderLabel)
+        ? `${selectedRouteProviderLabel} route`
+        : "Profile default";
   const selectedEffortLabel = routeEffortLabel(
     activeEffectiveRoute.effort || selectedAgentRoute.effort,
     "high",
   );
   const currentProjectLabel =
-    activeChatSession?.title ||
-    mission?.title ||
-    mission?.objective ||
-    workspace?.name ||
-    "Conversation";
+    sanitizeVisibleModelText(
+      activeChatSession?.title ||
+        mission?.title ||
+        mission?.objective ||
+        workspace?.name ||
+        "Conversation",
+    );
   const referenceRuntimeStatus =
     runtimeStatusById.get(agentRuntimeSelectValue) ||
     runtimeStatusById.get(mission?.runtime_id) ||
@@ -10549,7 +12568,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         .sort((left, right) => timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left)))
         .map(item => ({
           id: item.mission_id,
-          title: item.title || item.objective || "Mission",
+          title: sanitizeVisibleModelText(item.title || item.objective || "Mission"),
           tone:
             item.runtime_id === "hermes"
               ? "good"
@@ -10595,7 +12614,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           .sort((left, right) => timeValue(deriveMissionLatestTimestamp(right)) - timeValue(deriveMissionLatestTimestamp(left)))
           .map((missionRow, index) => ({
             id: missionRow.mission_id,
-            title: missionRow.title || missionRow.objective || "Mission",
+            title: sanitizeVisibleModelText(missionRow.title || missionRow.objective || "Mission"),
             status: titleizeToken(missionRow.state?.status || "draft"),
             statusTone: missionStatusTone(missionRow.state?.status),
             updated: timestampLabel(deriveMissionLatestTimestamp(missionRow)) || (index === 0 ? "Just now" : ""),
@@ -10623,21 +12642,29 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
   const referenceAgentMessages = useMemo(
     () => {
-      const scopedChatSessionId = mission?.mission_id ? "" : activeChatSession?.id || "";
+      const scopedMissionChatKey = String(mission?.mission_id || selectedMissionId || "").trim();
+      const scopedChatSessionId = scopedMissionChatKey
+        ? missionChatSessionIdFor(scopedMissionChatKey)
+        : activeChatSession?.id || "";
       const normalizeRow = item => {
         const rawDetail = item.detail && item.detail !== item.title ? item.detail : "";
         const routeDetail = isRouteMetadataText(rawDetail) || isRouteMetadataText(item.meta);
         return {
           id: item.id,
+          missionId: scopedMissionChatKey,
           role: item.role === "assistant" ? "assistant" : "user",
-          label: item.role === "assistant" ? "Syntelos Agent" : "You",
-          title: item.title || rawDetail || "Message",
+          label: item.role === "assistant" ? "Hermes" : "You",
+          title: sanitizeVisibleModelText(item.title || rawDetail || "Message"),
           detail: routeDetail ? "" : rawDetail,
           meta: routeDetail ? timestampLabel(item.createdAt) : item.meta || timestampLabel(item.createdAt),
           createdAt: item.createdAt || item.timestampRaw || item.timestamp || "",
           tone: item.tone || "neutral",
           pending: Boolean(item.pending),
+          conversationTurn: Boolean(item.conversationTurn),
+          messageKind: item.messageKind || (item.conversationTurn ? "dialogue" : ""),
+          source: item.source || "",
           technicalDetail: item.technicalDetail || "",
+          turnReceipt: item.turnReceipt && typeof item.turnReceipt === "object" ? item.turnReceipt : null,
           chips:
             item.role === "assistant" && routeDetail && item.meta
               ? [String(item.meta).replace(/\s+/g, " ").trim()]
@@ -10645,22 +12672,31 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         };
       };
       if (scopedChatSessionId) {
-        const transcriptRows = asList(chatSessionTranscripts?.[scopedChatSessionId]).map(normalizeRow);
+        const directTranscriptRows = asList(chatSessionTranscripts?.[scopedChatSessionId]);
+        const scopedTranscriptRows = transcriptHasRealRuntimeReply(directTranscriptRows)
+          ? directTranscriptRows.filter(isRealAgentDialogueTranscriptTurn)
+          : [];
+        const transcriptRows = scopedTranscriptRows.map(normalizeRow);
         if (transcriptRows.length > 0) {
-          return transcriptRows.slice(-12);
+          return transcriptRows.slice(-12).map(sanitizeAgentMessageRow);
         }
         const compartmentRows = asList(
           runtimeCompartmentChatTurnsBySession?.[scopedChatSessionId],
-        ).map(normalizeRow);
+        )
+          .filter(isRealAgentDialogueTranscriptTurn)
+          .map(normalizeRow);
         if (compartmentRows.length > 0) {
-          return compartmentRows.slice(-12);
+          return compartmentRows.slice(-12).map(sanitizeAgentMessageRow);
+        }
+        if (scopedMissionChatKey) {
+          return [];
         }
         const fallbackChatMessages = operatorNotes
           .filter(item => item.channel === "chat" && item.sessionId === scopedChatSessionId)
           .slice(0, 20)
           .reverse()
           .map(normalizeRow);
-        return fallbackChatMessages.slice(-12);
+        return fallbackChatMessages.slice(-12).map(sanitizeAgentMessageRow);
       }
       const selectedMissionKey = String(mission?.mission_id || "").trim();
       const detailMissionKey = String(
@@ -10688,42 +12724,71 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           id: item.id,
           role: "user",
           label: "You",
-          title: item.title || item.detail || "Comment",
+          title: sanitizeVisibleModelText(item.title || item.detail || "Comment"),
           detail: item.detail && item.detail !== item.title ? item.detail : "",
           meta: item.meta || timestampLabel(item.createdAt),
           createdAt: item.createdAt || item.timestampRaw || item.timestamp || "",
           tone: item.tone || "neutral",
           pending: Boolean(item.pending),
+          conversationTurn: true,
+          messageKind: "dialogue",
           chips: item.target?.title ? [`Comment: ${item.target.title}`] : ["Live comment"],
         }));
       if (previewMode === "live" && selectedMissionKey) {
         const detailMessages = missionDetailApplies
-          ? asList(missionDetailSnapshot.agentMessages).map((item, index) => ({
-              id: `detail-live-${item.id || item.createdAt || item.timestamp || index}`,
-              missionId: selectedMissionKey,
-              runtimeId: item.runtimeId || item.runtime_id || mission?.runtime_id || "",
-              role: item.role === "operator" || item.role === "user" ? "user" : "assistant",
-              label: item.label || item.roleLabel || item.runtimeLabel || runtimeLabel(item.runtimeId || mission?.runtime_id),
-              title: item.title || item.message || item.detail || "Live mission update",
-              detail:
-                item.detail && item.detail !== item.title
-                  ? item.detail
-                  : item.message && item.message !== item.title
-                    ? item.message
-                    : "",
-              meta: item.meta || timestampLabel(item.createdAt || item.timestamp),
-              createdAt: item.createdAt || item.timestamp || "",
-              tone: item.tone || "neutral",
-              processMessage: Boolean(item.processMessage),
-              emphasis: Boolean(item.emphasis || item.processMessage),
-              traceOnly: Boolean(item.traceOnly),
-              chatPreferred: item.chatPreferred !== false,
-              technicalDetail: item.technicalDetail || "",
-              chips: uniq([
-                item.label || item.roleLabel || item.runtimeLabel || "",
-                ...asList(item.chips),
-              ]).slice(0, 4),
-            }))
+          ? asList(missionDetailSnapshot.agentMessages).map((item, index) => {
+              const label = item.label || item.roleLabel || item.runtimeLabel || runtimeLabel(item.runtimeId || mission?.runtime_id);
+              const messageKind = item.messageKind || item.kind || (/runtime output artifact|proof artifact/i.test(String(label || "")) ? "proof" : "");
+              const followUpTurn = isOperatorFollowUpTurn({
+                ...item,
+                label,
+                messageKind,
+              });
+              const hermesReplyTurn = isHermesDialogueReplyTurn({
+                ...item,
+                label,
+                messageKind,
+                runtimeId: item.runtimeId || item.runtime_id || mission?.runtime_id || "",
+              });
+              const generatedContextTurn = isGeneratedContextFollowUpTurnText(
+                `${item.title || ""} ${item.detail || ""} ${item.message || ""} ${item.content || ""}`,
+              );
+              return {
+                id: `detail-live-${item.id || item.createdAt || item.timestamp || index}`,
+                missionId: selectedMissionKey,
+                runtimeId: item.runtimeId || item.runtime_id || mission?.runtime_id || "",
+                role: !generatedContextTurn && (followUpTurn || item.role === "operator" || item.role === "user") ? "user" : "assistant",
+                label,
+                messageKind: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? "dialogue" : messageKind,
+                conversationTurn:
+                  !generatedContextTurn &&
+                  (followUpTurn ||
+                    hermesReplyTurn ||
+                    Boolean(item.conversationTurn) ||
+                    item.role === "operator" ||
+                    item.role === "user" ||
+                    item.messageKind === "dialogue"),
+                title: sanitizeVisibleModelText(item.title || item.message || item.detail || "Live mission update"),
+                detail:
+                  item.detail && item.detail !== item.title
+                    ? item.detail
+                    : item.message && item.message !== item.title
+                      ? item.message
+                      : "",
+                meta: item.meta || timestampLabel(item.createdAt || item.timestamp),
+                createdAt: item.createdAt || item.timestamp || "",
+                tone: item.tone || "neutral",
+                processMessage: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? false : Boolean(item.processMessage),
+                emphasis: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? false : Boolean(item.emphasis || item.processMessage),
+                traceOnly: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? false : Boolean(item.traceOnly),
+                chatPreferred: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? true : item.chatPreferred !== false,
+                technicalDetail: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? "" : item.technicalDetail || "",
+                chips: uniq([
+                  !generatedContextTurn && followUpTurn ? "Operator follow-up" : !generatedContextTurn && hermesReplyTurn ? "Hermes reply" : label || "",
+                  ...asList(item.chips),
+                ]).slice(0, 4),
+              };
+            })
           : [];
         const detailEventMessages =
           missionDetailApplies
@@ -10736,17 +12801,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   runtimeId: event?.runtime_id || mission?.runtime_id || "",
                   role: /operator|user/i.test(kind) ? "user" : "assistant",
                   label: titleizeToken(kind),
-                  title: message || titleizeToken(kind),
-                  detail: event?.detail && event.detail !== message ? event.detail : "",
-                  meta: timestampLabel(event?.timestamp || event?.created_at),
-                  createdAt: event?.timestamp || event?.created_at || "",
-                  tone: /failed|blocked|error/i.test(`${kind} ${message}`) ? "bad" : "neutral",
-                  processMessage: /runtime|delegate|phase|slice|verification|feedback/i.test(kind),
-                  emphasis: /approval|blocked|failed|complete|slice|feedback/i.test(`${kind} ${message}`),
-                  technicalDetail: event?.trace || "",
-                  chips: [runtimeLabel(event?.runtime_id || mission?.runtime_id), "live detail"].filter(Boolean),
-                };
-              }).filter(item => item.title)
+                  title: sanitizeVisibleModelText(message || titleizeToken(kind)),
+              detail: event?.detail && event.detail !== message ? event.detail : "",
+              meta: timestampLabel(event?.timestamp || event?.created_at),
+              createdAt: event?.timestamp || event?.created_at || "",
+              tone: /failed|blocked|error/i.test(`${kind} ${message}`) ? "bad" : "neutral",
+              processMessage: /runtime|delegate|phase|slice|verification|feedback/i.test(kind),
+              emphasis: /approval|blocked|failed|complete|slice|feedback/i.test(`${kind} ${message}`),
+              technicalDetail: event?.trace || "",
+              traceOnly: true,
+              chatPreferred: false,
+              chips: [runtimeLabel(event?.runtime_id || mission?.runtime_id), "live detail"].filter(Boolean),
+            };
+          }).filter(item => item.title)
             : [];
         const transcriptRuntimeMessages = agentTranscript
           .filter(item => {
@@ -10774,7 +12841,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             runtimeId: item.runtimeId || item.runtime_id || mission?.runtime_id || "",
             role: item.role === "operator" || item.role === "user" ? "user" : "assistant",
             label: item.label || item.roleLabel || runtimeLabel(item.runtimeId || item.runtime_id || mission?.runtime_id),
-            title: item.title || item.detail || "Live runtime report",
+            messageKind: item.messageKind || item.kind || "",
+            conversationTurn:
+              Boolean(item.conversationTurn) ||
+              item.role === "operator" ||
+              item.role === "user" ||
+              item.messageKind === "dialogue",
+            title: sanitizeVisibleModelText(item.title || item.detail || "Live runtime report"),
             detail:
               item.detail && item.detail !== item.title && !isRouteMetadataText(item.detail)
                 ? item.detail
@@ -10795,9 +12868,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           }));
         const liveMissionMessages = uniqBy(
           [
-            ...detailEventMessages,
             ...detailMessages,
             ...transcriptRuntimeMessages,
+            ...detailEventMessages,
             ...liveCommentMessages,
           ],
           item =>
@@ -10819,7 +12892,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return preserveRuntimeOutputTurns(
           liveMissionMessages,
           48,
-        );
+        ).map(sanitizeAgentMessageRow);
       }
       const missionThreadRows = preserveRuntimeOutputTurns(
         agentTranscript.filter(item => {
@@ -10848,7 +12921,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         runtimeId: item.runtimeId || mission?.runtime_id || "",
         role: item.role === "operator" || item.role === "user" ? "user" : "assistant",
         label: item.label || item.roleLabel || (item.role === "operator" ? "You" : "Syntelos Agent"),
-        title: item.title || item.detail || "Update",
+        title: sanitizeVisibleModelText(item.title || item.detail || "Update"),
         detail:
           item.role === "operator" || isRouteMetadataText(item.detail)
             ? ""
@@ -10866,7 +12939,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           ...asList(item.chips),
         ]).slice(0, 4),
       }));
-      return preserveRuntimeOutputTurns([...missionMessages, ...liveCommentMessages], 48);
+      return preserveRuntimeOutputTurns([...missionMessages, ...liveCommentMessages], 48).map(sanitizeAgentMessageRow);
     },
     [
       activeChatSession?.id,
@@ -10879,8 +12952,90 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       operatorNotes,
       previewMode,
       runtimeCompartmentChatTurnsBySession,
+      selectedMissionId,
     ],
   );
+  const agentLiveThreadProof = useMemo(() => {
+    const selectedMissionKey = String(mission?.mission_id || "").trim();
+    const detailMissionKey = String(
+      missionDetailSnapshot?.missionId || missionDetailSnapshot?.mission_id || "",
+    ).trim();
+    const detailLoading = missionDetailSnapshot?.schema === "fluxio.control_room.mission_detail_loading.v1";
+    const detailError = missionDetailSnapshot?.schema === "fluxio.control_room.mission_detail_error.v1";
+    const missionDetailApplies = Boolean(
+      selectedMissionKey &&
+        detailMissionKey &&
+        detailMissionKey === selectedMissionKey &&
+        !detailLoading &&
+        !detailError,
+    );
+    const performance = missionDetailApplies ? asRecord(missionDetailSnapshot?.performance) : EMPTY_OBJECT;
+    const performanceBudget = asRecord(performance?.budget);
+    const detailCache = asRecord(missionDetailSnapshot?.detailCache || performance?.missionDetailCache);
+    const runtimeTranscript = missionDetailApplies
+      ? asRecord(missionDetailSnapshot?.runtimeTranscript)
+      : EMPTY_OBJECT;
+    const proofDigest = missionDetailApplies ? asRecord(missionDetailSnapshot?.proofDigest) : EMPTY_OBJECT;
+    const artifactGate = missionDetailApplies
+      ? asRecord(missionDetailSnapshot?.artifactGate || proofDigest?.artifactGate)
+      : EMPTY_OBJECT;
+    const nonTraceRows = referenceAgentMessages.filter(item => !item?.traceOnly);
+    const runtimeReportRows = nonTraceRows.filter(item => (
+      Boolean(item?.processMessage) ||
+      Boolean(item?.technicalDetail) ||
+      /hermes|runtime|delegate|report/i.test(`${item?.label || ""} ${item?.title || ""} ${item?.detail || ""}`)
+    ));
+    const liveProgress = deriveLiveMissionProgress(mission, missionDetailSnapshot);
+    const progressValue = clampPercent(liveProgress?.value);
+    const status = detailError
+      ? "error"
+      : missionDetailApplies
+        ? runtimeTranscript?.status === "attached" || runtimeReportRows.length > 0
+          ? "live_detail_attached"
+          : "live_detail_without_transcript"
+        : detailLoading
+          ? "loading"
+          : selectedMissionKey
+            ? "waiting_for_detail"
+            : "no_mission_selected";
+    const statusLabel = {
+      error: "Detail endpoint error",
+      live_detail_attached: "Live detail attached",
+      live_detail_without_transcript: "Live detail attached, transcript pending",
+      loading: "Loading mission detail",
+      waiting_for_detail: "Waiting for selected mission detail",
+      no_mission_selected: "No live mission selected",
+    }[status] || "Unknown";
+    return {
+      schema: "fluxio.agent_live_thread_proof.v1",
+      missionId: selectedMissionKey,
+      detailMissionId: detailMissionKey,
+      status,
+      statusLabel,
+      source: missionDetailApplies ? "control-room mission detail" : detailLoading ? "mission detail loading" : "live detail pending",
+      runtime: mission?.runtime_id || mission?.runtimeId || runtimeTranscript?.runtimeId || "",
+      transcriptStatus: runtimeTranscript?.status || "pending",
+      transcriptSessionId: runtimeTranscript?.sessionId || "",
+      transcriptMessageCount: Number(runtimeTranscript?.messageCount || asList(runtimeTranscript?.messages).length || 0),
+      agentMessageCount: referenceAgentMessages.length,
+      realMessageCount: nonTraceRows.length,
+      runtimeReportCount: runtimeReportRows.length,
+      traceOnlyCount: Math.max(0, referenceAgentMessages.length - nonTraceRows.length),
+      payloadBytes: Number(performance?.payloadBytes || 0),
+      durationMs: Number(performance?.durationMs || 0),
+      budgetStatus: performanceBudget?.status || "",
+      cacheStatus: detailCache?.status || "",
+      cacheFreshness: detailCache?.freshness || "",
+      generatedAt: missionDetailSnapshot?.generatedAt || "",
+      artifactGateStatus: artifactGate?.status || (artifactGate?.passed ? "passed" : ""),
+      progressLabel: liveProgress?.label || "",
+      progressValue,
+      nextAction:
+        missionDetailSnapshot?.nextAction ||
+        liveProgress?.nextAction ||
+        "The live thread below is the current evidence source.",
+    };
+  }, [mission, missionDetailSnapshot, referenceAgentMessages]);
   const referenceFeedbackItems = useMemo(() => {
     const seededMessages = referenceAgentMessages.slice(-3).map(item => ({
       id: `feedback-${item.id}`,
@@ -10912,8 +13067,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         .map((item, index) => ({
           id: item.id || `moment-${index}`,
           time: item.meta || timestampLabel(item.timestampRaw) || `${index + 1}`,
-          title: item.title || item.label || "Mission update",
-          detail: item.detail || item.technicalDetail || "No detail recorded.",
+          title: sanitizeVisibleModelText(item.title || item.label || "Mission update"),
+          detail: sanitizeVisibleModelText(item.detail || item.technicalDetail || "No detail recorded."),
           tone: item.tone || "neutral",
           preview: item.technicalDetail || item.detail || "",
         })),
@@ -10967,7 +13122,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   : "Queued";
         return {
           id: missionId,
-          name: item.title || item.objective || "Mission",
+          name: sanitizeVisibleModelText(item.title || item.objective || "Mission"),
           description: ownerWorkspace?.name || item.workspaceName || "Workspace mission",
           status: titleizeToken(status),
           statusTone:
@@ -10990,6 +13145,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           progressLabel: item?.liveProgress?.label || "",
           progressDetail: item?.liveProgress?.source || "",
           progressNextAction: item?.liveProgress?.nextAction || "",
+          progressKind: item?.liveProgress?.progressKind || "",
+          displayAsCompletion: item?.liveProgress?.displayAsCompletion !== false,
           runs: actionCount + delegatedCount,
           updated: timestampLabel(updatedAt) || "Just now",
           selected: missionId === selectedMissionId,
@@ -11029,7 +13186,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const traceRuntimeOps = agentTraceTurns.slice(-12).map((item, index) => ({
       id: item.id || `agent-trace-${index}`,
       label: item.label || item.roleLabel || item.title || "Runtime event",
-      title: item.title || item.label || "Runtime event",
+        title: sanitizeVisibleModelText(item.title || item.label || "Runtime event"),
       detail: item.detail || item.technicalDetail || "Live mission trace event.",
       status: item.tone || "live",
       timestamp: item.timestampRaw || item.createdAt || item.timestamp || "",
@@ -11039,7 +13196,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ...asList(runtimeOpsPayload.actions).map((item, index) => ({
         id: item.actionId || item.id || `runtime-action-${index}`,
         label: item.label || item.actionId || "Runtime action",
-        title: item.label || item.actionId || "Runtime action",
+        title: sanitizeVisibleModelText(item.label || item.actionId || "Runtime action"),
         detail: item.detail || item.summary || item.serviceLabel || item.status || "Live runtime action.",
         status: item.status || "live",
         timestamp: item.updatedAt || item.createdAt || "",
@@ -11047,7 +13204,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ...asList(runtimeOpsPayload.services).map((item, index) => ({
         id: item.serviceId || item.id || `runtime-service-${index}`,
         label: item.label || item.serviceId || "Runtime service",
-        title: item.label || item.serviceId || "Runtime service",
+        title: sanitizeVisibleModelText(item.label || item.serviceId || "Runtime service"),
         detail: item.doctor_summary || item.detail || item.status || "Live runtime service.",
         status: item.status || "live",
         timestamp: item.updatedAt || item.createdAt || "",
@@ -11063,7 +13220,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         missionId: item.missionId || mission?.mission_id || "",
         runtimeId: item.runtimeId || mission?.runtime_id || "",
         label: item.label || "Agent message",
-        title: item.title || item.detail || "Live mission update",
+        title: sanitizeVisibleModelText(item.title || item.detail || "Live mission update"),
         detail: item.detail || item.technicalDetail || item.meta || "",
         technicalDetail: item.technicalDetail || "",
         status: item.tone || "live",
@@ -11071,6 +13228,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         chips: asList(item.chips).slice(0, 4),
       }));
     const liveReviewState = viewModel.drawers?.builder?.liveReviewStudio || {};
+    const requestedLocalPreviewUrl = localPreviewUrlFromSearch(searchParams);
+    const requestedLocalPreviewLabel = requestedLocalPreviewUrl
+      ? String(searchParams.get("previewLabel") || "Local program preview").trim()
+      : "";
     const selectedMissionKey = String(mission?.mission_id || "").trim();
     const detailMissionKey = String(missionDetailSnapshot?.missionId || missionDetailSnapshot?.mission_id || "").trim();
     const liveReviewMissionKey = String(
@@ -11085,6 +13246,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const selectedMissionProofDigest =
       detailMissionKey && detailMissionKey === selectedMissionKey
         ? asRecord(missionDetailSnapshot?.proofDigest)
+        : EMPTY_OBJECT;
+    const selectedMissionArtifactGate =
+      detailMissionKey && detailMissionKey === selectedMissionKey
+        ? asRecord(missionDetailSnapshot?.artifactGate || missionDetailSnapshot?.proofDigest?.artifactGate)
         : EMPTY_OBJECT;
     const missionScopedPreviewUrl =
       selectedMissionProofDigest.previewUrl ||
@@ -11111,6 +13276,29 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       asList(mission?.runtimeLanes).length > 0
         ? asList(mission.runtimeLanes)
         : asList(mission?.providerCapabilities?.lanes || mission?.provider_capabilities?.lanes);
+    const runtimeCapabilityInventory =
+      mission?.providerCapabilities?.runtimeCapabilityInventory ||
+      mission?.provider_capabilities?.runtimeCapabilityInventory ||
+      {};
+    const providerReadiness = {
+      openAI: {
+        ready: openAICodexAuthReady,
+        label: openAICodexAuthReady ? "Ready" : "Needs login",
+        detail: openAICodexAuthPath,
+      },
+      minimax: {
+        ready: minimaxAuthReady,
+        label: minimaxAuthReady ? "Ready" : "Needs login",
+        detail: minimaxAuthPath,
+      },
+      openCodeGo: {
+        ready: openCodeGoAuthReady,
+        label: openCodeGoAuthReady ? "Ready" : "Needs API key",
+        detail: openCodeGoAuthReady
+          ? "OPENCODE_API_KEY is visible to the runtime; opencode-go/... routes are selectable."
+          : "OPENCODE_API_KEY is not visible to the runtime yet.",
+      },
+    };
     const activeSessionLaneRows = activeLanes.map((item, index) => ({
       id: item?.session_id || item?.delegated_id || `session-lane-${index}`,
       missionId: mission?.mission_id || "",
@@ -11185,10 +13373,35 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       [...activeSessionLaneRows, ...contractLaneRows],
       item => `${String(item.role || "").toLowerCase()}:${String(item.provider || "").toLowerCase()}:${String(item.model || "").toLowerCase()}`,
     ).slice(0, 8);
-    const latestDurableLaneControlReceipt = asList(laneRows)
-      .map(item => item?.laneControlReceipt || item?.latestControl)
+    const latestDurableLaneControlReceipt = [
+      ...asList(missionDetailSnapshot?.state?.lane_control_receipts),
+      ...asList(missionDetailSnapshot?.state?.laneControlReceipts),
+      ...asList(laneRows).map(item => item?.laneControlReceipt || item?.latestControl),
+    ]
       .filter(Boolean)
       .sort((left, right) => String(right?.generatedAt || right?.at || "").localeCompare(String(left?.generatedAt || left?.at || "")))[0] || null;
+    const connectedAppManagerItems = bridgeSessions.map(session => ({
+      ...session,
+      id: session?.session_id || session?.app_id || session?.app_name || "connected-app",
+      label: session?.app_name || session?.app_id || "Connected app",
+      statusLabel: `${titleizeToken(session?.status || "unknown")} / ${titleizeToken(session?.bridge_health || "unknown")}`,
+      appNativeActions: asList(session?.action_hooks).map(action => ({
+        hookId: action?.hookId || action?.hook_id || "",
+        label: action?.label || action?.hookId || action?.hook_id || "App action",
+        description: action?.description || "",
+        riskLevel: action?.riskLevel || action?.risk_level || "",
+        requiresApproval: Boolean(action?.requiresApproval || action?.requires_approval),
+        handoffMode: String(action?.hookId || action?.hook_id || "").toLowerCase().includes("skill") ? "skill" : "run",
+      })).filter(action => action.label),
+      contextSummary:
+        asList(session?.context_preview).map(item => item?.summary).find(Boolean) ||
+        "",
+      latestSummary:
+        session?.latest_task_result?.resultSummary ||
+        asList(session?.context_preview).map(item => item?.summary).find(Boolean) ||
+        asList(session?.notes)[0] ||
+        "No live context body reported yet.",
+    }));
     const notificationEvents = [
       {
         id: "skill-draft-created",
@@ -11256,10 +13469,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       agentThreadPreview,
       runtimeOps,
       notificationEvents,
-      missionTitle: mission?.title || mission?.objective || "",
+      missionTitle: sanitizeVisibleModelText(mission?.title || mission?.objective || ""),
       missionStatus: mission?.state?.status || mission?.status || "",
       plannerLoopStatus: mission?.planner_loop_status || mission?.plannerLoopStatus || mission?.state?.planner_loop_status || "",
       progress: liveProgress,
+      artifactGate: selectedMissionArtifactGate,
       artifacts: plannedScopeEntries.map((item, index) => ({
         id: item?.path || item?.resolvedPath || `artifact-${index}`,
         label: item?.readmePath ? "README" : item?.indexHtmlPath ? "Preview" : item?.path ? "Scope" : "Artifact",
@@ -11269,6 +13483,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         previewable: Boolean(item?.previewable),
       })),
       lanes: laneRows,
+      runtimeCapabilityInventory,
+      providerReadiness,
+      providerSecretPresence,
+      connectedAppManager: {
+        items: connectedAppManagerItems,
+        source: summarySnapshot?.bridgeLab?.schema || snapshot?.bridgeLab?.schema || "bridgeLab.connectedSessions",
+        recommendation:
+          summarySnapshot?.bridgeLab?.recommendation ||
+          snapshot?.bridgeLab?.recommendation ||
+          "Connected app handoffs appear here when a local bridge or follow-on manifest is available.",
+      },
       laneControlReceipt: referenceLaneControlReceipt || latestDurableLaneControlReceipt,
       playgrounds: [
         { id: "image", label: "Image Playground", status: "ready", action: "open-images" },
@@ -11308,19 +13533,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         totalRows: viewModel.drawers?.proof?.itemsCount || 0,
       },
       previewUrl:
+        requestedLocalPreviewUrl ||
         missionScopedPreviewUrl ||
         (liveReviewMatchesSelectedMission ? liveReviewState.previewUrl || "" : ""),
       previewActionUrl:
+        requestedLocalPreviewUrl ||
         missionScopedPreviewUrl ||
         (liveReviewMatchesSelectedMission
           ? liveReviewState.previewActionUrl || liveReviewState.previewUrl || ""
           : ""),
-      previewLabel: missionScopedPreviewLabel,
-      previewSourceLabel: missionScopedPreviewLabel,
-      previewSourceDetail: missionScopedPreviewDetail,
+      previewLabel: requestedLocalPreviewLabel || missionScopedPreviewLabel,
+      previewSourceLabel: requestedLocalPreviewLabel || missionScopedPreviewLabel,
+      previewSourceDetail: requestedLocalPreviewUrl
+        ? "Preview URL came from the local Workbench verifier target."
+        : missionScopedPreviewDetail,
       liveReview: liveReviewMatchesSelectedMission ? liveReviewState || null : null,
     };
-  }, [agentTraceTurns, data.pendingApprovals, data.pendingQuestions, mission, missionDetailSnapshot, referenceAgentMessages, referenceChangedItems, referenceLaneControlReceipt, referenceStudio, snapshot?.guidance?.productImprovements, viewModel.drawers?.builder?.liveReviewStudio, viewModel.drawers?.builder?.serviceStudio, viewModel.tutorialStudio]);
+  }, [agentTraceTurns, bridgeSessions, data.pendingApprovals, data.pendingQuestions, mission, missionDetailSnapshot, referenceAgentMessages, referenceChangedItems, referenceLaneControlReceipt, referenceStudio, providerSecretPresence, openAICodexAuthReady, openAICodexAuthPath, minimaxAuthReady, minimaxAuthPath, openCodeGoAuthReady, searchParams, snapshot?.bridgeLab?.recommendation, snapshot?.bridgeLab?.schema, snapshot?.guidance?.productImprovements, summarySnapshot?.bridgeLab?.recommendation, summarySnapshot?.bridgeLab?.schema, viewModel.drawers?.builder?.liveReviewStudio, viewModel.drawers?.builder?.serviceStudio, viewModel.tutorialStudio]);
   const referencePreviewStyle = useMemo(
     () => ({
       "--ref-violet": referenceAppearance.accent,
@@ -11346,10 +13575,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setAgentScene(current => (current === "live" ? "live" : "run"));
       return;
     }
-    if (!mission) {
-      setAgentScene("idle");
-      return;
-    }
     setAgentScene(current => (current === "live" ? "live" : "run"));
   }, [activeChatSessionId, mission, requestedAgentScene, surface]);
 
@@ -11363,7 +13588,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       if (nextSurface === "agent") {
         setActiveDrawer(null);
         if (!requestedAgentScene) {
-          setAgentScene(activeChatSessionId || mission ? "run" : "idle");
+          setAgentScene("run");
         }
         return;
       }
@@ -11574,7 +13799,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
       if (normalizedAction === "flow:search") {
         setSurface("agent");
-        setAgentScene(activeChatSessionId || mission ? "run" : "idle");
+        setAgentScene("run");
         pushToast("Use the left project list to jump across mission threads and chat conversations.", "info");
         return;
       }
@@ -11611,6 +13836,156 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (
+        normalizedAction === "composer:plus:runtime" ||
+        normalizedAction === "composer:plus:model" ||
+        normalizedAction === "composer:plus:thinking"
+      ) {
+        setSurface("settings");
+        setReferenceSettingsTab("providers");
+        setBuilderDetailOpen(false);
+        setActiveDrawer("runtime");
+        pushToast("Models, accounts, runtime, and thinking options opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "composer:plus:skill") {
+        setSurface("skills");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        setReferenceStudio(current => ({
+          ...current,
+          collectionTab: "skill",
+        }));
+        pushToast("Skill Studio opened for Hermes/OpenClaw skills.", "info");
+        return;
+      }
+
+      if (normalizedAction === "composer:plus:app") {
+        setSurface("agent");
+        setAgentScene("run");
+        setBuilderDetailOpen(false);
+        setActiveDrawer("context");
+        pushToast("Connected app handoff options are available in the Agent details drawer.", "info");
+        return;
+      }
+
+      if (normalizedAction === "composer:plus:terminal") {
+        setSurface("agent");
+        setAgentScene("run");
+        setShowThinkingTrace(true);
+        setActiveDrawer("runtime");
+        pushToast("Runtime trace and terminal context opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "composer:plus:approval") {
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("approvals");
+        pushToast("Approval and gated-action context opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "composer:plus:details") {
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("runtime");
+        setShowThinkingTrace(true);
+        pushToast("Live details opened with route, trace, receipts, and proof.", "info");
+        return;
+      }
+
+      if (normalizedAction === "setup:run-action") {
+        const action = payload && typeof payload === "object" ? payload : {};
+        if (!action.actionId) {
+          pushToast("No setup action was available for this card.", "warn");
+          return;
+        }
+        await runWorkspaceActionSpec(action);
+        return;
+      }
+
+      if (normalizedAction === "bridge:agent-handoff" || normalizedAction === "bridge:make-skill") {
+        const session = payload?.session || payload?.item || payload;
+        const selectedAction = payload?.action || null;
+        if (!session || typeof session !== "object") {
+          pushToast("No connected app was attached to this bridge action.", "warn");
+          return;
+        }
+        draftConnectedAppAgentPrompt(
+          session,
+          normalizedAction === "bridge:make-skill" ? "skill" : "run",
+          selectedAction,
+        );
+        return;
+      }
+
+      if (
+        normalizedAction === "live:evidence:runtime" ||
+        normalizedAction === "live:evidence:images" ||
+        normalizedAction === "live:evidence:hermes" ||
+        normalizedAction === "live:evidence:nas" ||
+        normalizedAction.startsWith("live:evidence:")
+      ) {
+        const evidenceKind = normalizedAction.slice("live:evidence:".length);
+        const drawer =
+          evidenceKind === "images"
+            ? "images"
+            : evidenceKind === "nas"
+              ? "proof"
+              : evidenceKind === "hermes" || evidenceKind === "runtime"
+                ? "runtime"
+                : "proof";
+        setSurface(evidenceKind === "images" ? "images" : "agent");
+        setAgentScene("run");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(drawer);
+        pushToast(`${titleizeToken(evidenceKind)} evidence opened.`, "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:restore-hermes-code-mod") {
+        setSurface("skills");
+        setReferenceStudio(current => ({
+          ...buildDefaultReferenceStudio(workspaceProfileForm.routeOverrides),
+          ...current,
+          collectionTab: "skill",
+          selectedSkillId:
+            asList(current.skills).find(item => String(item.id || "").includes("system"))?.id ||
+            asList(current.skills)[0]?.id ||
+            "skill-system-gap-routing",
+        }));
+        setOperatorDraft("Restore Hermes code-mod skills and report installed/missing simplify-code, test-driven-development, codex, and opencode lanes.\n");
+        pushToast("Hermes code-mod skill restore draft opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "skills:update-openclaw") {
+        setSurface("settings");
+        setReferenceSettingsTab("providers");
+        setActiveDrawer("runtime");
+        setOperatorDraft("Update OpenClaw skills and provider routes, then record readiness, quota, and model routing proof.\n");
+        pushToast("OpenClaw update path opened in Settings.", "info");
+        return;
+      }
+
+      if (
+        normalizedAction === "skills:use-code-mod:hermes:simplify-code" ||
+        normalizedAction.startsWith("skills:use-code-mod:")
+      ) {
+        const skillRoute = normalizedAction.slice("skills:use-code-mod:".length);
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        setOperatorDraft(current =>
+          current ||
+          `Use code-mod skill ${skillRoute} for this mission. Record runtime, provider/model, exact skill id, changed files, tests, and proof in the turn receipt.\n`,
+        );
+        pushToast(`Code-mod skill selected: ${skillRoute}.`, "info");
+        return;
+      }
+
       if (normalizedAction === "live:refresh-preview") {
         await refreshAll("reference-preview-refresh");
         return;
@@ -11631,7 +14006,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         normalizedAction === "live:comment-send"
       ) {
         setSurface("agent");
-        setAgentScene(activeChatSessionId || mission ? "run" : "idle");
+        setAgentScene("run");
         if (normalizedAction === "live:comment-send") {
           if (activeChatSessionId) {
             handleAgentIdleSubmit();
@@ -11662,6 +14037,51 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "agent:continue-prefill") {
+        const missionTitle = sanitizeVisibleModelText(
+          mission?.title || mission?.name || selectedMissionRow?.title || selectedMissionRow?.name || "current mission",
+        );
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        setOperatorDraft(current =>
+          current ||
+          `Continue ${missionTitle}:\n- Use the current thread context.\n- Next step:\n- Proof I should verify:\n`,
+        );
+        pushToast("Continuation draft opened in the Agent thread.", "info");
+        return;
+      }
+
+      if (normalizedAction === "run:modify") {
+        const missionTitle = sanitizeVisibleModelText(
+          mission?.title || mission?.name || selectedMissionRow?.title || selectedMissionRow?.name || "current mission",
+        );
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        setOperatorDraft(current =>
+          current ||
+          `Modify ${missionTitle}:\n- Keep the existing mission context.\n- Change this part:\n- Preserve proof and verification steps.\n`,
+        );
+        pushToast("Modification draft opened in the Agent thread.", "info");
+        return;
+      }
+
+      if (normalizedAction === "run:summarize") {
+        const missionTitle = sanitizeVisibleModelText(
+          mission?.title || mission?.name || selectedMissionRow?.title || selectedMissionRow?.name || "current mission",
+        );
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("proof");
+        setOperatorDraft(current =>
+          current ||
+          `Summarize ${missionTitle}: what happened, what changed, what proof exists, and what should I do next?\n`,
+        );
+        pushToast("Mission summary prompt is ready in Agent.", "info");
+        return;
+      }
+
       if (normalizedAction === "run:queue") {
         setActiveDrawer("queue");
         setSurface("agent");
@@ -11673,6 +14093,32 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         setNotificationStackCollapsed(false);
         setNotificationStackExpanded(true);
         pushToast("Live mission notifications are expanded.", "info");
+        return;
+      }
+
+      if (normalizedAction === "notifications:register-web-push") {
+        setNotificationStackCollapsed(false);
+        setNotificationStackExpanded(true);
+        const status = await ensureWebPushSubscription();
+        pushToast(
+          status === "subscribed"
+            ? "Closed-tab Web Push subscription registered for this browser."
+            : "Closed-tab Web Push registration needs attention.",
+          status === "subscribed" ? "info" : "warn",
+        );
+        return;
+      }
+
+      if (normalizedAction === "notifications:provision-web-push") {
+        setNotificationStackCollapsed(false);
+        setNotificationStackExpanded(true);
+        const status = await provisionWebPushSender();
+        pushToast(
+          status === "configured"
+            ? "Closed-tab Web Push sender is configured."
+            : "Closed-tab Web Push sender setup needs attention.",
+          status === "configured" ? "info" : "warn",
+        );
         return;
       }
 
@@ -11699,6 +14145,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "agent:follow-up") {
+        setSurface("agent");
+        setAgentScene("run");
+        setBuilderDetailOpen(false);
+        setActiveDrawer("context");
+        if (mission) {
+          await handleAgentFollowUp();
+          return;
+        }
+        handleAgentIdlePrimaryAction();
+        return;
+      }
+
       if (normalizedAction.startsWith("agent:lane:")) {
         const lane = payload?.lane && typeof payload.lane === "object" ? payload.lane : {};
         const control = payload?.control && typeof payload.control === "object"
@@ -11711,9 +14170,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         const missionId = String(lane.missionId || mission?.mission_id || selectedMissionId || "").trim();
         const laneRole = String(lane.role || lane.label || "lane").trim();
         const actionLabel = control.label || titleizeToken(control.action || control.id || "Inspect");
-        await handleSubAgentLaneControl({ ...lane, missionId }, control);
+        const laneControlResponse = await handleSubAgentLaneControl({ ...lane, missionId }, control);
         pushToast(`Lane ${actionLabel.toLowerCase()} recorded for ${laneRole}.`, "info");
-        return;
+        return laneControlResponse;
       }
 
       if (normalizedAction === "run:message-copy") {
@@ -11732,12 +14191,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             id: message.id,
             kind: message.role === "user" ? "user message" : "agent message",
             title: message.title,
+            zone: message.messageZone || message.zone || "thread",
           });
           setOperatorDraft("");
           pushToast("Comment target pinned to the mission composer.", "info");
           return;
         }
         pushToast("No message is selected for comment.", "warn");
+        return;
+      }
+
+      if (normalizedAction === "run:comment-edit") {
+        if (!activeCommentTarget?.id) {
+          pushToast("Pin a message or proof row before editing a runnable comment.", "warn");
+          return;
+        }
+        if (!operatorDraft.trim()) {
+          setOperatorDraft(`Act on this comment: ${activeCommentTarget.title || activeCommentTarget.kind || "selected item"}`);
+        }
+        window.requestAnimationFrame(() => {
+          document.getElementById("thread-note")?.focus();
+        });
+        pushToast("Comment is ready to edit before running.", "info");
+        return;
+      }
+
+      if (normalizedAction === "run:comment-execute") {
+        if (!activeCommentTarget?.id) {
+          pushToast("Pin a message or proof row before running a comment.", "warn");
+          return;
+        }
+        const commentText =
+          operatorDraft.trim() ||
+          `Act on this comment target: ${activeCommentTarget.title || activeCommentTarget.kind || "selected item"}`;
+        if (mission) {
+          await handleAgentFollowUp({ sourceType: "comment", message: commentText });
+          return;
+        }
+        await handleAgentIdleChat({ sourceType: "comment", message: commentText });
         return;
       }
 
@@ -11749,6 +14240,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             id: moment.id,
             kind: "mission activity",
             title: moment.title,
+            zone: "timeline",
           });
           setOperatorDraft("");
           pushToast("Progress item pinned to the mission composer.", "info");
@@ -11781,7 +14273,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "builder:toggle-view") {
-        pushToast("Grid view is coming soon. Table view remains active.", "info");
+        setSurface("builder");
+        setBuilderDetailOpen(current => !current);
+        setActiveDrawer(null);
         return;
       }
 
@@ -11791,7 +14285,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         normalizedAction === "builder:filter-updated" ||
         normalizedAction === "builder:filters"
       ) {
-        pushToast("Advanced Builder filters are coming soon.", "info");
+        setSurface("builder");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        pushToast("Builder queue focused.", "info");
         return;
       }
 
@@ -11946,12 +14443,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "skills:collapse-assistant") {
-        pushToast("Assistant panel collapse will be available in the next UI pass.", "info");
+        setSurface("skills");
+        setReferenceStudio(current => ({
+          ...current,
+          assistantCollapsed: !current.assistantCollapsed,
+        }));
+        pushToast("Skill assistant panel toggled.", "info");
         return;
       }
 
       if (normalizedAction === "skills:attach-context") {
-        pushToast("Paste context directly into the prompt while attachment upload is finalized.", "info");
+        setSurface("skills");
+        setOperatorDraft(current => current || "Context:\n");
+        pushToast("Context composer focused.", "info");
         return;
       }
 
@@ -12021,6 +14525,495 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           };
         });
         pushToast("Mission learned-skill draft created for review.", "info");
+        return;
+      }
+
+      if (normalizedAction === "composer:send") {
+        if (activeChatSessionId || !mission) {
+          await handleAgentIdleSubmit();
+          return;
+        }
+        await handleAgentFollowUp();
+        return;
+      }
+
+      if (normalizedAction.startsWith("composer:chip:")) {
+        const chip = normalizedAction.slice("composer:chip:".length);
+        const insertText = chip ? ` ${chip}` : "";
+        setOperatorDraft(current => `${current || ""}${insertText}`.trimStart());
+        setSurface("agent");
+        setAgentScene("run");
+        return;
+      }
+
+      if (normalizedAction === "composer:workspace") {
+        setSurface("builder");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "approval:review") {
+        setActiveDrawer("queue");
+        setSurface("agent");
+        setAgentScene("run");
+        return;
+      }
+
+      if (normalizedAction === "approval:approve") {
+        if (missionActionAvailable(mission, "approve")) {
+          await runMissionAction("approve", "Mission approval requested.");
+          return;
+        }
+        setActiveDrawer("queue");
+        setSurface("agent");
+        setAgentScene("run");
+        pushToast("Approval queue opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "home:view-all-sessions") {
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction.startsWith("home:session:")) {
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "preview:refresh") {
+        await refreshAll("reference-preview-refresh");
+        return;
+      }
+
+      if (normalizedAction === "agent:open-preview" || normalizedAction === "composer:plus:preview") {
+        setSurface("workbench");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        setAgentScene("run");
+        pushToast("Preview opened as a full work surface.", "info");
+        await refreshAll("agent-open-preview");
+        return;
+      }
+
+      if (normalizedAction === "agent:open-terminal") {
+        setActiveDrawer("runtime");
+        setSurface("agent");
+        setAgentScene("run");
+        return;
+      }
+
+      if (normalizedAction === "agent:open-browser" || normalizedAction === "composer:plus:browser") {
+        setSurface("workbench");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        setAgentScene("run");
+        pushToast("Browser proof surface opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "agent:structured-feedback") {
+        const sourceEventId = String(payload?.sourceEventId || payload?.eventId || "").trim();
+        const routeContext = String(payload?.routeContext || "").trim();
+        const taskContext = String(payload?.taskContext || payload?.title || "").trim();
+        const verifierFeedback = String(payload?.verifierFeedback || payload?.detail || "").trim();
+        const feedbackBody = [
+          taskContext ? `Task: ${taskContext}` : "",
+          routeContext ? `Route: ${routeContext}` : "",
+          verifierFeedback ? `Verifier feedback: ${verifierFeedback}` : "",
+          sourceEventId ? `Source event: ${sourceEventId}` : "",
+        ].filter(Boolean).join("\n");
+        if (previewMode === "live" && hasCommandBackend() && mission?.mission_id) {
+          try {
+            const eventId = sourceEventId || `reference-feedback-${Date.now()}`;
+            const handoffId = ["reference-feedback", mission.mission_id, eventId].join(":");
+            const receipt = await callBackend(
+              "record_live_review_structured_feedback_command",
+              {
+                payload: {
+                  eventId,
+                  sourceEventId: eventId,
+                  source: "fluxio-reference-action",
+                  plannerExecutorHandoffId: handoffId,
+                  routeContext: {
+                    missionId: mission.mission_id,
+                    workspaceId: workspace?.workspace_id || "",
+                    route: routeContext,
+                  },
+                  taskContext: {
+                    reviewTarget: taskContext || "Structured feedback",
+                    operatorFeedback: feedbackBody || "Structured feedback requested from the live review surface.",
+                  },
+                  verifierFeedback: {
+                    selectedEventDetail: verifierFeedback,
+                  },
+                  nextIdea: "Use this feedback receipt to drive the next planner/executor handoff.",
+                },
+              },
+              { throwOnError: true },
+            );
+            pushToast(`Structured feedback receipt recorded for ${receipt?.eventId || eventId}.`, "info");
+            await refreshAll("reference-structured-feedback");
+            return;
+          } catch (error) {
+            pushToast(`Structured feedback receipt failed: ${error}`, "warn");
+          }
+        }
+        setActiveCommentTarget({
+          id: sourceEventId || `structured-feedback-${Date.now()}`,
+          kind: "structured feedback",
+          title: taskContext || "Structured feedback",
+        });
+        setOperatorDraft(feedbackBody || "Structured feedback:\n");
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        return;
+      }
+
+      if (normalizedAction === "launch:mission") {
+        const sourceSurface = String(payload?.sourceSurface || surface || "").toLowerCase();
+        const launchedFromAgent = sourceSurface === "agent";
+        const launchRow =
+          builderSchedulingQueue.find(item => item.safeToLaunch !== false) ||
+          builderSchedulingQueue[0] ||
+          null;
+        if (launchRow?.workspaceId) {
+          setSelectedWorkspaceId(launchRow.workspaceId);
+        }
+        setMissionForm(current => {
+          const agentLaunchObjective =
+            "Launch the next mission from Agent Live with a clear objective, proof bar, and continuation plan.";
+          const candidateObjective =
+            current.objective.trim() ||
+            launchRow?.targetMissionTitle ||
+            launchRow?.latestMissionTitle ||
+            launchRow?.recommendedAction ||
+            operatorDraft.trim() ||
+            "";
+          const objective =
+            launchedFromAgent && (!candidateObjective || candidateObjective.includes("from Builder"))
+              ? agentLaunchObjective
+              : candidateObjective;
+          return {
+            ...current,
+            workspaceId: launchRow?.workspaceId || workspace?.workspace_id || current.workspaceId || "",
+            runtime: workspace?.default_runtime || current.runtime || "hermes",
+            profile: workspace?.user_profile || profileId || current.profile,
+            objective,
+          };
+        });
+        setSurface(launchedFromAgent ? "agent" : "builder");
+        if (launchedFromAgent) {
+          setAgentScene("run");
+        }
+        setBuilderDetailOpen(false);
+        setShowMissionDialog(true);
+        return;
+      }
+
+      if (normalizedAction === "live:comment-react") {
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        setOperatorDraft(current => current || "Reaction:\n");
+        return;
+      }
+
+      if (
+        normalizedAction === "live:jump-marker" ||
+        normalizedAction === "live:rewind-marker" ||
+        normalizedAction === "live:open-marker-context"
+      ) {
+        const markerId = String(payload?.markerId || payload?.eventId || "").trim();
+        setActiveCommentTarget({
+          id: markerId || `marker-${Date.now()}`,
+          kind: "live review marker",
+          title: payload?.snapshotPath || markerId || "Live review marker",
+        });
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        setActiveDrawer(normalizedAction === "live:open-marker-context" ? "context" : "proof");
+        return;
+      }
+
+      if (normalizedAction === "live:open-proof" || normalizedAction === "live:open-thread") {
+        const sourceEventId = String(payload?.sourceEventId || "").trim();
+        setActiveCommentTarget({
+          id: sourceEventId || `live-event-${Date.now()}`,
+          kind: "live review event",
+          title: normalizedAction === "live:open-proof" ? "Live review proof" : "Live review thread",
+        });
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer(normalizedAction === "live:open-proof" ? "proof" : "context");
+        return;
+      }
+
+      if (normalizedAction.startsWith("builder:pipeline:")) {
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "rule-sets:audit") {
+        setSurface("skills");
+        setReferenceStudio(current => ({ ...current, collectionTab: "rule" }));
+        setActiveDrawer("context");
+        return;
+      }
+
+      if (normalizedAction === "rule-sets:edit") {
+        const ruleSetId = String(payload?.ruleSetId || "").trim();
+        setSurface("skills");
+        setReferenceStudio(current => ({
+          ...current,
+          collectionTab: "rule",
+          selectedRuleId: ruleSetId || current.selectedRuleId || current.activeRuleSetId,
+        }));
+        setOperatorDraft(current => current || "Rule set edit request:\n");
+        return;
+      }
+
+      if (normalizedAction === "rule-sets:duplicate") {
+        const ruleSetId = String(payload?.ruleSetId || "").trim();
+        setSurface("skills");
+        setReferenceStudio(current => {
+          const sourceRule =
+            asList(current.ruleSets).find(item => item.id === ruleSetId) ||
+            asList(current.ruleSets).find(item => item.id === current.selectedRuleId) ||
+            asList(current.ruleSets)[0];
+          if (!sourceRule) {
+            return { ...current, collectionTab: "rule" };
+          }
+          const nextId = `rule-copy-${Date.now()}`;
+          return {
+            ...current,
+            collectionTab: "rule",
+            selectedRuleId: nextId,
+            ruleSets: [
+              {
+                ...sourceRule,
+                id: nextId,
+                name: `${sourceRule.name || "Rule Set"} Copy`,
+                status: "Draft",
+                summary: sourceRule.summary || "Duplicated rule set draft.",
+              },
+              ...asList(current.ruleSets),
+            ],
+          };
+        });
+        pushToast("Rule set duplicated as a draft.", "info");
+        return;
+      }
+
+      if (normalizedAction === "rule-sets:apply-active") {
+        const ruleSetId = String(payload?.ruleSetId || "").trim();
+        setSurface("skills");
+        setReferenceStudio(current => {
+          const nextRuleId = ruleSetId || current.selectedRuleId || current.activeRuleSetId;
+          return {
+            ...current,
+            collectionTab: "rule",
+            selectedRuleId: nextRuleId,
+            activeRuleSetId: nextRuleId,
+          };
+        });
+        pushToast("Rule set applied to the current run view.", "info");
+        return;
+      }
+
+      if (normalizedAction === "system-improvement:open" || normalizedAction === "t3-repair:open") {
+        const item = payload?.item || {};
+        setActiveCommentTarget({
+          id: item.id || item.category || item.title || normalizedAction,
+          kind: normalizedAction === "t3-repair:open" ? "T3 repair" : "system improvement",
+          title: item.title || item.category || item.nextAction || "Improvement item",
+        });
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        setActiveDrawer("proof");
+        return;
+      }
+
+      if (normalizedAction === "watchdog:refresh") {
+        setSurface("builder");
+        setBuilderDetailOpen(false);
+        setActiveDrawer("builder");
+        await refreshAll("watchdog-refresh");
+        return;
+      }
+
+      if (normalizedAction === "watchdog:parallelize-worktree") {
+        const missionId = String(payload?.missionId || "").trim();
+        setOperatorDraft(current => current || `Parallelize worktree for mission ${missionId || "selected mission"}:\n`);
+        if (missionId) {
+          handleReferenceMissionSelect({
+            missionId,
+            nextSurface: "agent",
+            nextAgentScene: "run",
+            openBuilderDetail: false,
+          });
+        } else {
+          setSurface("builder");
+        }
+        setActiveDrawer("queue");
+        return;
+      }
+
+      if (normalizedAction === "workbench:notification-settings") {
+        setNotificationStackCollapsed(false);
+        setNotificationStackExpanded(true);
+        setSurface("settings");
+        setReferenceSettingsTab("general");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "workbench:promote-idea") {
+        setMissionForm(current => ({
+          ...current,
+          workspaceId: workspace?.workspace_id || current.workspaceId || "",
+          runtime: workspace?.default_runtime || current.runtime || "hermes",
+          profile: workspace?.user_profile || profileId || current.profile,
+          objective: current.objective.trim() || operatorDraft.trim() || "Promote the selected workbench idea into a mission.",
+        }));
+        setSurface("workbench");
+        setShowMissionDialog(true);
+        return;
+      }
+
+      if (normalizedAction === "workbench:study-plan") {
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        setOperatorDraft(current => current || "Generate a study plan from the current Workbench context:\n");
+        return;
+      }
+
+      if (normalizedAction === "workbench:tutorial-help") {
+        setSurface("workbench");
+        setActiveDrawer("context");
+        return;
+      }
+
+      if (normalizedAction === "workbench:computer-use") {
+        setSurface("workbench");
+        setActiveDrawer("runtime");
+        return;
+      }
+
+      if (normalizedAction === "skills:review-system-loss") {
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        setActiveDrawer("builder");
+        return;
+      }
+
+      if (normalizedAction === "skills:open-repair-queue") {
+        setSurface("skills");
+        setReferenceStudio(current => ({ ...current, collectionTab: "skill" }));
+        return;
+      }
+
+      if (normalizedAction.startsWith("skills:apply-repair:")) {
+        setSurface("skills");
+        pushToast("Repair proposal selected in Skill Studio.", "info");
+        return;
+      }
+
+      if (normalizedAction.startsWith("skill:open:")) {
+        const itemId = normalizedAction.slice("skill:open:".length);
+        setSurface("skills");
+        setReferenceStudio(current => {
+          const skill = asList(current.skills).find(item => [item.id, item.name].includes(itemId));
+          const rule = asList(current.ruleSets).find(item => [item.id, item.name].includes(itemId));
+          if (skill) {
+            return { ...current, collectionTab: "skill", selectedSkillId: skill.id };
+          }
+          if (rule) {
+            return { ...current, collectionTab: "rule", selectedRuleId: rule.id };
+          }
+          return current;
+        });
+        return;
+      }
+
+      if (normalizedAction.startsWith("skill:permission:")) {
+        setSurface("skills");
+        pushToast("Skill permissions are shown in the selected skill detail.", "info");
+        return;
+      }
+
+      if (normalizedAction === "images:add-reference") {
+        setSurface("images");
+        pushToast("Image reference workspace opened.", "info");
+        return;
+      }
+
+      if (normalizedAction.startsWith("images:variant:")) {
+        setSurface("images");
+        return;
+      }
+
+      if (normalizedAction === "images:send-to-builder") {
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        return;
+      }
+
+      if (normalizedAction.startsWith("workbench:event:")) {
+        setSurface("workbench");
+        return;
+      }
+
+      if (
+        normalizedAction === "workbench:screenshot" ||
+        normalizedAction === "workbench:run-artifact-check" ||
+        normalizedAction === "workbench:open-execution-receipt"
+      ) {
+        setSurface("workbench");
+        setActiveDrawer("proof");
+        pushToast("Workbench proof view opened.", "info");
+        return;
+      }
+
+      if (normalizedAction === "config:provider") {
+        setSurface("settings");
+        setReferenceSettingsTab("providers");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "config:model" || normalizedAction === "config:effort") {
+        setSurface("settings");
+        setReferenceSettingsTab("providers");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "config:harness" || normalizedAction === "config:autonomy") {
+        setSurface("settings");
+        setReferenceSettingsTab("rules");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction.startsWith("database:open:")) {
+        setSurface("settings");
+        setReferenceSettingsTab("storage");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
         return;
       }
 
@@ -12140,17 +15133,68 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
-      pushToast("This action is not available yet in the current shell.", "info");
+      if (normalizedAction.startsWith("settings:")) {
+        const tab = normalizedAction.includes("rule")
+          ? "rules"
+          : normalizedAction.includes("model") || normalizedAction.includes("provider")
+            ? "providers"
+            : normalizedAction.includes("storage") || normalizedAction.includes("database")
+              ? "storage"
+              : "general";
+        setSurface("settings");
+        setReferenceSettingsTab(tab);
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction.startsWith("builder:")) {
+        setSurface("builder");
+        setBuilderDetailOpen(true);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction.startsWith("skills:") || normalizedAction.startsWith("skill:")) {
+        setSurface("skills");
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction.startsWith("images:")) {
+        setSurface("images");
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction.startsWith("workbench:")) {
+        setSurface("workbench");
+        setActiveDrawer(
+          normalizedAction.includes("notification")
+            ? "context"
+            : normalizedAction.includes("computer") || normalizedAction.includes("browser")
+              ? "runtime"
+              : "proof",
+        );
+        return;
+      }
+
+      setSurface("agent");
+      setAgentScene("run");
+      setActiveDrawer(null);
     },
     [
       activeChatSessionId,
       clearOperatorAttachments,
       createChatSessionForWorkspace,
+      activeCommentTarget,
       handleAgentFollowUp,
+      handleAgentIdleChat,
       handleAgentIdleSubmit,
       handleAgentIdlePrimaryAction,
       handleReferenceMissionSelect,
       handleSubAgentLaneControl,
+      builderSchedulingQueue,
       markAction,
       mission,
       operatorDraft,
@@ -12631,6 +15675,122 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [previewMode, pushToast],
   );
 
+  const draftConnectedAppAgentPrompt = useCallback(
+    (session, mode = "run", selectedAction = null) => {
+      const appName = session?.app_name || session?.app_id || "connected app";
+      const selectedHookId = selectedAction?.hookId || selectedAction?.hook_id || "";
+      const selectedActionLabel = selectedAction?.label || selectedHookId || "";
+      const selectedActionRisk = selectedAction?.riskLevel || selectedAction?.risk_level || "";
+      const selectedActionRequiresApproval = Boolean(selectedAction?.requiresApproval || selectedAction?.requires_approval);
+      const contextSummary =
+        asList(session?.context_preview).map(item => item?.summary).find(Boolean) ||
+        session?.latest_task_result?.resultSummary ||
+        asList(session?.notes)[0] ||
+        "No live context body reported yet.";
+      const taskLabel =
+        selectedActionLabel ||
+        session?.latest_task_result?.label ||
+        asList(session?.active_tasks)[0] ||
+        "app-native task";
+      const statusText = `${titleizeToken(session?.status || "unknown")} / ${titleizeToken(session?.bridge_health || "unknown")}`;
+      const bridgeRole =
+        session?.ui_hints?.bridgeRole ||
+        session?.ui_hints?.runtimeManager ||
+        session?.bridge_transport ||
+        "app bridge";
+      const aliasText = asList(session?.ui_hints?.aliases).filter(Boolean).join(", ");
+      const surfaceItems = asList(session?.context_preview)
+        .flatMap(surface => asList(surface?.items))
+        .filter(Boolean)
+        .slice(0, 6);
+      const appActions = asList(session?.latest_task_result?.payload?.safeDirections)
+        .concat(asList(session?.action_hooks).map(action => action?.label || action?.hook_id).filter(Boolean))
+        .filter(Boolean)
+        .slice(0, 6);
+      const appRoot = session?.app_root || session?.latest_task_result?.payload?.workspaceRoot || session?.latest_task_result?.payload?.expectedAppRoot || "";
+      const bridgeEndpoint = session?.bridge_endpoint || session?.latest_task_result?.payload?.bridgeEndpoint || "";
+      const startCommand = session?.ui_hints?.startCommand || session?.latest_task_result?.payload?.startCommand || "";
+      const healthUrl = session?.ui_hints?.healthUrl || session?.latest_task_result?.payload?.healthUrl || session?.ui_hints?.bridgeHealthUrl || "";
+      const appUrl = session?.ui_hints?.appUrl || session?.latest_task_result?.payload?.appUrl || "";
+      const bridgeSetupTruth =
+        ["missing", "offline", "configure", "available", "follow_on", "manifest", "manifest_only", "deferred"].some(token =>
+          String(session?.status || "").toLowerCase().includes(token) ||
+          String(session?.bridge_health || "").toLowerCase().includes(token)
+        )
+          ? "Setup truth: Do not claim the app bridge is connected or that an app task ran until the endpoint and latest task receipt prove it."
+          : "Setup truth: Use the latest connected-app receipt as proof before saying the app task ran.";
+      const skillCandidate =
+        session?.latest_task_result?.payload?.skillCandidate ||
+        session?.ui_hints?.skillCandidate ||
+        `${appName} workflow`;
+      const prompt =
+        mode === "skill"
+          ? [
+              `Make a reviewable skill draft from ${appName}.`,
+              `Bridge role: ${bridgeRole}.`,
+              aliasText ? `Aliases I may use: ${aliasText}.` : "",
+              `Skill candidate: ${skillCandidate}.`,
+              selectedActionLabel ? `Selected app action: ${selectedActionLabel}${selectedHookId ? ` (${selectedHookId})` : ""}.` : "",
+              selectedActionLabel ? `Action safety: ${selectedActionRequiresApproval ? "review required" : "ready without extra approval"}${selectedActionRisk ? `, ${selectedActionRisk} risk` : ""}.` : "",
+              `Known context: ${contextSummary}`,
+              appRoot ? `App root: ${appRoot}.` : "",
+              bridgeEndpoint ? `Bridge endpoint: ${bridgeEndpoint}.` : "",
+              startCommand ? `Start command: ${startCommand}` : "",
+              healthUrl ? `Health check: ${healthUrl}` : "",
+              appUrl ? `App URL: ${appUrl}` : "",
+              surfaceItems.length ? `Visible app context: ${surfaceItems.join("; ")}` : "",
+              "Use the existing Skill Studio contract: name the trigger, required context, allowed actions, approval rules, tests, and when the skill should not run.",
+              "Do not execute app writes silently; propose the skill and validation steps first.",
+            ]
+          : [
+              `Use ${appName} through the Agent runtime/harness path.`,
+              `Bridge role: ${bridgeRole}.`,
+              aliasText ? `Aliases I may use: ${aliasText}.` : "",
+              `Requested app task: ${taskLabel}.`,
+              selectedActionLabel ? `Drafted app action: ${selectedActionLabel}${selectedHookId ? ` (${selectedHookId})` : ""}.` : "",
+              selectedActionLabel ? `Action safety: ${selectedActionRequiresApproval ? "review required before write" : "ready without extra approval"}${selectedActionRisk ? `, ${selectedActionRisk} risk` : ""}.` : "",
+              `Known context: ${contextSummary}`,
+              `Bridge status: ${statusText}.`,
+              appRoot ? `App root: ${appRoot}.` : "",
+              bridgeEndpoint ? `Bridge endpoint: ${bridgeEndpoint}.` : "",
+              startCommand ? `Start command: ${startCommand}` : "",
+              healthUrl ? `Health check: ${healthUrl}` : "",
+              appUrl ? `App URL: ${appUrl}` : "",
+              surfaceItems.length ? `Visible app context: ${surfaceItems.join("; ")}` : "",
+              appActions.length ? `Safe app actions: ${appActions.join("; ")}` : "",
+              bridgeSetupTruth,
+              "Pick the right runtime/provider route, explain what is ready or missing, and give me the next safe action with proof.",
+            ];
+      const promptText = prompt.filter(Boolean).join("\n");
+      if (mode === "skill") {
+        const nextSkill = connectedAppSkillDraft(session, promptText, workspaceProfileForm.routeOverrides, selectedAction);
+        setReferenceStudio(current => ({
+          ...current,
+          collectionTab: "skill",
+          selectedSkillId: nextSkill.id,
+          skills: [
+            nextSkill,
+            ...asList(current.skills).filter(item => item.id !== nextSkill.id),
+          ],
+          assistantCollapsed: false,
+        }));
+        setSurface("skills");
+        setActiveDrawer(null);
+        setOperatorDraft(promptText);
+        markAction(`bridge:${mode}:${session?.app_id || "connected-app"}${selectedHookId ? `:${selectedHookId}` : ""}`);
+        pushToast(`${appName} Skill Studio draft created.`, "info");
+        return;
+      }
+      setSurface("agent");
+      setAgentScene("run");
+      setActiveDrawer(null);
+      setOperatorDraft(promptText);
+      markAction(`bridge:${mode}:${session?.app_id || "connected-app"}${selectedHookId ? `:${selectedHookId}` : ""}`);
+      pushToast(`${appName} Agent draft prepared. Review, then run.`, "info");
+    },
+    [markAction, pushToast, workspaceProfileForm.routeOverrides],
+  );
+
   const openProviderAuthUrl = useCallback(
     async (url, label) => {
       if (previewMode !== "live" || !hasCommandBackend()) {
@@ -12735,7 +15895,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           setWorkspaceProfileForm(nextProfile);
           await saveWorkspacePolicy(nextProfile);
           if (result?.status?.authenticated) {
-            pushToast("MiniMax OpenClaw OAuth is already verified.", "info");
+            pushToast("MiniMax broker OAuth is already verified.", "info");
           } else if (result?.sessionId && result?.verificationUrl) {
             setMiniMaxOAuthFlow({
               open: true,
@@ -12756,16 +15916,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             const copied = await copyTextValue(result.command || "");
             pushToast(
               copied
-                ? "MiniMax OpenClaw auth command copied. Run it on the NAS or runtime host, then verify auth."
-                : result?.message || "Run the MiniMax OpenClaw auth command on the runtime host, then verify auth.",
+                ? "MiniMax broker auth command copied. Run it on the NAS or runtime host, then verify auth."
+                : result?.message || "Run the MiniMax broker auth command on the runtime host, then verify auth.",
               "info",
             );
           } else {
-            pushToast("MiniMax OpenClaw OAuth terminal opened. Finish the login there, then verify auth.", "info");
+            pushToast("MiniMax broker OAuth terminal opened. Finish the login there, then verify auth.", "info");
           }
           await refreshAll("minimax-openclaw-oauth-started");
         } catch (error) {
-          pushToast(`MiniMax OpenClaw OAuth failed to start: ${error}`, "error");
+          pushToast(`MiniMax broker OAuth failed to start: ${error}`, "error");
         }
       }
     },
@@ -12878,7 +16038,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         setWorkspaceProfileForm(nextProfile);
         await saveWorkspacePolicy(nextProfile);
         setMiniMaxOAuthFlow(DEFAULT_MINIMAX_OAUTH_FLOW);
-        pushToast("MiniMax OpenClaw OAuth connected.", "info");
+        pushToast("MiniMax broker OAuth connected.", "info");
         await refreshAll("minimax-openclaw-oauth");
         return;
       }
@@ -12927,13 +16087,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         };
         setWorkspaceProfileForm(nextProfile);
         await saveWorkspacePolicy(nextProfile);
-        pushToast("MiniMax OpenClaw OAuth verified.", "info");
+        pushToast("MiniMax broker OAuth verified.", "info");
       } else {
-        pushToast(status?.message || "MiniMax OpenClaw OAuth is not verified yet.", "warn");
+        pushToast(status?.message || "MiniMax broker OAuth is not verified yet.", "warn");
       }
       await refreshAll("minimax-openclaw-oauth-verified");
     } catch (error) {
-      pushToast(`Could not verify MiniMax OpenClaw OAuth: ${error}`, "error");
+      pushToast(`Could not verify MiniMax broker OAuth: ${error}`, "error");
     }
   }, [
     callBackend,
@@ -13153,7 +16313,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <strong>Skill feedback from mission slices</strong>
                   {asList(missionProofDigest.latest.skillFeedback).slice(0, 3).map((item, index) => (
                     <p key={`proof-digest-feedback-${index}`}>
-                      {titleizeToken(item.skillId || item.skill_id || item.skill || "skill")} · Loss {item.systemLoss ?? item.system_loss ?? "n/a"} · {titleizeToken(item.nextAction || item.next_action || "review")}
+                      {titleizeToken(item.skillId || item.skill_id || item.skill || "skill")} · Gap {item.systemLoss ?? item.system_loss ?? "n/a"} · {titleizeToken(item.nextAction || item.next_action || "review")}
                     </p>
                   ))}
                 </div>
@@ -13407,6 +16567,50 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       const bridgeServices = focusedRuntimeServices.bridges.filter(
         item => !primaryRuntimeServices.some(existing => existing.serviceId === item.serviceId),
       );
+      const hermesServiceReady = focusedRuntimeServices.hermes.some(service => service.tone === "good");
+      const openClawGatewayReady = Boolean(openClawStatus?.connected || data.openClawHasToken);
+      const telegramBridgeReady = bridgeServices.some(service =>
+        String(service.serviceId || service.label || "").toLowerCase().includes("telegram") &&
+        service.tone === "good",
+      );
+      const connectorSetupRows = [
+        {
+          id: "hermes-runtime-thread",
+          label: "Hermes mission thread",
+          status: hermesServiceReady ? "Ready" : "Check runtime",
+          tone: hermesServiceReady ? "good" : "warn",
+          detail:
+            "Use this for normal mission chat: the app-native Agent thread sends follow-ups to Hermes, preserves mission context, and stores proof.",
+          action: "Open Agent on a selected mission, then use Continue, Modify, Verify, or Summarize.",
+        },
+        {
+          id: "openclaw-gateway-session",
+          label: "OpenClaw gateway session",
+          status: openClawGatewayReady ? "Gateway known" : "Needs gateway",
+          tone: openClawGatewayReady ? "good" : "warn",
+          detail:
+            "Use this when the runtime needs an OpenClaw local/gateway session for browser, provider setup, or tool exploration work.",
+          action: data.openClawHasToken ? "Connect the gateway URL." : "Save a gateway token, then connect.",
+        },
+        {
+          id: "provider-api-route",
+          label: "Provider API route",
+          status: modelAuthReady ? "Model auth ready" : "Needs model account",
+          tone: modelAuthReady ? "good" : "warn",
+          detail:
+            "Use this for direct model calls. Provider auth decides launch admission; quota remains separate live usage evidence.",
+          action: modelAuthReady ? "Pick the task-fit provider/model in the mission route." : "Connect Codex OAuth or save a provider API key.",
+        },
+        {
+          id: "telegram-bridge",
+          label: "Telegram bridge",
+          status: telegramBridgeReady ? "Bridge visible" : "Notification bridge only",
+          tone: telegramBridgeReady ? "good" : "neutral",
+          detail:
+            "Use this for alerts and mobile handoff. It is not the primary Hermes/OpenClaw mission runtime unless a bridge session says so.",
+          action: "Keep ntfy/Web Push for phone alerts; use Telegram only when bridge credentials are configured.",
+        },
+      ];
 
       return (
         <section className="drawer-panel">
@@ -13415,6 +16619,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <p>Keep Hermes, OpenClaw, image tools, and phone alerts healthy from one simple setup panel.</p>
           </header>
 
+          <section className="drawer-block" data-connector-setup-path="true">
+            <h3>Connector setup path</h3>
+            <div className="drawer-list">
+              {connectorSetupRows.map(item => (
+                <article className={`drawer-card ${toneClass(item.tone)}`} key={`connector-setup-${item.id}`}>
+                  <span>{item.status}</span>
+                  <strong>{item.label}</strong>
+                  <p>{item.detail}</p>
+                  <p>{item.action}</p>
+                </article>
+              ))}
+            </div>
+            <p className="drawer-footnote">
+              Chat with Hermes means the app-native mission thread by default; OpenClaw means a local or gateway runtime session; provider API means model routing; Telegram is a bridge unless a runtime session explicitly uses it.
+            </p>
+          </section>
+
           <section className="drawer-block" id="provider-auth-panel">
             <h3>AI accounts and model tools</h3>
             <div className="context-grid compact-metrics">
@@ -13422,7 +16643,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <span>OpenAI / Codex auth</span>
                 <strong>{`${openAICodexAuthPath} · ${openAICodexAuthReady ? "Ready" : "Missing"}`}</strong>
                 <p>
-                  Connect your OpenAI account for Codex/OpenClaw, or save an API key for direct model calls.
+                  Connect your OpenAI/Codex account, or save an API key for direct model calls.
                 </p>
               </article>
               <article className="context-item">
@@ -13437,9 +16658,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               <article className="context-item">
                 <span>Active provider route</span>
                 <strong>
-                  {missionProviderTruth?.activeRoute?.provider
-                    ? `${titleizeToken(missionProviderTruth.activeRoute.provider)} · ${missionProviderTruth.activeRoute.model || "default"}`
-                    : "Not resolved"}
+                  {routeProviderModelLabel(missionProviderTruth?.activeRoute, "Not resolved")}
                 </strong>
                 <p>
                   {missionProviderTruth?.activeRoute?.role
@@ -13450,9 +16669,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               <article className="context-item">
                 <span>Last successful model call</span>
                 <strong>
-                  {missionProviderTruth?.lastSuccessfulCall?.provider
-                    ? `${titleizeToken(missionProviderTruth.lastSuccessfulCall.provider)} · ${missionProviderTruth.lastSuccessfulCall.model || "default"}`
-                    : "None yet"}
+                  {routeProviderModelLabel(missionProviderTruth?.lastSuccessfulCall, "None yet")}
                 </strong>
                 <p>
                   {missionProviderTruth?.lastSuccessfulCall?.at
@@ -13463,9 +16680,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               <article className="context-item">
                 <span>Last provider failure</span>
                 <strong>
-                  {missionProviderTruth?.lastFailure?.provider
-                    ? `${titleizeToken(missionProviderTruth.lastFailure.provider)} · ${missionProviderTruth.lastFailure.model || "default"}`
-                    : "No provider failure"}
+                  {routeProviderModelLabel(missionProviderTruth?.lastFailure, "No provider failure")}
                 </strong>
                 <p>
                   {missionProviderTruth?.lastFailure?.summary ||
@@ -13494,7 +16709,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     <p>{item.note}</p>
                     <p>
                       {providerTruthRow?.lastSuccessfulModelCall?.provider
-                        ? `Last success: ${titleizeToken(providerTruthRow.lastSuccessfulModelCall.provider)} · ${providerTruthRow.lastSuccessfulModelCall.model || "default"}`
+                        ? `Last success: ${routeProviderModelLabel(providerTruthRow.lastSuccessfulModelCall)}`
                         : "No successful call recorded yet."}
                     </p>
                     <p>
@@ -13523,10 +16738,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           onClick={() => void handleReferenceQuickAuth("minimax")}
                           title={!providerOAuthActionsAvailable ? providerOAuthUnavailableReason : ""}
                         >
-                          MiniMax OpenClaw OAuth
+                          MiniMax broker OAuth
                         </ActionButton>
                         <ActionButton onClick={() => void openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxApiKeys, "MiniMax API keys")}>
                           Open API keys
+                        </ActionButton>
+                      </div>
+                    ) : null}
+                    {item.id === "opencode-go" ? (
+                      <div className="drawer-actions">
+                        <ActionButton onClick={() => void openProviderGuideUrl(PROVIDER_AUTH_URLS.opencodeGoDocs, "OpenCodeGo provider docs")}>
+                          Open provider docs
                         </ActionButton>
                       </div>
                     ) : null}
@@ -13667,6 +16889,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <span>MiniMax</span>
                   <strong>{minimaxAuthReady ? "Portal ready" : "Needs portal"}</strong>
                   <p>{minimaxAuthPath}</p>
+                </div>
+                <div>
+                  <span>OpenCodeGo</span>
+                  <strong>{openCodeGoAuthReady ? "API key ready" : "Needs API key"}</strong>
+                  <p>{openCodeGoAuthReady ? "OPENCODE_API_KEY is visible to the runtime." : "Save an OpenCodeGo API key in account settings."}</p>
                 </div>
               </div>
               <p>
@@ -13882,15 +17109,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <h3>Connected apps and mobile bridges</h3>
             <div className="drawer-list">
               {bridgeSessions.length > 0 ? (
-                bridgeSessions.map(session => (
-                  <article className={`drawer-card ${toneClass(session.bridge_health === "healthy" ? "good" : "warn")}`} key={`bridge-session-${session.session_id}`}>
+                bridgeSessions.map(session => {
+                  const nativeActions = asList(session.appNativeActions || session.action_hooks);
+                  const managerRole = titleizeToken(session.ui_hints?.runtimeManager || session.ui_hints?.bridgeRole || session.bridge_transport || "app manager");
+                  const nextNativeAction = nativeActions[0];
+                  const nextActionLabel = nextNativeAction?.label || titleizeToken(nextNativeAction?.hookId || nextNativeAction?.hook_id || "Use in Agent");
+                  const nextActionReview = Boolean(nextNativeAction?.requiresApproval || nextNativeAction?.requires_approval);
+                  const startCommand = session.ui_hints?.startCommand || session.latest_task_result?.payload?.startCommand || "";
+                  const healthUrl = session.ui_hints?.healthUrl || session.latest_task_result?.payload?.healthUrl || session.ui_hints?.bridgeHealthUrl || "";
+                  const appUrl = session.ui_hints?.appUrl || session.latest_task_result?.payload?.appUrl || "";
+                  const appId = session.app_id || session.id || "";
+                  return (
+                  <article
+                    className={`drawer-card ${toneClass(session.bridge_health === "healthy" ? "good" : "warn")}`}
+                    data-connected-app-manager-role={managerRole}
+                    data-connected-app-next-action={nextActionLabel}
+                    key={`bridge-session-${session.session_id}`}
+                  >
                     <span>{session.app_name || session.app_id}</span>
                     <strong>
                       {titleizeToken(session.status || "unknown")}
                       {session.bridge_transport ? ` · ${titleizeToken(session.bridge_transport)}` : ""}
                     </strong>
                     <p>{titleizeToken(session.bridge_health || "unknown")} bridge health</p>
+                    <p data-connected-app-next-action-copy="true">
+                      {managerRole}: next safe action is {nextActionLabel} ({nextActionReview ? "review before write" : "ready to draft/run"}).
+                    </p>
+                    {session.ui_hints?.runtimeManager || session.ui_hints?.bridgeRole ? (
+                      <p>{session.ui_hints.runtimeManager || session.ui_hints.bridgeRole}</p>
+                    ) : null}
                     {Array.isArray(session.notes) && session.notes.length > 0 ? <p>{session.notes[0]}</p> : null}
+                    {startCommand || healthUrl || appUrl ? (
+                      <div className="bridge-output-summary">
+                        <span>Execution truth</span>
+                        {startCommand ? <code>{startCommand}</code> : null}
+                        {healthUrl ? <p>Health: {healthUrl}</p> : null}
+                        {appUrl ? <p>App: {appUrl}</p> : null}
+                      </div>
+                    ) : null}
                     {session.latest_task_result?.resultSummary ? (
                       <div className="bridge-output-summary">
                         <span>{session.latest_task_result.label || "Latest output"}</span>
@@ -13917,6 +17173,50 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       </div>
                     ) : null}
                     <div className="drawer-actions bridge-card-actions">
+                      {startCommand && appId ? (
+                        <ActionButton
+                          data-connected-app-start-action="true"
+                          onClick={() =>
+                            void runWorkspaceActionSpec({
+                              actionId: `start-${appId}`,
+                              label: `Start ${session.app_name || session.app_id || "app"}`,
+                              commandSurface: "bridge.start_app",
+                              requiresApproval: false,
+                            })
+                          }
+                          type="button"
+                        >
+                          Start app
+                        </ActionButton>
+                      ) : null}
+                      {healthUrl && appId ? (
+                        <ActionButton
+                          data-connected-app-health-action="true"
+                          onClick={() =>
+                            void runWorkspaceActionSpec({
+                              actionId: `check-${appId}-health`,
+                              label: `Check ${session.app_name || session.app_id || "app"} health`,
+                              commandSurface: "bridge.app_health",
+                              requiresApproval: false,
+                            })
+                          }
+                          type="button"
+                        >
+                          Check health
+                        </ActionButton>
+                      ) : null}
+                      <ActionButton
+                        onClick={() => draftConnectedAppAgentPrompt(session, "run")}
+                        type="button"
+                      >
+                        Use in Agent
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => draftConnectedAppAgentPrompt(session, "skill")}
+                        type="button"
+                      >
+                        Make skill
+                      </ActionButton>
                       {session.bridge_endpoint ? (
                         <ActionButton
                           onClick={() => void openBridgeEndpoint(session.bridge_endpoint, session.app_name || session.app_id)}
@@ -13932,7 +17232,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       ) : null}
                     </div>
                   </article>
-                ))
+                  );
+                })
               ) : (
                 <article className="drawer-card">
                   <strong>No connected app bridge is reporting yet.</strong>
@@ -14571,7 +17872,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </span>
             </div>
             {(() => {
-              const tracks = viewModel.drawers.builder.qualityRoadmap.tracks;
+              const tracks = integrationRoadmapTracks.length > 0
+                ? integrationRoadmapTracks
+                : viewModel.drawers.builder.qualityRoadmap.tracks;
               const activeItem =
                 tracks.find(item => item.id === activeRoadmapItemId) ||
                 tracks.find(item => item.state !== "done") ||
@@ -14907,16 +18210,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <p className="drawer-footnote">{viewModel.drawers.builder.skillStudio.capabilitiesNote}</p>
             <details open>
               <summary>Mission-slice feedback loop</summary>
-              <div className="skill-loss-routing" aria-label="System loss routing policy">
+              <div className="skill-loss-routing" aria-label="System gap routing policy">
                 <div>
-                  <span>System loss routing</span>
+                  <span>System gap routing</span>
                   <strong>
                     {viewModel.drawers.builder.skillStudio.feedbackLoop?.systemLossRouting?.enabled
                       ? "Active"
                       : "Collecting evidence"}
                   </strong>
                   <p>
-                    {`Prefer <= ${viewModel.drawers.builder.skillStudio.feedbackLoop?.systemLossRouting?.preferThreshold ?? 0.15} loss`}
+                    {`Prefer <= ${viewModel.drawers.builder.skillStudio.feedbackLoop?.systemLossRouting?.preferThreshold ?? 0.15} gap`}
                     {` · repair >= ${viewModel.drawers.builder.skillStudio.feedbackLoop?.systemLossRouting?.deprioritizeThreshold ?? 0.55}`}
                     {` · ${viewModel.drawers.builder.skillStudio.feedbackLoop?.systemLossRouting?.minimumPromotionSlices ?? 3} clean slices before promotion`}
                   </p>
@@ -15133,13 +18436,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       <article className="drawer-card warn" key={item.proposalId || item.skillId}>
                         <span>{titleizeToken(item.status || "proposed")}</span>
                         <strong>{item.label || item.skillId}</strong>
-                        <p>{item.reason || "High-loss skill is held until a clean validation slice proves the repair."}</p>
+                        <p>{item.reason || "High-gap skill is held until a clean validation slice proves the repair."}</p>
                         <p>
-                          {`Before: loss ${item.beforeVerification?.systemLoss ?? "n/a"} · `}
+                          {`Before: gap ${item.beforeVerification?.systemLoss ?? "n/a"} · `}
                           {`${asList(item.beforeVerification?.verificationFailures).length} failure(s)`}
                         </p>
                         <p>
-                          {`After: <= ${item.afterVerification?.maxSystemLoss ?? 0.15} loss · `}
+                          {`After: <= ${item.afterVerification?.maxSystemLoss ?? 0.15} gap · `}
                           {`${item.afterVerification?.requiredCleanSlices ?? 1} clean validation slice(s)`}
                         </p>
                         <div className="skill-repair-actions" aria-label="Apply approved skill repair">
@@ -15152,7 +18455,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   ) : (
                     <article className="drawer-card">
                       <strong>No repair proposal is active.</strong>
-                      <p>High-loss skill slices will generate a before/after validation proposal here before the skill is trusted again.</p>
+                      <p>High-gap skill slices will generate a before/after validation proposal here before the skill is trusted again.</p>
                     </article>
                   )}
                 </div>
@@ -15371,7 +18674,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ))
               ) : (
                 <article className="drawer-card">
-                  <strong>Release gates are not available yet.</strong>
+                  <strong>Release gates require live release data.</strong>
                 </article>
               )}
             </div>
@@ -15413,11 +18716,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   const drivers = asList(breakdown.drivers).slice(0, 2);
                   return (
                     <article className="drawer-card warn" data-system-loss-current="true">
-                      <span>System loss</span>
+                      <span>System gap</span>
                       <strong>
                         {hasOutOf20
-                          ? `${scoreText}/20 · loss ${lossText}/20`
-                          : `loss pressure ${Number(breakdown.score || 0)}/100`}
+                          ? `${scoreText}/20 · gap ${lossText}/20`
+                          : `gap pressure ${Number(breakdown.score || 0)}/100`}
                       </strong>
                       <p>
                         {hasOutOf20
@@ -15595,31 +18898,43 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     findStudioItem(referenceStudio, "rule", referenceStudio.activeRuleSetId) ||
     findStudioItem(referenceStudio, "rule", referenceStudio.selectedRuleId);
   const liveSkillLibrary = snapshot?.skillLibrary || summarySnapshot?.skillLibrary || null;
-  const liveSystemAuditDigest = {
-    ...(snapshot?.systemAuditDigest || {}),
-    ...(summarySnapshot?.systemAuditDigest || {}),
-  };
   const livePublicLaunchReadiness = liveSystemAuditDigest.publicLaunchReadiness || {};
   const livePublicLaunchRepairPacket = livePublicLaunchReadiness?.repairPacket || {};
   const livePublicLaunchSteps = publicLaunchProofSteps(livePublicLaunchReadiness);
   const liveSkillRows = referenceSkillRowsFromCatalog(liveSkillLibrary);
+  const connectedAppDraftSkills = asList(referenceStudio.skills).filter(
+    item => String(item?.sourceType || "").toLowerCase() === "connected_app",
+  );
+  const mergedLiveSkillRows = [
+    ...connectedAppDraftSkills,
+    ...liveSkillRows.filter(
+      item => !connectedAppDraftSkills.some(draft => draft.id === item.id),
+    ),
+  ];
   const liveSkillIds = liveSkillRows
     .filter(item => ["active", "reviewed", "installed", "curated"].includes(String(item?.status || item?.sourceType || "").toLowerCase()))
     .map(item => item.id);
-  const liveSkillSelectedItem = liveSkillRows.find(item => item.id === referenceStudio.selectedSkillId) || liveSkillRows[0] || null;
+  const connectedAppSelectedSkill =
+    connectedAppDraftSkills.find(item => item.id === referenceStudio.selectedSkillId) || null;
+  const liveSkillSelectedItem =
+    connectedAppSelectedSkill ||
+    liveSkillRows.find(item => item.id === referenceStudio.selectedSkillId) ||
+    liveSkillRows[0] ||
+    null;
   const liveSkillLibraryReady = liveSkillRows.length > 0 || Boolean(liveSkillLibrary?.managementSummary || liveSkillLibrary?.feedbackLoop);
   const referenceSkillStudioProps = {
     collectionTab: referenceStudio.collectionTab,
     selectedKind: referenceStudioKind,
     selectedItem: liveSkillSelectedItem || (liveSkillLibraryReady ? null : referenceStudioSelectedItem),
-    skills: liveSkillLibraryReady ? liveSkillRows : [],
+    skills: liveSkillLibraryReady ? mergedLiveSkillRows : [],
     ruleSets: liveSkillLibraryReady ? [] : referenceStudio.ruleSets,
-    activeSkillIds: liveSkillLibraryReady ? liveSkillIds : [],
+    activeSkillIds: liveSkillLibraryReady ? uniq([...connectedAppDraftSkills.map(item => item.id), ...liveSkillIds]) : [],
     activeRuleSetId: referenceStudio.activeRuleSetId,
     feedbackLoop: liveSkillLibrary?.feedbackLoop || viewModel.drawers.builder.skillStudio.feedbackLoop,
     liveReady: liveSkillLibraryReady,
     liveSource: liveSkillLibrary ? (snapshot?.skillLibrary ? "control-room snapshot" : "control-room summary") : "",
     managementSummary: liveSkillLibrary?.managementSummary || viewModel.drawers.builder.skillStudio.summary,
+    runtimeRouteProof: summarySnapshot.runtimeRouteProof || snapshot.runtimeRouteProof || null,
     redTeamEscalation: viewModel.drawers.builder.skillStudio.redTeamEscalation,
     routeTrustCoverage: viewModel.drawers.builder.skillStudio.routeTrustCoverage,
     totals: {
@@ -15693,7 +19008,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ...asList(setupHealth?.serviceManagement),
       ...asList(workspace?.serviceManagement),
     ],
-    providers: PROVIDER_SECRET_OPTIONS.map(item => ({
+    beginnerSetupCards: asList(setupHealth?.beginnerSetupCards),
+    safeUpdateAction: setupHealth?.safeUpdateAction || null,
+    providers: PROVIDER_SECRET_OPTIONS.map(item => {
+      const providerHasSecret =
+        item.id === "opencode-go"
+          ? openCodeGoAuthReady
+          : Boolean(providerSecretPresence[item.id]);
+      const providerReady =
+        item.id === "openai"
+          ? openAICodexAuthReady
+          : item.id === "minimax"
+            ? minimaxAuthReady
+            : providerHasSecret;
+      return {
       ...item,
       quickAuth:
         item.id === "openai"
@@ -15707,10 +19035,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             }
           : item.id === "minimax"
             ? {
-                label: "MiniMax OpenClaw OAuth",
+                label: "MiniMax broker OAuth",
                 ready: minimaxAuthReady,
                 detail: providerOAuthActionsAvailable
-                  ? "Launch OpenClaw's minimax-portal OAuth flow or save a MiniMax API key."
+                  ? "Launch the MiniMax broker OAuth flow and sync it into Hermes, or save a MiniMax API key."
                   : providerOAuthUnavailableReason,
                 disabled: !providerOAuthActionsAvailable,
               }
@@ -15731,23 +19059,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 onClick: () => void openProviderAuthUrl(PROVIDER_AUTH_URLS.openaiApiKeys, "OpenAI API keys"),
               },
             ]
-          : item.id === "minimax"
-            ? [
-                {
-                  label: "Verify OpenClaw OAuth",
-                  onClick: () => void verifyMiniMaxOpenClawAuth(),
+            : item.id === "minimax"
+              ? [
+                  {
+                    label: "Verify broker OAuth",
+                    onClick: () => void verifyMiniMaxOpenClawAuth(),
                 },
                 {
-                  label: "MiniMax OpenClaw docs",
-                  onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.minimaxOpenClawDocs, "MiniMax OpenClaw docs"),
+                  label: "MiniMax broker docs",
+                  onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.minimaxOpenClawDocs, "MiniMax broker docs"),
                 },
                 {
                   label: "MiniMax API keys",
-                  onClick: () => void openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxApiKeys, "MiniMax API keys"),
-                },
-              ]
+                    onClick: () => void openProviderAuthUrl(PROVIDER_AUTH_URLS.minimaxApiKeys, "MiniMax API keys"),
+                  },
+                ]
+              : item.id === "opencode-go"
+                ? [
+                    {
+                      label: "OpenCodeGo provider docs",
+                      onClick: () => void openProviderGuideUrl(PROVIDER_AUTH_URLS.opencodeGoDocs, "OpenCodeGo provider docs"),
+                    },
+                  ]
             : [],
-      hasSecret: Boolean(providerSecretPresence[item.id]),
+      hasSecret: providerHasSecret,
+      statusLabel:
+        item.id === "opencode-go" && providerReady
+          ? "API key ready"
+          : providerReady
+            ? "Ready"
+            : "Needs login",
+      statusDetail:
+        item.id === "opencode-go" && providerReady
+          ? "OPENCODE_API_KEY is visible to the runtime."
+          : "",
       draft: providerSecretDrafts[item.id] || "",
       onDraftChange: value => handleReferenceProviderDraftChange(item.id, value),
       onSave: () => void handleProviderSecretSave(item.id),
@@ -15762,8 +19107,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           ? openAICodexAuthReady
           : item.id === "minimax"
             ? minimaxAuthReady
-            : Boolean(providerSecretPresence[item.id]),
-    })),
+            : providerReady,
+      };
+    }),
     members: [
       { name: "Orbit Pro", role: "Owner" },
       { name: "Syntelos Agent", role: "System" },
@@ -15856,12 +19202,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           feedbackItems={referenceFeedbackItems}
           flowProjects={referenceProjectGroups}
           generatedImageArtifacts={generatedImageArtifacts}
+          agentLiveThreadProof={agentLiveThreadProof}
           hermesEvidenceItems={hermesEvidenceItems}
           messages={referenceAgentMessages}
+          missionWatchdog={missionWatchdog}
           nasDeployChecks={nasDeployChecks}
           onAttach={handleReferenceAttach}
           onBackFromBuilder={handleReferenceBuilderBack}
           onChangeDraft={setOperatorDraft}
+          onConnectedAppHandoff={draftConnectedAppAgentPrompt}
           onDictation={() => void handleReferenceDictation()}
           onHistory={handleReferenceHistory}
           onIdleSubmit={handleAgentIdleChat}
@@ -15878,7 +19227,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           onOpenSettings={handleReferenceSettings}
           onOpenSkillStudio={handleReferenceSkillStudio}
           onPaste={handleComposerPaste}
-          onRequestAction={(actionId, payload) => void handleReferenceAction(actionId, payload)}
+          onRequestAction={(actionId, payload) => handleReferenceAction(actionId, payload)}
           callBackend={callBackend}
           onSelectFlow={handleReferenceFlowSelect}
           onSelectProject={handleReferenceProjectSelect}
@@ -15892,7 +19241,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             setMissionForm(current => ({ ...current, runtime: value }));
           }}
           onSend={() => {
-            void handleAgentIdleChat();
+            if (mission && !activeChatSessionId) {
+              void handleAgentFollowUp();
+              return;
+            }
+            void handleAgentIdleSubmit();
           }}
           onSetAgentScene={setAgentScene}
           onSetSurface={handleReferenceSurfaceChange}
@@ -15924,21 +19277,33 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       ? "control-room summary"
                       : "pending",
             previewMode,
+            summaryReady: Boolean(summarySnapshot?.schema),
+            summarySchema: summarySnapshot?.schema || "",
             loading: previewMode === "live" ? !summarySnapshot?.schema : initialLiveSnapshotPending || isRefreshing,
+            missionRows: summaryMissions,
+            missions: summaryMissions,
             missionCount: Number(summarySnapshot.counts?.missions || missions.length || 0),
             activeMissionCount: Number(summarySnapshot.counts?.activeMissions || 0),
             queuedMissionCount: Number(summarySnapshot.counts?.queuedMissions || 0),
             blockedMissionCount: Number(summarySnapshot.counts?.blockedMissions || 0),
             completedMissionCount: Number(summarySnapshot.counts?.completedMissions || 0),
             runningMissionCount: Number(summarySnapshot.statusCounts?.running || 0),
+            notificationRows: visibleNotificationItems,
+            notifications: visibleNotificationItems,
             notificationCount: visibleNotificationItems.length,
             sliceNotificationCount: visibleNotificationItems.filter(item => isImmediateBrowserNotificationItem(item)).length,
             refreshing: isRefreshing,
             summaryCache: summarySnapshot.summaryCache || null,
+            liveControlState: summarySnapshot.liveControlState || null,
+            runtimeRouteProof: summarySnapshot.runtimeRouteProof || snapshot.runtimeRouteProof || null,
+            webPushStatus: summarySnapshot.webPushStatus || snapshot.webPushStatus || webPushState || null,
+            ntfyStatus: summarySnapshot.ntfyStatus || snapshot.ntfyStatus || null,
             refreshedAt: summarySnapshot.generatedAt || snapshot.generatedAt || snapshot.updatedAt || "",
           }}
           missionLoop={activeChatSessionId ? null : referenceMissionLoop}
           notificationItems={visibleNotificationItems}
+          overnightDigest={visibleOvernightDigest}
+          webPushState={webPushState}
           workbenchState={referenceWorkbenchState}
         />
       </Suspense>
@@ -16055,8 +19420,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         }
         onClose={() => setMiniMaxOAuthFlow(current => ({ ...current, open: false }))}
         open={miniMaxOAuthFlow.open}
-        summary="MiniMax uses a portal user-code grant. Syntelos starts it on the NAS, then writes the completed token into the OpenClaw auth profile."
-        title="Complete MiniMax OpenClaw OAuth"
+        summary="MiniMax uses a portal user-code grant. Syntelos starts it on the NAS, then writes the completed token into the broker profile that Hermes can read."
+        title="Complete MiniMax broker OAuth"
       >
         <div className="dialog-form">
           <p>
@@ -16259,8 +19624,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
       <Modal
         actions={
-          <ActionButton onClick={handleMissionSubmit} type="submit" variant="primary">
-            Launch mission
+          <ActionButton
+            disabled={launchMissionBlockedByStorage}
+            onClick={handleMissionSubmit}
+            type="submit"
+            variant="primary"
+          >
+            {launchMissionBlockedByStorage ? "NAS launch blocked" : "Launch mission"}
           </ActionButton>
         }
         onClose={() => setShowMissionDialog(false)}
@@ -16286,6 +19656,128 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <strong>{launchRecommendation.model}</strong>
                 <p>{launchRecommendation.taskLabel}: {launchRecommendation.modelReason}</p>
               </article>
+            </div>
+            <Field label="Start from goal">
+              <textarea
+                data-mission-launch-objective="quickstart"
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, objective: event.target.value }))
+                }
+                placeholder={missionObjectivePlaceholder(missionForm.profile)}
+                value={missionForm.objective}
+              />
+            </Field>
+            <div className="mission-quickstart-actions">
+              <span>
+                Quick start uses Hermes supervision by default: pick the task-fit model, launch asynchronously, then show live Agent thread output, artifact proof, and notification receipts before claiming completion.
+              </span>
+              <ActionButton
+                disabled={launchMissionBlockedByStorage}
+                onClick={handleMissionQuickstart}
+                type="button"
+                variant="primary"
+              >
+                {launchMissionBlockedByStorage ? "NAS launch blocked" : "Quick start"}
+              </ActionButton>
+            </div>
+            <div className="mission-route-selector-row" data-mission-route-selector-row="true">
+              <Field label="Runtime">
+                <select
+                  aria-label="Mission runtime"
+                  onChange={event =>
+                    setMissionForm(current => ({ ...current, runtime: event.target.value }))
+                  }
+                  value={missionForm.runtime}
+                >
+                  <option value="hermes">Hermes</option>
+                  <option value="openclaw">OpenClaw</option>
+                </select>
+              </Field>
+              <Field label="Provider">
+                <select
+                  aria-label="Mission model provider"
+                  onChange={event =>
+                    setMissionForm(current => ({ ...current, modelProvider: event.target.value }))
+                  }
+                  value={missionForm.modelProvider}
+                >
+                  {MODEL_PROVIDER_OPTIONS.map(option => (
+                    <option key={`mission-provider-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Model">
+                <select
+                  aria-label="Mission model"
+                  onChange={event =>
+                    setMissionForm(current => ({ ...current, model: event.target.value }))
+                  }
+                  value={missionForm.model}
+                >
+                  {ROUTE_MODEL_OPTIONS.map(option => (
+                    <option key={`mission-model-${option}`} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            <Field label="Thinking">
+              <select
+                aria-label="Mission thinking effort"
+                  onChange={event =>
+                    setMissionForm(current => ({ ...current, modelEffort: event.target.value }))
+                  }
+                  value={missionForm.modelEffort}
+                >
+                  {MODEL_EFFORT_OPTIONS.filter(option => option.value !== "default").map(option => (
+                    <option key={`mission-effort-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Skill">
+                <select
+                  aria-label="Mission skill"
+                  onChange={event =>
+                    setMissionForm(current => ({ ...current, selectedSkill: event.target.value }))
+                  }
+                  value={missionForm.selectedSkill}
+                >
+                  {MISSION_SKILL_OPTIONS.map(option => (
+                    <option key={`mission-skill-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Messages">
+                <select
+                  aria-label="Mission message channel"
+                  onChange={event =>
+                    setMissionForm(current => ({ ...current, messageChannel: event.target.value }))
+                  }
+                  value={missionForm.messageChannel}
+                >
+                  {MESSAGE_CHANNEL_OPTIONS.map(option => (
+                    <option key={`mission-channel-${option.value}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <ActionButton
+                onClick={() => {
+                  setSurface("settings");
+                  setReferenceSettingsTab("providers");
+                  setActiveDrawer("runtime");
+                }}
+                type="button"
+              >
+                Open model options
+              </ActionButton>
             </div>
             <div className="mission-launch-route-decision" data-task-fit-route-decision="true">
               <div>
@@ -16328,6 +19820,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   </button>
                 ) : null}
               </article>
+              <article
+                className={launchNasStorageBlocked ? "is-blocked" : "is-ready"}
+                data-launch-nas-storage-pressure="true"
+              >
+                <span>NAS storage</span>
+                <strong>{launchNasStorageStatus}</strong>
+                <p>{launchNasStorageDetail}</p>
+              </article>
+              <article
+                className={launchArtifactRepairBlocked ? "is-blocked" : "is-ready"}
+                data-launch-artifact-repair-gate="true"
+                data-launch-artifact-repair-can-resume={launchArtifactRepairCanResume ? "true" : "false"}
+              >
+                <span>Artifact proof</span>
+                <strong>{launchArtifactRepairStatus}</strong>
+                <p>{launchArtifactRepairDetail}</p>
+              </article>
             </div>
             <div className="mission-starter-templates" data-mission-starter-templates="true">
               <span>Starter missions</span>
@@ -16344,23 +19853,26 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </button>
               ))}
             </div>
-            <Field label="Start from goal">
-              <textarea
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, objective: event.target.value }))
-                }
-                placeholder={missionObjectivePlaceholder(missionForm.profile)}
-                value={missionForm.objective}
-              />
-            </Field>
-            <div className="mission-quickstart-actions">
-              <span>
-                Quick start uses Auto route: Hermes unless OpenClaw is explicitly requested, task-fit model selection, async launch, live Agent thread, proof, and notification wiring.
-              </span>
-              <ActionButton onClick={handleMissionQuickstart} type="button" variant="primary">
-                Quick start
-              </ActionButton>
-            </div>
+            {launchMissionBlockedByStorage ? (
+              <div className="mission-launch-blocked-note" data-launch-storage-block-note="true">
+                <span>{launchMissionStorageBlockReason}</span>
+                {launchCanSwitchToLocalWorkspace ? (
+                  <button
+                    data-launch-local-fallback="true"
+                    onClick={() => {
+                      setSelectedWorkspaceId(launchLocalFallbackWorkspace.workspace_id);
+                      setMissionForm(current => ({
+                        ...current,
+                        workspaceId: launchLocalFallbackWorkspace.workspace_id,
+                      }));
+                    }}
+                    type="button"
+                  >
+                    Use local workspace
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {missionLaunchShortcuts.length > 0 ? (
               <div className="mission-launch-shortcuts" aria-label="Copyable mission launch shortcuts">
                 <span>Copyable starts</span>
@@ -16409,7 +19921,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 }
                 value={missionForm.runtime}
               >
-                <option value="openclaw">OpenClaw</option>
                 <option value="hermes">Hermes</option>
               </select>
             </Field>
@@ -16419,6 +19930,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <strong>{titleizeToken(launchRecommendation.runtime)} · {launchRecommendation.taskLabel}</strong>
             <p>{launchRecommendation.reason}</p>
             <p>{launchRecommendation.modelProvider} / {launchRecommendation.model} · {launchRecommendation.modelReason}</p>
+            <div className="mission-launch-beginner-proof" data-beginner-launch-proof="true">
+              <strong>Beginner launch proof checklist</strong>
+              <p>1. Hermes remains the harness. 2. MiniMax-M3 is selected for frontend/design execution when recommended. 3. Completion requires runtime output, artifact/Workbench proof, and notification receipt rows from live NAS data.</p>
+            </div>
             <div className={`mission-launch-route-trust ${toneClass(launchRecommendation.routeTrust?.status === "proven" ? "good" : "warn")}`.trim()}>
               <span>Outcome-trend confidence · {titleizeToken(launchRecommendation.routeTrust?.status || "sampling")}</span>
               <strong>{Math.round(launchRecommendation.routeTrust?.confidence || launchRecommendation.confidence || 0)}%</strong>
@@ -16522,6 +20037,36 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ))}
               </select>
             </Field>
+            <Field label="Skill">
+              <select
+                aria-label="Mission skill"
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, selectedSkill: event.target.value }))
+                }
+                value={missionForm.selectedSkill}
+              >
+                {MISSION_SKILL_OPTIONS.map(option => (
+                  <option key={`mission-skill-secondary-${option.value}`} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Messages">
+              <select
+                aria-label="Mission message channel"
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, messageChannel: event.target.value }))
+                }
+                value={missionForm.messageChannel}
+              >
+                {MESSAGE_CHANNEL_OPTIONS.map(option => (
+                  <option key={`mission-channel-secondary-${option.value}`} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
           </div>
 
           <div className="field-row">
@@ -16568,6 +20113,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
           <Field label="Mission objective">
             <textarea
+              data-mission-launch-objective="advanced"
               onChange={event =>
                 setMissionForm(current => ({ ...current, objective: event.target.value }))
               }
@@ -16578,6 +20124,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
           <Field label="Success checks">
             <textarea
+              data-mission-launch-success-checks="true"
               onChange={event =>
                 setMissionForm(current => ({ ...current, successChecks: event.target.value }))
               }
@@ -16622,35 +20169,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         </form>
       </Modal>
 
-      <NotificationStack
-        browserEnabled={browserNotifications.enabled}
-        browserPermission={browserNotifications.permission}
-        browserTestStatus={browserNotificationTestStatus}
-        collapsed={notificationStackCollapsed}
-        dismissedCount={dismissedNotificationIds.size}
-        expanded={notificationStackExpanded}
-        items={visibleNotificationItems}
-        onClearAll={clearVisibleNotifications}
-        onDismiss={dismissNotification}
-        onDisableBrowser={disableBrowserNotifications}
-        onEnableBrowser={requestBrowserNotifications}
-        onOpenMission={missionId =>
-          handleReferenceMissionSelect({
-            missionId,
-            nextSurface: "agent",
-            nextAgentScene: "run",
-            openBuilderDetail: false,
-          })
-        }
-        onProvisionWebPush={provisionWebPushSender}
-        onRestoreDismissed={restoreDismissedNotifications}
-        onTestBrowser={testBrowserNotifications}
-        onToggleCollapsed={() => setNotificationStackCollapsed(current => !current)}
-        onToggleExpanded={() => setNotificationStackExpanded(current => !current)}
-        overnightDigest={visibleOvernightDigest}
-        performance={summarySnapshot.performance}
-        webPushState={webPushState}
-      />
+      {surface !== "phone" && surface !== "agent" ? (
+        <NotificationStack
+          browserEnabled={browserNotifications.enabled}
+          browserPermission={browserNotifications.permission}
+          browserTestStatus={browserNotificationTestStatus}
+          collapsed={notificationStackCollapsed}
+          dismissedCount={dismissedNotificationIds.size}
+          expanded={notificationStackExpanded}
+          items={visibleNotificationItems}
+          notificationChannels={summarySnapshot.missionWatchdog?.supervisor?.notificationChannels || summarySnapshot.missionWatchdog?.notificationChannels || null}
+          onClearAll={clearVisibleNotifications}
+          onDismiss={dismissNotification}
+          onDisableBrowser={disableBrowserNotifications}
+          onEnableBrowser={requestBrowserNotifications}
+          onOpenMission={missionId =>
+            handleReferenceMissionSelect({
+              missionId,
+              nextSurface: "agent",
+              nextAgentScene: "run",
+              openBuilderDetail: false,
+            })
+          }
+          onProvisionWebPush={provisionWebPushSender}
+          onRegisterWebPush={ensureWebPushSubscription}
+          onRestoreDismissed={restoreDismissedNotifications}
+          onTestBrowser={testBrowserNotifications}
+          onToggleCollapsed={() => setNotificationStackCollapsed(current => !current)}
+          onToggleExpanded={() => setNotificationStackExpanded(current => !current)}
+          overnightDigest={visibleOvernightDigest}
+          performance={summarySnapshot.performance}
+          surface={surface}
+          webPushState={webPushState}
+        />
+      ) : null}
       <ToastHost items={toasts} />
     </>
   );
@@ -17366,7 +20918,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         </div>
                       </div>
                       <div className="roadmap-grid">
-                        {viewModel.drawers.builder.qualityRoadmap.tracks.slice(0, 4).map(item => (
+                        {(integrationRoadmapTracks.length > 0
+                            ? integrationRoadmapTracks
+                            : viewModel.drawers.builder.qualityRoadmap.tracks
+                          ).slice(0, 4).map(item => (
                           <article className={`roadmap-item ${toneClass(item.tone)}`} key={`empty-roadmap-${item.id}`}>
                             <span>{titleizeToken(item.state)}</span>
                             <strong>{item.label}</strong>
@@ -17583,7 +21138,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     {builderTopQueueItem?.recommendedAction ||
                       builderTopQueueItem?.reason ||
                       builderPrimaryConversation?.next ||
-                      "Launch or open a project to create the next live queue row."}
+                      builderLiveStateDetail}
+                  </p>
+                  <p
+                    className={`builder-queue-first-state ${builderZeroActiveQueueHealthy ? "healthy" : "active"}`.trim()}
+                    data-live-zero-active-state={builderZeroActiveQueueHealthy ? "healthy" : "active-or-ready"}
+                  >
+                    <span>{builderLiveStateLabel}</span>
+                    <em>{builderLiveStateDetail}</em>
                   </p>
                 </div>
                 <div className="builder-queue-first-metrics" aria-label="Builder queue-first live metrics">
@@ -18463,7 +22025,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                     type="button"
                                     variant="ghost"
                                   >
-                                    Open Agent live surface
+                                    Open live preview
                                   </ActionButton>
                                 ) : null}
                                 <ActionButton onClick={() => void refreshAll("live-review-empty-preview")} type="button" variant="ghost">
@@ -18808,6 +22370,36 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                   ))}
                                 </div>
                                 <div className="builder-live-review-meta">Scope safety: safe {missionWatchdog.queuePressureSafe || 0} · unknown {missionWatchdog.queuePressureUnknown || 0} · overlap {missionWatchdog.queuePressureOverlap || 0}</div>
+                                {builderQueuePressureRows.length > 0 ? (
+                                  <div className="builder-queue-pressure-overview" aria-label="Live queue pressure blockers" data-live-builder-queue-pressure="true">
+                                    <div className="builder-queue-pressure-head">
+                                      <span>Queue pressure</span>
+                                      <strong>{builderQueuePressureRows.length} overlap hold{builderQueuePressureRows.length === 1 ? "" : "s"}</strong>
+                                      <p>These are live watchdog rows. They are not runtime crashes; they are held because the queued mission touches files already owned by another active mission.</p>
+                                    </div>
+                                    <div className="builder-queue-pressure-list">
+                                      {builderQueuePressureRows.slice(0, 4).map(item => (
+                                        <article className={`builder-queue-pressure-row ${item.canParallelize ? "safe" : "held"}`.trim()} key={`watchdog-pressure-${item.key}`}>
+                                          <span>{titleizeToken(item.severity)} · {titleizeToken(item.scopeSafety)} scope</span>
+                                          <strong>{item.missionTitle}</strong>
+                                          <p>{item.detail}</p>
+                                          <p className="builder-queue-pressure-evidence">
+                                            blocking mission {item.blockingMissionId || "unknown"} · active {item.activeFileCount} files · queued {item.queuedFileCount} files
+                                          </p>
+                                          {item.overlapFiles.length > 0 ? (
+                                            <p className="builder-queue-pressure-evidence">overlap files: {item.overlapFiles.join(" · ")}</p>
+                                          ) : null}
+                                          <p>{item.firstRepairStep}</p>
+                                          {item.canParallelize ? (
+                                            <button className="reference-link-button strong" type="button" onClick={() => handleWatchdogParallelize(item)}>
+                                              Parallelize worktree
+                                            </button>
+                                          ) : null}
+                                        </article>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
                                 <div className="builder-live-watchdog-artifacts" aria-label="Artifact readiness across missions">
                                   <span className="mini-pill good">Ready artifacts {missionWatchdog.artifactReady || 0}</span>
                                   <span className={(missionWatchdog.artifactPartial || 0) > 0 ? "mini-pill warn" : "mini-pill muted"}>Partial {missionWatchdog.artifactPartial || 0}</span>
@@ -19249,7 +22841,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               <p>{item.missionTitle}</p>
                             </button>
                             <p className="builder-digest-detail">
-                              {item.runtime} · {item.harness} · {item.effort} effort · fallback {item.fallbackPolicy}
+                              {item.runtime} · {item.harness} · {item.effort} effort · route policy {liveRoutePolicyLabel(item.fallbackPolicy)}
                             </p>
                             <div className="builder-lane-task-fit" aria-label="Task-aware model route">
                               <span>Task fit</span>
@@ -19320,16 +22912,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           <strong>{builderSchedulingQueue.length} ranked project{builderSchedulingQueue.length === 1 ? "" : "s"}</strong>
                           <p>{builderProjectProgressHistory.scheduler?.nextAction || "Review the highest ranked project before launching more work."}</p>
                         </div>
+                        {builderQueuePressureRows.length > 0 ? (
+                          <div className="builder-project-queue-pressure" data-live-builder-queue-pressure="true">
+                            <span>Queue pressure from watchdog</span>
+                            <strong>{builderQueuePressureRows.length} held mission{builderQueuePressureRows.length === 1 ? "" : "s"} · {missionWatchdog?.bad || 0} bad</strong>
+                            <p>
+                              The current hold is overlap-based. Builder should wait, split the objective, or parallelize only when the watchdog marks scope safety as safe.
+                            </p>
+                            <div className="builder-project-queue-pressure-list">
+                              {builderQueuePressureRows.slice(0, 3).map(item => (
+                                <span key={`queue-pressure-chip-${item.key}`}>
+                                  {item.missionId || "mission"} behind blocking mission {item.blockingMissionId || "unknown"} · {item.scopeSafety}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="builder-project-queue-pressure clear" data-live-builder-queue-pressure="clear">
+                            <span>Queue pressure from watchdog</span>
+                            <strong>No live workspace hold reported</strong>
+                            <p>Builder can use the scheduler row state without a watchdog queue-pressure override.</p>
+                          </div>
+                        )}
                         <div className="builder-project-queue-list">
                           {builderSchedulingQueue.slice(0, 6).map(item => (
                             <button
                               className={`builder-project-queue-row ${item.safeToLaunch ? "safe" : "held"}`.trim()}
+                              data-builder-queue-action="open-workspace"
+                              data-builder-queue-state={item.safeToLaunch ? "safe-to-launch" : "held"}
+                              data-builder-queue-workspace-id={item.workspaceId || ""}
                               key={`builder-scheduling-${item.workspaceId || item.rank}`}
                               onClick={() => item.workspaceId && setSelectedWorkspaceId(item.workspaceId)}
                               type="button"
                             >
                               <span>
-                                #{item.rank} · {titleizeToken(item.state || "watch")} · priority {item.priorityScore || 0}
+                                #{item.rank} · {titleizeToken(item.state || "watch")} · priority {item.priorityScore || 0} · {item.safeToLaunch ? "actionable" : "held"}
                               </span>
                               <strong>{item.title}</strong>
                               <p>{item.recommendedAction || item.reason || "No live scheduling action recorded."}</p>
@@ -19667,6 +23284,102 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <h1>{agentCenterTitle}</h1>
               </header>
 
+              {mission ? (
+                <section className="agent-run-topbar" aria-label="Agent mission command center" data-agent-mission-command-center="true">
+                  <div>
+                    <span className="eyebrow">Mission command center</span>
+                    <strong>{titleizeToken(mission?.status || mission?.state?.status || "mission")}</strong>
+                    <p>
+                      {agentLiveThreadProof.statusLabel}
+                      {agentLiveThreadProof.progressValue != null ? ` · ${agentLiveThreadProof.progressValue}%` : ""}
+                    </p>
+                  </div>
+                  <div className="agent-run-proof-strip" aria-label="Mission proof and transcript status">
+                    <span>
+                      Transcript
+                      <strong>{titleizeToken(agentLiveThreadProof.transcriptStatus || "pending")}</strong>
+                      <em>{agentLiveThreadProof.transcriptMessageCount || agentLiveThreadProof.realMessageCount || 0} messages</em>
+                    </span>
+                    <span>
+                      Artifacts
+                      <strong>{titleizeToken(agentLiveThreadProof.artifactGateStatus || "pending")}</strong>
+                      <em>{agentLiveThreadProof.runtimeReportCount || 0} runtime reports</em>
+                    </span>
+                    <span>
+                      Verifier
+                      <strong>{titleizeToken(agentLiveThreadProof.budgetStatus || agentLiveThreadProof.cacheStatus || "waiting")}</strong>
+                      <em>{Math.round(agentLiveThreadProof.durationMs || 0)} ms detail</em>
+                    </span>
+                    <span className="agent-run-next-step">
+                      Next
+                      <strong>{agentLiveThreadProof.nextAction}</strong>
+                    </span>
+                  </div>
+                  <div className="agent-run-topbar-actions">
+                    <ActionButton
+                      disabled={!missionActionAvailable(mission, "resume")}
+                      onClick={() => void runMissionAction("resume", "Mission resume requested.")}
+                      type="button"
+                      variant="primary"
+                    >
+                      Continue run
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() =>
+                        prefillAgentInstruction(
+                          "Modify this mission:\n- Change:\n- Keep:\n- Success proof I want:",
+                          "agent:modify-prefill",
+                        )
+                      }
+                      type="button"
+                    >
+                      Modify
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => void handleReferenceAction("workbench:run-artifact-check")}
+                      type="button"
+                    >
+                      Verify
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => {
+                        setActiveDrawer("proof");
+                        prefillAgentInstruction(
+                          "Summarize this mission for me:\n- What changed:\n- What is running or blocked:\n- Proof and artifacts:\n- Recommended next step:",
+                          "agent:summarize-prefill",
+                        );
+                      }}
+                      type="button"
+                    >
+                      Summarize
+                    </ActionButton>
+                    <ActionButton onClick={() => setActiveDrawer("proof")} type="button">
+                      Proof
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => {
+                        document.querySelector(".agent-conversation-feed")?.scrollIntoView({ block: "start" });
+                        document.getElementById("thread-note")?.focus();
+                      }}
+                      type="button"
+                    >
+                      Thread
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => {
+                        setSurface("settings");
+                        setReferenceSettingsTab("providers");
+                        setBuilderDetailOpen(false);
+                        setActiveDrawer(null);
+                      }}
+                      type="button"
+                    >
+                      Model accounts
+                    </ActionButton>
+                  </div>
+                </section>
+              ) : null}
+
               {latestAgentCompartment ? (
                 <section className="agent-compartment-box" aria-label="Active agent runtime compartment">
                   <div className="agent-compartment-box-head">
@@ -19690,11 +23403,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       <span>Route</span>
                       <strong>
                         {latestAgentCompartment.route?.provider
-                          ? `${titleizeToken(latestAgentCompartment.route.provider)} / ${
-                              latestAgentCompartment.route?.model_id ||
-                              latestAgentCompartment.route?.model ||
-                              "model"
-                            }`
+                          ? routeProviderModelLabel(latestAgentCompartment.route)
                           : agentRouteStatus}
                       </strong>
                     </div>
@@ -19854,6 +23563,48 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           </p>
                         )}
                       </div>
+                    </div>
+                  </div>
+
+                  <div
+                    className="agent-compartment-lane agent-integration-readiness-panel"
+                    data-integration-readiness="true"
+                    data-integration-readiness-percent={integrationReadinessPercent}
+                  >
+                    <div className="agent-compartment-subhead">
+                      <span>Evidence-based 100%</span>
+                      <b>{`${Number(integrationReadiness.score || 0)}/${Number(integrationReadiness.maxScore || 100)}`}</b>
+                    </div>
+                    <div className="agent-nas-check-grid">
+                      {integrationReadinessCategories.length > 0 ? (
+                        integrationReadinessCategories.map(item => {
+                          const state = String(item?.state || "not_reported").toLowerCase();
+                          const className =
+                            state === "ready"
+                              ? "passed"
+                              : state === "blocked"
+                                ? "blocked"
+                                : "warn";
+                          return (
+                            <article
+                              className={`agent-nas-check ${className}`}
+                              data-integration-readiness-row={item.id || item.label}
+                              key={item.id || item.label}
+                            >
+                              <span>{item.statusLabel || titleizeToken(state)}</span>
+                              <strong>{item.label}</strong>
+                              <p>{item.detail || item.source || "Live NAS evidence has not reported this integration yet."}</p>
+                              {item.receiptPath || item.screenshotPath || item.command ? (
+                                <small>
+                                  {item.receiptPath || item.screenshotPath || item.command}
+                                </small>
+                              ) : null}
+                            </article>
+                          );
+                        })
+                      ) : (
+                        <p className="agent-compartment-empty">Integration readiness has not been reported by the backend yet.</p>
+                      )}
                     </div>
                   </div>
 
@@ -20176,6 +23927,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     ))}
                   </div>
                   <textarea
+                    data-agent-composer-draft="true"
                     id="thread-note"
                     onChange={event => setOperatorDraft(event.target.value)}
                     onPaste={handleComposerPaste}
@@ -20326,8 +24078,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
       <Modal
         actions={
-          <ActionButton onClick={handleMissionSubmit} type="submit" variant="primary">
-            Launch mission
+          <ActionButton
+            disabled={launchMissionBlockedByStorage}
+            onClick={handleMissionSubmit}
+            type="submit"
+            variant="primary"
+          >
+            {launchMissionBlockedByStorage ? "NAS launch blocked" : "Launch mission"}
           </ActionButton>
         }
         onClose={() => setShowMissionDialog(false)}
@@ -20353,6 +24110,29 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <strong>{launchRecommendation.model}</strong>
                 <p>{launchRecommendation.taskLabel}: {launchRecommendation.modelReason}</p>
               </article>
+            </div>
+            <Field label="Start from goal">
+              <textarea
+                data-mission-launch-objective="quickstart"
+                onChange={event =>
+                  setMissionForm(current => ({ ...current, objective: event.target.value }))
+                }
+                placeholder={missionObjectivePlaceholder(missionForm.profile)}
+                value={missionForm.objective}
+              />
+            </Field>
+            <div className="mission-quickstart-actions">
+              <span>
+                Quick start uses Hermes supervision by default: pick the task-fit model, launch asynchronously, then show live Agent thread output, artifact proof, and notification receipts before claiming completion.
+              </span>
+              <ActionButton
+                disabled={launchMissionBlockedByStorage}
+                onClick={handleMissionQuickstart}
+                type="button"
+                variant="primary"
+              >
+                {launchMissionBlockedByStorage ? "NAS launch blocked" : "Quick start"}
+              </ActionButton>
             </div>
             <div className="mission-launch-route-decision" data-task-fit-route-decision="true">
               <div>
@@ -20395,6 +24175,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   </button>
                 ) : null}
               </article>
+              <article
+                className={launchNasStorageBlocked ? "is-blocked" : "is-ready"}
+                data-launch-nas-storage-pressure="true"
+              >
+                <span>NAS storage</span>
+                <strong>{launchNasStorageStatus}</strong>
+                <p>{launchNasStorageDetail}</p>
+              </article>
+              <article
+                className={launchArtifactRepairBlocked ? "is-blocked" : "is-ready"}
+                data-launch-artifact-repair-gate="true"
+                data-launch-artifact-repair-can-resume={launchArtifactRepairCanResume ? "true" : "false"}
+              >
+                <span>Artifact proof</span>
+                <strong>{launchArtifactRepairStatus}</strong>
+                <p>{launchArtifactRepairDetail}</p>
+              </article>
             </div>
             <div className="mission-starter-templates" data-mission-starter-templates="true">
               <span>Starter missions</span>
@@ -20411,23 +24208,26 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </button>
               ))}
             </div>
-            <Field label="Start from goal">
-              <textarea
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, objective: event.target.value }))
-                }
-                placeholder={missionObjectivePlaceholder(missionForm.profile)}
-                value={missionForm.objective}
-              />
-            </Field>
-            <div className="mission-quickstart-actions">
-              <span>
-                Quick start uses Auto route: Hermes unless OpenClaw is explicitly requested, task-fit model selection, async launch, live Agent thread, proof, and notification wiring.
-              </span>
-              <ActionButton onClick={handleMissionQuickstart} type="button" variant="primary">
-                Quick start
-              </ActionButton>
-            </div>
+            {launchMissionBlockedByStorage ? (
+              <div className="mission-launch-blocked-note" data-launch-storage-block-note="true">
+                <span>{launchMissionStorageBlockReason}</span>
+                {launchCanSwitchToLocalWorkspace ? (
+                  <button
+                    data-launch-local-fallback="true"
+                    onClick={() => {
+                      setSelectedWorkspaceId(launchLocalFallbackWorkspace.workspace_id);
+                      setMissionForm(current => ({
+                        ...current,
+                        workspaceId: launchLocalFallbackWorkspace.workspace_id,
+                      }));
+                    }}
+                    type="button"
+                  >
+                    Use local workspace
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {missionLaunchShortcuts.length > 0 ? (
               <div className="mission-launch-shortcuts" aria-label="Copyable mission launch shortcuts">
                 <span>Copyable starts</span>
@@ -20476,7 +24276,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 }
                 value={missionForm.runtime}
               >
-                <option value="openclaw">OpenClaw</option>
                 <option value="hermes">Hermes</option>
               </select>
             </Field>
@@ -20486,6 +24285,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <strong>{titleizeToken(launchRecommendation.runtime)} · {launchRecommendation.taskLabel}</strong>
             <p>{launchRecommendation.reason}</p>
             <p>{launchRecommendation.modelProvider} / {launchRecommendation.model} · {launchRecommendation.modelReason}</p>
+            <div className="mission-launch-beginner-proof" data-beginner-launch-proof="true">
+              <strong>Beginner launch proof checklist</strong>
+              <p>1. Hermes remains the harness. 2. MiniMax-M3 is selected for frontend/design execution when recommended. 3. Completion requires runtime output, artifact/Workbench proof, and notification receipt rows from live NAS data.</p>
+            </div>
             <div className={`mission-launch-route-trust ${toneClass(launchRecommendation.routeTrust?.status === "proven" ? "good" : "warn")}`.trim()}>
               <span>Outcome-trend confidence · {titleizeToken(launchRecommendation.routeTrust?.status || "sampling")}</span>
               <strong>{Math.round(launchRecommendation.routeTrust?.confidence || launchRecommendation.confidence || 0)}%</strong>
@@ -20635,6 +24438,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
           <Field label="Mission objective">
             <textarea
+              data-mission-launch-objective="advanced"
               onChange={event =>
                 setMissionForm(current => ({ ...current, objective: event.target.value }))
               }
@@ -20645,6 +24449,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
           <Field label="Success checks">
             <textarea
+              data-mission-launch-success-checks="true"
               onChange={event =>
                 setMissionForm(current => ({ ...current, successChecks: event.target.value }))
               }
@@ -20689,35 +24494,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         </form>
       </Modal>
 
-      <NotificationStack
-        browserEnabled={browserNotifications.enabled}
-        browserPermission={browserNotifications.permission}
-        browserTestStatus={browserNotificationTestStatus}
-        collapsed={notificationStackCollapsed}
-        dismissedCount={dismissedNotificationIds.size}
-        expanded={notificationStackExpanded}
-        items={visibleNotificationItems}
-        onClearAll={clearVisibleNotifications}
-        onDismiss={dismissNotification}
-        onDisableBrowser={disableBrowserNotifications}
-        onEnableBrowser={requestBrowserNotifications}
-        onOpenMission={missionId =>
-          handleReferenceMissionSelect({
-            missionId,
-            nextSurface: "agent",
-            nextAgentScene: "run",
-            openBuilderDetail: false,
-          })
-        }
-        onProvisionWebPush={provisionWebPushSender}
-        onRestoreDismissed={restoreDismissedNotifications}
-        onTestBrowser={testBrowserNotifications}
-        onToggleCollapsed={() => setNotificationStackCollapsed(current => !current)}
-        onToggleExpanded={() => setNotificationStackExpanded(current => !current)}
-        overnightDigest={visibleOvernightDigest}
-        performance={summarySnapshot.performance}
-        webPushState={webPushState}
-      />
+      {surface !== "phone" && surface !== "agent" ? (
+        <NotificationStack
+          browserEnabled={browserNotifications.enabled}
+          browserPermission={browserNotifications.permission}
+          browserTestStatus={browserNotificationTestStatus}
+          collapsed={notificationStackCollapsed}
+          dismissedCount={dismissedNotificationIds.size}
+          expanded={notificationStackExpanded}
+          items={visibleNotificationItems}
+          notificationChannels={summarySnapshot.missionWatchdog?.supervisor?.notificationChannels || summarySnapshot.missionWatchdog?.notificationChannels || null}
+          onClearAll={clearVisibleNotifications}
+          onDismiss={dismissNotification}
+          onDisableBrowser={disableBrowserNotifications}
+          onEnableBrowser={requestBrowserNotifications}
+          onOpenMission={missionId =>
+            handleReferenceMissionSelect({
+              missionId,
+              nextSurface: "agent",
+              nextAgentScene: "run",
+              openBuilderDetail: false,
+            })
+          }
+          onProvisionWebPush={provisionWebPushSender}
+          onRegisterWebPush={ensureWebPushSubscription}
+          onRestoreDismissed={restoreDismissedNotifications}
+          onTestBrowser={testBrowserNotifications}
+          onToggleCollapsed={() => setNotificationStackCollapsed(current => !current)}
+          onToggleExpanded={() => setNotificationStackExpanded(current => !current)}
+          overnightDigest={visibleOvernightDigest}
+          performance={summarySnapshot.performance}
+          surface={surface}
+          webPushState={webPushState}
+        />
+      ) : null}
       <ToastHost items={toasts} />
     </div>
   );

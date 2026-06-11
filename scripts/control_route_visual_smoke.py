@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from control_route_interaction_smoke import Cdp, DevToolsSocket, free_port, wait_for_devtools
 
 try:
     from PIL import Image
@@ -86,6 +91,55 @@ def find_browser(preference: str = "auto", browser_path: str = "") -> str:
     raise RuntimeError("No Chrome, Chromium, Edge, or Zen executable found for visual smoke capture.")
 
 
+def process_group_flags() -> int:
+    return subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform.startswith("win") else 0
+
+
+def stop_process_tree(process: subprocess.Popen[bytes] | None, timeout: float = 5.0) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if sys.platform.startswith("win"):
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def find_browser_or_playwright_managed(preference: str = "auto", browser_path: str = "") -> str | None:
+    """Return a local browser path when present; otherwise let Playwright use its managed browser."""
+    try:
+        return find_browser(preference, browser_path)
+    except RuntimeError:
+        return None
+
+
+def browser_launch_diagnostics(exc: Exception) -> dict[str, object]:
+    text = str(exc)
+    missing_libraries = sorted(set(re.findall(r"loading shared libraries: ([^:]+):", text)))
+    return {
+        "error": text[:1600],
+        "missingLibraries": missing_libraries,
+        "nativeDependencyBlocked": bool(missing_libraries),
+        "nextAction": (
+            "Install the missing native browser libraries on the host or run this verifier from a machine with a supported browser."
+            if missing_libraries
+            else "Inspect the browser launch error and rerun the verifier after the browser can start."
+        ),
+    }
+
+
 def browser_family(browser: str) -> str:
     lowered = browser.lower()
     if "zen" in lowered:
@@ -107,6 +161,99 @@ def run_browser(browser: str, args: list[str], timeout: int = 90) -> subprocess.
 
 def decode_output(value: bytes | None) -> str:
     return (value or b"").decode("utf-8", errors="replace")
+
+
+def cdp_eval(cdp: Cdp, expression: str) -> object:
+    return cdp.eval(expression)
+
+
+def wait_for_rendered_surface(cdp: Cdp, expected: list[str], timeout: float = 30.0) -> str:
+    deadline = time.time() + timeout
+    last_text = ""
+    while time.time() < deadline:
+        ready_state = str(cdp_eval(cdp, "document.readyState") or "")
+        text = str(cdp_eval(cdp, "document.body ? document.body.innerText : ''") or "")
+        last_text = text
+        loading = "Loading live control shell" in text
+        has_shell = bool(cdp_eval(cdp, "Boolean(document.querySelector('.fluxos-shell, .reference-shell, .fluxio-shell'))"))
+        normalized_text = text.casefold()
+        has_expected = all(fragment.casefold() in normalized_text for fragment in expected)
+        if ready_state == "complete" and has_shell and not loading and has_expected:
+            return text
+        time.sleep(0.25)
+    excerpt = last_text.replace("\r\n", "\n")[:900]
+    raise RuntimeError(
+        "Timed out waiting for the rendered control surface. "
+        f"Expected={expected!r}; visible excerpt={excerpt!r}"
+    )
+
+
+def capture_chromium_with_cdp(
+    *,
+    browser: str,
+    url: str,
+    screenshot_path: Path,
+    dom_path: Path,
+    width: int,
+    height: int,
+    expected: list[str],
+    timeout: int = 45,
+) -> dict[str, object]:
+    port = free_port()
+    profile = tempfile.TemporaryDirectory(prefix="fluxio-cdp-")
+    process = subprocess.Popen(
+        [
+            browser,
+            "--headless=new",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--no-sandbox",
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={profile.name}",
+            f"--window-size={width},{height}",
+            "about:blank",
+        ],
+        cwd=ROOT,
+        creationflags=process_group_flags(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    ws: DevToolsSocket | None = None
+    try:
+        tabs = wait_for_devtools(port)
+        ws = DevToolsSocket(str(tabs[0]["webSocketDebuggerUrl"]))
+        ws.socket.settimeout(max(timeout, 30))
+        cdp = Cdp(ws)
+        cdp.send("Page.enable")
+        cdp.send("Runtime.enable")
+        cdp.send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": width < 700,
+            },
+        )
+        cdp.send("Page.navigate", {"url": url})
+        visible_text = wait_for_rendered_surface(cdp, expected, timeout=timeout)
+        dom = str(cdp_eval(cdp, "document.documentElement ? document.documentElement.outerHTML : ''") or "")
+        dom_path.write_text(dom, encoding="utf-8")
+        result = cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
+        data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(data, str):
+            raise RuntimeError("Chrome DevTools did not return screenshot bytes.")
+        screenshot_path.write_bytes(base64.b64decode(data))
+        return {
+            "method": "chromium-devtools",
+            "visibleText": visible_text,
+            "visibleTextExcerpt": visible_text.replace("\r\n", "\n")[:900],
+        }
+    finally:
+        if ws:
+            ws.close()
+        stop_process_tree(process)
+        profile.cleanup()
 
 
 def url_with_params(url: str, **updates: str) -> str:
@@ -295,12 +442,20 @@ async def _assert_launch_interactions_async(
         runtime_value = await runtime_select.input_value()
         record(
             "runtime-select-prefilled",
-            runtime_value in {"openclaw", "hermes"},
-            f"Runtime select has a concrete value: {runtime_value}.",
+            runtime_value == "hermes",
+            f"Runtime select is pinned to the Hermes harness: {runtime_value}.",
+        )
+        runtime_options = [
+            (await runtime_select.locator("option").nth(index).get_attribute("value")) or ""
+            for index in range(await runtime_select.locator("option").count())
+        ]
+        record(
+            "no-openclaw-runtime-option-visible",
+            "openclaw" not in {item.lower() for item in runtime_options} and "hermes" in {item.lower() for item in runtime_options},
+            f"Beginner launch runtime options are Hermes-only: {runtime_options}.",
         )
 
         await textarea.fill(hermes_objective)
-        await runtime_select.select_option("openclaw")
         await page.wait_for_timeout(250)
         body_text = await page.locator("body").inner_text(timeout=10000)
         normalized = body_text.lower()
@@ -310,9 +465,9 @@ async def _assert_launch_interactions_async(
             "Changing the objective recalculates to Hermes plus the hardware/electrical model route.",
         )
         record(
-            "runtime-difference-warning-visible",
-            "selected runtime differs from the recommendation" in normalized,
-            "The launcher warns when the selected runtime does not match the recommendation.",
+            "runtime-stays-hermes-after-recommendation-change",
+            await runtime_select.input_value() == "hermes",
+            "The launcher keeps Hermes selected after objective changes instead of falling back to another runtime.",
         )
 
         await page.get_by_role("button", name="Quick start").click(timeout=10000)
@@ -347,7 +502,7 @@ def assert_launch_interactions(
     frontend_objective = LAUNCH_INTERACTION_FRONTEND_OBJECTIVE
     hermes_objective = LAUNCH_INTERACTION_HERMES_OBJECTIVE
     launch_url = launch_interaction_url(url)
-    hermes_url = url_with_params(launch_url, objective=hermes_objective, runtime="openclaw")
+    hermes_url = url_with_params(launch_url, objective=hermes_objective, runtime="hermes")
 
     def dump_text(target_url: str) -> str:
         dom = run_browser(browser_path, ["--virtual-time-budget=5000", "--dump-dom", target_url], timeout=45)
@@ -392,9 +547,9 @@ def assert_launch_interactions(
         "Changing the objective recalculates to Hermes plus the hardware/electrical model route.",
     )
     record(
-        "runtime-alternatives-visible",
-        "openclaw" in hermes_text and "hermes" in hermes_text,
-        "The launcher keeps runtime alternatives visible while the recommendation stays Hermes-first.",
+        "no-openclaw-runtime-option-visible",
+        '<option value="openclaw"' not in hermes_text and '<option value="hermes"' in hermes_text,
+        "The launcher keeps the beginner runtime select Hermes-only and does not expose OpenCLAW as a fallback runtime option.",
     )
     record(
         "quickstart-control-visible",
@@ -466,7 +621,21 @@ def main() -> int:
 
     browser = find_browser(args.browser, args.browser_path)
     family = browser_family(browser)
-    if family in {"zen", "firefox"}:
+    expected = args.expect or ["Runtime operations", "Automatic verify", "Hermes"]
+    capture_report: dict[str, object] = {"method": "browser-screenshot-cli"}
+    if family == "chromium":
+        capture_report = capture_chromium_with_cdp(
+            browser=browser,
+            url=args.url,
+            screenshot_path=screenshot_path,
+            dom_path=dom_path,
+            width=args.width,
+            height=args.height,
+            expected=expected,
+        )
+        dom_text = dom_path.read_text(encoding="utf-8")
+        dom_supported = True
+    elif family in {"zen", "firefox"}:
         profile_dir = ROOT / "tmp-ui-checks" / f"{family}-visual-smoke-profile"
         profile_dir.mkdir(parents=True, exist_ok=True)
         screenshot_args = [
@@ -486,31 +655,22 @@ def main() -> int:
             f"--screenshot={screenshot_path}",
             args.url,
         ]
-    screenshot = run_browser(browser, screenshot_args)
-    if screenshot.returncode not in (0, None) and not screenshot_path.exists():
-        raise RuntimeError(
-            decode_output(screenshot.stderr).strip()
-            or decode_output(screenshot.stdout).strip()
-            or "Browser screenshot failed."
-        )
-    if not screenshot_path.exists():
-        raise RuntimeError("Browser did not create a screenshot.")
-
-    dom_text = ""
-    dom_supported = family == "chromium"
-    if dom_supported:
-        dom = run_browser(browser, ["--virtual-time-budget=5000", "--dump-dom", args.url])
-        if dom.returncode not in (0, None):
+        screenshot = run_browser(browser, screenshot_args)
+        if screenshot.returncode not in (0, None) and not screenshot_path.exists():
             raise RuntimeError(
-                decode_output(dom.stderr).strip()
-                or decode_output(dom.stdout).strip()
-                or "Browser DOM dump failed."
+                decode_output(screenshot.stderr).strip()
+                or decode_output(screenshot.stdout).strip()
+                or "Browser screenshot failed."
             )
-        dom_text = decode_output(dom.stdout)
-    dom_path.write_text(dom_text, encoding="utf-8")
+        if not screenshot_path.exists():
+            raise RuntimeError("Browser did not create a screenshot.")
 
-    expected = args.expect or ["Runtime operations", "Automatic verify", "OpenClaw", "Hermes"]
-    missing = [] if not dom_supported else [fragment for fragment in expected if fragment not in dom_text]
+        dom_text = ""
+        dom_supported = False
+        dom_path.write_text(dom_text, encoding="utf-8")
+    match_text = str(capture_report.get("visibleText") or dom_text)
+    normalized_match_text = match_text.casefold()
+    missing = [] if not dom_supported else [fragment for fragment in expected if fragment.casefold() not in normalized_match_text]
     stats = image_stats(
         screenshot_path,
         min_width=args.min_width,
@@ -565,6 +725,7 @@ def main() -> int:
         "domSupported": dom_supported,
         "screenshotPath": str(screenshot_path),
         "domPath": str(dom_path),
+        "capture": capture_report,
         "expectedFragments": expected,
         "missingFragments": missing,
         "image": stats,

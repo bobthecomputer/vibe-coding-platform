@@ -20,7 +20,7 @@ TASK_RECOMMENDATIONS: list[dict[str, Any]] = [
             "tablet",
         ),
         "provider": "minimax",
-        "model": "MiniMax-M2.7",
+        "model": "MiniMax-M3",
         "effort": "high",
         "reason": "UI and frontend work benefits from MiniMax as the execution model while Hermes keeps the mission durable.",
     },
@@ -93,6 +93,17 @@ OPENCLAW_RUNTIME_KEYWORDS = (
     "openclaw setup",
     "openclaw auth",
 )
+OPENCLAW_NEGATION_KEYWORDS = (
+    "do not use openclaw",
+    "do not relaunch through openclaw",
+    "do not launch through openclaw",
+    "don't use openclaw",
+    "dont use openclaw",
+    "avoid openclaw",
+    "not openclaw",
+    "no openclaw",
+    "without openclaw",
+ )
 HERMES_RUNTIME_KEYWORDS = (
     "browser automation",
     "interactive",
@@ -113,6 +124,12 @@ HERMES_RUNTIME_KEYWORDS = (
     "mission",
     "hermes",
 )
+
+
+def _explicit_openclaw_requested(normalized_objective: str) -> bool:
+    if any(keyword in normalized_objective for keyword in OPENCLAW_NEGATION_KEYWORDS):
+        return False
+    return any(keyword in normalized_objective for keyword in OPENCLAW_RUNTIME_KEYWORDS)
 
 
 def infer_launch_task(objective: str) -> dict[str, Any]:
@@ -196,7 +213,7 @@ def build_launch_runtime_recommendation(
         runtime = "hermes"
         runtime_reason = "Hermes is better for durable supervised missions, provider setup, resume loops, and proof-heavy work."
         confidence = max(confidence, 78)
-    explicit_openclaw = any(keyword in normalized for keyword in OPENCLAW_RUNTIME_KEYWORDS)
+    explicit_openclaw = _explicit_openclaw_requested(normalized)
     if explicit_openclaw:
         runtime = "openclaw"
         runtime_reason = "OpenClaw was explicitly requested for this launch."

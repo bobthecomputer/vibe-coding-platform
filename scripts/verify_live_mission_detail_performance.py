@@ -62,15 +62,26 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         {"root": None, "summaryMode": "bootstrap"},
         args.timeout_seconds,
     )
+    missions = summary.get("missions", []) if isinstance(summary.get("missions"), list) else []
     running = [
         mission
-        for mission in summary.get("missions", [])
+        for mission in missions
         if isinstance(mission, dict) and mission.get("status") == "running"
-    ][: args.mission_limit]
+    ]
+    target_missions = running[: args.mission_limit]
+    target_source = "running"
+    if not target_missions:
+        target_missions = [
+            mission
+            for mission in missions
+            if isinstance(mission, dict)
+            and str(mission.get("status") or "").strip().lower() not in {"draft", "stopped"}
+        ][: args.mission_limit]
+        target_source = "recent_live_non_draft"
 
     measurements: list[dict[str, Any]] = []
     for pass_index in range(args.passes):
-        for mission in running:
+        for mission in target_missions:
             mission_id = str(mission.get("mission_id") or mission.get("missionId") or "").strip()
             if not mission_id:
                 continue
@@ -86,7 +97,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             performance = detail.get("performance", {}) if isinstance(detail.get("performance"), dict) else {}
             budget = performance.get("budget", {}) if isinstance(performance.get("budget"), dict) else {}
             cache = (
-                performance.get("missionDetailCache", {})
+                detail.get("detailCache", {})
+                if isinstance(detail.get("detailCache"), dict)
+                else performance.get("missionDetailCache", {})
                 if isinstance(performance.get("missionDetailCache"), dict)
                 else {}
             )
@@ -98,8 +111,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                     "runtime": str(mission.get("runtime_id") or mission.get("runtimeId") or ""),
                     "wallMs": round(wall_ms, 2),
                     "durationMs": performance.get("durationMs"),
+                    "payloadBytes": performance.get("payloadBytes"),
                     "budgetStatus": str(budget.get("status") or "unknown"),
                     "cacheStatus": str(cache.get("status") or "unknown"),
+                    "cacheFreshness": str(cache.get("freshness") or ""),
                     "generationDurationMs": cache.get("generationDurationMs"),
                     "runtimeTranscriptStatus": (
                         detail.get("runtimeTranscript", {}).get("status")
@@ -164,8 +179,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "checkedAt": datetime.now(timezone.utc).isoformat(),
         "baseUrl": args.base_url,
         "summaryGeneratedAt": summary.get("generatedAt", ""),
-        "missionCount": len(summary.get("missions", [])) if isinstance(summary.get("missions"), list) else 0,
+        "missionCount": len(missions),
         "runningMissionCount": len(running),
+        "targetMissionCount": len(target_missions),
+        "targetMissionSource": target_source,
         "passes": args.passes,
         "eventLimit": args.event_limit,
         "wallBudgetMs": args.wall_budget_ms,

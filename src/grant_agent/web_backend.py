@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import webbrowser
 import zlib
 from dataclasses import asdict
@@ -35,8 +36,10 @@ from urllib.request import Request, urlopen
 from .delivery_receipt import (
     generate_web_push_vapid_config,
     load_delivery_receipts,
+    ntfy_status,
     record_delivery_receipt,
     record_web_push_subscription,
+    send_ntfy_delivery_receipt,
     send_web_push_delivery_receipts,
     web_push_status,
 )
@@ -48,6 +51,7 @@ from .mission_control import (
     ControlRoomStore,
     hermes_auth_store_candidates,
 )
+from .models import MissionEvent
 from .mission_watchdog import ensure_watchdog_supervisor_loop
 from .port_safety import tcp_port_accepts_connection
 from .subprocess_utils import hidden_windows_subprocess_kwargs
@@ -69,8 +73,8 @@ ADMIN_PASSWORD_RELATIVE_PATH = ".agent_control/grand_agent_admin_password.txt"
 BOOTSTRAP_SUMMARY_CACHE_TTL_SECONDS = 5.0
 FULL_SUMMARY_CACHE_TTL_SECONDS = 8.0
 FULL_SUMMARY_STALE_WHILE_REVALIDATE_SECONDS = 20.0
-PERSISTED_FULL_SUMMARY_CACHE_VERSION = "2026-05-31.live_progress.v1"
-PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION = "2026-05-31.bootstrap_signature.v1"
+PERSISTED_FULL_SUMMARY_CACHE_VERSION = "2026-06-01.proof_safe_progress.v2"
+PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION = "2026-06-09.bridge_lab_bootstrap.v1"
 MISSION_DETAIL_CACHE_MAX_ITEMS = 12
 MISSION_DETAIL_PREWARM_DELAY_SECONDS = _env_float(
     "FLUXIO_MISSION_DETAIL_PREWARM_DELAY_SECONDS",
@@ -96,6 +100,7 @@ ARTIFACT_CONTENT_TYPES = {
     ".apng": "image/apng",
     ".avif": "image/avif",
     ".gif": "image/gif",
+    ".html": "text/html; charset=utf-8",
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
     ".json": "application/json; charset=utf-8",
@@ -163,6 +168,7 @@ PROVIDER_ENV = {
     "minimax": ("MINIMAX_API_KEY",),
     "minimax-cn": ("MINIMAX_API_KEY",),
     "minimax-portal": ("MINIMAX_OAUTH_TOKEN", "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"),
+    "opencode-go": ("OPENCODE_API_KEY",),
 }
 PROVIDER_SECRET_ENV = {
     "openai": "OPENAI_API_KEY",
@@ -171,6 +177,7 @@ PROVIDER_SECRET_ENV = {
     "openrouter": "OPENROUTER_API_KEY",
     "minimax": "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_API_KEY",
+    "opencode-go": "OPENCODE_API_KEY",
 }
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -792,7 +799,12 @@ def _wsl_has_command(command_name: str, timeout: int = 8) -> bool:
         return False
     try:
         completed = subprocess.run(  # noqa: S603
-            [wsl, "bash", "-lc", f"command -v {shlex.quote(command_name)} >/dev/null 2>&1"],
+            [
+                wsl,
+                "bash",
+                "-lc",
+                f'export PATH="$HOME/.local/bin:$PATH"; command -v {shlex.quote(command_name)} >/dev/null 2>&1',
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -807,7 +819,82 @@ def _wsl_has_command(command_name: str, timeout: int = 8) -> bool:
     return completed.returncode == 0
 
 
+def _wsl_command_path(command_name: str, timeout: int = 8) -> str:
+    if os.name != "nt":
+        return ""
+    wsl = shutil.which("wsl")
+    if not wsl:
+        return ""
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [
+                wsl,
+                "bash",
+                "-lc",
+                f'export PATH="$HOME/.local/bin:$PATH"; command -v {shlex.quote(command_name)}',
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            **hidden_windows_subprocess_kwargs(),
+        )
+    except Exception:  # pragma: no cover - defensive
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return (completed.stdout or "").strip().splitlines()[0] if (completed.stdout or "").strip() else ""
+
+
+def _wsl_command_version(command_name: str, timeout: int = 8) -> str:
+    if os.name != "nt":
+        return ""
+    wsl = shutil.which("wsl")
+    if not wsl:
+        return ""
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [
+                wsl,
+                "bash",
+                "-lc",
+                f'export PATH="$HOME/.local/bin:$PATH"; {shlex.quote(command_name)} --version',
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            **hidden_windows_subprocess_kwargs(),
+        )
+    except Exception:  # pragma: no cover - defensive
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return (completed.stdout or completed.stderr or "").strip().splitlines()[0]
+
+
 def _extract_model_reply(payload: dict[str, Any]) -> str:
+    timeline = payload.get("toolTimeline")
+    if isinstance(timeline, list):
+        for item in reversed(timeline):
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "").lower()
+            summary = str(item.get("summary") or "").strip()
+            if summary and kind in {"runtime.model_message", "model.message", "assistant.message"}:
+                return summary
+        for item in reversed(timeline):
+            if not isinstance(item, dict):
+                continue
+            summary = str(item.get("summary") or "").strip()
+            if summary and not str(item.get("kind") or "").lower().startswith("operator."):
+                return summary
     candidates: list[object] = [
         payload.get("reply"),
         payload.get("text"),
@@ -825,7 +912,25 @@ def _extract_model_reply(payload: dict[str, Any]) -> str:
     ]
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
+            stripped = candidate.strip()
+            if stripped[:1] in {"{", "["}:
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    nested = _extract_model_reply(parsed)
+                    if nested:
+                        return nested
+                elif isinstance(parsed, list):
+                    for item in reversed(parsed):
+                        if isinstance(item, dict):
+                            nested = _extract_model_reply(item)
+                            if nested:
+                                return nested
+                        elif isinstance(item, str) and item.strip():
+                            return item.strip()
+            return stripped
         if isinstance(candidate, dict):
             nested = _extract_model_reply(candidate)
             if nested:
@@ -909,10 +1014,12 @@ def _provider_presence(
 ) -> dict[str, bool]:
     ids = provider_ids or list(PROVIDER_ENV)
     output: dict[str, bool] = {}
-    minimax_oauth_file = Path.home() / ".minimax" / "oauth_creds.json"
-    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw")))
+    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+    minimax_oauth_file = home / ".minimax" / "oauth_creds.json"
+    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(home / ".openclaw"))).expanduser()
     openclaw_auth_store = state_root / "agents" / "main" / "agent" / "auth-profiles.json"
-    hermes_auth_stores = hermes_auth_store_candidates(Path.home())
+    opencode_auth_store = home / ".local" / "share" / "opencode" / "auth.json"
+    hermes_auth_stores = _scoped_hermes_auth_store_candidates(home)
     session_secrets = session_secrets or {}
     for provider_id in ids:
         env_names = PROVIDER_ENV.get(provider_id, (f"{provider_id.upper()}_API_KEY",))
@@ -921,6 +1028,8 @@ def _provider_presence(
             aliases.add("openai")
         if provider_id == "minimax-cn":
             aliases.add("minimax")
+        if provider_id == "opencode-go":
+            aliases.update({"opencodego", "opencode"})
         present = any(bool(os.environ.get(name)) for name in env_names) or any(
             bool(session_secrets.get(alias)) for alias in aliases
         )
@@ -938,12 +1047,45 @@ def _provider_presence(
                 for path in hermes_auth_stores
                 for hermes_provider in ("minimax-oauth", "minimax", "minimax-portal")
             )
+        if provider_id == "opencode-go":
+            present = present or _openclaw_auth_store_has_provider(openclaw_auth_store, "opencode-go")
+            present = present or _openclaw_auth_store_has_provider(openclaw_auth_store, "opencodego")
+            present = present or _openclaw_auth_store_has_provider(openclaw_auth_store, "opencode")
+            present = present or _openclaw_auth_store_has_provider(opencode_auth_store, "opencode-go")
+            present = present or _openclaw_auth_store_has_provider(opencode_auth_store, "opencodego")
+            present = present or any(
+                _openclaw_auth_store_has_provider(path, hermes_provider)
+                for path in hermes_auth_stores
+                for hermes_provider in ("opencode-go", "opencodego", "opencode")
+            )
         output[provider_id] = present
     return output
 
 
 def _provider_secret_store_path(root: Path) -> Path:
     return root / ".agent_control" / "provider_secrets.json"
+
+
+def _scoped_hermes_auth_store_candidates(home: Path) -> list[Path]:
+    candidates = hermes_auth_store_candidates(home)
+    explicit_home = os.environ.get("HOME")
+    if not explicit_home:
+        return candidates
+    default_home = Path.home().expanduser()
+    try:
+        if home.resolve() == default_home.resolve():
+            return candidates
+    except OSError:
+        if str(home) == str(default_home):
+            return candidates
+    scoped: list[Path] = []
+    for path in candidates:
+        try:
+            path.resolve().relative_to(home.resolve())
+        except (OSError, ValueError):
+            continue
+        scoped.append(path)
+    return scoped
 
 
 def _provider_runtime_env_path() -> Path | None:
@@ -1034,7 +1176,11 @@ def _write_persisted_provider_secrets(root: Path, provider_secrets: dict[str, st
 
 
 def _openclaw_auth_store_has_provider(path: Path, provider_id: str) -> bool:
-    if not path.exists():
+    try:
+        exists = path.exists()
+    except OSError:
+        return False
+    if not exists:
         return False
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1044,6 +1190,8 @@ def _openclaw_auth_store_has_provider(path: Path, provider_id: str) -> bool:
 
     def visit(value: object) -> bool:
         if isinstance(value, dict):
+            if needle in {str(item).strip().lower() for item in value.keys()}:
+                return True
             for key in ("providers", "credential_pool"):
                 nested = value.get(key)
                 if isinstance(nested, dict) and needle in {
@@ -2037,10 +2185,11 @@ def _openclaw_status() -> dict[str, Any]:
 def _minimax_openclaw_auth_status(
     session_secrets: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    credentials_path = Path.home() / ".minimax" / "oauth_creds.json"
-    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw")))
+    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+    credentials_path = home / ".minimax" / "oauth_creds.json"
+    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(home / ".openclaw"))).expanduser()
     auth_store_path = state_root / "agents" / "main" / "agent" / "auth-profiles.json"
-    hermes_auth_stores = hermes_auth_store_candidates(Path.home())
+    hermes_auth_stores = _scoped_hermes_auth_store_candidates(home)
     authenticated = _provider_presence(
         ["minimax-portal"],
         session_secrets=session_secrets,
@@ -2068,9 +2217,9 @@ def _minimax_openclaw_auth_status(
         "hermesAuthStorePaths": [str(path) for path in hermes_auth_stores],
         "source": source,
         "message": (
-            "MiniMax OpenClaw OAuth credentials are visible to the web backend."
+            "MiniMax broker OAuth credentials are visible to the web backend."
             if authenticated
-            else "MiniMax OpenClaw OAuth is not visible to the web backend yet."
+            else "MiniMax broker OAuth is not visible to the web backend yet."
         ),
     }
 
@@ -2231,7 +2380,7 @@ def _minimax_openclaw_auth_start(region: object = None) -> dict[str, Any]:
             "region": normalized_region,
             "command": command,
             "status": status,
-            "message": "MiniMax OpenClaw OAuth is already connected on this runtime.",
+            "message": "MiniMax broker OAuth is already connected on this runtime.",
         }
     try:
         verifier, challenge = _create_openai_codex_pkce_pair()
@@ -2276,7 +2425,7 @@ def _minimax_openclaw_auth_start(region: object = None) -> dict[str, Any]:
             "error": str(exc),
             "message": (
                 "MiniMax browser OAuth could not be started automatically. "
-                "Run this OpenClaw command on the NAS or runtime host, then refresh Syntelos auth status."
+                "Run this MiniMax broker command on the NAS or runtime host, then refresh Syntelos auth status."
             ),
         }
 
@@ -2323,7 +2472,7 @@ def _minimax_openclaw_auth_complete(payload: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "profileId": identity.get("profileId"),
         "message": (
-            "MiniMax OpenClaw OAuth connected."
+            "MiniMax broker OAuth connected."
             if status.get("authenticated")
             else "MiniMax OAuth completed, but credentials are not visible yet."
         ),
@@ -2352,7 +2501,7 @@ def _minimax_openclaw_connect_page(region: object = None) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Connect MiniMax OpenClaw OAuth</title>
+  <title>Connect MiniMax broker OAuth</title>
   <style>
     :root {{ color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }}
     body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101417; color: #eef3f5; }}
@@ -2371,9 +2520,9 @@ def _minimax_openclaw_connect_page(region: object = None) -> str:
 </head>
 <body>
   <main>
-    <h1>Connect MiniMax OpenClaw OAuth</h1>
-    <p>This is the Syntelos connect step. Open MiniMax from here, approve the OpenClaw connection, then return to this page and verify the NAS session.</p>
-    {"<p class='ok'>MiniMax OpenClaw OAuth is already connected.</p>" if already_connected else ""}
+    <h1>Connect MiniMax broker OAuth</h1>
+    <p>This is the Syntelos connect step. Open MiniMax from here, approve the broker connection, then return to this page and verify the NAS/Hermes session.</p>
+    {"<p class='ok'>MiniMax broker OAuth is already connected.</p>" if already_connected else ""}
     {"<p class='err'>" + html.escape(error) + "</p>" if error else ""}
     {"<p>MiniMax code:</p><div class='code'>" + html.escape(user_code) + "</div>" if user_code else ""}
     <div class="actions">
@@ -2403,7 +2552,7 @@ def _minimax_openclaw_connect_page(region: object = None) -> str:
         const payload = await response.json();
         if (!response.ok || payload.ok === false) throw new Error(payload.error || 'Verification failed.');
         const data = payload.data || {{}};
-        statusEl.textContent = data.message || (data.authenticated ? 'MiniMax OpenClaw OAuth connected.' : 'MiniMax approval is still pending.');
+        statusEl.textContent = data.message || (data.authenticated ? 'MiniMax broker OAuth connected.' : 'MiniMax approval is still pending.');
         statusEl.className = data.authenticated ? 'ok' : '';
         if (data.authenticated && verifyTimer) {{
           clearInterval(verifyTimer);
@@ -2663,7 +2812,104 @@ class FluxioWebBackend:
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax"]
         if self.provider_secrets.get("minimax-cn"):
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax-cn"]
+        if self.provider_secrets.get("opencode-go"):
+            env["OPENCODE_API_KEY"] = self.provider_secrets["opencode-go"]
         return env
+
+    def _runtime_route_proof_path(self, root: Path | None = None) -> Path:
+        return Path(root or self.root) / ".agent_control" / "runtime_route_proof.json"
+
+    def _record_runtime_route_proof(
+        self,
+        payload: dict[str, Any],
+        result: dict[str, Any],
+        *,
+        root: Path | None = None,
+    ) -> None:
+        route = result.get("route") if isinstance(result.get("route"), dict) else {}
+        proof = {
+            "schema": "fluxio.runtime_route_proof.v1",
+            "checkedAt": _utc_now(),
+            "runtime": str(result.get("runtime") or payload.get("runtime") or "").strip(),
+            "provider": str(route.get("provider") or payload.get("provider") or "").strip(),
+            "model": str(route.get("model") or payload.get("model") or "").strip(),
+            "modelId": str(route.get("model_id") or "").strip(),
+            "effort": str(route.get("effort") or "").strip(),
+            "replyPreview": str(result.get("reply") or "").strip()[:160],
+            "elapsedMs": int(result.get("elapsedMs") or 0),
+            "source": "authenticated_web_backend_chat",
+        }
+        path = self._runtime_route_proof_path(root)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+            tmp_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            tmp_path.replace(path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            return
+
+    def _runtime_route_proof_status(self, root: Path) -> dict[str, Any]:
+        env = self._provider_env()
+        hermes_command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
+        hermes_command_source = "native" if hermes_command else ""
+        version_output = ""
+        if hermes_command:
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    [hermes_command, "--version"],
+                    cwd=str(root),
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                    env={**os.environ, **env},
+                    **hidden_windows_subprocess_kwargs(),
+                )
+                version_output = (completed.stdout or completed.stderr).strip().splitlines()[0]
+            except Exception:
+                version_output = ""
+        else:
+            wsl_hermes_command = _wsl_command_path("hermes")
+            if wsl_hermes_command:
+                hermes_command = f"wsl:{wsl_hermes_command}"
+                hermes_command_source = "wsl"
+                version_output = _wsl_command_version("hermes")
+        proof: dict[str, Any] = {}
+        try:
+            loaded = json.loads(self._runtime_route_proof_path(root).read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                proof = loaded
+        except (OSError, json.JSONDecodeError):
+            proof = {}
+        proof_model = str(proof.get("model") or "").strip()
+        proof_provider = str(proof.get("provider") or "").strip()
+        m3_verified = (
+            str(proof.get("runtime") or "").strip().lower() == "hermes"
+            and proof_provider.lower().startswith("minimax")
+            and proof_model.lower() == "minimax-m3"
+            and bool(str(proof.get("replyPreview") or "").strip())
+        )
+        return {
+            "schema": "fluxio.runtime_route_status.v1",
+            "checkedAt": _utc_now(),
+            "hermesCommand": hermes_command or "",
+            "hermesCommandSource": hermes_command_source,
+            "hermesCommandVisible": bool(hermes_command),
+            "hermesVersion": version_output,
+            "frontendExecutorModel": "MiniMax-M3",
+            "frontendExecutorProvider": "minimax-oauth",
+            "minimaxM3Verified": m3_verified,
+            "proof": proof,
+            "source": "backend_runtime_path_and_last_successful_chat",
+        }
 
     def _with_provider_env(self, callback):
         env = self._provider_env()
@@ -2716,7 +2962,7 @@ class FluxioWebBackend:
     def _control_room_freshness_signature(self, root: Path) -> tuple[tuple[str, int, int], ...]:
         store = ControlRoomStore(root)
         rows: list[tuple[str, int, int]] = []
-        for path in (
+        watched_paths = [
             store.missions_path,
             store.events_path,
             store.workspaces_path,
@@ -2724,7 +2970,15 @@ class FluxioWebBackend:
             root / ".agent_control" / "mission_watchdog.json",
             root / ".agent_control" / "mission_watchdog_problems.json",
             root / ".agent_control" / "mission_watchdog_supervisor.json",
-        ):
+            root / ".agent_control" / "connected_apps_state.json",
+            root / "config" / "connected_apps.json",
+            root / "src" / "grant_agent" / "app_capability_standard.py",
+        ]
+        runtime_compartment_dir = root / ".agent_control" / "runtime_compartments"
+        watched_paths.append(runtime_compartment_dir)
+        if runtime_compartment_dir.exists():
+            watched_paths.extend(sorted(runtime_compartment_dir.glob("*.json")))
+        for path in watched_paths:
             try:
                 stat = path.stat()
             except OSError:
@@ -3034,6 +3288,26 @@ class FluxioWebBackend:
         return root / ".agent_control" / "control_room_bootstrap_summary_cache.json"
 
     @staticmethod
+    def _temporary_control_room_cache_path(root: Path, name: str) -> Path:
+        digest = hashlib.sha256(str(root.resolve()).encode("utf-8", errors="ignore")).hexdigest()[:16]
+        return Path(tempfile.gettempdir()) / "fluxio-control-room-cache" / digest / name
+
+    @classmethod
+    def _control_room_summary_cache_paths(cls, root: Path, *, bootstrap: bool) -> list[Path]:
+        primary = (
+            cls._persisted_control_room_bootstrap_summary_cache_path(root)
+            if bootstrap
+            else cls._persisted_control_room_summary_cache_path(root)
+        )
+        temporary = cls._temporary_control_room_cache_path(
+            root,
+            "control_room_bootstrap_summary_cache.json"
+            if bootstrap
+            else "control_room_summary_cache.json",
+        )
+        return [primary, temporary]
+
+    @staticmethod
     def _serializable_control_room_signature(
         signature: tuple[tuple[str, int, int], ...],
     ) -> list[list[object]]:
@@ -3058,11 +3332,23 @@ class FluxioWebBackend:
         root: Path,
         signature: tuple[tuple[str, int, int], ...],
     ) -> dict[str, Any] | None:
-        path = self._persisted_control_room_summary_cache_path(root)
+        paths = self._control_room_summary_cache_paths(root, bootstrap=False)
+        path = paths[0]
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = None
+            for candidate in paths:
+                try:
+                    payload = json.loads(candidate.read_text(encoding="utf-8"))
+                    path = candidate
+                    break
+                except (OSError, json.JSONDecodeError):
+                    continue
+            if payload is None:
+                return None
+        except OSError:
             return None
+        if path != paths[0]:
+            pass
         if not isinstance(payload, dict):
             return None
         if payload.get("cacheVersion") != PERSISTED_FULL_SUMMARY_CACHE_VERSION:
@@ -3080,7 +3366,13 @@ class FluxioWebBackend:
         signature: tuple[tuple[str, int, int], ...],
         payload: dict[str, Any],
     ) -> None:
-        path = self._persisted_control_room_summary_cache_path(root)
+        primary_path, temporary_path = self._control_room_summary_cache_paths(root, bootstrap=False)
+        path = primary_path
+        try:
+            if shutil.disk_usage(path.parent).free < 2_000_000:
+                path = temporary_path
+        except OSError:
+            path = temporary_path
         cache_payload = {
             "schema": "fluxio.control_room.persisted_summary_cache.v1",
             "cacheVersion": PERSISTED_FULL_SUMMARY_CACHE_VERSION,
@@ -3091,6 +3383,9 @@ class FluxioWebBackend:
         cache_payload["summary"].pop("summaryCache", None)
         cache_payload["summary"].pop("webBackend", None)
         cache_payload["summary"].pop("providerSecretPresence", None)
+        cache_payload["summary"].pop("runtimeRouteProof", None)
+        cache_payload["summary"].pop("webPushStatus", None)
+        cache_payload["summary"].pop("ntfyStatus", None)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
         try:
@@ -3115,10 +3410,15 @@ class FluxioWebBackend:
         root: Path,
         signature: tuple[tuple[str, int, int], ...],
     ) -> dict[str, Any] | None:
-        path = self._persisted_control_room_bootstrap_summary_cache_path(root)
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        paths = self._control_room_summary_cache_paths(root, bootstrap=True)
+        payload = None
+        for path in paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                break
+            except (OSError, json.JSONDecodeError):
+                continue
+        if payload is None:
             return None
         if not isinstance(payload, dict):
             return None
@@ -3137,7 +3437,13 @@ class FluxioWebBackend:
         signature: tuple[tuple[str, int, int], ...],
         payload: dict[str, Any],
     ) -> None:
-        path = self._persisted_control_room_bootstrap_summary_cache_path(root)
+        primary_path, temporary_path = self._control_room_summary_cache_paths(root, bootstrap=True)
+        path = primary_path
+        try:
+            if shutil.disk_usage(path.parent).free < 2_000_000:
+                path = temporary_path
+        except OSError:
+            path = temporary_path
         cache_payload = {
             "schema": "fluxio.control_room.persisted_bootstrap_summary_cache.v1",
             "cacheVersion": PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION,
@@ -3148,6 +3454,9 @@ class FluxioWebBackend:
         cache_payload["summary"].pop("summaryCache", None)
         cache_payload["summary"].pop("webBackend", None)
         cache_payload["summary"].pop("providerSecretPresence", None)
+        cache_payload["summary"].pop("runtimeRouteProof", None)
+        cache_payload["summary"].pop("webPushStatus", None)
+        cache_payload["summary"].pop("ntfyStatus", None)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
         try:
@@ -3382,11 +3691,43 @@ class FluxioWebBackend:
             roots.append(normalized)
         return roots
 
+    def _project_mission_artifact_roots(self) -> list[Path]:
+        projects_roots: list[Path] = []
+        for candidate in (self.root, *self.root.parents):
+            if candidate.name == "projects":
+                projects_roots.append(candidate)
+                break
+        mirror_candidates = (
+            [Path("C:/volume1/Saclay/projects")]
+            if os.name == "nt"
+            else [Path("/volume1/Saclay/projects"), Path("/mnt/c/volume1/Saclay/projects")]
+        )
+        projects_roots.extend(mirror_candidates)
+        roots: list[Path] = []
+        seen: set[str] = set()
+        for projects_root in projects_roots:
+            if not projects_root.exists() or not projects_root.is_dir():
+                continue
+            for control_dir in projects_root.glob("*/.agent_control/mission_artifacts"):
+                try:
+                    resolved = control_dir.expanduser().resolve()
+                except OSError:
+                    continue
+                if not resolved.exists() or not resolved.is_dir():
+                    continue
+                key = str(resolved)
+                if key in seen:
+                    continue
+                seen.add(key)
+                roots.append(resolved)
+        return roots
+
     def _artifact_allowed_roots(self) -> list[Path]:
         candidates = [
             self.root / ".agent_control" / "image_playground_artifacts",
             self.root / ".agent_control" / "generated_image_artifacts",
             self.root / ".agent_control" / "design_references",
+            self.root / ".agent_control" / "mission_artifacts",
             self.root / ".agent_control" / "runtime_compartments",
             self.root / ".agent_control" / "runtime_sessions",
             self.root / ".agent_control" / "mission_async",
@@ -3394,14 +3735,17 @@ class FluxioWebBackend:
         ]
         if os.name == "nt":
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_artifacts"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
         else:
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_artifacts"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
+        candidates.extend(self._project_mission_artifact_roots())
         roots: list[Path] = []
         seen: set[str] = set()
         for candidate in candidates:
@@ -3463,14 +3807,17 @@ class FluxioWebBackend:
                     self.root / ".agent_control" / "image_playground_artifacts",
                     self.root / ".agent_control" / "generated_image_artifacts",
                     self.root / ".agent_control" / "design_references",
+                    self.root / ".agent_control" / "mission_artifacts",
                     self.root / ".agent_control" / "runtime_compartments",
                     self.root / ".agent_control" / "runtime_sessions",
                     self.root / ".agent_control" / "mission_async",
                     self.root / ".agent_runs",
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"),
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_artifacts"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"),
+                    *self._project_mission_artifact_roots(),
                 ):
                     if search_root.exists():
                         candidates.extend(search_root.rglob(name))
@@ -3866,6 +4213,184 @@ class FluxioWebBackend:
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
+    def _display_command(self, args: list[object], *, prompt_marker: str = "<prompt>") -> str:
+        safe_args: list[str] = []
+        skip_next_prompt = False
+        for item in args:
+            value = str(item)
+            if skip_next_prompt:
+                safe_args.append(prompt_marker)
+                skip_next_prompt = False
+                continue
+            safe_args.append(value)
+            if value in {"--prompt", "-q"}:
+                skip_next_prompt = True
+        try:
+            return subprocess.list2cmdline(safe_args)
+        except (TypeError, ValueError):
+            return shlex.join(safe_args)
+
+    def _normalize_receipt_assistant_message(self, candidates: list[Any], command: str = "") -> str:
+        command_text = " ".join(str(command or "").split())
+        for candidate in candidates:
+            text = str(candidate or "").replace("\r\n", "\n").strip()
+            if not text:
+                continue
+            text = re.sub(r"[ \t]+\n", "\n", text)
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+            collapsed = " ".join(text.split())
+            if command_text and collapsed == command_text:
+                continue
+            if re.search(r"^(command|feedback|response|reply)\s*:?\s+(\/volume\d+\/|[A-Z]:\\|wsl\s+|python\s+-m\s+|node\s+|npm\s+|pnpm\s+|yarn\s+|hermes\s+|opencode\s+|openclaw\s+|codex\s+)", collapsed, re.I):
+                continue
+            if re.search(r"^(\/volume\d+\/|[A-Z]:\\|wsl\s+|python\s+-m\s+|node\s+|npm\s+|pnpm\s+|yarn\s+|hermes\s+|opencode\s+|openclaw\s+|codex\s+)", collapsed, re.I):
+                continue
+            if re.search(r"\b(mission one-shot|execute model mission|--objective|--mission-id|--provider|--model)\b", collapsed, re.I):
+                continue
+            if re.search(
+                r"\b(delegated runtime lane launched|delegated lane launched|file mutation completed|workspace search completed|approval required before|waiting for operator approval|lane action routed)\b",
+                collapsed,
+                re.I,
+            ):
+                continue
+            return self._assistant_message_from_runtime_output(text) or text
+        return ""
+
+    def _assistant_message_from_runtime_output(self, text: str) -> str:
+        cleaned = re.sub(
+            r"^\s*(?:runtime output|raw action output)\s*:\s*",
+            "",
+            str(text or "").strip(),
+            flags=re.I,
+        )
+        cleaned = re.sub(
+            r"^\s*Mission\s+\S+\s+live runtime output\s*\([^)]+\)\s*",
+            "",
+            cleaned,
+            flags=re.I,
+        ).strip()
+        if re.search(r"^OpenRuntime returned a real result for this mission\b", cleaned, re.I):
+            return cleaned
+        if not cleaned or not re.search(r"(^|\n)\s*(artifact|preview url|route)\s*:", cleaned, re.I):
+            return ""
+        lines = [
+            re.sub(r"^[-*]\s*", "", line).strip()
+            for line in cleaned.splitlines()
+            if line.strip()
+        ]
+
+        def is_artifact_line(line: str) -> bool:
+            return bool(
+                re.search(r"^(artifact|preview url|route|command|status)\s*:", line, re.I)
+                or re.search(r"^/volume\d+/", line, re.I)
+                or re.search(r"^https?://", line, re.I)
+                or re.search(r"^/api/artifact\b", line, re.I)
+            )
+
+        headline = next((line for line in lines if not is_artifact_line(line)), "")
+        route = next((line for line in lines if re.search(r"^route\s*:", line, re.I)), "")
+        facts = [line for line in lines if line != headline and not is_artifact_line(line)][:4]
+        parts = [
+            (
+                f"OpenRuntime returned a real result for this mission: {headline}."
+                if headline
+                else "OpenRuntime returned a real result for this mission."
+            )
+        ]
+        if facts:
+            parts.append(f"Key output: {' '.join(facts)}")
+        if route:
+            parts.append(route)
+        return "\n".join(parts).strip()
+
+    def _turn_receipt_from_chat_result(
+        self,
+        payload: dict[str, Any],
+        result: dict[str, Any],
+        *,
+        session_id: str,
+        route: dict[str, Any],
+        changed_files: list[str],
+        timeline: list[dict[str, Any]],
+        ended_at: str,
+        elapsed_ms: int,
+    ) -> dict[str, Any]:
+        existing = result.get("turnReceipt")
+        if isinstance(existing, dict):
+            receipt = dict(existing)
+        else:
+            receipt = {}
+        command = (
+            receipt.get("command")
+            or result.get("command")
+            or result.get("launchCommand")
+            or result.get("launch_command")
+            or ""
+        )
+        if not command:
+            for item in reversed(timeline):
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("kind") or "").lower() in {"command.execution", "command"}:
+                    command = str(item.get("summary") or "")
+                    break
+        status = receipt.get("status") or ("completed" if str(result.get("reply") or "").strip() else "completed_no_reply")
+        source_type = str(payload.get("sourceType") or payload.get("source_type") or "chat").strip() or "chat"
+        assistant_message = self._normalize_receipt_assistant_message(
+            [
+                receipt.get("assistantMessage"),
+                receipt.get("modelMessage"),
+                receipt.get("openRuntimeMessage"),
+                receipt.get("agentMessage"),
+                receipt.get("finalMessage"),
+                result.get("assistantMessage"),
+                result.get("modelMessage"),
+                result.get("openRuntimeMessage"),
+                result.get("runtimeMessage"),
+                result.get("agentMessage"),
+                result.get("finalMessage"),
+                result.get("reply"),
+                result.get("message"),
+            ],
+            command,
+        )
+        run_summary = str(
+            receipt.get("runSummary")
+            or result.get("result_summary")
+            or result.get("resultSummary")
+            or ""
+        ).strip()
+        return {
+            "schema": "fluxio.turn_receipt.v1",
+            "sessionId": receipt.get("sessionId") or session_id,
+            "missionId": receipt.get("missionId") or str(payload.get("missionId") or payload.get("mission_id") or ""),
+            "sourceType": receipt.get("sourceType") or source_type,
+            "sourceMessageId": receipt.get("sourceMessageId") or str(payload.get("sourceMessageId") or ""),
+            "sourceZone": receipt.get("sourceZone") or str(payload.get("sourceZone") or ""),
+            "commentText": receipt.get("commentText") or str(payload.get("commentText") or ""),
+            "command": command or "Not reported",
+            "runtime": receipt.get("runtime") or str(result.get("runtime") or payload.get("runtime") or "Not reported"),
+            "provider": receipt.get("provider") or str(route.get("provider") or "Not reported"),
+            "model": receipt.get("model") or str(route.get("model_id") or route.get("model") or "Not reported"),
+            "effort": receipt.get("effort") or str(route.get("effort") or "Not reported"),
+            "status": str(status),
+            "exitCode": receipt.get("exitCode", result.get("exitCode", result.get("exit_code", ""))),
+            "startedAt": receipt.get("startedAt") or str(payload.get("requestStartedAt") or ""),
+            "endedAt": receipt.get("endedAt") or ended_at,
+            "durationMs": receipt.get("durationMs", elapsed_ms),
+            "toolTimeline": receipt.get("toolTimeline") if isinstance(receipt.get("toolTimeline"), list) else timeline[-30:],
+            "changedFiles": receipt.get("changedFiles") if isinstance(receipt.get("changedFiles"), list) else changed_files[:30],
+            "assistantMessage": assistant_message,
+            "finalMessage": assistant_message,
+            "modelMessageSource": receipt.get("modelMessageSource") or str(result.get("modelMessageSource") or ""),
+            "modelMessageSourceLabel": receipt.get("modelMessageSourceLabel") or str(result.get("modelMessageSourceLabel") or ""),
+            "modelMessageSourceTitle": receipt.get("modelMessageSourceTitle") or str(result.get("modelMessageSourceTitle") or ""),
+            "modelMessageSourceId": receipt.get("modelMessageSourceId") or str(result.get("modelMessageSourceId") or ""),
+            "transcriptSessionId": receipt.get("transcriptSessionId") or str(result.get("transcriptSessionId") or ""),
+            "runSummary": run_summary,
+            "proofArtifacts": receipt.get("proofArtifacts") if isinstance(receipt.get("proofArtifacts"), list) else [],
+        }
+
     def _save_chat_compartment(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         session_id = _safe_identifier(result.get("sessionId") or payload.get("sessionId") or "syntelos_chat")
         route = result.get("route") if isinstance(result.get("route"), dict) else self._chat_route(payload)
@@ -3892,11 +4417,6 @@ class FluxioWebBackend:
                     "at": now,
                     "summary": str(payload.get("message") or "").strip()[:240],
                 },
-                {
-                    "kind": "runtime.reply",
-                    "at": now,
-                    "summary": str(result.get("reply") or "").strip()[:240],
-                },
             ]
         )
         if elapsed_ms > 0:
@@ -3922,13 +4442,6 @@ class FluxioWebBackend:
                     "status": str(item.get("status") or "recorded"),
                 }
             )
-        messages = previous.get("messages") if isinstance(previous.get("messages"), list) else []
-        operator_message = str(payload.get("message") or "").strip()
-        runtime_reply = str(result.get("reply") or "").strip()
-        if operator_message:
-            messages.append({"role": "operator", "text": operator_message, "at": now})
-        if runtime_reply:
-            messages.append({"role": "assistant", "text": runtime_reply, "at": now})
         previous_files = previous.get("filesChanged") if isinstance(previous.get("filesChanged"), list) else []
         changed_files: list[str] = []
         seen_files: set[str] = set()
@@ -3956,8 +4469,47 @@ class FluxioWebBackend:
                     "blocker": "",
                 }
             )
+        turn_receipt = self._turn_receipt_from_chat_result(
+            payload,
+            result,
+            session_id=session_id,
+            route=route,
+            changed_files=changed_files,
+            timeline=timeline,
+            ended_at=now,
+            elapsed_ms=elapsed_ms,
+        )
+        model_reply = str(turn_receipt.get("assistantMessage") or "").strip()
+        raw_runtime_reply = str(result.get("reply") or result.get("message") or "").strip()
+        if model_reply:
+            timeline.append(
+                {
+                    "kind": "runtime.model_message",
+                    "at": now,
+                    "summary": model_reply[:240],
+                    "status": "recorded",
+                }
+            )
+        elif raw_runtime_reply:
+            timeline.append(
+                {
+                    "kind": "runtime.trace_only_reply",
+                    "at": now,
+                    "summary": raw_runtime_reply[:240],
+                    "status": "trace_only",
+                }
+            )
+        turn_receipt["toolTimeline"] = timeline[-30:]
+        messages = previous.get("messages") if isinstance(previous.get("messages"), list) else []
+        operator_message = str(payload.get("message") or "").strip()
+        if operator_message:
+            messages.append({"role": "operator", "text": operator_message, "at": now, "source": "operator-submitted"})
+        if model_reply:
+            messages.append({"role": "assistant", "text": model_reply, "at": now, "source": "backend-model-message"})
+        previous_receipts = previous.get("turnReceipts") if isinstance(previous.get("turnReceipts"), list) else []
         compartment = {
             "sessionId": session_id,
+            "missionId": str(payload.get("missionId") or payload.get("mission_id") or ""),
             "runtime": result.get("runtime") or payload.get("runtime") or "openclaw",
             "cwd": workspace_path,
             "route": route,
@@ -3968,6 +4520,8 @@ class FluxioWebBackend:
             "toolTimeline": timeline[-30:],
             "lanes": lanes,
             "filesChanged": changed_files[:30],
+            "turnReceipt": turn_receipt,
+            "turnReceipts": [*previous_receipts, turn_receipt][-20:],
             "approvals": [],
             "blockers": [],
             "actions": ["resume-chat", "open-proof", "restart"],
@@ -4067,6 +4621,14 @@ class FluxioWebBackend:
         route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
         provider = self._openclaw_provider_for_route(route.get("provider") or payload.get("provider") or "openai-codex")
         model = str(route.get("model") or payload.get("model") or OPENAI_CODEX_DEFAULT_MODEL).strip()
+        if provider in {"minimax", "minimax-cn", "minimax-portal"} and model.lower() in {
+            "minimax-m2.7",
+            "minimax-m2.7-highspeed",
+            "minimax/m2.7",
+            "minimax/minimax-m2.7",
+            "minimax/minimax-m2.7-highspeed",
+        }:
+            model = "MiniMax-M3"
         effort = str(route.get("effort") or payload.get("effort") or "high").strip().lower()
         role = str(route.get("role") or payload.get("role") or "executor").strip().lower()
         model_id = model if "/" in model else f"{provider}/{model}" if provider and model else model
@@ -4103,6 +4665,7 @@ class FluxioWebBackend:
         ]
         if model_id:
             args.extend(["--model", model_id])
+        display_command = self._display_command(args)
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
@@ -4126,6 +4689,7 @@ class FluxioWebBackend:
             "route": route,
             "raw": result,
             "elapsedMs": elapsed_ms,
+            "command": display_command,
             "toolTimeline": tool_timeline,
             "filesChanged": files_changed,
         }
@@ -4160,6 +4724,7 @@ class FluxioWebBackend:
                 "--json",
                 prompt,
             ]
+            display_command = self._display_command(args[:-1] + ["<prompt>"])
             result, stdout, _stderr, elapsed_ms = _run_process_capture(
                 args,
                 cwd=workspace_path,
@@ -4189,6 +4754,7 @@ class FluxioWebBackend:
                 "route": route,
                 "raw": result,
                 "elapsedMs": elapsed_ms,
+                "command": display_command,
                 "toolTimeline": tool_timeline,
                 "filesChanged": files_changed,
             }
@@ -4204,24 +4770,31 @@ class FluxioWebBackend:
         command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
         route = self._chat_route(payload)
         raw_route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+        routed_model = str(route.get("model") or "").strip()
         explicit_model = str(raw_route.get("model") or payload.get("model") or "").strip()
+        hermes_model = routed_model or explicit_model
         explicit_provider = str(raw_route.get("provider") or payload.get("provider") or "").strip()
+        hermes_provider = str(route.get("provider") or "").strip()
+        if hermes_provider == "minimax-portal":
+            hermes_provider = "minimax-oauth"
         native_args = ["hermes", "chat", "-q", prompt, "-Q"]
-        if explicit_model:
-            native_args.extend(["--model", explicit_model])
-        if explicit_provider and route["provider"]:
-            native_args.extend(["--provider", route["provider"]])
+        if hermes_model:
+            native_args.extend(["--model", hermes_model])
+        if explicit_provider and hermes_provider:
+            native_args.extend(["--provider", hermes_provider])
         if command:
             args = [command, *native_args[1:]]
         elif _wsl_has_command("hermes"):
+            wsl_command = f'export PATH="$HOME/.local/bin:$PATH"; {shlex.join(native_args)}'
             args = [
                 shutil.which("wsl") or "wsl",
                 "bash",
                 "-lc",
-                shlex.join(native_args),
+                wsl_command,
             ]
         else:
             raise RuntimeError("Hermes CLI was not found on PATH (native or WSL).")
+        display_command = self._display_command(args)
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
@@ -4241,20 +4814,24 @@ class FluxioWebBackend:
             now=now,
             elapsed_ms=elapsed_ms,
         )
-        return {
+        result_payload = {
             "reply": reply,
             "runtime": "hermes",
             "sessionId": _safe_identifier(payload.get("sessionId") or "syntelos_chat"),
             "route": {
                 **route,
-                "model": explicit_model,
-                "model_id": f"{route['provider']}/{explicit_model}" if explicit_model else route["provider"],
+                "provider": hermes_provider or route["provider"],
+                "model": hermes_model,
+                "model_id": f"{hermes_provider or route['provider']}/{hermes_model}" if hermes_model else hermes_provider or route["provider"],
             },
             "raw": result,
             "elapsedMs": elapsed_ms,
+            "command": display_command,
             "toolTimeline": tool_timeline,
             "filesChanged": files_changed,
         }
+        self._record_runtime_route_proof(payload, result_payload, root=self.root)
+        return result_payload
 
     def _run_agent_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         runtime = str(payload.get("runtime") or payload.get("runtimeId") or "codex").strip().lower()
@@ -4286,6 +4863,9 @@ class FluxioWebBackend:
             snapshot["providerSecretPresence"] = _provider_presence(
                 session_secrets=self.provider_secrets,
             )
+            snapshot["runtimeRouteProof"] = self._runtime_route_proof_status(root)
+            snapshot["webPushStatus"] = web_push_status(root)
+            snapshot["ntfyStatus"] = ntfy_status(root)
             snapshot["webBackend"] = {
                 "available": True,
                 "commandSurface": "http",
@@ -4296,14 +4876,16 @@ class FluxioWebBackend:
             root = Path(payload.get("root") or self.root).resolve()
             bootstrap = bool(payload.get("bootstrap") or payload.get("summaryBootstrap"))
             summary_mode = str(payload.get("summaryMode") or "").strip().lower()
-            summary = (
-                self._cached_control_room_bootstrap_summary(root)
-                if bootstrap or summary_mode == "bootstrap"
-                else self._cached_control_room_summary(root)
-            )
+            if bootstrap or summary_mode == "bootstrap":
+                summary = self._cached_control_room_bootstrap_summary(root)
+            else:
+                summary = self._cached_control_room_summary(root)
             summary["providerSecretPresence"] = _provider_presence(
                 session_secrets=self.provider_secrets,
             )
+            summary["runtimeRouteProof"] = self._runtime_route_proof_status(root)
+            summary["webPushStatus"] = web_push_status(root)
+            summary["ntfyStatus"] = ntfy_status(root)
             summary["webBackend"] = {
                 "available": True,
                 "commandSurface": "http",
@@ -4353,11 +4935,23 @@ class FluxioWebBackend:
                 status=str(payload.get("status") or "delivered"),
                 error_message=str(payload.get("errorMessage") or payload.get("error_message") or ""),
                 delivery_url=str(payload.get("deliveryUrl") or payload.get("delivery_url") or ""),
+                origin_runtime=str(payload.get("originRuntime") or payload.get("origin_runtime") or ""),
+                origin_provider=str(payload.get("originProvider") or payload.get("origin_provider") or ""),
+                origin_model=str(payload.get("originModel") or payload.get("origin_model") or ""),
+                transport_provider=str(payload.get("transportProvider") or payload.get("transport_provider") or ""),
+                producer=str(payload.get("producer") or ""),
+                mission_title=str(payload.get("missionTitle") or payload.get("mission_title") or ""),
+                source_session_id=str(payload.get("sourceSessionId") or payload.get("source_session_id") or ""),
+                evidence_path=str(payload.get("evidencePath") or payload.get("evidence_path") or ""),
+                screenshot_path=str(payload.get("screenshotPath") or payload.get("screenshot_path") or ""),
             )
             return asdict(receipt)
         if command == "get_web_push_status_command":
             root = Path(payload.get("root") or self.root).resolve()
             return web_push_status(root)
+        if command == "get_ntfy_status_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return ntfy_status(root)
         if command == "generate_web_push_vapid_config_command":
             root = Path(payload.get("root") or self.root).resolve()
             return generate_web_push_vapid_config(
@@ -4394,10 +4988,43 @@ class FluxioWebBackend:
                 "errorCount": sum(1 for receipt in receipts if receipt.status == "error"),
                 "skippedCount": sum(1 for receipt in receipts if receipt.status == "skipped"),
             }
+        if command == "send_ntfy_notification_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            event = MissionEvent(
+                mission_id=str(payload.get("missionId") or payload.get("mission_id") or "control_room"),
+                kind=str(payload.get("eventKind") or payload.get("event_kind") or "notification.ntfy"),
+                message=str(payload.get("body") or payload.get("eventMessage") or payload.get("event_message") or ""),
+                metadata={
+                    "title": str(payload.get("title") or "Fluxio mission update"),
+                    "targetUrl": str(payload.get("targetUrl") or payload.get("target_url") or ""),
+                },
+            )
+            receipt = send_ntfy_delivery_receipt(
+                event,
+                root=root,
+                topic=str(payload.get("topic") or ""),
+                title=str(payload.get("title") or "Fluxio mission update"),
+                priority=str(payload.get("priority") or "default"),
+                tags=str(payload.get("tags") or "fluxio"),
+                click_url=str(payload.get("targetUrl") or payload.get("target_url") or ""),
+                dry_run=bool(payload.get("dryRun") or payload.get("dry_run")),
+            )
+            return {
+                "schema": "fluxio.ntfy_delivery.v1",
+                "ok": receipt.status == "delivered",
+                "receipt": asdict(receipt),
+                "deliveredCount": 1 if receipt.status == "delivered" else 0,
+                "errorCount": 1 if receipt.status == "error" else 0,
+                "skippedCount": 1 if receipt.status == "skipped" else 0,
+            }
         if command == "get_nas_deploy_readiness_command":
             from .mission_control import build_nas_deploy_readiness_snapshot
 
             return build_nas_deploy_readiness_snapshot(self.root)
+        if command == "get_integration_readiness_command":
+            from .mission_control import build_integration_readiness_snapshot
+
+            return build_integration_readiness_snapshot(self.root)
         if command == "inspect_codex_import_command":
             return _codex_import_snapshot()
         if command == "get_provider_secret_presence_command":
@@ -4747,7 +5374,18 @@ class FluxioWebBackend:
     def serve_file(self, handler: BaseHTTPRequestHandler) -> bool:
         parsed = urlparse(handler.path)
         raw_path = unquote(parsed.path.lstrip("/"))
-        target = self.static_root / (raw_path or "index.html")
+        candidate_paths = [raw_path or "index.html"]
+        if raw_path == "control" or raw_path.startswith("control/"):
+            control_relative = raw_path.removeprefix("control/").strip("/")
+            candidate_paths.append(control_relative or "index.html")
+        target = next(
+            (
+                self.static_root / candidate
+                for candidate in candidate_paths
+                if (self.static_root / candidate).exists()
+            ),
+            self.static_root / (candidate_paths[0] or "index.html"),
+        )
         if target.is_dir():
             target = target / "index.html"
         if not target.exists():
@@ -4842,7 +5480,7 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
-            if parsed.path == "/health":
+            if parsed.path in {"/health", "/api/health"}:
                 _json_response(
                     self,
                     200,
@@ -4964,6 +5602,14 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
             if path != "/api/backend":
                 _json_response(self, 404, {"ok": False, "error": "Unknown API route"})
                 return
+            try:
+                payload = _read_json_body(self)
+            except Exception as exc:  # pragma: no cover - exercised by browser/manual flows
+                try:
+                    _json_response(self, 400, {"ok": False, "error": str(exc)})
+                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                    return
+                return
             if not backend.is_authenticated(self):
                 _json_response(
                     self,
@@ -4976,7 +5622,6 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             try:
-                payload = _read_json_body(self)
                 command = str(payload.get("command") or "").strip()
                 result = backend.dispatch(command, payload.get("payload"))
                 try:
@@ -4984,6 +5629,7 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                 except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                     return
             except Exception as exc:  # pragma: no cover - exercised by browser/manual flows
+                traceback.print_exc()
                 try:
                     _json_response(self, 500, {"ok": False, "error": str(exc)})
                 except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
@@ -5064,6 +5710,7 @@ def main(argv: list[str] | None = None) -> int:
                 stale_minutes=_env_int("FLUXIO_WATCHDOG_STALE_MINUTES", 60, minimum=1),
                 interval_seconds=_env_int("FLUXIO_WATCHDOG_INTERVAL_SECONDS", 1200, minimum=0),
                 notify_telegram=_env_flag("FLUXIO_WATCHDOG_NOTIFY_TELEGRAM", True),
+                notify_ntfy=_env_flag("FLUXIO_WATCHDOG_NOTIFY_NTFY", True),
             )
             if watchdog_status.get("started"):
                 print(

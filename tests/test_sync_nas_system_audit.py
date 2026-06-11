@@ -47,6 +47,48 @@ class SyncNasSystemAuditTests(unittest.TestCase):
         self.assertFalse(client.kwargs["allow_agent"])
         self.assertEqual(client.kwargs["auth_timeout"], 30)
 
+    def test_load_nas_credentials_prefers_dpapi_secret_over_stale_text_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            control = root / ".agent_control"
+            control.mkdir()
+            runbook = control / "NAS_ACCESS_RUNBOOK.md"
+            runbook.write_text(
+                "\n".join(
+                    [
+                        "- Tailscale IP: `100.125.54.118`",
+                        "- SSH user: `Codex2`",
+                        "- SSH password: `stale-runbook`",
+                        "- SSH port: `22`",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (control / "nas_codex2_100_125_54_118.json").write_text(
+                json.dumps(
+                    {
+                        "host": "100.125.54.118",
+                        "user": "Codex2",
+                        "port": 22,
+                        "secret": "stale-json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dpapi_path = control / "nas_codex2_100_125_54_118.dpapi"
+            dpapi_path.write_text("encrypted", encoding="utf-8")
+
+            credentials = sync._load_nas_credentials(
+                root=root,
+                runbook_path=runbook,
+                dpapi_decoder=lambda path: "fresh-dpapi" if path == dpapi_path else "",
+            )
+
+        self.assertEqual(credentials["host"], "100.125.54.118")
+        self.assertEqual(credentials["user"], "Codex2")
+        self.assertEqual(credentials["port"], 22)
+        self.assertEqual(credentials["password"], "fresh-dpapi")
+
     def test_non_secret_evidence_upload_list_includes_runtime_inputs(self) -> None:
         evidence_files = "\n".join(sync.NON_SECRET_EVIDENCE_FILES)
 
@@ -54,12 +96,17 @@ class SyncNasSystemAuditTests(unittest.TestCase):
         self.assertIn(".agent_control/release_artifacts/latest.json", evidence_files)
         self.assertIn(".agent_control/t3_code_benchmark_latest.json", evidence_files)
         self.assertIn(".agent_control/live_mission_detail_performance_latest.json", evidence_files)
+        self.assertIn(".agent_control/nas_storage_cleanup_plan_latest.json", evidence_files)
+        self.assertIn(".agent_control/nas_storage_pressure_latest.json", evidence_files)
         self.assertIn(".agent_control/public_launch_readiness/doctor.json", evidence_files)
         self.assertIn(".agent_control/publication/github-release-plan.json", evidence_files)
         self.assertIn(".agent_control/publication/github-release.json", evidence_files)
         self.assertIn(".agent_control/self_improvement_evidence/latest.json", evidence_files)
         self.assertIn(".agent_control/self_improvement_evidence/watchdog_latest.json", evidence_files)
         self.assertIn(".agent_control/self_improvement_evidence/watchdog_history.jsonl", evidence_files)
+        self.assertIn(".agent_control/live_mission_detail_status_latest.json", evidence_files)
+        self.assertIn(".agent_control/mission_artifact_repair_plan_latest.json", evidence_files)
+        self.assertIn(".agent_control/mission_evidence_manifest_latest.json", evidence_files)
         self.assertNotIn("grand_agent_admin_password", evidence_files)
         self.assertNotIn(".dpapi", evidence_files)
         self.assertNotIn("nas_codex2", evidence_files)
@@ -84,6 +131,40 @@ class SyncNasSystemAuditTests(unittest.TestCase):
         self.assertEqual(sorted(names), sorted(pushed))
         self.assertTrue(all(name.startswith(".agent_control/") for name in names))
         self.assertFalse(any(".." in Path(name).parts for name in names))
+
+    def test_local_evidence_archive_includes_latest_screenshot_browser_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            control = root / ".agent_control"
+            screenshots = control / "screenshots"
+            screenshots.mkdir(parents=True)
+            (control / "old-live-control-check.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.authenticated_live_control.v1",
+                        "checkedAt": "2026-05-31T13:05:12+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fresh = screenshots / "active-hermes-m3-finalgreen-20260602-check.json"
+            fresh.write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.authenticated_live_control.v1",
+                        "checkedAt": "2026-06-02T10:29:12+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload, pushed, _missing = sync._build_local_evidence_archive(root)
+
+        self.assertIn(".agent_control/screenshots/active-hermes-m3-finalgreen-20260602-check.json", pushed)
+        self.assertNotIn(".agent_control/old-live-control-check.json", pushed)
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            names = archive.getnames()
+        self.assertIn(".agent_control/screenshots/active-hermes-m3-finalgreen-20260602-check.json", names)
 
     def test_local_evidence_archive_includes_latest_release_artifact_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -200,6 +281,69 @@ class SyncNasSystemAuditTests(unittest.TestCase):
 
         self.assertTrue(sync._should_keep_local_evidence(local, remote))
         self.assertFalse(sync._should_keep_local_evidence(remote, local))
+
+    def test_push_guard_only_allows_provably_newer_local_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            control = root / ".agent_control"
+            control.mkdir()
+            stale = control / "route_trust_sampling" / "latest.json"
+            stale.parent.mkdir(parents=True)
+            stale.write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.route_trust_live_sampling_run.v1",
+                        "generatedAt": "2026-06-02T08:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fresh = control / "live_mission_detail_performance_latest.json"
+            fresh.write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.live_mission_detail_performance.v1",
+                        "checkedAt": "2026-06-02T12:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            remote_route_trust = json.dumps(
+                {
+                    "schema": "fluxio.route_trust_live_sampling_run.v1",
+                    "generatedAt": "2026-06-02T12:30:00+00:00",
+                }
+            )
+            remote_perf = json.dumps(
+                {
+                    "schema": "fluxio.live_mission_detail_performance.v1",
+                    "checkedAt": "2026-06-02T11:00:00+00:00",
+                }
+            )
+            candidates, _missing = sync._collect_local_evidence_candidates(root)
+            allowed = {
+                relative
+                for source, relative in candidates
+                if sync._local_evidence_is_newer_than_remote(
+                    source,
+                    remote_route_trust
+                    if relative == ".agent_control/route_trust_sampling/latest.json"
+                    else remote_perf
+                    if relative == ".agent_control/live_mission_detail_performance_latest.json"
+                    else None,
+                )
+            }
+            payload, pushed, _missing = sync._build_local_evidence_archive(
+                root,
+                allowed_relative_paths=allowed,
+            )
+
+        self.assertNotIn(".agent_control/route_trust_sampling/latest.json", pushed)
+        self.assertIn(".agent_control/live_mission_detail_performance_latest.json", pushed)
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            names = archive.getnames()
+        self.assertNotIn(".agent_control/route_trust_sampling/latest.json", names)
+        self.assertIn(".agent_control/live_mission_detail_performance_latest.json", names)
 
 
 if __name__ == "__main__":

@@ -1424,7 +1424,7 @@ const longHistoryFixture = (() => {
   mission.proof.summary = 'Long-history proof fixture is active with bounded proof, transcript, and artifact lists.';
   mission.route_configs = [
     { role: 'planner', provider: 'openai-codex', model: 'gpt-5.5', budget_class: 'specialist', explanation: 'Codex planning lane chooses decomposition and route changes.' },
-    { role: 'executor', provider: 'minimax', model: 'MiniMax-M2.7', budget_class: 'specialist', explanation: 'Frontend-heavy execution routes to MiniMax.' },
+    { role: 'executor', provider: 'minimax', model: 'MiniMax-M3', budget_class: 'specialist', explanation: 'Frontend-heavy execution routes to MiniMax.' },
     { role: 'verifier', provider: 'openai', model: 'gpt-5.5', budget_class: 'premium', explanation: 'Verification stays on the high-confidence verifier route.' },
   ];
   mission.effectiveRouteContract.roles = mission.route_configs.map(item => ({

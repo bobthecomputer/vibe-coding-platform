@@ -17,6 +17,7 @@ from ..runtime_updates import (
 )
 from .base import (
     AgentRuntimeAdapter,
+    build_mission_resume_objective,
     mission_phase_route,
     _direct_runtime_command,
     runtime_bin_candidates,
@@ -35,6 +36,9 @@ OPENCLAW_PROVIDER_MAP = {
     "minimax": "minimax",
     "minimax-portal": "minimax-portal",
     "minimax-cn": "minimax",
+    "opencode": "opencode",
+    "opencode-go": "opencode-go",
+    "opencodego": "opencode-go",
     "huggingface": "huggingface",
     "zai": "zai",
     "kimi-coding": "kimi-coding",
@@ -92,6 +96,18 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
                 label="Managed skills",
                 available=True,
                 detail="Bundled, managed, and workspace skills are supported.",
+            ),
+            RuntimeCapability(
+                key="provider_usage_quota",
+                label="Provider usage and quota",
+                available=True,
+                detail="OpenClaw can report provider usage when auth endpoints expose it through status commands.",
+            ),
+            RuntimeCapability(
+                key="opencode_go_provider",
+                label="OpenCodeGo provider",
+                available=True,
+                detail="OpenClaw routes opencode-go models when OPENCODE_API_KEY or OpenClaw provider auth is configured.",
             ),
             RuntimeCapability(
                 key="multi_channel",
@@ -218,7 +234,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         return {
             "launch_command": self._mission_launch_command(
                 mission.mission_id,
-                f"Resume mission {mission.mission_id}: {mission.objective}",
+                build_mission_resume_objective(mission),
                 workspace.root_path,
                 route_contract=route_contract,
             ),

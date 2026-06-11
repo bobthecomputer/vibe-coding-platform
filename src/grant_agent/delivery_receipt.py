@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 import uuid
 import base64
+import importlib.util
 from dataclasses import asdict
 from html import escape
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
 from .models import DeliveryReceipt, MissionEvent, utc_now_iso
 
 RECEIPTS_FILENAME = "delivery_receipts.jsonl"
 WEB_PUSH_SUBSCRIPTIONS_FILENAME = "web_push_subscriptions.jsonl"
 WEB_PUSH_VAPID_FILENAME = "web_push_vapid.json"
+NTFY_SETTINGS_FILENAME = "ntfy_settings.json"
 
 
 def delivery_receipts_path(root: str | Path) -> Path:
@@ -35,28 +39,60 @@ def web_push_vapid_path(root: str | Path) -> Path:
     return path
 
 
+def ntfy_settings_path(root: str | Path) -> Path:
+    path = Path(root) / ".agent_control" / NTFY_SETTINGS_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ntfy_status(root: str | Path | None = None) -> dict[str, Any]:
+    settings = _load_ntfy_settings(root)
+    server_url = _ntfy_server_url(settings)
+    topic = _ntfy_topic(settings)
+    token = _ntfy_token(settings)
+    configured = bool(topic)
+    return {
+        "schema": "fluxio.ntfy_status.v1",
+        "configured": configured,
+        "senderConfigured": configured,
+        "serverUrl": server_url,
+        "topic": topic,
+        "tokenConfigured": bool(token),
+        "channel": "ntfy",
+        "setupPath": str(ntfy_settings_path(root)) if root else "",
+        "nextAction": (
+            "ntfy can send phone/tablet mission notifications."
+            if configured
+            else "Set FLUXIO_NTFY_TOPIC or .agent_control/ntfy_settings.json before ntfy phone push can send."
+        ),
+    }
+
+
 def web_push_status(root: str | Path | None = None) -> dict[str, Any]:
     vapid_config = _load_web_push_vapid_config(root) if root else {}
-    public_key = _web_push_public_key(root)
-    private_key = _web_push_private_key(root)
+    public_key = _web_push_public_key(root, vapid_config=vapid_config)
+    private_key = _web_push_private_key(root, vapid_config=vapid_config)
     dependency_available = _web_push_dependency_available()
     subscription_count = len(load_web_push_subscriptions(root)) if root else 0
     keys_configured = bool(public_key and private_key)
+    sender_configured = bool(keys_configured and dependency_available)
     return {
         "schema": "fluxio.web_push_status.v1",
         "configured": bool(public_key),
-        "senderConfigured": bool(keys_configured and dependency_available),
+        "senderConfigured": sender_configured,
         "dependencyAvailable": dependency_available,
         "privateKeyConfigured": bool(private_key),
         "localKeyConfigured": bool(vapid_config.get("publicKey") and vapid_config.get("privateKeyPem")),
-        "configuredSource": _web_push_key_source(root),
+        "configuredSource": _web_push_key_source(root, vapid_config=vapid_config),
         "setupPath": str(web_push_vapid_path(root)) if root else "",
         "publicKey": public_key,
         "subscriptionCount": subscription_count,
         "channel": "web_push",
         "nextAction": (
             "Closed-tab Web Push can send mission notifications."
-            if keys_configured and dependency_available
+            if sender_configured and subscription_count > 0
+            else "Register this browser from the notification stack before closed-tab push can send."
+            if sender_configured
             else "Install pywebpush and set FLUXIO_WEB_PUSH_PUBLIC_KEY plus FLUXIO_WEB_PUSH_PRIVATE_KEY before closed-tab push can send."
             if keys_configured and not dependency_available
             else "Set FLUXIO_WEB_PUSH_PRIVATE_KEY before closed-tab push can send."
@@ -64,6 +100,44 @@ def web_push_status(root: str | Path | None = None) -> dict[str, Any]:
             else "Provision VAPID keys from the notification stack or set FLUXIO_WEB_PUSH_PUBLIC_KEY and FLUXIO_WEB_PUSH_PRIVATE_KEY."
         ),
     }
+
+
+def _load_ntfy_settings(root: str | Path | None) -> dict[str, Any]:
+    if not root:
+        return {}
+    try:
+        payload = json.loads(ntfy_settings_path(root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _ntfy_server_url(settings: dict[str, Any] | None = None) -> str:
+    value = (
+        os.environ.get("FLUXIO_NTFY_SERVER_URL")
+        or os.environ.get("NTFY_SERVER_URL")
+        or str((settings or {}).get("serverUrl") or (settings or {}).get("server_url") or "")
+        or "https://ntfy.sh"
+    ).strip()
+    return value.rstrip("/")
+
+
+def _ntfy_topic(settings: dict[str, Any] | None = None) -> str:
+    return (
+        os.environ.get("FLUXIO_NTFY_TOPIC")
+        or os.environ.get("NTFY_TOPIC")
+        or str((settings or {}).get("topic") or "")
+        or ""
+    ).strip().strip("/")
+
+
+def _ntfy_token(settings: dict[str, Any] | None = None) -> str:
+    return (
+        os.environ.get("FLUXIO_NTFY_TOKEN")
+        or os.environ.get("NTFY_TOKEN")
+        or str((settings or {}).get("token") or "")
+        or ""
+    ).strip()
 
 
 def record_web_push_subscription(
@@ -103,7 +177,7 @@ def load_web_push_subscriptions(root: str | Path, limit: int = 50) -> list[dict[
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]:
+    for line in _tail_text_lines(path, limit):
         if not line.strip():
             continue
         try:
@@ -116,11 +190,7 @@ def load_web_push_subscriptions(root: str | Path, limit: int = 50) -> list[dict[
 
 
 def _web_push_dependency_available() -> bool:
-    try:
-        import pywebpush  # noqa: F401
-    except Exception:
-        return False
-    return True
+    return importlib.util.find_spec("pywebpush") is not None
 
 
 def _load_web_push_vapid_config(root: str | Path | None) -> dict[str, Any]:
@@ -133,30 +203,30 @@ def _load_web_push_vapid_config(root: str | Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _web_push_key_source(root: str | Path | None = None) -> str:
+def _web_push_key_source(root: str | Path | None = None, *, vapid_config: dict[str, Any] | None = None) -> str:
     if os.environ.get("FLUXIO_WEB_PUSH_PUBLIC_KEY") or os.environ.get("VAPID_PUBLIC_KEY"):
         return "environment"
-    if root and _load_web_push_vapid_config(root).get("publicKey"):
+    if root and (vapid_config if vapid_config is not None else _load_web_push_vapid_config(root)).get("publicKey"):
         return "local_agent_control"
     return "missing"
 
 
-def _web_push_private_key(root: str | Path | None = None) -> str:
-    vapid_config = _load_web_push_vapid_config(root)
+def _web_push_private_key(root: str | Path | None = None, *, vapid_config: dict[str, Any] | None = None) -> str:
+    config = vapid_config if vapid_config is not None else _load_web_push_vapid_config(root)
     return (
         os.environ.get("FLUXIO_WEB_PUSH_PRIVATE_KEY")
         or os.environ.get("VAPID_PRIVATE_KEY")
-        or str(vapid_config.get("privateKeyPem") or vapid_config.get("privateKey") or "")
+        or str(config.get("privateKeyPem") or config.get("privateKey") or "")
         or ""
     ).strip()
 
 
-def _web_push_public_key(root: str | Path | None = None) -> str:
-    vapid_config = _load_web_push_vapid_config(root)
+def _web_push_public_key(root: str | Path | None = None, *, vapid_config: dict[str, Any] | None = None) -> str:
+    config = vapid_config if vapid_config is not None else _load_web_push_vapid_config(root)
     return (
         os.environ.get("FLUXIO_WEB_PUSH_PUBLIC_KEY")
         or os.environ.get("VAPID_PUBLIC_KEY")
-        or str(vapid_config.get("publicKey") or "")
+        or str(config.get("publicKey") or "")
         or ""
     ).strip()
 
@@ -309,21 +379,59 @@ def send_web_push_delivery_receipts(
     return receipts
 
 
-def _read_telegram_token() -> str:
-    token = os.environ.get("SYNTELOS_TELEGRAM_BOT_TOKEN") or os.environ.get(
-        "FLUXIO_TELEGRAM_BOT_TOKEN"
+def _read_telegram_token_with_source(root: str | Path | None = None) -> tuple[str, str]:
+    token = (
+        os.environ.get("SYNTELOS_TELEGRAM_BOT_TOKEN")
+        or os.environ.get("FLUXIO_TELEGRAM_BOT_TOKEN")
+        or os.environ.get("TELEGRAM_BOT_TOKEN")
     )
     if token:
-        return token.strip()
+        return token.strip(), "fluxio_env"
+    if root:
+        try:
+            candidate = Path(root) / ".agent_control" / "telegram_bot_token.txt"
+            if candidate.exists():
+                token = candidate.read_text(encoding="utf-8").strip()
+                if token:
+                    return token, "fluxio_agent_control"
+        except OSError:
+            pass
     for candidate in (
         Path.home() / ".agent_control" / "telegram_bot_token.txt",
         Path.home() / ".syntelos" / "telegram_bot_token.txt",
     ):
         try:
             if candidate.exists():
-                return candidate.read_text(encoding="utf-8").strip()
+                token = candidate.read_text(encoding="utf-8").strip()
+                if token:
+                    return token, "user_agent_control"
         except OSError:
             continue
+    token = _read_openclaw_telegram_token()
+    return (token, "openclaw_telegram_token") if token else ("", "missing")
+
+
+def _read_telegram_token(root: str | Path | None = None) -> str:
+    token, _source = _read_telegram_token_with_source(root)
+    return token
+
+
+def _read_openclaw_telegram_token() -> str:
+    env_path = Path.home() / ".openclaw" / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() != "TELEGRAM_BOT_TOKEN":
+            continue
+        token = value.strip().strip('"').strip("'")
+        if token:
+            return token
     return ""
 
 
@@ -368,14 +476,82 @@ def load_delivery_receipts(root: str | Path, limit: int = 50) -> list[DeliveryRe
     if not path.exists():
         return []
     rows: list[DeliveryReceipt] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]:
+    for line in _tail_text_lines(path, limit):
         if not line.strip():
             continue
         try:
-            rows.append(DeliveryReceipt(**json.loads(line)))
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                continue
+            allowed = DeliveryReceipt.__dataclass_fields__.keys()
+            rows.append(DeliveryReceipt(**{key: value for key, value in payload.items() if key in allowed}))
         except (TypeError, json.JSONDecodeError):
             continue
     return rows
+
+
+def _tail_text_lines(path: Path, limit: int, *, chunk_size: int = 8192) -> list[str]:
+    if limit <= 0:
+        return []
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            offset = size
+            chunks: list[bytes] = []
+            line_count = 0
+            while offset > 0 and line_count <= limit:
+                read_size = min(chunk_size, offset)
+                offset -= read_size
+                handle.seek(offset)
+                chunk = handle.read(read_size)
+                chunks.append(chunk)
+                line_count += chunk.count(b"\n")
+    except OSError:
+        return []
+    data = b"".join(reversed(chunks))
+    return data.decode("utf-8", errors="replace").splitlines()[-limit:]
+
+
+def acknowledge_delivery_receipt(root: str | Path, receipt_id: str) -> DeliveryReceipt | None:
+    target = str(receipt_id or "").strip()
+    if not target:
+        return None
+    path = delivery_receipts_path(root)
+    if not path.exists():
+        return None
+    try:
+        raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    rows: list[dict[str, Any]] = []
+    matched: DeliveryReceipt | None = None
+    for raw_line in raw_lines:
+        if not raw_line.strip():
+            continue
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("receipt_id") or "") == target:
+            row["status"] = "acknowledged"
+            row["acknowledged_at"] = utc_now_iso()
+            try:
+                allowed = DeliveryReceipt.__dataclass_fields__.keys()
+                matched = DeliveryReceipt(**{key: value for key, value in row.items() if key in allowed})
+            except (TypeError, ValueError):
+                matched = None
+        rows.append(row)
+    if matched is None:
+        return None
+    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=True, separators=(",", ":")) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+    return matched
 
 
 def delivery_receipt_from_event(
@@ -383,6 +559,8 @@ def delivery_receipt_from_event(
     *,
     channel: str,
     destination: str,
+    transport_provider: str = "",
+    producer: str = "",
 ) -> DeliveryReceipt:
     return DeliveryReceipt(
         receipt_id=f"rcpt_{uuid.uuid4().hex[:12]}",
@@ -393,6 +571,25 @@ def delivery_receipt_from_event(
         event_message=event.message,
         sent_at=utc_now_iso(),
         status="pending",
+        origin_runtime=str(
+            event.metadata.get("originRuntime")
+            or event.metadata.get("runtimeId")
+            or event.metadata.get("runtime")
+            or ""
+        ),
+        origin_provider=str(
+            event.metadata.get("originProvider")
+            or event.metadata.get("provider")
+            or event.metadata.get("modelProvider")
+            or ""
+        ),
+        origin_model=str(event.metadata.get("originModel") or event.metadata.get("model") or ""),
+        transport_provider=transport_provider,
+        producer=producer or str(event.metadata.get("producer") or event.kind.split(".", 1)[0] or ""),
+        mission_title=str(event.metadata.get("missionTitle") or event.metadata.get("title") or ""),
+        source_session_id=str(event.metadata.get("sourceSessionId") or event.metadata.get("sessionId") or ""),
+        evidence_path=str(event.metadata.get("evidencePath") or ""),
+        screenshot_path=str(event.metadata.get("screenshotPath") or ""),
     )
 
 
@@ -407,6 +604,15 @@ def record_delivery_receipt(
     status: str,
     error_message: str = "",
     delivery_url: str = "",
+    origin_runtime: str = "",
+    origin_provider: str = "",
+    origin_model: str = "",
+    transport_provider: str = "",
+    producer: str = "",
+    mission_title: str = "",
+    source_session_id: str = "",
+    evidence_path: str = "",
+    screenshot_path: str = "",
 ) -> DeliveryReceipt:
     return _append_receipt(
         root,
@@ -421,6 +627,15 @@ def record_delivery_receipt(
             status=status,
             error_message=error_message,
             delivery_url=delivery_url,
+            origin_runtime=origin_runtime,
+            origin_provider=origin_provider,
+            origin_model=origin_model,
+            transport_provider=transport_provider or channel,
+            producer=producer,
+            mission_title=mission_title,
+            source_session_id=source_session_id,
+            evidence_path=evidence_path,
+            screenshot_path=screenshot_path,
         ),
     )
 
@@ -436,7 +651,101 @@ def _format_telegram_message(event: MissionEvent) -> str:
         if key.lower() in {"destination", "token"}:
             continue
         lines.append(f"<b>{escape(key)}:</b> {escape(str(value)[:160])}")
+    runtime = str(event.metadata.get("originRuntime") or event.metadata.get("runtimeId") or "").strip()
+    provider = str(event.metadata.get("originProvider") or event.metadata.get("provider") or "").strip()
+    model = str(event.metadata.get("originModel") or event.metadata.get("model") or "").strip()
+    transport = str(event.metadata.get("transportProvider") or "").strip()
+    if runtime:
+        lines.append(f"<b>Runtime:</b> {escape(runtime)}")
+    if provider or model:
+        lines.append(f"<b>Provider/model:</b> {escape(' / '.join(part for part in (provider, model) if part))}")
+    if transport:
+        lines.append(f"<b>Transport:</b> {escape(transport)}")
     return "\n".join(lines)
+
+
+def _format_ntfy_body(event: MissionEvent) -> str:
+    lines = [
+        event.message.strip() or "Fluxio mission update.",
+        "",
+        f"Mission: {event.mission_id}",
+        f"Event: {event.kind}",
+    ]
+    for key, value in list(event.metadata.items())[:5]:
+        if key.lower() in {"destination", "token", "authorization"}:
+            continue
+        lines.append(f"{key}: {str(value)[:160]}")
+    return "\n".join(line for line in lines if line is not None)
+
+
+def send_ntfy_delivery_receipt(
+    event: MissionEvent,
+    *,
+    root: str | Path,
+    topic: str = "",
+    title: str = "",
+    priority: str = "default",
+    tags: str = "fluxio",
+    click_url: str = "",
+    dry_run: bool = False,
+) -> DeliveryReceipt:
+    settings = _load_ntfy_settings(root)
+    server_url = _ntfy_server_url(settings)
+    resolved_topic = str(topic or _ntfy_topic(settings)).strip().strip("/")
+    destination = f"{server_url}/{resolved_topic}" if resolved_topic else server_url
+    receipt = _append_receipt(
+        root,
+        delivery_receipt_from_event(event, channel="ntfy", destination=destination),
+    )
+    if not resolved_topic:
+        receipt.status = "skipped"
+        receipt.error_message = "ntfy_topic_not_configured"
+        return _update_receipt(root, receipt)
+    if not urlparse(server_url).scheme:
+        receipt.status = "error"
+        receipt.error_message = "ntfy_server_url_invalid"
+        return _update_receipt(root, receipt)
+    if dry_run:
+        receipt.status = "delivered"
+        receipt.delivery_url = f"dry_run://ntfy/{resolved_topic}"
+        return _update_receipt(root, receipt)
+
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Title": title.strip() or "Fluxio mission update",
+        "X-Priority": priority.strip() or "default",
+        "X-Tags": tags.strip() or "fluxio",
+    }
+    if click_url.strip():
+        headers["X-Click"] = click_url.strip()
+    token = _ntfy_token(settings)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        f"{server_url}/{quote(resolved_topic, safe='')}",
+        data=_format_ntfy_body(event).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    last_error = ""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                response.read()
+            last_error = ""
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            receipt.retry_count = attempt + 1
+            if attempt < 2:
+                time.sleep(2**attempt)
+    if last_error:
+        receipt.status = "error"
+        receipt.error_message = last_error
+    else:
+        receipt.status = "delivered"
+        receipt.delivery_url = f"{server_url}/***/json"
+    return _update_receipt(root, receipt)
 
 
 def _watchdog_event_from_report(report: dict[str, Any]) -> MissionEvent:
@@ -481,39 +790,63 @@ def send_telegram_delivery_receipt(
     root: str | Path,
     dry_run: bool = False,
 ) -> DeliveryReceipt:
+    token, token_source = _read_telegram_token_with_source(root)
+    transport_provider = (
+        "telegram_via_openclaw_token"
+        if token_source == "openclaw_telegram_token"
+        else f"telegram_via_{token_source}"
+        if token_source and token_source != "missing"
+        else "telegram"
+    )
+    event.metadata.setdefault("transportProvider", transport_provider)
     receipt = _append_receipt(
         root,
-        delivery_receipt_from_event(event, channel="telegram", destination=destination),
+        delivery_receipt_from_event(
+            event,
+            channel="telegram",
+            destination=destination,
+            transport_provider=transport_provider,
+            producer=str(event.metadata.get("producer") or "mission_runtime"),
+        ),
     )
     if dry_run:
         receipt.status = "delivered"
         receipt.delivery_url = f"dry_run://telegram/{destination}"
         return _update_receipt(root, receipt)
 
-    token = _read_telegram_token()
     if not token:
         receipt.status = "error"
         receipt.error_message = "telegram_bot_token_not_configured"
         return _update_receipt(root, receipt)
 
-    request = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=json.dumps(
-            {
-                "chat_id": destination,
-                "text": _format_telegram_message(event),
-                "parse_mode": "HTML",
-            }
-        ).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
-    except Exception as exc:  # noqa: BLE001
+    payload: dict[str, Any] = {}
+    last_error = ""
+    for attempt in range(3):
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=json.dumps(
+                {
+                    "chat_id": destination,
+                    "text": _format_telegram_message(event),
+                    "parse_mode": "HTML",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            last_error = ""
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            receipt.retry_count = attempt + 1
+            if attempt < 2:
+                time.sleep(2**attempt)
+    if last_error:
         receipt.status = "error"
-        receipt.error_message = str(exc)
+        receipt.error_message = last_error
         return _update_receipt(root, receipt)
 
     if payload.get("ok"):
@@ -575,6 +908,45 @@ def send_watchdog_delivery_receipt(
         _watchdog_event_from_report(report),
         destination=resolved_destination,
         root=root,
+        dry_run=dry_run,
+    )
+
+
+def send_watchdog_ntfy_delivery_receipt(
+    *,
+    root: str | Path,
+    report: dict[str, Any],
+    topic: str = "",
+    dry_run: bool = False,
+    include_clear: bool = False,
+) -> DeliveryReceipt:
+    problem_report = report.get("problemReport") if isinstance(report.get("problemReport"), dict) else {}
+    problem_count = int(problem_report.get("problemCount") or 0)
+    if problem_count <= 0 and not include_clear:
+        status = ntfy_status(root)
+        return _append_receipt(
+            root,
+            DeliveryReceipt(
+                receipt_id=f"rcpt_{uuid.uuid4().hex[:12]}",
+                mission_id="mission_watchdog",
+                channel="ntfy",
+                destination=str(status.get("serverUrl") or ""),
+                event_kind="watchdog.problem_report",
+                event_message="Watchdog clear notification skipped.",
+                sent_at=utc_now_iso(),
+                status="skipped",
+                error_message="watchdog_clear_notification_disabled",
+            ),
+        )
+    event = _watchdog_event_from_report(report)
+    return send_ntfy_delivery_receipt(
+        event,
+        root=root,
+        topic=topic,
+        title="Fluxio watchdog",
+        priority="high" if problem_count else "default",
+        tags="fluxio,watchdog",
+        click_url="/control?mode=builder&surface=builder",
         dry_run=dry_run,
     )
 

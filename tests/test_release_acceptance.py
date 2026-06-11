@@ -253,7 +253,11 @@ class ReleaseAcceptanceTests(unittest.TestCase):
             marker.unlink()
 
     def _command_version_factory(self, root: pathlib.Path):
-        def _command_version(command: str, args: list[str] | None = None) -> dict:
+        def _command_version(
+            command: str,
+            args: list[str] | None = None,
+            **_: object,
+        ) -> dict:
             installed = {
                 "node": True,
                 "python": True,
@@ -923,7 +927,8 @@ class ReleaseAcceptanceTests(unittest.TestCase):
                 restart_sessions = {
                     item["app_id"]: item for item in restart_payload["bridgeLab"]["connectedSessions"]
                 }
-                self.assertEqual(restart_sessions["oratio-viva"]["status"], "connected")
+                self.assertEqual(restart_sessions["oratio-viva"]["status"], "available")
+                self.assertEqual(restart_sessions["oratio-viva"]["bridge_health"], "offline")
                 self.assertNotIn("mind-tower", restart_sessions)
                 self.assertEqual(restart_sessions["solantir-terminal"]["status"], "follow_on_manifest")
                 latest_restart_mission = restart_payload["missions"][-1]

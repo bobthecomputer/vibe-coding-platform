@@ -117,7 +117,7 @@ def verify_live_data_contract(root: Path, *, require_built_dist: bool = False) -
                 "isLiveBackend ? [] : TOOL_EVENTS",
                 "fixture flow cards are hidden in live mode",
                 "no cached or sample sessions are shown",
-                "The agent thread will stay empty until the NAS returns current mission messages.",
+                "The latest Model / OpenRuntime message is shown in the run receipt below",
                 "No runtime operation rows loaded",
                 "No NAS preview evidence loaded",
             ),

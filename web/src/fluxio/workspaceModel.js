@@ -32,6 +32,7 @@ export const MODEL_PROVIDER_OPTIONS = Object.freeze([
   { value: "anthropic", label: "Anthropic" },
   { value: "minimax", label: "MiniMax" },
   { value: "openrouter", label: "OpenRouter" },
+  { value: "opencode-go", label: "OpenCodeGo" },
 ]);
 
 export const MODEL_EFFORT_OPTIONS = Object.freeze([

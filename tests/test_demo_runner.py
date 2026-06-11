@@ -83,6 +83,19 @@ class DemoRunnerTests(unittest.TestCase):
         )
         report = pathlib.Path(exported["proof_report_path"]).read_text(encoding="utf-8")
         self.assertIn("Next difficulty", report)
+        exported_probe = json.loads(
+            (pathlib.Path(exported["bundle_path"]) / "adversarial_probe.json").read_text(encoding="utf-8")
+        )
+        exported_payload = json.loads(
+            (pathlib.Path(exported["bundle_path"]) / "proof_payload.json").read_text(encoding="utf-8")
+        )
+        self.assertFalse(exported_probe["rawPayloadExported"])
+        self.assertEqual(exported_probe["payloadHandling"], "aggregate_only_redacted")
+        self.assertEqual(exported_payload["probe"]["payloadHandling"], "aggregate_only_redacted")
+        for attempt in exported_probe["attempts"]:
+            self.assertEqual(attempt["prompt"], "[redacted: aggregate-only defensive red-team payload]")
+            self.assertRegex(attempt["prompt_sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(attempt["prompt_length"], 0)
 
     def test_clean_red_team_pass_escalates_next_benchmark(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -155,6 +168,64 @@ class DemoRunnerTests(unittest.TestCase):
         self.assertGreater(escalation["pressureDelta"], 0)
         self.assertIn("pressure", escalation["nextDifficultyLabel"])
         self.assertIn("pressure", escalation["nextBenchmark"]["objective"])
+
+    def test_max_level_red_team_pressure_never_regresses_from_short_history_tail(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        registry = ChallengePresetRegistry(root / "config" / "challenge_presets.json")
+        preset = registry.get("hackaprompt")
+        history = [
+            {
+                "schema": "fluxio.red_team_escalation_history.v1",
+                "recordedAt": "2026-05-31T23:50:20+00:00",
+                "preset": "hackaprompt",
+                "status": "pass",
+                "resistance_score": 100,
+                "attempt_count": 137,
+                "blocked_attempt_count": 137,
+                "difficultyLevel": 5,
+                "nextDifficultyLevel": 5,
+                "passStreak": 21,
+                "cleanPass": True,
+                "shouldEscalate": True,
+                "currentPressureIndex": 170,
+                "nextPressureIndex": 175,
+                "nextAttemptBudget": 139,
+            },
+            {
+                "schema": "fluxio.red_team_escalation_history.v1",
+                "recordedAt": "2026-06-01T02:48:57+00:00",
+                "preset": "hackaprompt",
+                "status": "pass",
+                "resistance_score": 100,
+                "attempt_count": 139,
+                "blocked_attempt_count": 139,
+                "difficultyLevel": 5,
+                "nextDifficultyLevel": 5,
+                "passStreak": 6,
+                "cleanPass": True,
+                "shouldEscalate": True,
+                "currentPressureIndex": 157,
+                "nextPressureIndex": 162,
+                "nextAttemptBudget": 141,
+            },
+        ]
+        probe = {
+            "attempt_count": 141,
+            "blocked_attempt_count": 141,
+            "resistance_score": 100,
+            "status": "pass",
+            "attempts": [
+                {"tactic": "direct_policy_probe"},
+                {"tactic": "roleplay"},
+                {"tactic": "authority"},
+            ],
+        }
+
+        escalation = build_difficulty_escalation(preset, probe, history=history)
+
+        self.assertGreaterEqual(escalation["currentPressureIndex"], 175)
+        self.assertGreater(escalation["nextPressureIndex"], escalation["currentPressureIndex"])
+        self.assertIn("pressure", escalation["nextDifficultyLabel"])
 
     def test_probe_detects_simple_encoded_secret_request(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -458,7 +529,35 @@ class DemoRunnerTests(unittest.TestCase):
         try:
             control_dir = temp_root / ".agent_control"
             control_dir.mkdir()
-            (control_dir / "missions.json").write_text("[]", encoding="utf-8")
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "mission_id": "mission_low_value_f1_a",
+                            "objective": "Build an F1 telemetry analytics report",
+                            "state": {
+                                "operator_value_feedback": {
+                                    "score": 35,
+                                    "outcome": "not_useful",
+                                    "trustSignal": "deprioritize",
+                                }
+                            },
+                        },
+                        {
+                            "mission_id": "mission_low_value_f1_b",
+                            "objective": "Formula 1 lap time dashboard analytics",
+                            "state": {
+                                "operator_value_feedback": {
+                                    "score": 42,
+                                    "outcome": "not_useful",
+                                    "trustSignal": "deprioritize",
+                                }
+                            },
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
             live_audit_dir = control_dir / "release_artifacts" / "latest" / "live_nas_system_audit"
             live_audit_dir.mkdir(parents=True)
             (live_audit_dir / "live_nas_system_audit_latest.json").write_text(
@@ -515,7 +614,81 @@ class DemoRunnerTests(unittest.TestCase):
             self.assertEqual(route_trust["samplingTaskCount"], 0)
             self.assertEqual(route_trust["missingTaskCategories"], [])
             self.assertEqual(evidence["selfImprovementActions"][1]["status"], "proven")
+            self.assertEqual(evidence["operatorValueSamplingPlan"]["status"], "proven")
+            self.assertFalse(evidence["operatorValueSamplingPlan"]["canLaunch"])
             self.assertEqual(evidence["redTeam"]["source"], "live_nas_system_audit")
+        finally:
+            shutil.rmtree(temp_root)
+
+    def test_self_improvement_sampling_plan_blocks_when_nas_storage_is_critical(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        temp_root = root / ".self_improvement_sampling_plan_storage_test"
+        if temp_root.exists():
+            shutil.rmtree(temp_root)
+        temp_root.mkdir()
+        try:
+            control_dir = temp_root / ".agent_control"
+            control_dir.mkdir()
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "mission_id": "mission_low_value_f1_a",
+                            "objective": "Build an F1 telemetry analytics report",
+                            "state": {
+                                "operator_value_feedback": {
+                                    "score": 35,
+                                    "outcome": "not_useful",
+                                    "trustSignal": "deprioritize",
+                                }
+                            },
+                        },
+                        {
+                            "mission_id": "mission_low_value_f1_b",
+                            "objective": "Formula 1 lap time dashboard analytics",
+                            "state": {
+                                "operator_value_feedback": {
+                                    "score": 42,
+                                    "outcome": "not_useful",
+                                    "trustSignal": "deprioritize",
+                                }
+                            },
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (control_dir / "nas_storage_pressure_latest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.nas_storage_pressure.v1",
+                        "status": "critical",
+                        "source": "bounded_ssh_timeout",
+                        "probeTimedOut": True,
+                        "checkedAt": "2026-05-31T23:36:49+00:00",
+                        "nextAction": "Do not start NAS write-heavy missions until a bounded probe returns.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            evidence = build_self_improvement_evidence(temp_root)
+            plan = evidence["operatorValueSamplingPlan"]
+
+            self.assertEqual(plan["schema"], "fluxio.operator_value_sampling_plan.v1")
+            self.assertEqual(plan["status"], "blocked_by_nas_storage")
+            self.assertFalse(plan["canLaunch"])
+            self.assertEqual(plan["nasStorageGate"]["source"], "bounded_ssh_timeout")
+            self.assertGreaterEqual(len(plan["sampleRows"]), 6)
+            self.assertIn("frontend_design", plan["missingTaskCategories"])
+            self.assertIn("data_f1_analytics", plan["missingTaskCategories"])
+            f1_row = next(row for row in plan["sampleRows"] if row["taskType"] == "data_f1_analytics")
+            self.assertEqual(f1_row["promoteCount"], 0)
+            self.assertEqual(f1_row["deprioritizeCount"], 2)
+            self.assertIn("--dry-run", plan["dryRunCommand"]["argv"])
+            self.assertEqual(plan["launchCommand"], {})
+            self.assertEqual(evidence["selfImprovementActions"][1]["status"], "blocked_by_nas_storage")
+            self.assertIn("NAS storage", evidence["nextAction"])
         finally:
             shutil.rmtree(temp_root)
 

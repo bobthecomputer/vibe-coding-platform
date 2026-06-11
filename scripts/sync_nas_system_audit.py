@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
 import sys
 import tarfile
@@ -37,11 +38,17 @@ NON_SECRET_EVIDENCE_FILES = (
     ".agent_control/publication/github-release-plan.json",
     ".agent_control/publication/github-release.json",
     ".agent_control/live_mission_detail_performance_latest.json",
+    ".agent_control/live_mission_detail_status_latest.json",
+    ".agent_control/mission_artifact_repair_plan_latest.json",
+    ".agent_control/mission_evidence_manifest_latest.json",
+    ".agent_control/nas_storage_cleanup_plan_latest.json",
+    ".agent_control/nas_storage_pressure_latest.json",
 )
 ROOT_BROWSER_REPORT_PATTERNS = (
     "*live-agent*check.json",
     "*live-control*check.json",
     "*phone-progress*check.json",
+    "*-check.json",
 )
 ROOT_BROWSER_REPORT_SCHEMAS = {
     "fluxio.authenticated_live_agent.v1",
@@ -63,6 +70,89 @@ def _parse_runbook(runbook: str) -> dict[str, object]:
         "password": required(r"SSH password: `([^`]+)`", "SSH password"),
         "port": int(required(r"SSH port: `([^`]+)`", "SSH port")),
     }
+
+
+def _decode_windows_dpapi_secret(path: Path) -> str:
+    if os.name != "nt":
+        raise RuntimeError("Windows DPAPI credentials can only be decrypted on Windows.")
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+
+    raw = bytes.fromhex(path.read_text(encoding="utf-8").strip())
+    input_buffer = ctypes.create_string_buffer(raw)
+    input_blob = DATA_BLOB(len(raw), ctypes.cast(input_buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    output_blob = DATA_BLOB()
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    if not crypt32.CryptUnprotectData(
+        ctypes.byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(output_blob),
+    ):
+        raise RuntimeError("Windows DPAPI credential decrypt failed.")
+    try:
+        plain = ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    finally:
+        kernel32.LocalFree(output_blob.pbData)
+    if b"\x00" in plain:
+        return plain.decode("utf-16-le").strip("\x00\r\n ")
+    return plain.decode("utf-8").strip()
+
+
+def _load_nas_credentials(
+    *,
+    root: Path,
+    runbook_path: Path,
+    dpapi_decoder: Any = _decode_windows_dpapi_secret,
+) -> dict[str, object]:
+    credentials = _parse_runbook(runbook_path.read_text(encoding="utf-8"))
+    control_dir = root / ".agent_control"
+    json_path = control_dir / "nas_codex2_100_125_54_118.json"
+    if json_path.exists():
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            credentials.update(
+                {
+                    "host": payload.get("host") or credentials.get("host"),
+                    "user": payload.get("user") or credentials.get("user"),
+                    "port": int(payload.get("port") or credentials.get("port") or 22),
+                    "password": payload.get("secret") or credentials.get("password"),
+                }
+            )
+    env_password = os.environ.get("FLUXIO_NAS_SSH_PASSWORD", "").strip()
+    if env_password:
+        credentials["password"] = env_password
+        return credentials
+    host_key = str(credentials.get("host") or "100.125.54.118").replace(".", "_")
+    user_key = str(credentials.get("user") or "Codex2").lower()
+    dpapi_candidates = [
+        control_dir / f"nas_{user_key}_{host_key}.dpapi",
+        *sorted(control_dir.glob(f"nas_*_{host_key}.dpapi")),
+    ]
+    for dpapi_path in dpapi_candidates:
+        if not dpapi_path.exists():
+            continue
+        try:
+            secret = str(dpapi_decoder(dpapi_path)).strip()
+        except Exception:
+            continue
+        if secret:
+            credentials["password"] = secret
+            break
+    return credentials
 
 
 def _extract_json(stdout: str) -> dict:
@@ -192,7 +282,11 @@ def _latest_root_browser_report_paths(local_root: Path) -> list[tuple[Path, str]
         return []
     selected: dict[str, tuple[float, Path]] = {}
     for pattern in ROOT_BROWSER_REPORT_PATTERNS:
-        for path in control_root.glob(pattern):
+        candidate_paths = [
+            *control_root.glob(pattern),
+            *(control_root / "screenshots").glob(pattern),
+        ]
+        for path in candidate_paths:
             if not path.is_file():
                 continue
             try:
@@ -201,10 +295,11 @@ def _latest_root_browser_report_paths(local_root: Path) -> list[tuple[Path, str]
                 continue
             if not isinstance(payload, dict) or payload.get("schema") not in ROOT_BROWSER_REPORT_SCHEMAS:
                 continue
+            schema = str(payload.get("schema") or pattern)
             timestamp = _parse_evidence_timestamp(json.dumps(payload))
-            current = selected.get(pattern)
+            current = selected.get(schema)
             if current is None or timestamp > current[0]:
-                selected[pattern] = (timestamp, path)
+                selected[schema] = (timestamp, path)
     paths: list[tuple[Path, str]] = []
     for _timestamp, path in selected.values():
         relative = path.relative_to(local_root).as_posix()
@@ -213,30 +308,62 @@ def _latest_root_browser_report_paths(local_root: Path) -> list[tuple[Path, str]
     return sorted(paths, key=lambda item: item[1])
 
 
-def _build_local_evidence_archive(local_root: Path) -> tuple[bytes, list[str], list[str]]:
+def _collect_local_evidence_candidates(local_root: Path) -> tuple[list[tuple[Path, str]], list[str]]:
+    candidates: list[tuple[Path, str]] = []
+    missing: list[str] = []
+    seen: set[str] = set()
+    for relative_path in NON_SECRET_EVIDENCE_FILES:
+        safe_relative_path = _safe_evidence_relative_path(relative_path)
+        source = local_root / safe_relative_path
+        if not source.is_file():
+            missing.append(safe_relative_path)
+            continue
+        candidates.append((source, safe_relative_path))
+        seen.add(safe_relative_path)
+    release_artifact_paths, release_artifact_missing = _latest_release_artifact_paths(local_root)
+    missing.extend(release_artifact_missing)
+    for source, relative_path in [
+        *release_artifact_paths,
+        *_latest_root_browser_report_paths(local_root),
+    ]:
+        if relative_path in seen:
+            continue
+        candidates.append((source, relative_path))
+        seen.add(relative_path)
+    return candidates, missing
+
+
+def _build_local_evidence_archive(
+    local_root: Path,
+    *,
+    allowed_relative_paths: set[str] | None = None,
+) -> tuple[bytes, list[str], list[str]]:
     archive_buffer = io.BytesIO()
     pushed: list[str] = []
-    missing: list[str] = []
+    candidates, missing = _collect_local_evidence_candidates(local_root)
     with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
-        for relative_path in NON_SECRET_EVIDENCE_FILES:
-            safe_relative_path = _safe_evidence_relative_path(relative_path)
-            source = local_root / safe_relative_path
-            if not source.is_file():
-                missing.append(safe_relative_path)
-                continue
-            archive.add(source, arcname=safe_relative_path, recursive=False)
-            pushed.append(safe_relative_path)
-        release_artifact_paths, release_artifact_missing = _latest_release_artifact_paths(local_root)
-        missing.extend(release_artifact_missing)
-        for source, relative_path in [
-            *release_artifact_paths,
-            *_latest_root_browser_report_paths(local_root),
-        ]:
-            if relative_path in pushed:
+        for source, relative_path in candidates:
+            if allowed_relative_paths is not None and relative_path not in allowed_relative_paths:
                 continue
             archive.add(source, arcname=relative_path, recursive=False)
             pushed.append(relative_path)
     return archive_buffer.getvalue(), pushed, missing
+
+
+def _read_text_if_possible(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _local_evidence_is_newer_than_remote(source: Path, remote_content: str | None) -> bool:
+    if remote_content is None:
+        return True
+    local_content = _read_text_if_possible(source)
+    if not local_content:
+        return False
+    return _should_keep_local_evidence(local_content, remote_content)
 
 
 def _push_local_evidence_files(
@@ -246,7 +373,21 @@ def _push_local_evidence_files(
     remote_root: str,
     timeout: int,
 ) -> tuple[list[str], list[str]]:
-    archive_bytes, pushed, missing = _build_local_evidence_archive(local_root)
+    candidates, missing = _collect_local_evidence_candidates(local_root)
+    allowed_relative_paths: set[str] = set()
+    for source, relative_path in candidates:
+        remote_content = _read_remote_evidence_file(
+            client,
+            remote_root=remote_root,
+            relative_path=relative_path,
+            timeout=timeout,
+        )
+        if _local_evidence_is_newer_than_remote(source, remote_content):
+            allowed_relative_paths.add(relative_path)
+    archive_bytes, pushed, missing = _build_local_evidence_archive(
+        local_root,
+        allowed_relative_paths=allowed_relative_paths,
+    )
     if not pushed:
         return pushed, missing
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -343,7 +484,19 @@ def _parse_evidence_timestamp(content: str) -> float:
     try:
         payload = json.loads(content)
     except json.JSONDecodeError:
-        return 0.0
+        latest = 0.0
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            latest = max(latest, _parse_evidence_timestamp(json.dumps(row)))
+        return latest
     if not isinstance(payload, dict):
         return 0.0
     raw_timestamp = str(
@@ -414,7 +567,7 @@ def sync_nas_system_audit(
     push_local_evidence_files: bool = False,
     publish_remote_snapshot: bool = False,
 ) -> dict:
-    credentials = _parse_runbook(runbook_path.read_text(encoding="utf-8"))
+    credentials = _load_nas_credentials(root=root, runbook_path=runbook_path)
     paramiko = _paramiko()
     client = _connect_nas_client(paramiko, credentials)
     try:

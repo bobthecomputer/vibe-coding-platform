@@ -472,11 +472,15 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
     source_state_for_triage = dict(source_state)
     if current_git_dirty_rows:
         source_state_for_triage["sourceDirtyPathCount"] = len(current_git_dirty_rows)
+        source_state_for_triage["sourceDirtyPathSample"] = current_git_dirty_rows[:20]
+        source_state_for_triage["sourceWorkingTreeClean"] = False
     dirty_source_triage = _publication_dirty_source_triage(source_state_for_triage, dirty_source_rows)
+    current_release_blocking_dirty = int(dirty_source_triage.get("releaseBlockingPathCount") or 0) > 0
     public_web_current = bool(
         public_web.get("publicationCurrent")
         and source_state.get("deployedShaMatchesLocalHead")
-        and source_state.get("sourceWorkingTreeClean")
+        and source_state_for_triage.get("sourceWorkingTreeClean")
+        and not current_release_blocking_dirty
     )
     public_publication_proven = bool(
         (
@@ -536,12 +540,14 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
         public_web_current,
         "Public web receipt must point at the current source state before public launch can be claimed.",
         publicationCurrent=public_web.get("publicationCurrent", False),
-        sourceWorkingTreeClean=source_state.get("sourceWorkingTreeClean", False),
+        sourceWorkingTreeClean=source_state_for_triage.get("sourceWorkingTreeClean", False),
+        receiptSourceWorkingTreeClean=source_state.get("sourceWorkingTreeClean", False),
         deployedShaMatchesLocalHead=source_state.get("deployedShaMatchesLocalHead", False),
-        sourceDirtyPathCount=source_state.get("sourceDirtyPathCount", 0),
-        sourceDirtyPathSample=source_dirty_sample[:20],
+        sourceDirtyPathCount=source_state_for_triage.get("sourceDirtyPathCount", 0),
+        sourceDirtyPathSample=source_state_for_triage.get("sourceDirtyPathSample", source_dirty_sample)[:20],
         currentGitDirtyPathCount=len(current_git_dirty_rows),
         currentGitDirtyPathSample=current_git_dirty_rows[:20],
+        currentReleaseBlockingPathCount=int(dirty_source_triage.get("releaseBlockingPathCount") or 0),
         dirtySourceTriage=dirty_source_triage,
     )
     _check(
@@ -660,7 +666,7 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
         next_action=next_action,
         dirty_source_triage=dirty_source_triage,
         public_web=public_web,
-        source_state=source_state,
+        source_state=source_state_for_triage,
     )
     payload = {
         "schema": "fluxio.public_launch_readiness.v1",
@@ -677,15 +683,16 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
             "url": public_web.get("url", ""),
             "workflowRun": public_web.get("workflowRun", ""),
             "publicationCurrent": public_web.get("publicationCurrent", False),
-            "sourceDirtyPathCount": source_state.get("sourceDirtyPathCount", 0),
-            "sourceDirtyPathSample": source_dirty_sample[:20],
+            "sourceDirtyPathCount": source_state_for_triage.get("sourceDirtyPathCount", 0),
+            "sourceDirtyPathSample": source_state_for_triage.get("sourceDirtyPathSample", source_dirty_sample)[:20],
             "currentGitDirtyPathCount": len(current_git_dirty_rows),
             "currentGitDirtyPathSample": current_git_dirty_rows[:20],
             "dirtySourceTriage": dirty_source_triage,
             "gitHead": source_state.get("gitHead", ""),
             "deployedSha": source_state.get("deployedSha", ""),
             "deployedShaMatchesLocalHead": source_state.get("deployedShaMatchesLocalHead", False),
-            "sourceWorkingTreeClean": source_state.get("sourceWorkingTreeClean", False),
+            "sourceWorkingTreeClean": source_state_for_triage.get("sourceWorkingTreeClean", False),
+            "receiptSourceWorkingTreeClean": source_state.get("sourceWorkingTreeClean", False),
         },
         "publicationProof": {
             "npmReceiptPath": str(root / ".agent_control" / "publication" / "npm-registry.json"),

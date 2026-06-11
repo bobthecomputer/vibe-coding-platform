@@ -7,7 +7,7 @@ import subprocess
 import sys
 import uuid
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 import time
@@ -37,6 +37,10 @@ SESSION_QUICK_EXIT_GRACE_SECONDS = max(
     float(os.environ.get("FLUXIO_SESSION_QUICK_EXIT_GRACE_SECONDS", "0.45")),
     0.0,
 )
+
+DELEGATED_RUNTIME_SESSION_FIELD_NAMES = {
+    item.name for item in fields(DelegatedRuntimeSession)
+}
 SESSION_SETTLE_POLL_SECONDS = max(
     float(os.environ.get("FLUXIO_SESSION_SETTLE_POLL_SECONDS", "0.05")),
     0.01,
@@ -290,8 +294,29 @@ class DelegatedRuntimeSupervisor:
             reloaded = self._load_session(payload.session_path)
             if reloaded is not None and reloaded.exit_code is not None:
                 payload = self._sync_structured_state(reloaded)
+            elif _log_suggests_clean_completion(payload):
+                payload.exit_code = 0
+                payload.status = "completed"
+                payload.detail = "Delegated runtime completion recovered from terminal log output."
+                payload.last_event = _tail_summary(Path(payload.log_path)) or payload.detail
+                payload.updated_at = utc_now_iso()
+                payload.heartbeat_status = "inactive"
+                self._write_session(payload)
+                self._append_structured_event(
+                    payload,
+                    kind="session.completed",
+                    message=payload.last_event,
+                    status="completed",
+                    data={
+                        "exit_code": 0,
+                        "recovered": True,
+                        "reason": "terminal_log_completion_without_session_event",
+                    },
+                )
+                return self._sync_structured_state(payload)
             elif payload.exit_code is None:
-                if payload.heartbeat_status == "stale":
+                recorded_process_missing = payload.pid > 0 or payload.supervisor_pid > 0
+                if payload.heartbeat_status == "stale" or recorded_process_missing:
                     payload.exit_code = -1
                     payload.status = "failed"
                     payload.detail = (
@@ -304,7 +329,11 @@ class DelegatedRuntimeSupervisor:
                         message=payload.detail,
                         status="failed",
                         data={
-                            "reason": "stale_heartbeat_without_live_process",
+                            "reason": (
+                                "stale_heartbeat_without_live_process"
+                                if payload.heartbeat_status == "stale"
+                                else "recorded_process_missing_without_exit"
+                            ),
                             "pid": payload.pid,
                             "supervisor_pid": payload.supervisor_pid,
                             "heartbeat_age_seconds": payload.heartbeat_age_seconds,
@@ -555,7 +584,13 @@ class DelegatedRuntimeSupervisor:
                     detail="Delegated runtime session file is missing or inaccessible.",
                 )
             raise
-        loaded = DelegatedRuntimeSession(**payload)
+        loaded = DelegatedRuntimeSession(
+            **{
+                key: value
+                for key, value in payload.items()
+                if key in DELEGATED_RUNTIME_SESSION_FIELD_NAMES
+            }
+        )
         if acknowledged and not loaded.acknowledged:
             loaded.acknowledged = True
         return loaded
@@ -765,6 +800,24 @@ def _tail_summary(log_path: Path, max_lines: int = 3) -> str:
         if line.strip()
     ]
     return " | ".join(lines[-max_lines:])
+
+
+def _log_suggests_clean_completion(session: DelegatedRuntimeSession) -> bool:
+    if not session.log_path:
+        return False
+    log_path = Path(session.log_path)
+    if not log_path.exists() or not log_path.is_file():
+        return False
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 16384), os.SEEK_SET)
+            tail = handle.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+    lowered = tail.lower()
+    return "completed." in lowered and "session_id:" in lowered
 
 
 def _pid_alive(pid: int) -> bool:

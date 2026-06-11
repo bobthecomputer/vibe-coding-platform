@@ -1061,6 +1061,9 @@ function LiveReviewWorkbench({ mode }: { mode: "agent" | "builder" }) {
               <span>Target</span>
               <strong>{String(selectedTarget.label || selectedTarget.kind)}</strong>
             </div>
+            <button onClick={() => reportUiAction("review:open-live-preview")} type="button">
+              Open live preview
+            </button>
             <p>{String(selectedTarget.detail || "Live UI, window, or document surface")}</p>
           </div>
 

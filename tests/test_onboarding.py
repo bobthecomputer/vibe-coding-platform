@@ -699,6 +699,64 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(hermes_dependency["stage"], "healthy")
         self.assertEqual(hermes_dependency["lastVerificationResult"], "passed")
 
+    @mock.patch("grant_agent.onboarding.detect_wsl_status")
+    @mock.patch("grant_agent.onboarding._command_version")
+    def test_setup_health_exposes_ready_tonight_cards_and_opencodego(
+        self,
+        command_version: mock.Mock,
+        detect_wsl_status: mock.Mock,
+    ) -> None:
+        detect_wsl_status.return_value = {
+            "required": True,
+            "installed": True,
+            "default_version": 2,
+            "details": "WSL2 ready",
+        }
+        command_version.side_effect = [
+            {"installed": True, "command": "node", "version": "v22", "details": "ok"},
+            {"installed": True, "command": "python", "version": "3.13", "details": "ok"},
+            {"installed": True, "command": "uv", "version": "0.9", "details": "ok"},
+            {"installed": True, "command": "openclaw", "version": "2026.2.15", "details": "ok"},
+            {"installed": True, "command": "hermes", "version": "0.4.0", "details": "ok"},
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            control_dir = root / ".agent_control"
+            control_dir.mkdir()
+            (control_dir / "workspaces.json").write_text(
+                '[{"workspace_id":"ws","openai_codex_auth_mode":"api"}]',
+                encoding="utf-8",
+            )
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "profiles.json").write_text(
+                """
+                {
+                  "default_profile": "builder",
+                  "profiles": {
+                    "builder": {"description": "Builder", "ui": {"motion": "standard"}, "agent": {"execution_scope": "isolated", "approval_mode": "tiered", "explanation_depth": "medium", "delegation_aggressiveness": "balanced"}}
+                  }
+                }
+                """,
+                encoding="utf-8",
+            )
+            with mock.patch.dict("grant_agent.onboarding.os.environ", {"OPENCODE_API_KEY": "test-key"}, clear=False):
+                status = detect_onboarding_status(root)
+
+        setup_health = status["setupHealth"]
+        self.assertEqual(
+            [item["cardId"] for item in setup_health["beginnerSetupCards"]],
+            ["computer_tools", "ai_accounts", "agent_runtimes", "messages"],
+        )
+        self.assertEqual(setup_health["safeUpdateAction"]["label"], "Update everything")
+        opencode_dependency = next(
+            item for item in setup_health["dependencies"] if item["dependencyId"] == "opencode_go_auth"
+        )
+        self.assertTrue(opencode_dependency["installed"])
+        self.assertEqual(opencode_dependency["stage"], "healthy")
+
 
 if __name__ == "__main__":
     unittest.main()

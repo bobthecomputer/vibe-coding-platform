@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import re
 import shutil
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -133,9 +135,18 @@ def build_difficulty_escalation(
     comparison = comparison or {}
     defensive_delta = int(comparison.get("score_delta", 0) or 0)
     next_attempt_budget = max(attempt_count + (2 if should_escalate else 1), next_level * 3)
+    prior_pressure_index = max(
+        [
+            int(row.get("nextPressureIndex", row.get("currentPressureIndex", 0)) or 0)
+            for row in history
+            if isinstance(row, dict)
+        ]
+        or [0]
+    )
     current_pressure_index = max(
         current_level * 10,
         attempt_count + pass_streak + len(tactics) * 2,
+        prior_pressure_index,
     )
     next_pressure_index = current_pressure_index + (
         max(2, next_attempt_budget - attempt_count) + len(next_tactics)
@@ -666,6 +677,19 @@ def _proof_panel_html(payload: dict) -> str:
 """
 
 
+def redact_probe_payload_for_export(probe: dict) -> dict:
+    """Return an export-safe red-team probe without raw attempt prompts."""
+    safe_probe = deepcopy(probe)
+    for attempt in safe_probe.get("attempts", []):
+        raw_prompt = str(attempt.get("prompt") or "")
+        attempt["prompt_sha256"] = hashlib.sha256(raw_prompt.encode("utf-8")).hexdigest()
+        attempt["prompt_length"] = len(raw_prompt)
+        attempt["prompt"] = "[redacted: aggregate-only defensive red-team payload]"
+    safe_probe["rawPayloadExported"] = False
+    safe_probe["payloadHandling"] = "aggregate_only_redacted"
+    return safe_probe
+
+
 def export_report_bundle(
     bundle_root: Path,
     preset: ChallengePreset,
@@ -683,6 +707,7 @@ def export_report_bundle(
     name = f"bundle_{utc_stamp()}_{_sanitize(preset.name)}"
     bundle_path = bundle_root / name
     bundle_path.mkdir(parents=True, exist_ok=False)
+    export_probe = redact_probe_payload_for_export(probe)
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -691,9 +716,9 @@ def export_report_bundle(
         "training_before": before,
         "training_after": after,
         "training_comparison": comparison,
-        "probe": probe,
+        "probe": export_probe,
         "red_team_history_row": history_row or {},
-        "red_team_escalation_trend": escalation_trend or probe.get("escalationTrend", {}),
+        "red_team_escalation_trend": escalation_trend or export_probe.get("escalationTrend", {}),
         "top_findings": findings,
     }
 
@@ -701,7 +726,7 @@ def export_report_bundle(
     (bundle_path / "training_before.json").write_text(json.dumps(before, indent=2), encoding="utf-8")
     (bundle_path / "training_after.json").write_text(json.dumps(after, indent=2), encoding="utf-8")
     (bundle_path / "training_comparison.json").write_text(json.dumps(comparison, indent=2), encoding="utf-8")
-    (bundle_path / "adversarial_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
+    (bundle_path / "adversarial_probe.json").write_text(json.dumps(export_probe, indent=2), encoding="utf-8")
     (bundle_path / "red_team_escalation_trend.json").write_text(
         json.dumps(payload["red_team_escalation_trend"], indent=2),
         encoding="utf-8",

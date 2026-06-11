@@ -97,6 +97,38 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(backend._resolve_artifact_id(artifact_id), image_path)
             self.assertEqual(backend._resolve_artifact_path(str(image_path)), image_path)
 
+    def test_backend_serves_mission_artifacts_from_sibling_project_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            projects = pathlib.Path(temp_dir) / "projects"
+            active_release = projects / "syntelos" / "releases" / "current"
+            mission_artifacts = projects / "overnight-discovery-lab" / ".agent_control" / "mission_artifacts"
+            active_release.mkdir(parents=True)
+            mission_artifacts.mkdir(parents=True)
+            report = mission_artifacts / "f1-telemetry-report.md"
+            report.write_text("# F1 telemetry report\n\nRuntime output body.\n", encoding="utf-8")
+            backend = FluxioWebBackend(active_release, active_release)
+
+            self.assertEqual(backend._resolve_artifact_path(str(report)), report.resolve())
+            artifact_id = backend._artifact_id(report)
+            self.assertEqual(backend._resolve_artifact_id(artifact_id), report.resolve())
+
+    def test_backend_serves_html_mission_dashboard_from_active_release_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            active_release = pathlib.Path(temp_dir) / "syntelos" / "releases" / "current"
+            mission_artifacts = active_release / ".agent_control" / "mission_artifacts" / "mission_f1"
+            mission_artifacts.mkdir(parents=True)
+            dashboard = mission_artifacts / "index.html"
+            dashboard.write_text(
+                "<!doctype html><main>F1 telemetry analytics dashboard</main>\n",
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(active_release, active_release)
+
+            self.assertEqual(backend._resolve_artifact_path(str(dashboard)), dashboard.resolve())
+            artifact_id = backend._artifact_id(dashboard)
+            self.assertEqual(backend._resolve_artifact_id(artifact_id), dashboard.resolve())
+            self.assertIn(".html", web_backend.ARTIFACT_CONTENT_TYPES)
+
     def test_image_playground_accepts_openai_json_when_stderr_proves_codex_oauth(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -247,6 +279,7 @@ class FluxioWebBackendTests(unittest.TestCase):
                     "sessionId": "chat-live",
                     "message": "What changed?",
                     "runtime": "codex",
+                    "missionId": "mission_live",
                     "workspacePath": str(workspace),
                     "route": {
                         "role": "executor",
@@ -279,14 +312,283 @@ class FluxioWebBackendTests(unittest.TestCase):
             )
 
             self.assertEqual(compartment["cwd"], str(workspace))
+            self.assertEqual(compartment["missionId"], "mission_live")
             self.assertGreaterEqual(len(compartment["messages"]), 2)
+            self.assertEqual(compartment["messages"][-2]["source"], "operator-submitted")
+            self.assertEqual(compartment["messages"][-1]["source"], "backend-model-message")
             self.assertEqual([lane["role"] for lane in compartment["lanes"]], ["planner", "executor", "verifier"])
             self.assertTrue(next(lane for lane in compartment["lanes"] if lane["role"] == "executor")["active"])
             self.assertIn("resume-chat", compartment["actions"])
             self.assertEqual(compartment["lastRoundtripMs"], 842)
             self.assertIn("web/src/fluxio/FluxioShell.jsx", compartment["filesChanged"])
+            self.assertEqual(compartment["turnReceipt"]["schema"], "fluxio.turn_receipt.v1")
+            self.assertEqual(compartment["turnReceipt"]["runtime"], "codex")
+            self.assertEqual(compartment["turnReceipt"]["provider"], "openai-codex")
+            self.assertEqual(compartment["turnReceipt"]["model"], "gpt-5.5")
+            self.assertEqual(compartment["turnReceipt"]["effort"], "medium")
+            self.assertEqual(compartment["turnReceipt"]["assistantMessage"], "The runtime wrote a proof receipt.")
+            self.assertEqual(compartment["turnReceipt"]["finalMessage"], "The runtime wrote a proof receipt.")
+            self.assertIn("web/src/fluxio/FluxioShell.jsx", compartment["turnReceipt"]["changedFiles"])
+            self.assertIn("turnReceipts", compartment)
             timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
             self.assertIn("runtime.roundtrip", timeline_kinds)
+            self.assertIn("runtime.model_message", timeline_kinds)
+
+    def test_chat_compartment_records_executable_comment_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "comment-run",
+                    "message": "Please apply this fix.",
+                    "runtime": "hermes",
+                    "sourceType": "comment",
+                    "sourceMessageId": "turn-123",
+                    "sourceZone": "thread",
+                    "commentText": "Please apply this fix.",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "comment-run",
+                    "reply": "Done.",
+                    "runtime": "hermes",
+                    "command": "hermes chat -q <prompt> -Q --model MiniMax-M3",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 120,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertEqual(receipt["sourceType"], "comment")
+            self.assertEqual(receipt["sourceMessageId"], "turn-123")
+            self.assertEqual(receipt["sourceZone"], "thread")
+            self.assertEqual(receipt["commentText"], "Please apply this fix.")
+            self.assertEqual(receipt["command"], "hermes chat -q <prompt> -Q --model MiniMax-M3")
+            self.assertEqual(receipt["changedFiles"], [])
+            self.assertEqual(receipt["assistantMessage"], "Done.")
+
+    def test_chat_turn_receipt_does_not_treat_command_message_as_agent_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "command-only",
+                    "message": "Run this.",
+                    "runtime": "hermes",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "command-only",
+                    "message": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "runtime": "hermes",
+                    "command": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "result_summary": "Delegated runtime lane launched.",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 80,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertEqual(receipt["assistantMessage"], "")
+            self.assertEqual(receipt["finalMessage"], "")
+            self.assertEqual(receipt["runSummary"], "Delegated runtime lane launched.")
+            self.assertIn("ms-one-shot", receipt["command"])
+            self.assertEqual([item["role"] for item in compartment["messages"]], ["operator"])
+            timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
+            self.assertIn("runtime.trace_only_reply", timeline_kinds)
+
+    def test_chat_turn_receipt_does_not_treat_command_prefixed_reply_as_agent_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "command-prefix-only",
+                    "message": "Run this.",
+                    "runtime": "hermes",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "command-prefix-only",
+                    "reply": "Command: /volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "runtime": "hermes",
+                    "command": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "result_summary": "Delegated runtime lane launched.",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 80,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertEqual(receipt["assistantMessage"], "")
+            self.assertEqual(receipt["finalMessage"], "")
+            self.assertEqual(receipt["runSummary"], "Delegated runtime lane launched.")
+            self.assertEqual([item["role"] for item in compartment["messages"]], ["operator"])
+            timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
+            self.assertIn("runtime.trace_only_reply", timeline_kinds)
+
+    def test_chat_turn_receipt_does_not_treat_command_word_without_colon_as_agent_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "command-word-only",
+                    "message": "Run this.",
+                    "runtime": "hermes",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "command-word-only",
+                    "reply": "Command /volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "runtime": "hermes",
+                    "command": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "result_summary": "Delegated runtime lane launched.",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 80,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertEqual(receipt["assistantMessage"], "")
+            self.assertEqual(receipt["finalMessage"], "")
+            self.assertEqual([item["role"] for item in compartment["messages"]], ["operator"])
+            timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
+            self.assertIn("runtime.trace_only_reply", timeline_kinds)
+
+    def test_chat_turn_receipt_prefers_open_runtime_model_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "open-runtime-message",
+                    "message": "Show the real runtime answer.",
+                    "runtime": "hermes",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "open-runtime-message",
+                    "openRuntimeMessage": "I changed the receipt so the model answer is visible first.",
+                    "reply": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "runtime": "hermes",
+                    "command": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "modelMessageSource": "runtime_transcript",
+                    "modelMessageSourceLabel": "Runtime output artifact",
+                    "modelMessageSourceTitle": "What changed in this resume",
+                    "transcriptSessionId": "runtime_artifact",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 80,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertEqual(receipt["assistantMessage"], "I changed the receipt so the model answer is visible first.")
+            self.assertEqual(receipt["finalMessage"], "I changed the receipt so the model answer is visible first.")
+            self.assertEqual(compartment["messages"][-1]["source"], "backend-model-message")
+            self.assertEqual(compartment["messages"][-1]["text"], "I changed the receipt so the model answer is visible first.")
+            self.assertEqual(receipt["modelMessageSource"], "runtime_transcript")
+            self.assertEqual(receipt["modelMessageSourceLabel"], "Runtime output artifact")
+            self.assertEqual(receipt["modelMessageSourceTitle"], "What changed in this resume")
+            self.assertEqual(receipt["transcriptSessionId"], "runtime_artifact")
+
+    def test_chat_turn_receipt_humanizes_runtime_artifact_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "artifact-shaped-message",
+                    "message": "Show the real runtime answer.",
+                    "runtime": "hermes",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "artifact-shaped-message",
+                    "openRuntimeMessage": (
+                        "Ringway F1 compact telemetry board - mission_123\n"
+                        "Artifact: /volume1/Saclay/projects/syntelos/current/.agent_control/artifacts/index.html\n"
+                        "Preview URL: /api/artifact?path=/volume1/Saclay/projects/syntelos/current/.agent_control/artifacts/index.html\n"
+                        "Route: Hermes harness; executor route preserved as minimax/MiniMax-M3.\n"
+                        "Fastest lap: ARO L3 83.140s.\n"
+                        "Sector comparison: S1 ARO 28.36s; S2 ARO 32.88s; S3 ARO 21.90s."
+                    ),
+                    "runtime": "hermes",
+                    "command": "/volume1/Saclay/projects/syntelos/runtime/bin/hermes chat -q <prompt>",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 80,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertIn("OpenRuntime returned a real result", receipt["assistantMessage"])
+            self.assertIn("Fastest lap", receipt["assistantMessage"])
+            self.assertNotIn("/volume1/Saclay", receipt["assistantMessage"])
+            self.assertNotIn("/api/artifact", receipt["assistantMessage"])
+            self.assertEqual(compartment["messages"][-1]["text"], receipt["assistantMessage"])
+
+    def test_chat_turn_receipt_skips_command_before_open_runtime_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            compartment = backend._save_chat_compartment(
+                {
+                    "sessionId": "command-then-open-runtime",
+                    "message": "Show the real runtime answer.",
+                    "runtime": "hermes",
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+                {
+                    "sessionId": "command-then-open-runtime",
+                    "turnReceipt": {
+                        "assistantMessage": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    },
+                    "openRuntimeMessage": "Implemented and verified the receipt fix. The model answer is now first.",
+                    "reply": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "runtime": "hermes",
+                    "command": "/volume1/Saclay/projects/system-loss/bin/ms-one-shot execute model mission",
+                    "filesChanged": [],
+                    "toolTimeline": [],
+                    "elapsedMs": 80,
+                    "route": {"provider": "minimax-oauth", "model": "MiniMax-M3", "effort": "high"},
+                },
+            )
+
+            receipt = compartment["turnReceipt"]
+            self.assertEqual(
+                receipt["assistantMessage"],
+                "Implemented and verified the receipt fix. The model answer is now first.",
+            )
+            self.assertEqual(
+                receipt["finalMessage"],
+                "Implemented and verified the receipt fix. The model answer is now first.",
+            )
+            self.assertEqual(compartment["messages"][-1]["source"], "backend-model-message")
+            self.assertEqual(
+                compartment["messages"][-1]["text"],
+                "Implemented and verified the receipt fix. The model answer is now first.",
+            )
 
     def test_nas_deploy_readiness_command_returns_offline_safe_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -304,6 +606,24 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("setupHealth", readiness)
             self.assertIn("source", readiness)
 
+    def test_integration_readiness_command_returns_evidence_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            readiness = backend.dispatch("get_integration_readiness_command", {})
+
+            self.assertEqual(readiness["schema"], "fluxio.integration_readiness.v1")
+            self.assertIn("score", readiness)
+            self.assertIn("maxScore", readiness)
+            self.assertIn("percent", readiness)
+            self.assertIn("categories", readiness)
+            self.assertIn("blockers", readiness)
+            self.assertLess(readiness["percent"], 100)
+            category_ids = {item["id"] for item in readiness["categories"]}
+            self.assertIn("provider_routes", category_ids)
+            self.assertIn("authenticated_phone_agent", category_ids)
+
     def test_provider_secret_presence_uses_session_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -317,6 +637,7 @@ class FluxioWebBackendTests(unittest.TestCase):
                     "OPENROUTER_API_KEY": "",
                     "MINIMAX_API_KEY": "",
                     "MINIMAX_OAUTH_TOKEN": "",
+                    "OPENCODE_API_KEY": "",
                     "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT": "",
                     "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
                     "HOME": str(root / "home"),
@@ -337,11 +658,12 @@ class FluxioWebBackendTests(unittest.TestCase):
                 )
                 after = backend.dispatch(
                     "get_provider_secret_presence_command",
-                    {"providerIds": ["openai", "openai-codex", "minimax"]},
+                    {"providerIds": ["openai", "openai-codex", "minimax", "opencode-go"]},
                 )
                 self.assertTrue(after["openai"])
                 self.assertTrue(after["openai-codex"])
                 self.assertFalse(after["minimax"])
+                self.assertFalse(after["opencode-go"])
 
                 self.assertTrue(
                     backend.dispatch(
@@ -353,14 +675,24 @@ class FluxioWebBackendTests(unittest.TestCase):
                 self.assertTrue(runtime_env.is_file())
                 self.assertIn("MINIMAX_API_KEY=", runtime_env.read_text(encoding="utf-8"))
 
+                self.assertTrue(
+                    backend.dispatch(
+                        "save_provider_secret_command",
+                        {"providerId": "opencode-go", "secret": "test-opencodego-key"},
+                    )
+                )
+                runtime_text = runtime_env.read_text(encoding="utf-8")
+                self.assertIn("OPENCODE_API_KEY=", runtime_text)
+
                 restarted_backend = FluxioWebBackend(root, root)
                 persisted = restarted_backend.dispatch(
                     "get_provider_secret_presence_command",
-                    {"providerIds": ["openai", "openai-codex", "minimax"]},
+                    {"providerIds": ["openai", "openai-codex", "minimax", "opencode-go"]},
                 )
                 self.assertTrue(persisted["openai"])
                 self.assertTrue(persisted["openai-codex"])
                 self.assertTrue(persisted["minimax"])
+                self.assertTrue(persisted["opencode-go"])
 
                 self.assertTrue(
                     backend.dispatch("clear_provider_secret_command", {"providerId": "openai"})
@@ -370,6 +702,33 @@ class FluxioWebBackendTests(unittest.TestCase):
                     {"providerIds": ["openai"]},
                 )
                 self.assertFalse(cleared["openai"])
+
+    def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            home = root / "home"
+            auth_store = home / ".local" / "share" / "opencode" / "auth.json"
+            auth_store.parent.mkdir(parents=True)
+            auth_store.write_text(
+                json.dumps({"opencode-go": {"type": "api"}}),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(home),
+                    "OPENCODE_API_KEY": "",
+                    "OPENCLAW_STATE_DIR": str(home / ".openclaw"),
+                },
+                clear=False,
+            ):
+                presence = backend.dispatch(
+                    "get_provider_secret_presence_command",
+                    {"providerIds": ["opencode-go"]},
+                )
+
+            self.assertTrue(presence["opencode-go"])
 
     def test_web_backend_prepends_packaged_runtime_bin_to_cli_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -677,7 +1036,97 @@ class FluxioWebBackendTests(unittest.TestCase):
                 )
 
             self.assertEqual(route["provider"], "minimax-portal")
-            self.assertEqual(route["model_id"], "minimax-portal/MiniMax-M2.7")
+            self.assertEqual(route["model_id"], "minimax-portal/MiniMax-M3")
+
+    def test_hermes_chat_sends_normalized_minimax_m3_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            home = root / "home"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            auth_store = home / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+            auth_store.parent.mkdir(parents=True)
+            auth_store.write_text(
+                '{"profiles":{"minimax-portal:default":{"provider":"minimax-portal","access":"token","refresh":"refresh"}}}',
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+            calls: list[list[str]] = []
+
+            def fake_run(args, **kwargs):
+                calls.append(list(args))
+                return mock.Mock(
+                    returncode=0,
+                    stdout='{"reply":"M3 frontend route ready."}',
+                    stderr="",
+                )
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(home),
+                    "OPENCLAW_STATE_DIR": str(home / ".openclaw"),
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                },
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="hermes"):
+                    with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                        result = backend.dispatch(
+                            "send_agent_chat_command",
+                            {
+                                "payload": {
+                                    "runtime": "hermes",
+                                    "message": "tighten the frontend",
+                                    "workspaceId": "workspace_primary",
+                                    "workspacePath": str(workspace),
+                                    "route": {
+                                        "role": "executor",
+                                        "provider": "minimax",
+                                        "model": "MiniMax-M2.7",
+                                        "effort": "high",
+                                    },
+                                }
+                            },
+                        )
+
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertEqual(result["route"]["provider"], "minimax-oauth")
+            self.assertEqual(result["route"]["model"], "MiniMax-M3")
+            self.assertIn("--model", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--model") + 1], "MiniMax-M3")
+            self.assertIn("--provider", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--provider") + 1], "minimax-oauth")
+            proof = json.loads((root / ".agent_control" / "runtime_route_proof.json").read_text(encoding="utf-8"))
+            self.assertEqual(proof["runtime"], "hermes")
+            self.assertEqual(proof["provider"], "minimax-oauth")
+            self.assertEqual(proof["model"], "MiniMax-M3")
+
+    def test_agent_chat_extracts_runtime_model_message_from_json_string_reply(self) -> None:
+        from grant_agent.web_backend import _extract_model_reply
+
+        reply = _extract_model_reply(
+            {
+                "reply": json.dumps(
+                    {
+                        "sessionId": "mission-chat-example",
+                        "runtime": "hermes",
+                        "toolTimeline": [
+                            {
+                                "kind": "operator.message",
+                                "summary": "Can you answer this mission?",
+                            },
+                            {
+                                "kind": "runtime.model_message",
+                                "summary": "This is the visible Hermes answer.",
+                            },
+                        ],
+                    }
+                )
+            }
+        )
+
+        self.assertEqual(reply, "This is the visible Hermes answer.")
 
     def test_agent_chat_uses_wsl_hermes_when_native_cli_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -726,6 +1175,56 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(calls[-1][0], "wsl")
             self.assertEqual(calls[-1][1:3], ["bash", "-lc"])
             self.assertIn("hermes chat -q", calls[-1][3])
+
+    def test_runtime_route_proof_reports_wsl_hermes_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            proof_path = root / ".agent_control" / "runtime_route_proof.json"
+            proof_path.parent.mkdir(parents=True, exist_ok=True)
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "runtime": "hermes",
+                        "provider": "minimax-oauth",
+                        "model": "MiniMax-M3",
+                        "replyPreview": "MiniMax-M3 answered through Hermes.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_which(name, *args, **kwargs):  # noqa: ANN001
+                if name == "wsl":
+                    return "wsl"
+                return None
+
+            def fake_run(args, **kwargs):  # noqa: ANN001
+                script = str(args[-1])
+                if "command -v hermes" in script:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout="/home/kali/.local/bin/hermes\n",
+                        stderr="",
+                    )
+                if "hermes --version" in script:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout="Hermes Agent v0.14.0\n",
+                        stderr="",
+                    )
+                return mock.Mock(returncode=1, stdout="", stderr="")
+
+            with mock.patch("grant_agent.web_backend.os.name", "nt"):
+                with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
+                    with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                        status = backend._runtime_route_proof_status(root)
+
+            self.assertTrue(status["hermesCommandVisible"])
+            self.assertEqual(status["hermesCommand"], "wsl:/home/kali/.local/bin/hermes")
+            self.assertEqual(status["hermesCommandSource"], "wsl")
+            self.assertEqual(status["hermesVersion"], "Hermes Agent v0.14.0")
+            self.assertTrue(status["minimaxM3Verified"])
 
     def test_web_backend_starts_direct_openai_codex_oauth(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1075,6 +1574,53 @@ class FluxioWebBackendTests(unittest.TestCase):
 
             self.assertNotEqual(before, after)
             self.assertTrue(any("mission_watchdog.json" in row[0] and row[2] > 0 for row in after))
+
+    def test_control_room_summary_cache_signature_includes_runtime_compartments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            compartment_dir = root / ".agent_control" / "runtime_compartments"
+            compartment_dir.mkdir(parents=True)
+            backend = FluxioWebBackend(root, root)
+            before = backend._control_room_freshness_signature(root)
+            (compartment_dir / "mission-chat-mission_live.json").write_text(
+                json.dumps(
+                    {
+                        "sessionId": "mission-chat-mission_live",
+                        "runtime": "hermes",
+                        "messages": [{"role": "operator", "text": "Continue the mission."}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            after = backend._control_room_freshness_signature(root)
+
+            self.assertNotEqual(before, after)
+            self.assertTrue(any("mission-chat-mission_live.json" in row[0] and row[2] > 0 for row in after))
+
+    def test_control_room_summary_cache_signature_includes_connected_app_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True)
+            backend = FluxioWebBackend(root, root)
+            before = backend._control_room_freshness_signature(root)
+            (config_dir / "connected_apps.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "manifest_id": "manifest_mind_tower",
+                            "schema_version": "fluxio.app-capability/v0-draft",
+                            "app_id": "mind-tower",
+                            "name": "Mind Tower",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            after = backend._control_room_freshness_signature(root)
+
+            self.assertNotEqual(before, after)
+            self.assertTrue(any("connected_apps.json" in row[0] and row[2] > 0 for row in after))
 
     def test_bootstrap_summary_cache_uses_live_signature_instead_of_short_ttl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1636,6 +2182,37 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(receipt_path.exists())
             self.assertIn("overnight_progress_digest", receipt_path.read_text(encoding="utf-8"))
 
+    def test_record_delivery_receipt_command_persists_runtime_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "record_delivery_receipt_command",
+                {
+                    "missionId": "mission_hermes",
+                    "channel": "telegram",
+                    "destination": "operator",
+                    "eventKind": "watchdog.problem_report",
+                    "eventMessage": "No problem found.",
+                    "status": "delivered",
+                    "originRuntime": "hermes",
+                    "originProvider": "minimax",
+                    "originModel": "MiniMax-M3",
+                    "transportProvider": "telegram_via_openclaw_token",
+                    "producer": "watchdog",
+                    "sourceSessionId": "session_123",
+                },
+            )
+
+            self.assertEqual(result["origin_runtime"], "hermes")
+            self.assertEqual(result["origin_provider"], "minimax")
+            self.assertEqual(result["origin_model"], "MiniMax-M3")
+            self.assertEqual(result["transport_provider"], "telegram_via_openclaw_token")
+            self.assertEqual(result["producer"], "watchdog")
+            receipt_text = (root / ".agent_control" / "delivery_receipts.jsonl").read_text(encoding="utf-8")
+            self.assertIn("telegram_via_openclaw_token", receipt_text)
+
     def test_web_push_status_and_subscription_are_exposed_for_browser_registration(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -1728,6 +2305,72 @@ class FluxioWebBackendTests(unittest.TestCase):
                 result["receipts"][0]["error_message"],
                 {"web_push_vapid_keys_not_configured", "web_push_sender_dependency_missing"},
             )
+
+    def test_ntfy_status_and_send_command_expose_open_source_phone_channel(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            status = backend.dispatch("get_ntfy_status_command", {})
+            self.assertEqual(status["schema"], "fluxio.ntfy_status.v1")
+            self.assertFalse(status["configured"])
+            self.assertEqual(status["channel"], "ntfy")
+
+            skipped = backend.dispatch(
+                "send_ntfy_notification_command",
+                {
+                    "missionId": "mission_123",
+                    "title": "Slice complete",
+                    "body": "Mission slice completed.",
+                    "eventKind": "mission.slice.completed",
+                    "dryRun": True,
+                },
+            )
+            self.assertEqual(skipped["schema"], "fluxio.ntfy_delivery.v1")
+            self.assertFalse(skipped["ok"])
+            self.assertEqual(skipped["receipt"]["status"], "skipped")
+            self.assertEqual(skipped["receipt"]["error_message"], "ntfy_topic_not_configured")
+
+    def test_ntfy_send_command_records_dry_run_receipt_when_topic_is_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / ".agent_control").mkdir()
+            (root / ".agent_control" / "ntfy_settings.json").write_text(
+                json.dumps(
+                    {
+                        "serverUrl": "https://ntfy.example.test",
+                        "topic": "fluxio-test",
+                        "token": "secret-token",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            status = backend.dispatch("get_ntfy_status_command", {})
+            self.assertTrue(status["configured"])
+            self.assertTrue(status["senderConfigured"])
+            self.assertTrue(status["tokenConfigured"])
+            self.assertEqual(status["topic"], "fluxio-test")
+
+            result = backend.dispatch(
+                "send_ntfy_notification_command",
+                {
+                    "missionId": "mission_123",
+                    "title": "Slice complete",
+                    "body": "Mission slice completed.",
+                    "eventKind": "mission.slice.completed",
+                    "targetUrl": "/control?mode=agent&surface=agent&missionId=mission_123",
+                    "dryRun": True,
+                },
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["receipt"]["channel"], "ntfy")
+            self.assertEqual(result["receipt"]["status"], "delivered")
+            self.assertEqual(result["receipt"]["delivery_url"], "dry_run://ntfy/fluxio-test")
+            receipts_path = root / ".agent_control" / "delivery_receipts.jsonl"
+            self.assertIn("mission.slice.completed", receipts_path.read_text(encoding="utf-8"))
 
     def test_send_web_push_notification_command_supports_dry_run_delivery_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2028,6 +2671,12 @@ class FluxioWebBackendTests(unittest.TestCase):
             asset_handler = DummyHandler("/assets/app.js")
             self.assertTrue(backend.serve_file(asset_handler))
             self.assertEqual(asset_handler.headers_out.get("Cache-Control"), "no-store")
+
+            nested_asset_handler = DummyHandler("/control/assets/app.js")
+            self.assertTrue(backend.serve_file(nested_asset_handler))
+            self.assertEqual(nested_asset_handler.headers_out.get("Content-Type"), "text/javascript; charset=utf-8")
+            self.assertNotIn(b"<html", nested_asset_handler.wfile.getvalue().lower())
+            self.assertIn(b"console.log('ok');", nested_asset_handler.wfile.getvalue())
 
     def test_main_refuses_duplicate_backend_port(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

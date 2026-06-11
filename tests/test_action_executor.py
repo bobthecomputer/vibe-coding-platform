@@ -144,6 +144,128 @@ class ActionExecutorTests(unittest.TestCase):
             self.assertNotEqual(pathlib.Path(proposal.target_path), readme)
             self.assertFalse(proposal.requires_approval)
 
+    def test_action_proposal_defaults_to_hermes_when_runtime_is_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_default_runtime_test",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            step = PlannedStep(step_id="step_delegate", title="Delegate runtime lane")
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Improve Fluxio default runtime handling.",
+                workspace_root=root,
+                verification_commands=[],
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertEqual(proposal.delegation_metadata.get("runtime_id"), "hermes")
+
+    def test_runtime_delegate_execution_defaults_missing_runtime_to_hermes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_runtime_delegate_missing_runtime_test",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            proposal = ActionProposal(
+                action_id="action_missing_runtime",
+                kind="runtime_delegate",
+                title="Delegate missing runtime",
+                source_step_id="step_missing_runtime",
+                reason="Exercise defensive runtime default.",
+                event_id="event_missing_runtime",
+                target_scope="workspace",
+                mutability_class="write",
+                delegation_metadata={},
+            )
+            proposal.policy_decision = "auto_run"
+            proposal.requires_approval = False
+
+            with mock.patch.dict("os.environ", {"FLUXIO_RUNTIME_DELEGATION_MODE": "local_shim"}):
+                record = execute_action(
+                    proposal,
+                    root,
+                    execution_scope=scope,
+                    execution_policy=policy,
+                )
+
+            self.assertTrue(record.result.ok)
+            self.assertEqual(record.result.payload.get("runtimeId"), "hermes")
+
+    def test_build_prototype_objective_creates_reviewable_artifact_without_explicit_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("experimental")
+            scope = prepare_execution_scope(
+                root,
+                "mission_f1_artifact_target_test",
+                requested_scope="direct",
+                profile_name="experimental",
+            )
+            step = PlannedStep(
+                step_id="step_build",
+                title="Build F1 telemetry analytics prototype",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Build a first usable F1 telemetry prototype/report with a hard artifact gate.",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertEqual(proposal.kind, "file_write")
+            self.assertIn("mission_artifacts", proposal.target_path)
+            self.assertIn("f1-telemetry", pathlib.Path(proposal.target_path).name)
+
+    def test_preview_objective_does_not_route_draft_step_to_read_only_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "MISSION_NOTES.md").write_text("# Notes\n", encoding="utf-8")
+            policy = build_execution_policy("experimental")
+            scope = prepare_execution_scope(
+                root,
+                "mission_preview_word_boundary_test",
+                requested_scope="direct",
+                profile_name="experimental",
+            )
+            step = PlannedStep(
+                step_id="step_draft",
+                title="Draft implementation plan with milestones",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective=(
+                    "Build an F1 telemetry workbench with runnable/static preview "
+                    "instructions and reviewable artifacts."
+                ),
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertEqual(proposal.kind, "file_write")
+            self.assertIn("mission_artifacts", proposal.target_path)
+
     def test_verify_words_in_objective_do_not_turn_non_verify_step_into_test_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -336,6 +458,44 @@ class ActionExecutorTests(unittest.TestCase):
             )
 
             self.assertNotEqual(proposal.kind, "runtime_delegate")
+
+    def test_high_delegation_sends_implementation_prototype_to_runtime_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("experimental")
+            scope = prepare_execution_scope(
+                root,
+                "mission_high_delegate_test",
+                requested_scope="direct",
+                profile_name="experimental",
+            )
+            step = PlannedStep(
+                step_id="step_slice",
+                title="Implement smallest vertical slice",
+                description="Build the first dashboard artifact.",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Build a legal defensive RF/wireless mapping prototype with Hermes.",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+                route_configs=[
+                    {
+                        "role": "executor",
+                        "provider": "openai-codex",
+                        "model": "gpt-5.5",
+                        "effort": "high",
+                    }
+                ],
+            )
+
+            self.assertEqual(proposal.kind, "runtime_delegate")
+            self.assertEqual(proposal.delegation_metadata["route_role"], "executor")
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     @mock.patch("grant_agent.action_executor.runtime_adapter_map")

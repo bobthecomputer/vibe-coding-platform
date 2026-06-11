@@ -11,6 +11,7 @@ from ..subprocess_utils import hidden_windows_subprocess_kwargs
 from ..runtime_updates import compare_version_tokens, latest_hermes_release, normalize_hermes_version
 from .base import (
     AgentRuntimeAdapter,
+    build_mission_resume_objective,
     mission_phase_route,
     _direct_runtime_command,
     runtime_bin_candidates,
@@ -36,6 +37,9 @@ HERMES_PROVIDER_MAP = {
     "minimax": "minimax",
     "minimax-oauth": "minimax-oauth",
     "minimax-cn": "minimax-cn",
+    "opencode": "opencode",
+    "opencode-go": "opencode-go",
+    "opencodego": "opencode-go",
     "kilocode": "kilocode",
     "xiaomi": "xiaomi",
     "arcee": "arcee",
@@ -69,6 +73,12 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 label="Skills and memory",
                 available=True,
                 detail="Hermes learns and recalls skills across sessions.",
+            ),
+            RuntimeCapability(
+                key="code_mod_skills",
+                label="Code-mod skills",
+                available=True,
+                detail="Hermes can route coding work through bundled SKILL.md procedures such as simplify-code, test-driven-development, codex, and opencode when present.",
             ),
             RuntimeCapability(
                 key="delegation",
@@ -225,7 +235,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
     def resume_mission(
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
-        objective = f"Resume mission {mission.mission_id}: {mission.objective}"
+        objective = build_mission_resume_objective(mission)
         route_contract = self._route_contract(mission)
         return {
             "launch_command": self._mission_launch_command(
@@ -255,7 +265,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         route_contract = route_contract or {}
         provider = self._normalize_provider(route_contract.get("provider", ""))
         model = self._normalize_model(provider, route_contract.get("model", ""))
-        native_args = ["hermes", "chat", "-q", objective, "-Q"]
+        native_args = ["hermes", "chat", "-q", objective, "-Q", "--accept-hooks"]
         if model:
             native_args.extend(["--model", model])
         if provider:
@@ -288,14 +298,27 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
 
     def _normalize_model(self, provider: str, model: object) -> str:
         value = str(model or "").strip()
+        if provider == "openai-codex":
+            normalized = value.lower()
+            if normalized in {"gpt-5.5-codex", "gpt-5.5-codex-high"}:
+                return "gpt-5.5"
+            if normalized in {"gpt-5.3-codex", "gpt-5.3"}:
+                return "gpt-5.3-codex-spark"
         if provider in {"minimax", "minimax-oauth", "minimax-cn"}:
             normalized = value.lower()
-            if normalized in {"minimax-m2.7", "minimax/minimax-m2.7"}:
-                return "minimax-m2.7"
+            if normalized in {"minimax-m3", "minimax/minimax-m3"}:
+                return "MiniMax-M3"
+            if normalized in {
+                "minimax-m2.7",
+                "minimax-m2.7-highspeed",
+                "minimax/minimax-m2.7",
+                "minimax/minimax-m2.7-highspeed",
+            }:
+                return "MiniMax-M3"
             if normalized in {"minimax-m2.5", "minimax/minimax-m2.5"}:
-                return "minimax-m2.5"
+                return "MiniMax-M2.5"
             if normalized in {"minimax-m2.5-free", "minimax/minimax-m2.5-free"}:
-                return "minimax-m2.5-free"
+                return "MiniMax-M2.5-free"
         return value
 
     def _route_summary(self, route_contract: dict[str, str]) -> str:

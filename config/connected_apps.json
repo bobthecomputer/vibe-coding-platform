@@ -44,6 +44,11 @@
     ],
     "ui_hints": {
       "category": "speech",
+      "bridgeRole": "voice_runtime",
+      "runtimeManager": "voice-and-relax-engine-manager",
+      "skillCandidate": "voice-preview-workflow",
+      "followOnSlice": "voice catalog read plus preview render queue with proof",
+      "aliases": ["relax engines", "voice engines", "Oratio", "Oratio Viva"],
       "requiresUserPresent": false
     }
   },
@@ -170,6 +175,123 @@
       "mobileSurface": true,
       "providers": ["google-drive", "onedrive", "dropbox", "local-mounted-drive"],
       "primaryProvider": "google-drive"
+    }
+  },
+  {
+    "manifest_id": "manifest_mind_tower",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "mind-tower",
+    "name": "Mind Tower",
+    "description": "Personal tower and time-management workspace for planning tasks, protecting focus, and turning repeated routines into reusable skills.",
+    "bridge": {
+      "transport": "http",
+      "endpoint": "http://127.0.0.1:47842/fluxio",
+      "healthcheck": "/health",
+      "event_stream": "/events"
+    },
+    "auth": {
+      "mode": "local_session",
+      "scopes": ["tower.read", "timebox.plan", "skill.candidate"]
+    },
+    "permissions": ["task.run", "context.read", "approval.request", "skill.propose"],
+    "tasks": [
+      {
+        "task_id": "plan-timebox",
+        "label": "Plan timebox",
+        "description": "Read the current tower/task context and propose a bounded next work block with proof and interruption rules.",
+        "requires_approval": true
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "tower-focus-board",
+        "label": "Tower Focus Board",
+        "description": "Current focus area, task queue, blockers, time budget, and repeated workflow patterns.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "queue-timebox",
+        "label": "Queue Timebox",
+        "description": "Ask the app to queue a focus block or planning checkpoint after operator approval.",
+        "mutability": "write",
+        "risk_level": "medium",
+        "requires_approval": true
+      },
+      {
+        "hook_id": "propose-skill",
+        "label": "Propose Skill",
+        "description": "Convert a repeated time-management or app-operation pattern into a skill draft for review.",
+        "mutability": "write",
+        "risk_level": "medium",
+        "requires_approval": true
+      }
+    ],
+    "ui_hints": {
+      "category": "time_management",
+      "bridgeRole": "personal_manager",
+      "requiresUserPresent": true,
+      "mobileSurface": true,
+      "runtimeManager": "timebox-and-skill-manager",
+      "skillCandidate": "time-management-workflow",
+      "followOnSlice": "tower focus board read plus approval-aware timebox and skill proposal actions",
+      "approvalChannel": "agent_review",
+      "approvalDetail": "Timebox changes and skill proposals stay review-gated until the Mind Tower bridge is live.",
+      "aliases": ["tower", "time manager", "task manager", "JBHABCN"]
+    }
+  },
+  {
+    "manifest_id": "manifest_jbheaven",
+    "schema_version": "fluxio.app-capability/v0-draft",
+    "app_id": "jbheaven",
+    "name": "JBheaven",
+    "description": "Local skill and API workspace for JBheaven skill-pack inspection, technique routing, and app-native proof receipts. JBHABCN is kept as a legacy alias.",
+    "bridge": {
+      "transport": "http",
+      "endpoint": "http://127.0.0.1:8081/api",
+      "healthcheck": "/health",
+      "event_stream": "/tool/history"
+    },
+    "auth": {
+      "mode": "local_session",
+      "scopes": ["skill.read", "tool.inspect", "proof.read"]
+    },
+    "permissions": ["task.run", "context.read", "skill.inspect"],
+    "tasks": [
+      {
+        "task_id": "inspect-jbhabcn-skills",
+        "label": "Inspect JBheaven skills",
+        "description": "Read the local skill pack and API readiness before any app-native JBheaven action is claimed.",
+        "requires_approval": false
+      }
+    ],
+    "context_surfaces": [
+      {
+        "surface_id": "jbhabcn-skills",
+        "label": "JBheaven Skills",
+        "description": "Local skill files, API endpoints, technique routes, and proof-producing scripts.",
+        "access": "read"
+      }
+    ],
+    "action_hooks": [
+      {
+        "hook_id": "inspect-skills",
+        "label": "Inspect Skills",
+        "description": "Verify local JBheaven skill files and API health before routing a skill action.",
+        "mutability": "read",
+        "risk_level": "low",
+        "requires_approval": false
+      }
+    ],
+    "ui_hints": {
+      "category": "skills",
+      "bridgeRole": "skill_api",
+      "runtimeManager": "jbhabcn-skill-manager",
+      "skillCandidate": "jbhabcn-skill-inspection",
+      "followOnSlice": "JBheaven skill inventory plus API health and proof receipts",
+      "aliases": ["JBHABCN", "JBheaven", "Jbheaven", "skill pack"],
+      "requiresUserPresent": false
     }
   },
   {

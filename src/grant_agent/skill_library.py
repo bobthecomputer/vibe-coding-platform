@@ -293,7 +293,7 @@ class SkillLibrary:
                     if state == "prefer"
                     else "Hold this skill back until a better value-scored closeout or validation slice exists."
                     if state == "deprioritize"
-                    else "Collect more operator-value closeouts or mission-slice loss before promoting this skill."
+                    else "Collect more operator-value closeouts or mission-slice gap before promoting this skill."
                 )
                 return {
                     "sliceCount": 0,
@@ -338,11 +338,11 @@ class SkillLibrary:
                 },
                 "selectionPolicy": {
                     "state": "measure",
-                    "reason": "No mission-slice loss has been recorded yet.",
+                    "reason": "No mission-slice gap has been recorded yet.",
                     "selectionWeight": 0,
                 },
                 "operatorValue": operator_value,
-                "nextAction": "Run the skill in a mission slice to collect loss feedback.",
+                "nextAction": "Run the skill in a mission slice to collect gap feedback.",
             }
         records = sorted(records, key=lambda item: str(item.get("createdAt") or item.get("created_at") or ""))
         losses = [
@@ -374,10 +374,10 @@ class SkillLibrary:
         )
         if latest_loss <= 0.15 and latest_improvement >= 0:
             trend = "reinforce"
-            next_action = "Keep using this skill for matching slices; it is lowering loss."
+            next_action = "Keep using this skill for matching slices; it is lowering the measured gap."
             selection_policy = {
                 "state": "prefer",
-                "reason": "Recent mission slices lowered system loss.",
+                "reason": "Recent mission slices lowered the system gap.",
                 "selectionWeight": 24 + min(18, consecutive_reinforce_count * 6),
             }
         elif latest_loss >= 0.55:
@@ -385,7 +385,7 @@ class SkillLibrary:
             next_action = "Review prompt guidance and verification fit before reusing this skill."
             selection_policy = {
                 "state": "deprioritize",
-                "reason": "Recent mission slice produced high system loss.",
+                "reason": "Recent mission slice produced a high system gap.",
                 "selectionWeight": -80 - min(40, consecutive_repair_count * 10),
             }
         else:
@@ -408,7 +408,7 @@ class SkillLibrary:
                 selection_policy["reason"] = "Operator mission closeouts lowered skill trust."
             elif operator_state == "prefer" and trend != "repair":
                 selection_policy["state"] = "prefer"
-                selection_policy["reason"] = "Low system loss and operator-value closeouts both support reuse."
+                selection_policy["reason"] = "Low system gap and operator-value closeouts both support reuse."
         return {
             "sliceCount": len(records),
             "averageSystemLoss": round(sum(losses) / max(len(losses), 1), 3),
@@ -529,7 +529,7 @@ class SkillLibrary:
             "label": label,
             "status": "proposed",
             "reason": (
-                f"Latest mission slice recorded system loss {round(latest_loss, 3)}, "
+                f"Latest mission slice recorded system gap {round(latest_loss, 3)}, "
                 "so reuse is held until a clean validation slice proves the repair."
             ),
             "beforeVerification": {
@@ -929,7 +929,7 @@ class SkillLibrary:
                 "skillId": resolved_skill_id,
                 "status": "error",
                 "error": "repair_proposal_not_found",
-                "nextAction": "Record a high-loss slice so a repair proposal exists before applying it.",
+                "nextAction": "Record a high-gap slice so a repair proposal exists before applying it.",
             }
             self.repair_receipts.append(receipt)
             self._save_repair_receipts()

@@ -28,6 +28,7 @@ from .models import (
 from .execution_truth import derive_execution_target
 from .research import search_workspace
 from .runtimes import runtime_adapter_map
+from .runtimes.base import runtime_subprocess_env
 from .runtime_supervisor import DelegatedRuntimeSupervisor, _pid_alive
 from .safety import risk_level_for_command
 
@@ -61,12 +62,25 @@ PROFILE_EXECUTION_ALIASES = {
     "hands_free_builder": "experimental",
 }
 
-WRITE_HINTS = ("implement", "edit", "update", "patch", "fix", "write", "refactor")
-CREATE_HINTS = ("create", "new file", "draft", "author")
+WRITE_HINTS = (
+    "build",
+    "implement",
+    "edit",
+    "update",
+    "patch",
+    "fix",
+    "repair",
+    "write",
+    "refactor",
+    "prototype",
+    "dashboard",
+    "report",
+)
+CREATE_HINTS = ("create", "new file", "draft", "author", "artifact")
 DELEGATE_HINTS = ("delegate", "runtime lane", "openclaw", "hermes")
 STATUS_HINTS = ("status", "ground", "inspect mutable", "workspace state")
 DIFF_HINTS = ("rollout", "diff", "next iteration", "changed files")
-VERIFY_HINTS = ("verify", "test", "build", "lint", "smoke")
+VERIFY_HINTS = ("verify", "test", "lint", "smoke")
 EXECUTION_TARGET_SCOPE_OVERRIDES = {
     "workspace_root": "direct",
     "isolated_worktree": "isolated",
@@ -357,7 +371,13 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 mutability_class="read",
             )
 
-        if "doc" in lowered or "constraint" in lowered or "review" in lowered:
+        context_hint = bool(
+            re.search(r"\b(doc|docs|documentation|constraint|constraints|review)\b", lowered)
+        )
+        read_step_hint = bool(
+            re.search(r"\b(read|collect|inspect|review|ground|context)\b", step_text)
+        )
+        if context_hint and read_step_hint:
             if target_path.exists():
                 return self._proposal(
                     action_id=action_id,
@@ -537,7 +557,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
             )
 
         if proposal.kind == "runtime_delegate":
-            runtime_id = str(proposal.delegation_metadata.get("runtime_id", "openclaw"))
+            runtime_id = str(proposal.delegation_metadata.get("runtime_id", "hermes"))
             if os.environ.get("FLUXIO_RUNTIME_DELEGATION_MODE") == "local_shim":
                 proof_dir = execution_root / "docs"
                 proof_dir.mkdir(parents=True, exist_ok=True)
@@ -586,8 +606,9 @@ class HybridExecutionAdapter(ExecutionAdapter):
                     ]
                     if "minimax" in delegated_objective.lower():
                         runtime_check_commands.append(
-                            "command -v hermes >/dev/null 2>&1 && timeout 60s hermes --provider minimax-oauth --model MiniMax-M2.7-highspeed -z 'Reply exactly: HERMES_MINIMAX_ROUTE_OK' || true"
+                            "command -v hermes >/dev/null 2>&1 && timeout 60s hermes chat -q 'Reply exactly: HERMES_MINIMAX_ROUTE_OK' -Q --provider minimax-oauth --model MiniMax-M3 || true"
                         )
+                    runtime_env = runtime_subprocess_env(execution_root)
                     for command in runtime_check_commands:
                         try:
                             completed = subprocess.run(  # noqa: S603
@@ -597,6 +618,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                                 capture_output=True,
                                 text=True,
                                 timeout=70,
+                                env=runtime_env,
                                 check=False,
                             )
                             output = (completed.stdout or completed.stderr or "").strip()
@@ -958,7 +980,7 @@ def build_action_proposal(
     objective: str,
     workspace_root: Path,
     verification_commands: list[str],
-    runtime_id: str = "openclaw",
+    runtime_id: str = "hermes",
     execution_scope: ExecutionScope | None = None,
     execution_policy: ExecutionPolicy | None = None,
     route_configs: list[dict] | list[ModelRouteConfig] | None = None,
@@ -1174,7 +1196,6 @@ def _should_delegate_step(text: str, policy: ExecutionPolicy) -> bool:
                 "bridge",
                 "deploy",
                 "handoff",
-                "live review",
                 "runtime lane",
             )
         )

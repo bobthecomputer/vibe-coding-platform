@@ -86,6 +86,36 @@ class RuntimeSupervisorTests(unittest.TestCase):
             self.assertEqual(refreshed.status, "completed")
             self.assertEqual(refreshed.delegated_id, "delegate_stale")
 
+    def test_refresh_session_ignores_additive_session_json_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            supervisor = DelegatedRuntimeSupervisor(root)
+            sessions_dir = root / ".agent_control" / "runtime_sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            session_path = sessions_dir / "delegate_extra.json"
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_extra",
+                        "runtime_id": "hermes",
+                        "launch_command": "hermes chat -q test",
+                        "status": "completed",
+                        "detail": "Completed with diagnostics.",
+                        "session_path": str(session_path),
+                        "exit_code": 0,
+                        "runtime_diagnostics": {"tokens": 12},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            refreshed = supervisor.refresh_session(session_path)
+
+            self.assertEqual(refreshed.status, "completed")
+            self.assertEqual(refreshed.exit_code, 0)
+            self.assertEqual(refreshed.runtime_id, "hermes")
+
     def test_refresh_session_marks_missing_embedded_session_copy_failed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -106,6 +136,109 @@ class RuntimeSupervisorTests(unittest.TestCase):
             self.assertEqual(refreshed.status, "failed")
             self.assertEqual(refreshed.exit_code, -1)
             self.assertIn("inaccessible", refreshed.detail)
+
+    @mock.patch("grant_agent.runtime_supervisor._pid_alive", return_value=False)
+    def test_refresh_session_recovers_completed_log_without_terminal_event(
+        self,
+        _pid_alive_mock: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            supervisor = DelegatedRuntimeSupervisor(root)
+            sessions_dir = root / ".agent_control" / "runtime_sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            session_path = sessions_dir / "delegate_recover.json"
+            log_path = sessions_dir / "delegate_recover.log"
+            events_path = sessions_dir / "delegate_recover.events.jsonl"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "Hermes did useful work",
+                        "Completed.",
+                        "session_id: 20260601_202447_e2d616",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_recover",
+                        "runtime_id": "hermes",
+                        "launch_command": "hermes chat -q test",
+                        "status": "running",
+                        "detail": "Delegated runtime heartbeat: session is healthy.",
+                        "session_path": str(session_path),
+                        "workspace_root": str(root),
+                        "execution_root": str(root),
+                        "log_path": str(log_path),
+                        "events_path": str(events_path),
+                        "pid": 999999,
+                        "supervisor_pid": 999998,
+                        "heartbeat_status": "stale",
+                        "heartbeat_at": "2026-01-01T00:00:00+00:00",
+                        "heartbeat_interval_seconds": 10,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            refreshed = supervisor.refresh_session(str(session_path))
+
+            self.assertEqual(refreshed.status, "completed")
+            self.assertEqual(refreshed.exit_code, 0)
+            self.assertIn("session_id", refreshed.last_event)
+            self.assertIn("terminal_log_completion", events_path.read_text(encoding="utf-8"))
+
+    @mock.patch("grant_agent.runtime_supervisor._pid_alive", return_value=False)
+    def test_refresh_session_marks_recorded_dead_process_failed_even_with_healthy_heartbeat(
+        self,
+        _pid_alive_mock: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            supervisor = DelegatedRuntimeSupervisor(root)
+            sessions_dir = root / ".agent_control" / "runtime_sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            session_path = sessions_dir / "delegate_dead_healthy.json"
+            log_path = sessions_dir / "delegate_dead_healthy.log"
+            events_path = sessions_dir / "delegate_dead_healthy.events.jsonl"
+            log_path.write_text("Delegated runtime started.\n", encoding="utf-8")
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_dead_healthy",
+                        "runtime_id": "hermes",
+                        "launch_command": "hermes chat -q test",
+                        "status": "running",
+                        "detail": "Delegated runtime heartbeat: session is healthy.",
+                        "session_path": str(session_path),
+                        "workspace_root": str(root),
+                        "execution_root": str(root),
+                        "log_path": str(log_path),
+                        "events_path": str(events_path),
+                        "pid": 999999,
+                        "supervisor_pid": 999998,
+                        "heartbeat_status": "healthy",
+                        "heartbeat_at": "2999-01-01T00:00:00+00:00",
+                        "heartbeat_interval_seconds": 10,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            refreshed = supervisor.refresh_session(str(session_path))
+
+            self.assertEqual(refreshed.status, "failed")
+            self.assertEqual(refreshed.exit_code, -1)
+            self.assertIn("disappeared", refreshed.detail)
+            self.assertIn(
+                "recorded_process_missing_without_exit",
+                events_path.read_text(encoding="utf-8"),
+            )
 
     def test_runtime_worker_parses_wsl_bash_lc_without_cmd_shell(self) -> None:
         command = (

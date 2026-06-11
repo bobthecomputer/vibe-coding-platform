@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -62,6 +63,24 @@ function cx(...values) {
 
 function asList(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function artifactRepairCountFromGoalRows(rows) {
+  for (const row of asList(rows)) {
+    const text = [
+      row?.label,
+      row?.title,
+      row?.statusLabel,
+      row?.detail,
+      row?.evidence,
+      row?.nextAction,
+    ]
+      .map(value => String(value || ""))
+      .join(" ");
+    const match = text.match(/\b(\d+)\s+artifact repair mission/i);
+    if (match) return Number(match[1] || 0);
+  }
+  return 0;
 }
 
 function useVirtualWindow(items, { itemHeight = 96, viewportHeight = 440, overscan = 4 } = {}) {
@@ -211,6 +230,278 @@ function isRuntimeOutputAgentMessage(message) {
   );
 }
 
+function isProofArtifactAgentMessage(message) {
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const kind = String(message?.kind || message?.messageKind || "").toLowerCase();
+  const id = String(message?.id || "").toLowerCase();
+  const text = [
+    message?.title,
+    message?.detail,
+    message?.technicalDetail,
+    ...asList(message?.chips),
+  ]
+    .map(value => String(value || "").toLowerCase())
+    .join(" ");
+  return Boolean(
+    kind === "proof" ||
+      kind.includes("artifact") ||
+      label.includes("runtime output artifact") ||
+      label.includes("proof artifact") ||
+      id.includes("runtime-artifact") ||
+      text.includes("mission_artifact_runtime_output") ||
+      text.includes("runtime_output.txt") ||
+      text.includes("nas audit fluxio.live_nas_system_audit_snapshot"),
+  );
+}
+
+function isOperatorFollowUpAgentMessage(message) {
+  if (!message || isProofArtifactAgentMessage(message) || isRuntimeOutputAgentMessage(message)) {
+    return false;
+  }
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const kind = String(message?.kind || message?.messageKind || "").toLowerCase();
+  const id = String(message?.id || "").toLowerCase();
+  const text = [
+    message?.title,
+    message?.detail,
+    message?.message,
+    message?.content,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!text) {
+    return false;
+  }
+  if (isGeneratedContextFollowUpText(text)) {
+    return false;
+  }
+  return Boolean(
+    label === "mission.follow_up" ||
+      label === "operator.followup" ||
+      label === "operator.follow_up" ||
+      label === "operator.message" ||
+      kind === "mission.follow_up" ||
+      kind === "operator.followup" ||
+      kind === "operator.follow_up" ||
+      kind === "operator.message" ||
+      id.includes(":mission.follow_up:") ||
+      id.includes(":operator.followup:"),
+  );
+}
+
+function isGeneratedContextFollowUpText(text) {
+  const normalizedText = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const contextMarkers = [
+    "active rule set:",
+    "workspace:",
+    "workspace path:",
+    "mission context:",
+    "mission id:",
+    "rule intent:",
+    "rule set intent:",
+    "approval-sensitive actions:",
+    "active skills:",
+    "route for ",
+    "runtime focus:",
+    "attachment metadata:",
+    "do not restate this routing/context block",
+  ];
+  const markerCount = contextMarkers.filter(marker => normalizedText.includes(marker)).length;
+  return Boolean(
+    normalizedText.startsWith("you are replying inside fluxio agent live") ||
+    normalizedText.startsWith("you are hermes, the runtime answering a fluxio-selected mission follow-up") ||
+      normalizedText.startsWith("mission context:") ||
+      markerCount >= 2 ||
+      (
+        markerCount >= 1 &&
+        (
+          normalizedText.includes("do not restate this routing/context block") ||
+          normalizedText.includes("provided mission context") ||
+          normalizedText.includes("normal chat behavior")
+        )
+      ) ||
+      normalizedText.startsWith("active rule set:") ||
+      normalizedText.startsWith("workspace:") ||
+      normalizedText.startsWith("workspace path:") ||
+      normalizedText.startsWith("mission id:") ||
+      normalizedText.startsWith("mission:") ||
+      normalizedText.startsWith("rule intent:") ||
+      normalizedText.startsWith("rule set intent:") ||
+      normalizedText.startsWith("rule-set route for") ||
+      normalizedText.startsWith("approval-sensitive actions:") ||
+      normalizedText.startsWith("active skills:") ||
+      normalizedText.startsWith("route preference for") ||
+      normalizedText.startsWith("route for ") ||
+      normalizedText.startsWith("runtime focus:") ||
+      normalizedText.startsWith("runtime preference:") ||
+      normalizedText.startsWith("attachment metadata:") ||
+      normalizedText.startsWith("do not restate this routing/context block"),
+  );
+}
+
+function isVerificationProbeDialogueText(text) {
+  const normalizedText = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return Boolean(
+    normalizedText.startsWith("in one sentence, tell me what you can verify about this fluxio agent live mission thread") ||
+      normalizedText.startsWith("in one sentence, what can you verify about this f1 telemetry agent live thread") ||
+      (
+        normalizedText.startsWith("i can verify") &&
+        normalizedText.includes("hermes cli agent") &&
+        normalizedText.includes("agent live mission thread")
+      ) ||
+      (
+        normalizedText.startsWith("i can verify") &&
+        normalizedText.includes("thread is specifically about f1 telemetry") &&
+        normalizedText.includes("workspace")
+      ) ||
+      (
+        normalizedText.startsWith("i can verify only that this is the first turn of the thread") &&
+        normalizedText.includes("no prior mission state")
+      )
+  );
+}
+
+function isTrustedLiveDialogueSource(message) {
+  const source = String(message?.source || "").trim().toLowerCase();
+  return [
+    "operator-submitted",
+    "backend-model-message",
+    "backend-runtime-reply",
+    "runtime-compartment",
+    "runtime_compartment",
+  ].includes(source);
+}
+
+function hasTrustedRuntimeReply(messages) {
+  return asList(messages).some(message => {
+    const role = String(message?.role || "").toLowerCase();
+    const source = String(message?.source || "").trim().toLowerCase();
+    return role === "assistant" && ["backend-model-message", "backend-runtime-reply", "runtime-compartment", "runtime_compartment"].includes(source);
+  });
+}
+
+function isHermesDialogueReplyAgentMessage(message) {
+  if (!message || isProofArtifactAgentMessage(message) || isRuntimeOutputAgentMessage(message) || isOperatorFollowUpAgentMessage(message)) {
+    return false;
+  }
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const text = String(message?.title || message?.detail || message?.message || message?.content || "").trim();
+  if (!text || text.length < 24 || isVerificationProbeDialogueText(text)) {
+    return false;
+  }
+  if (!(label.includes("hermes runtime output") || label.includes("hermes reply"))) {
+    return false;
+  }
+  if (label.includes("lane_control") || label.includes("lane control")) {
+    return false;
+  }
+  if (/^\s*(?:[-*]|\d+[.)])\s+/.test(text)) {
+    return false;
+  }
+  if (/\b(?:pass|fail|wait|status)\s*:|runtime output:|raw action output|proof_digest|delivery_receipts?|nas audit|python -m|lane control receipt|recorded runtime for planner|\.json\b|\.py\b/i.test(text)) {
+    return false;
+  }
+  return /[.!?]/.test(text);
+}
+
+function isAgentDialogueTurn(message) {
+  if (!message || isProofArtifactAgentMessage(message)) {
+    return false;
+  }
+  const role = String(message?.role || "").toLowerCase();
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const kind = String(message?.kind || message?.messageKind || "").toLowerCase();
+  const text = [
+    message?.title,
+    message?.detail,
+    message?.message,
+    message?.content,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (
+    !text ||
+    isVerificationProbeDialogueText(text) ||
+    isControlRoomBookkeepingAgentMessage(message) ||
+    isSyntheticAgentOverviewMessage(message)
+  ) {
+    return false;
+  }
+  if (isGeneratedContextFollowUpText(text)) {
+    return false;
+  }
+  if (isMissionEventAgentMessage(message)) {
+    return false;
+  }
+  if (message?.source && !isTrustedLiveDialogueSource(message)) {
+    return false;
+  }
+  if (isOperatorFollowUpAgentMessage(message)) {
+    return true;
+  }
+  if (isHermesDialogueReplyAgentMessage(message)) {
+    return true;
+  }
+  if (message?.conversationTurn === true || kind === "dialogue" || kind === "chat") {
+    return true;
+  }
+  if (role === "user" || role === "operator") {
+    return true;
+  }
+  return Boolean(
+    message?.chatPreferred === true &&
+      !message?.traceOnly &&
+      !label.includes("runtime output artifact") &&
+      !label.includes("control-room") &&
+      !label.includes("provider route") &&
+      !label.includes("runtime heartbeat"),
+  );
+}
+
+function isMissionEventAgentMessage(message) {
+  if (!message || isOperatorFollowUpAgentMessage(message) || isHermesDialogueReplyAgentMessage(message)) {
+    return false;
+  }
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const kind = String(message?.kind || message?.messageKind || "").toLowerCase();
+  const title = String(message?.title || "").toLowerCase();
+  const detail = String(message?.detail || message?.message || message?.content || "").toLowerCase();
+  const text = [title, detail].filter(Boolean).join("\n");
+  return Boolean(
+    (label.startsWith("mission.") || kind.startsWith("mission.")) &&
+      !label.includes("follow") &&
+      !kind.includes("follow")
+  ) || Boolean(
+    label.includes("action_history") ||
+      label.includes("runtime evidence") ||
+      label.includes("runtime budget") ||
+      label.includes("resume dispatched") ||
+      title.includes("runtime budget") ||
+      title.includes("resume was dispatched") ||
+      title.includes("recorded hermes runtime evidence") ||
+      text.includes("completed with exit code") ||
+      text.includes("moved to a dedicated isolated task lane")
+  );
+}
+
+function isRuntimeActivityAgentMessage(message) {
+  if (!message || isAgentDialogueTurn(message) || isProofArtifactAgentMessage(message)) {
+    return false;
+  }
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const kind = String(message?.kind || message?.messageKind || "").toLowerCase();
+  return Boolean(
+    kind === "activity" ||
+      label.includes("hermes session transcript") ||
+      label.includes("planner") ||
+      label.includes("runtime") ||
+      message?.processMessage ||
+      message?.technicalDetail,
+  );
+}
+
 function runtimeOutputText(message) {
   const reportSourceText = [
     message?.detail,
@@ -233,10 +524,122 @@ function firstUsefulRuntimeLine(text) {
   return String(text || "")
     .split(/\r?\n/)
     .map(line => line.replace(/^#{1,6}\s*/, "").replace(/^[-*]\s*/, "").trim())
-    .find(line => line && !/^objective\s*:/i.test(line) && !/^triggered by step\s*:/i.test(line)) || "";
+    .find(line =>
+      line &&
+      !/^objective\s*:/i.test(line) &&
+      !/^triggered by step\s*:/i.test(line) &&
+      !/^(what changed|concrete verification|live-only inputs|status|runtime output)\b.*:\s*$/i.test(line)
+    ) || "";
+}
+
+function finalAssistantMessageFromRuntimeOutput(text) {
+  const cleaned = String(text || "")
+    .replace(/^\s*(?:runtime output|raw action output)\s*:\s*/i, "")
+    .replace(/^\s*Mission\s+\S+\s+live runtime output\s*\([^)]+\)\s*/i, "")
+    .trim();
+  if (/^OpenRuntime returned a real result for this mission\b/i.test(cleaned)) {
+    return cleaned;
+  }
+  if (!cleaned || !/(^|\n)\s*(?:artifact|preview url|route)\s*:/i.test(cleaned)) {
+    return "";
+  }
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map(line => line.replace(/^[-*]\s*/, "").trim())
+    .filter(Boolean);
+  const headline =
+    lines.find(line =>
+      !/^(artifact|preview url|route|command|status)\s*:/i.test(line) &&
+        !/^\/volume\d+\//i.test(line) &&
+        !/^https?:\/\//i.test(line) &&
+        !/^\/api\/artifact\b/i.test(line),
+    ) || "";
+  const route = lines.find(line => /^route\s*:/i.test(line)) || "";
+  const facts = lines
+    .filter(line =>
+      line !== headline &&
+      !/^(artifact|preview url|route|command|status)\s*:/i.test(line) &&
+      !/^\/volume\d+\//i.test(line) &&
+      !/^https?:\/\//i.test(line) &&
+      !/^\/api\/artifact\b/i.test(line),
+    )
+    .slice(0, 4);
+  const parts = [];
+  if (headline) {
+    parts.push(`OpenRuntime returned a real result for this mission: ${headline}.`);
+  } else {
+    parts.push("OpenRuntime returned a real result for this mission.");
+  }
+  if (facts.length) {
+    parts.push(`Key output: ${facts.join(" ")}`);
+  }
+  if (route) {
+    parts.push(route);
+  }
+  return parts.join("\n").trim();
+}
+
+function firstMeaningfulNotificationLine(item) {
+  const text = [
+    item?.agentMessage,
+    item?.detail,
+    item?.message,
+    item?.summary,
+    item?.title,
+    item?.headline,
+    item?.label,
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  return text
+    .split(/\r?\n/)
+    .map(line => line.replace(/^#{1,6}\s*/, "").replace(/^[-*]\s*/, "").trim())
+    .find(line =>
+      line &&
+      !/^mission updates?$/i.test(line) &&
+      !/^notification$/i.test(line) &&
+      !/^slice$/i.test(line) &&
+      !/^update$/i.test(line)
+    ) || "";
+}
+
+function sanitizeDisplayTitle(value) {
+  return String(value || "")
+    .replace(/\bsystem-loss\s+improvement\s+mission\b/gi, "system improvement mission")
+    .replace(/\bsystem\s+loss\s+improvement\s+mission\b/gi, "system improvement mission")
+    .replace(/\bsystem-loss\b/gi, "system gap")
+    .replace(/\bsystem\s+loss\b/gi, "system gap");
+}
+
+function referenceNotificationId(item, index = 0) {
+  const baseId = String(
+    item?.id ||
+      item?.notificationId ||
+      item?.eventId ||
+      item?.event_id ||
+      [
+        item?.missionId || item?.mission_id || "control-room",
+        item?.kind || item?.type || "notification",
+        item?.createdAt || item?.timestamp || item?.time || index,
+        item?.title || item?.headline || item?.message || "",
+      ].join(":"),
+  ).trim();
+  return `${baseId || "notification"}:${index}`;
 }
 
 function agentMessageDisplayTitle(message) {
+  if (isHermesDialogueReplyAgentMessage(message)) {
+    const replyText = String(message?.title || message?.detail || message?.message || message?.content || "").trim();
+    return replyText.length > 220 ? `${replyText.slice(0, 217).trim()}...` : replyText || "Hermes reply";
+  }
+  if (isOperatorFollowUpAgentMessage(message)) {
+    const followUpText = String(message?.title || message?.detail || message?.message || message?.content || "")
+      .replace(/^follow-up evidence from codex on\s+.*?z:\s*/i, "")
+      .trim();
+    const firstSentence = followUpText.split(/(?<=[.!?])\s+/)[0] || followUpText;
+    return firstSentence.length > 180 ? `${firstSentence.slice(0, 177).trim()}...` : firstSentence || "Operator follow-up";
+  }
   const runtimeText = runtimeOutputText(message);
   if (runtimeText) {
     const runtimeTitle = firstUsefulRuntimeLine(runtimeText)
@@ -265,6 +668,15 @@ function isControlRoomBookkeepingAgentMessage(message) {
   );
 }
 
+function isRuntimeTranscriptIntegrityWarning(message) {
+  const label = String(message?.label || message?.roleLabel || "").toLowerCase();
+  const title = String(message?.title || "").toLowerCase();
+  return (
+    label.includes("runtime transcript integrity") ||
+    title.includes("hermes session transcript is not attached")
+  );
+}
+
 function isSyntheticAgentOverviewMessage(message) {
   const id = String(message?.id || "").toLowerCase();
   const label = String(message?.label || message?.roleLabel || "").trim().toLowerCase();
@@ -276,7 +688,13 @@ function isSyntheticAgentOverviewMessage(message) {
 }
 
 function isLiveRuntimeReportMessage(message) {
-  if (!message || message.traceOnly || isControlRoomBookkeepingAgentMessage(message) || isSyntheticAgentOverviewMessage(message)) {
+  if (
+    !message ||
+    message.traceOnly ||
+    isControlRoomBookkeepingAgentMessage(message) ||
+    isSyntheticAgentOverviewMessage(message) ||
+    isRuntimeTranscriptIntegrityWarning(message)
+  ) {
     return false;
   }
   const label = String(message?.label || message?.roleLabel || "").toLowerCase();
@@ -367,6 +785,24 @@ function orderedAgentMessagesNewestFirst(messages) {
     .map(item => item.message);
 }
 
+function orderedAgentDialogueChronological(messages) {
+  return asList(messages)
+    .map((message, index) => {
+      const rawTimestamp = message?.createdAt || message?.timestamp || message?.time || message?.updatedAt || "";
+      const parsedTimestamp = rawTimestamp ? Date.parse(rawTimestamp) : Number.NaN;
+      return {
+        message,
+        index,
+        timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : 0,
+      };
+    })
+    .sort((left, right) => {
+      if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+      return left.index - right.index;
+    })
+    .map(item => item.message);
+}
+
 function uniqueRuntimeOutputMessages(messages) {
   const seen = new Set();
   const rows = [];
@@ -387,19 +823,55 @@ function uniqueRuntimeOutputMessages(messages) {
   return rows;
 }
 
+function uniqueAgentDialogueMessages(messages) {
+  const seen = new Set();
+  const rows = [];
+  for (const message of asList(messages)) {
+    const key = [
+      isOperatorFollowUpAgentMessage(message) ? "operator-follow-up" : isHermesDialogueReplyAgentMessage(message) ? "hermes-reply" : message?.role || "",
+      String(message?.label || message?.roleLabel || "").toLowerCase(),
+      String(message?.title || "").replace(/\s+/g, " ").trim().toLowerCase(),
+      String(message?.detail || message?.message || message?.content || "").replace(/\s+/g, " ").trim().toLowerCase(),
+      String(message?.createdAt || message?.timestamp || message?.time || "").slice(0, 19),
+    ]
+      .filter(Boolean)
+      .join(":")
+      .slice(0, 1500);
+    if (key && seen.has(key)) {
+      continue;
+    }
+    if (key) {
+      seen.add(key);
+    }
+    rows.push(message);
+  }
+  return rows;
+}
+
 function visibleAgentMessages(messages, limit = 36, priorityLimit = 8, options = {}) {
   const requireRuntimeReports = Boolean(options?.requireRuntimeReports);
+  const requireTrustedDialogue = Boolean(options?.requireTrustedDialogue);
   const rows = asList(messages).filter(message => !isEmptyBookkeepingAgentMessage(message));
-  const runtimeOutputRows = uniqueRuntimeOutputMessages(rows.filter(isRuntimeOutputAgentMessage));
-  const reportRows = rows.filter(isLiveRuntimeReportMessage);
+  const dialogueRows = uniqueAgentDialogueMessages(
+    rows.filter(message => isAgentDialogueTurn(message) && (!requireTrustedDialogue || isTrustedLiveDialogueSource(message))),
+  );
+  if (dialogueRows.length > 0) {
+    return orderedAgentDialogueChronological(
+      dialogueRows.length <= limit ? dialogueRows : dialogueRows.slice(-limit),
+    );
+  }
+  const runtimeOutputRows = uniqueRuntimeOutputMessages(
+    rows.filter(message => isRuntimeOutputAgentMessage(message) && !isProofArtifactAgentMessage(message)),
+  );
+  const reportRows = rows.filter(message => isLiveRuntimeReportMessage(message) && !isProofArtifactAgentMessage(message));
   const sourceRows = requireRuntimeReports
-    ? (runtimeOutputRows.length > 0 ? runtimeOutputRows : reportRows)
+    ? []
     : runtimeOutputRows.length > 0
       ? runtimeOutputRows
       : reportRows.length > 0
         ? reportRows
         : rows.filter(message => !isControlRoomBookkeepingAgentMessage(message) && !isSyntheticAgentOverviewMessage(message));
-  const priorityRows = runtimeOutputRows.slice(-priorityLimit);
+  const priorityRows = requireRuntimeReports ? [] : runtimeOutputRows.slice(-priorityLimit);
   const seedRows = sourceRows.length <= limit ? sourceRows : sourceRows.slice(-limit);
   const seenKeys = new Set();
   const priorityKeys = new Set(
@@ -471,6 +943,50 @@ function sortLiveBuilderRows(rows) {
     if (blockedDelta) return blockedDelta;
     return 0;
   });
+}
+
+function normalizePhoneMissionRow(item) {
+  if (!item || typeof item !== "object") return null;
+  const missionId = item.id || item.missionId || item.mission_id || "";
+  const status = item.status || item.statusLabel || item?.state?.status || item.planner_loop_status || "live";
+  const progressValue = clampPercent(item.progress ?? item?.liveProgress?.value);
+  const blockerCount =
+    Number(item.blockedCount || 0) +
+    asList(item?.proof?.pending_approvals).length +
+    asList(item?.state?.verification_failures).length;
+  const delegatedLaneCount =
+    Number(item.delegatedLaneCount || item.activeDelegatedLaneCount || item.delegatedLaneCount || 0) ||
+    asList(item.delegated_runtime_sessions).filter(session =>
+      !["completed", "failed", "stopped"].includes(String(session?.status || "").toLowerCase()),
+    ).length;
+  return {
+    ...item,
+    id: missionId,
+    missionId,
+    name: item.name || item.title || item.objective || missionId || "Live mission",
+    title: item.title || item.name || item.objective || missionId || "Live mission",
+    status,
+    statusLabel: item.statusLabel || status,
+    progress: progressValue == null ? item.progress || item?.liveProgress?.value || null : `${progressValue}%`,
+    runtime: item.runtime || item.runtime_id || item.runtimeId || "",
+    runtimeId: item.runtimeId || item.runtime_id || item.runtime || "",
+    turningPoint:
+      item.turningPoint ||
+      item?.liveProgress?.nextAction ||
+      item.nextAction ||
+      item.summary ||
+      item.description ||
+      "",
+    detail:
+      item.detail ||
+      item.summary ||
+      item.description ||
+      item?.proof?.summary ||
+      item?.liveProgress?.label ||
+      "",
+    delegatedLaneCount,
+    blockedCount: blockerCount,
+  };
 }
 
 function isRealChangedItem(item) {
@@ -746,6 +1262,36 @@ function isMissionPreviewUrl(value) {
   return true;
 }
 
+function isLocalEmbeddablePreviewUrl(value) {
+  const source = String(value || "").trim();
+  if (!isEmbeddablePreviewUrl(source)) return false;
+    if (/^(data:|blob:|\/api\/artifact\b)/i.test(source)) return true;
+    if (/^\/(?!\/)/.test(source)) {
+      return !/^\/control(?:[/?#]|$)/i.test(source);
+    }
+    if (!/^https?:\/\//i.test(source)) return false;
+    try {
+      const parsed = new URL(source);
+      const host = parsed.hostname.toLowerCase();
+      const currentHost = String(globalThis.window?.location?.hostname || "").toLowerCase();
+      if (host === currentHost && /^\/control(?:[/?#]|$)/i.test(parsed.pathname)) {
+        return false;
+      }
+      return (
+        host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      (currentHost && host === currentHost)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isWorkbenchPreviewFrameUrl(value) {
+  return isMissionPreviewUrl(value) || isLocalEmbeddablePreviewUrl(value);
+}
+
 function previewUrlCandidatesForMessage(message) {
   if (!message || typeof message !== "object") return [];
   return [
@@ -998,6 +1544,7 @@ function FlowSidebar({
           aria-label="New conversation"
           className="reference-search-shell-new"
           onClick={() => onRequestAction?.("flow:new-conversation")}
+          title="Start new conversation"
           type="button"
         >
           <Edit3 size={15} strokeWidth={1.9} />
@@ -1325,7 +1872,7 @@ function WorkbenchSurface({ workbenchState, onRequestAction, onSetSurface }) {
       return {
         key: "empty",
         tone: "neutral",
-        title: "Computer-use is not configured yet",
+        title: "Computer-use needs a live lane",
         body: "Connect a runtime lane to enable browser/desktop handoff and live task execution.",
         actions: [
           { id: "workbench:computer-use", label: "Open control lane" },
@@ -1724,6 +2271,24 @@ function WorkbenchSurface({ workbenchState, onRequestAction, onSetSurface }) {
                       type="button"
                     >
                       Marker context
+                    </button>
+                  </div>
+                </div>
+                <div className="builder-live-review-sidegroup" aria-label="Live evidence">
+                  <span>Live evidence</span>
+                  <p className="reference-surface-footnote">Runtime, artifacts, Hermes, NAS</p>
+                  <div className="reference-inline-actions compact">
+                    <button className="reference-outline-button" onClick={() => onRequestAction?.("live:evidence:runtime")} type="button">
+                      Runtime
+                    </button>
+                    <button className="reference-outline-button" onClick={() => onRequestAction?.("live:evidence:images")} type="button">
+                      Artifacts
+                    </button>
+                    <button className="reference-outline-button" onClick={() => onRequestAction?.("live:evidence:hermes")} type="button">
+                      Hermes
+                    </button>
+                    <button className="reference-outline-button" onClick={() => onRequestAction?.("live:evidence:nas")} type="button">
+                      NAS
                     </button>
                   </div>
                 </div>
@@ -2138,6 +2703,18 @@ function LiveOperationsBrief({
     return null;
   }
   const progressValue = clampPercent(workbenchState?.progress?.value);
+  const progressKind = String(workbenchState?.progress?.progressKind || "").trim();
+  const progressLabel = String(workbenchState?.progress?.label || "").trim();
+  const progressIsCompletion = workbenchState?.progress?.displayAsCompletion !== false;
+  const progressStateLabel =
+    progressLabel ||
+    (progressKind === "runtime_budget_exhausted"
+      ? "Runtime budget exhausted"
+      : progressKind === "proof_repair"
+        ? "Proof repair readiness"
+        : progressIsCompletion
+          ? "Progress"
+          : "Non-completion progress");
   const visibleThreadRows = asList(threadRows).filter(item => !isLowSignalAgentMessage(item)).slice(0, 3);
   const latestThreadRow =
     visibleThreadRows[0] ||
@@ -2150,11 +2727,20 @@ function LiveOperationsBrief({
   const topQueueRow = queueRows[0] || null;
   const activeCount = Number(liveDataStatus?.activeMissionCount || activeRows.length || 0);
   const runningCount = Number(liveDataStatus?.runningMissionCount || 0);
+  const attentionCount = Math.max(0, activeCount - runningCount);
   const notificationCount = Number(liveDataStatus?.notificationCount || 0);
   const sliceNotificationCount = Number(liveDataStatus?.sliceNotificationCount || 0);
   const latestDetail = latestThreadRow
     ? agentPreviewDetail(latestThreadRow)
     : workbenchState?.progress?.nextAction || "Waiting for the next live mission update.";
+  const compactLatestDetail = String(latestDetail || "")
+    .replace(/^Runtime output:\s*/i, "")
+    .replace(/^#+\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const briefDetail = compactLatestDetail.length > 210
+    ? `${compactLatestDetail.slice(0, 207).trim()}...`
+    : compactLatestDetail;
   const sourceLabel = liveDataStatus?.summaryCache?.status === "hit"
     ? "warm NAS summary"
     : liveDataStatus?.source || "control-room summary";
@@ -2163,16 +2749,21 @@ function LiveOperationsBrief({
       <div className="fluxos-live-brief-main">
         <span>{sourceLabel}</span>
         <strong>{workbenchState?.missionTitle || `${activeCount} active live mission${activeCount === 1 ? "" : "s"}`}</strong>
-        <p>{latestDetail}</p>
+        <p title={compactLatestDetail}>{briefDetail}</p>
       </div>
       <div className="fluxos-live-brief-metrics">
-        <div>
-          <span>Progress</span>
+        <div
+          className={!progressIsCompletion ? "non-completion-progress" : ""}
+          data-brief-progress-kind={progressKind || undefined}
+        >
+          <span>{progressIsCompletion ? "Progress" : "State"}</span>
           <strong>{progressValue == null ? "No %" : `${progressValue}%`}</strong>
+          <em>{progressStateLabel}</em>
         </div>
         <div>
-          <span>Running</span>
-          <strong>{runningCount}</strong>
+          <span>Active</span>
+          <strong>{activeCount}</strong>
+          <em>{runningCount ? `${runningCount} running` : `${attentionCount} attention`}</em>
         </div>
         <div>
           <span>Queue</span>
@@ -2466,2820 +3057,6 @@ function SlashCommandPanel({ className, commands = [], draft = "", onUseCommand 
   );
 }
 
-function AgentIdleSurface(props) {
-  const {
-    draft,
-    onUseSlashCommand,
-    selectedRuntime,
-    runtimeOptions,
-    runtimeStatus,
-    selectedModelLabel,
-    selectedEffortLabel,
-    selectedHarnessMeta = [],
-    slashCommands = [],
-    onAttach,
-    onChangeDraft,
-    onDictation,
-    onIdleSubmit,
-    onRequestAction,
-    onPaste,
-    onRuntimeChange,
-    routeControls = {},
-  } = props;
-  const showSlashCommands = String(draft || "").trim().startsWith("/");
-  const selectedRoute = routeControls.selectedRoute || {};
-  const routeOptions = routeControls.routeOptions || {};
-  const actionModes = routeControls.actionModes || [];
-  const routeRows = asList(routeOptions.roles).map(role => ({
-    role,
-    route:
-      routeControls.routeByRole?.[role] ||
-      (role === routeControls.role ? selectedRoute : null) ||
-      {},
-  }));
-
-  return (
-    <section className="reference-agent-idle">
-      <div className="reference-surface-intro">
-        <h1>What are we working on today?</h1>
-        <p>Describe your task or ask anything.</p>
-      </div>
-
-      <ComposerDock
-        draft={draft}
-        onAttach={onAttach}
-        onChangeDraft={onChangeDraft}
-        onDictation={onDictation}
-        onPaste={onPaste}
-        onSubmit={onIdleSubmit}
-        placeholder="Ask your agent anything..."
-      >
-        {actionModes.length > 0 ? (
-          <div className="reference-mode-strip" aria-label="Run mode">
-            {actionModes.map(option => (
-              <button
-                className={routeControls.actionMode === option.value ? "active" : ""}
-                key={`composer-mode-${option.value}`}
-                onClick={() => routeControls.onActionModeChange?.(option.value)}
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {showSlashCommands ? (
-          <SlashCommandPanel
-            className="in-composer"
-            commands={slashCommands}
-            draft={draft}
-            onUseCommand={onUseSlashCommand}
-          />
-        ) : null}
-      </ComposerDock>
-
-      <div className="reference-config-grid compact">
-        <ConfigCard
-          accent="neutral"
-          copy={runtimeStatus?.detected ? "Work engine ready for launch." : "Syntelos checks this automatically before the first run."}
-          title="Work engine"
-          titleIcon={WandSparkles}
-        >
-          <label className="reference-select-shell">
-            <select onChange={event => onRuntimeChange(event.target.value)} value={selectedRuntime}>
-              {runtimeOptions.map(option => (
-                <option key={`idle-runtime-${option.value}`} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selectedHarnessMeta.length > 0 ? (
-            <div className="reference-card-metric-stack">
-              {selectedHarnessMeta.map(item => (
-                <MetricLine key={`${item.label}-${item.value}`} label={item.label} value={item.value} />
-              ))}
-            </div>
-          ) : null}
-        </ConfigCard>
-
-        <ConfigCard
-          accent="neutral"
-          copy="Planner, executor, and verifier roles route automatically by phase. You only tune provider/model per role."
-          title="Model Routes"
-          titleIcon={Bot}
-        >
-          <div className="reference-route-matrix compact">
-            {routeRows.map(({ role, route }) => (
-              <article className={routeControls.role === role ? "active" : ""} key={`route-row-${role}`}>
-                <button onClick={() => routeControls.onRoleChange?.(role)} type="button">
-                  {titleizeToken(role)}
-                </button>
-                <select
-                  aria-label={`${role} provider`}
-                  onChange={event => routeControls.onRoleFieldChange?.(role, "provider", event.target.value)}
-                  value={route.provider || "openai"}
-                >
-                  {asList(routeOptions.providers).map(option => (
-                    <option key={`${role}-provider-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label={`${role} model`}
-                  onChange={event => routeControls.onRoleFieldChange?.(role, "model", event.target.value)}
-                  value={route.model || ""}
-                >
-                  <option value="">Provider default</option>
-                  {asList(routeOptions.models).map(option => (
-                    <option key={`${role}-model-${option}`} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label={`${role} effort`}
-                  onChange={event => routeControls.onRoleFieldChange?.(role, "effort", event.target.value)}
-                  value={route.effort || "default"}
-                >
-                  {asList(routeOptions.efforts).map(option => (
-                    <option key={`${role}-effort-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </article>
-            ))}
-          </div>
-        </ConfigCard>
-
-        {actionModes.length > 0 ? (
-          <ConfigCard
-            accent="neutral"
-            copy="The arrow follows this mode. Auto keeps short greetings/questions as chat and opens a mission for larger work."
-            title="Run Mode"
-            titleIcon={Sparkles}
-          >
-            <div className="reference-card-control-stack">
-              <div className="reference-mode-strip vertical" aria-label="Run mode">
-                {actionModes.map(option => (
-                  <button
-                    className={routeControls.actionMode === option.value ? "active" : ""}
-                    key={`card-mode-${option.value}`}
-                    onClick={() => routeControls.onActionModeChange?.(option.value)}
-                    type="button"
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <button className="reference-link-button strong" onClick={() => routeControls.onSave?.()} type="button">
-                Save routes
-              </button>
-            </div>
-          </ConfigCard>
-        ) : null}
-
-        <ConfigCard
-          accent="neutral"
-          copy={`${selectedEffortLabel} · ${selectedModelLabel}`}
-          title="Rules"
-          titleIcon={BookOpen}
-          footer={(
-            <button
-              className="reference-link-button"
-              onClick={() => onRequestAction?.("idle:advanced-settings")}
-              type="button"
-            >
-              Advanced settings
-            </button>
-          )}
-        >
-          <div className="reference-card-control-stack">
-            <div className="reference-pill-select">Project Rules</div>
-            <button className="reference-link-button" onClick={() => routeControls.onToggleCodeExecution?.()} type="button">
-              Code execution {routeControls.codeExecutionEnabled ? `on (${routeControls.codeExecutionMemory})` : "off"}
-            </button>
-          </div>
-        </ConfigCard>
-      </div>
-
-      <div className="reference-agent-support-grid single">
-        <article className="reference-support-panel">
-          <div className="reference-builder-section-head">
-            <div>
-              <strong>{runtimeStatus?.label || "Selected work engine"}</strong>
-              <span>
-                {runtimeStatus?.doctor_summary ||
-                  runtimeStatus?.doctorSummary ||
-                  "Readiness appears here after Syntelos checks setup."}
-              </span>
-            </div>
-            <StatusBadge
-              label={runtimeStatus?.detected ? "Ready" : "Not detected"}
-              tone={runtimeStatus?.detected ? "completed" : "paused"}
-            />
-          </div>
-          <RuntimeCapabilityPills capabilities={asList(runtimeStatus?.capabilities)} />
-        </article>
-      </div>
-
-      <div className="reference-idle-footer">
-        <button
-          className="reference-reset-button"
-          onClick={() => onRequestAction?.("idle:reset-defaults")}
-          type="button"
-        >
-          <RefreshCw size={16} strokeWidth={1.9} />
-          <span>Reset to defaults</span>
-        </button>
-        <p>Syntelos can make mistakes. Please verify important information.</p>
-      </div>
-    </section>
-  );
-}
-
-function StepState({ label, done = false, pending = false }) {
-  return (
-    <div className="reference-step-state">
-      {done ? (
-        <CircleCheckBig className="done" size={16} strokeWidth={2.2} />
-      ) : (
-        <CircleDashed className={pending ? "pending" : ""} size={16} strokeWidth={2.2} />
-      )}
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function AgentRunningSurface(props) {
-  const {
-    activeCommentTarget = null,
-    conversationMode = "chat",
-    draft,
-    feedbackItems = [],
-    generatedImageArtifacts = [],
-    hermesEvidenceItems = [],
-    missionLoop,
-    messages = [],
-    nasDeployChecks = [],
-    onUseSlashCommand,
-    runtimeCompartment = null,
-    selectedRuntime,
-    selectedRuntimeLabel,
-    selectedModelLabel,
-    selectedEffortLabel,
-    slashCommands = [],
-    timelineMoments = [],
-    workbenchState = null,
-    onAttach,
-    onChangeDraft,
-    onDictation,
-    onPaste,
-    onRequestAction,
-    onRuntimeChange,
-    runtimeOptions = [],
-    routeControls = {},
-    onSend,
-  } = props;
-  const [detailTab, setDetailTab] = useState("feedback");
-  const [showTraceDetail, setShowTraceDetail] = useState(false);
-  const processMoments = timelineMoments.slice(-4);
-  const renderedMessages = messages.length > 0 ? messages : [];
-  const transcriptWindow = useVirtualWindow(renderedMessages, {
-    itemHeight: 176,
-    viewportHeight: 620,
-    overscan: 6,
-  });
-  const transcriptVirtualized = transcriptWindow.totalCount > 32;
-  const transcriptRows = transcriptVirtualized ? transcriptWindow.items : renderedMessages;
-  const showMissionPanels = conversationMode === "mission" || Boolean(missionLoop);
-  const showSlashCommands = String(draft || "").trim().startsWith("/");
-  const selectedRoute = routeControls.selectedRoute || {};
-  const activeMissionId =
-    workbenchState?.missionId ||
-    missionLoop?.missionId ||
-    missionLoop?.mission_id ||
-    "";
-  const activeRuntimeId =
-    selectedRuntime ||
-    runtimeCompartment?.runtime ||
-    missionLoop?.runtimeId ||
-    missionLoop?.runtime_id ||
-    "";
-  const routeOptions = routeControls.routeOptions || {};
-  const actionModes = routeControls.actionModes || [];
-  const runtimeSelectOptions = runtimeOptions.length > 0
-    ? runtimeOptions
-    : [{ value: selectedRuntime, label: selectedRuntimeLabel }];
-  const delegatedLanes = asList(
-    missionLoop?.delegatedRuntimeSessions || missionLoop?.delegated_runtime_sessions || missionLoop?.lanes,
-  );
-  const runtimeModeLabel =
-    missionLoop?.approvalMode === "hands_free" || routeControls.actionMode === "mission"
-      ? "Hands-free"
-      : "Supervised";
-  const checkpointSummary =
-    missionLoop?.checkpointSummary || missionLoop?.continuityDetail || missionLoop?.continuityState || "No checkpoint yet";
-  const lazyProofArtifactPageSize = 4;
-  const lazyHermesEvidencePageSize = 5;
-  const [generatedArtifactPage, setGeneratedArtifactPage] = useState(1);
-  const [hermesEvidencePage, setHermesEvidencePage] = useState(1);
-  const artifactItems = asList(missionLoop?.artifacts || missionLoop?.proofArtifacts || missionLoop?.proof_artifacts).slice(0, 3);
-  const diffSummary = missionLoop?.diffSummary || missionLoop?.gitDiffSummary || missionLoop?.workspaceDiffSummary || "Diff pending";
-  const compartmentEvents = asList(runtimeCompartment?.toolTimeline).slice(-5);
-  const compartmentFiles = asList(runtimeCompartment?.filesChanged).slice(0, 5);
-  const compartmentApprovals = asList(runtimeCompartment?.approvals).slice(0, 3);
-  const generatedArtifactRows = asList(generatedImageArtifacts);
-  const hermesEvidenceRows = asList(hermesEvidenceItems);
-  const visibleGeneratedArtifacts = generatedArtifactRows.slice(
-    0,
-    generatedArtifactPage * lazyProofArtifactPageSize,
-  );
-  const visibleHermesEvidence = hermesEvidenceRows.slice(
-    0,
-    hermesEvidencePage * lazyHermesEvidencePageSize,
-  );
-  const visibleNasChecks = asList(nasDeployChecks).slice(0, 6);
-  const [workbenchTab, setWorkbenchTab] = useState("browser");
-  const workbenchTabs = [
-    { id: "browser", label: "Browser" },
-    { id: "snapshot", label: "UI Snapshot" },
-    { id: "terminal", label: "Terminal" },
-    { id: "diff", label: "Diff" },
-    { id: "files", label: `Files (${compartmentFiles.length})` },
-    { id: "control", label: "Computer Control" },
-  ];
-  const [diagnosticNowMs, setDiagnosticNowMs] = useState(() => Date.now());
-  const messageDiagnostics = useMemo(() => {
-    return renderedMessages.map((item, index) => {
-      const createdAtMs = parseTimeMs(item.createdAt);
-      const pendingMs = item.pending && createdAtMs > 0 ? Math.max(0, diagnosticNowMs - createdAtMs) : 0;
-      const latencyMs = !item.pending ? extractLatencyMsFromMessage(item) : 0;
-      return {
-        id: item.id,
-        pendingMs,
-        latencyMs,
-        contradiction: detectPotentialContradiction(renderedMessages, index),
-      };
-    });
-  }, [diagnosticNowMs, renderedMessages]);
-  const messageDiagnosticsById = useMemo(
-    () => new Map(messageDiagnostics.map(entry => [entry.id, entry])),
-    [messageDiagnostics],
-  );
-  const runMessageEntries = useMemo(
-    () =>
-      renderedMessages.map((item, index) => ({
-        item,
-        key: stableAgentMessageKey(item, `reference-run-message-${index}`),
-      })),
-    [renderedMessages],
-  );
-  const runMessageKeySignature = runMessageEntries.map(entry => entry.key).join("|");
-  const [selectedRunMessageId, setSelectedRunMessageId] = useState("");
-  const runMessageScopeRef = useRef("");
-  const selectedRunMessageScope = [
-    conversationMode,
-    activeMissionId,
-    activeRuntimeId,
-    runMessageKeySignature,
-  ].join(":");
-  useEffect(() => {
-    setSelectedRunMessageId(current => {
-      const scopeChanged = runMessageScopeRef.current !== selectedRunMessageScope;
-      runMessageScopeRef.current = selectedRunMessageScope;
-      const currentEntry = current ? runMessageEntries.find(entry => entry.key === current) : null;
-      if (!scopeChanged && currentEntry) {
-        return current;
-      }
-      const runtimeReport =
-        [...runMessageEntries].reverse().find(entry => isRuntimeOutputAgentMessage(entry.item) || isLiveRuntimeReportMessage(entry.item)) ||
-        null;
-      const meaningful =
-        runtimeReport ||
-        [...runMessageEntries].reverse().find(entry => isMeaningfulDefaultAgentMessage(entry.item)) ||
-        runMessageEntries[runMessageEntries.length - 1] ||
-        null;
-      return meaningful?.key || "";
-    });
-  }, [runMessageEntries, selectedRunMessageScope]);
-  const selectedRunMessageEntry = runMessageEntries.find(entry => entry.key === selectedRunMessageId) || null;
-  const selectedRunMessage = selectedRunMessageEntry?.item || null;
-  const selectedRunMessageBody = selectedRunMessage ? agentMessageDisplayDetail(selectedRunMessage) : "";
-  const selectedRunMessageMeta = [
-    selectedRunMessage?.label || selectedRunMessage?.roleLabel || "",
-    selectedRunMessage?.runtimeId || activeRuntimeId || "",
-    selectedRunMessage?.meta || selectedRunMessage?.createdAt || "",
-  ].filter(Boolean).join(" · ");
-  const selectRunMessage = useCallback((messageKey, event = null) => {
-    if (eventTargetIsInteractive(event)) {
-      return;
-    }
-    const normalizedMessageKey = String(messageKey || "").trim();
-    if (!normalizedMessageKey) {
-      return;
-    }
-    setSelectedRunMessageId(normalizedMessageKey);
-  }, []);
-  const handleRunMessageKeyDown = useCallback((event, messageKey) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      selectRunMessage(messageKey, null);
-    }
-  }, [selectRunMessage]);
-  const pendingMessageCount = useMemo(
-    () => messageDiagnostics.filter(entry => entry.pendingMs > 0).length,
-    [messageDiagnostics],
-  );
-  const contradictionCount = useMemo(
-    () => messageDiagnostics.filter(entry => Boolean(entry.contradiction)).length,
-    [messageDiagnostics],
-  );
-  const latestLatencyMs = useMemo(() => {
-    for (let index = messageDiagnostics.length - 1; index >= 0; index -= 1) {
-      if (messageDiagnostics[index].latencyMs > 0) {
-        return messageDiagnostics[index].latencyMs;
-      }
-    }
-    return 0;
-  }, [messageDiagnostics]);
-  useEffect(() => {
-    if (pendingMessageCount <= 0) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      setDiagnosticNowMs(Date.now());
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [pendingMessageCount]);
-
-  if (!showMissionPanels) {
-    return (
-      <section className={cx("reference-agent-run", "mode-chat", "reference-agent-pro-chat")}>
-        <div className="reference-chat-workbench">
-          <section className="reference-chat-panel">
-            <header className="reference-chat-session-head">
-              <div>
-                <strong>{selectedRoute.model || selectedModelLabel || "Conversation"}</strong>
-                <p>
-                  Provider: {selectedRoute.provider || runtimeCompartment?.route?.provider || "openai-codex"}
-                  {"  "} Model: {selectedRoute.model || runtimeCompartment?.route?.model || selectedModelLabel}
-                  {"  "} Route: {selectedRoute.role || "primary"}
-                </p>
-                <div className="reference-chat-health-strip" aria-label="Conversation diagnostics">
-                  <span className={cx("reference-health-pill", pendingMessageCount > 0 && "is-live")}>
-                    {pendingMessageCount > 0
-                      ? `Thinking: ${pendingMessageCount}`
-                      : "Thinking: idle"}
-                  </span>
-                  <span className="reference-health-pill">
-                    {latestLatencyMs > 0
-                      ? `Last response: ${formatElapsedDuration(latestLatencyMs)}`
-                      : "Last response: n/a"}
-                  </span>
-                  <span className={cx("reference-health-pill", contradictionCount > 0 ? "is-warn" : "is-good")}>
-                    {contradictionCount > 0
-                      ? `Consistency watch: ${contradictionCount} flagged`
-                      : "Consistency watch: clear"}
-                  </span>
-                  <span className="reference-health-pill">
-                    {transcriptVirtualized
-                      ? `Virtualized transcript: ${transcriptWindow.items.length}/${transcriptWindow.totalCount}`
-                      : `Transcript: ${renderedMessages.length}`}
-                  </span>
-                </div>
-              </div>
-              <span className={cx("reference-session-state", runtimeCompartment?.streaming === "live" && "live")}>
-                {runtimeCompartment?.streaming === "live" ? "Live" : "Recorded"}
-              </span>
-            </header>
-
-            <div
-              className={cx("reference-chat-thread-canvas", transcriptVirtualized && "virtualized")}
-              onScroll={transcriptVirtualized ? transcriptWindow.onScroll : undefined}
-              style={transcriptVirtualized ? { maxHeight: transcriptWindow.viewportHeight } : undefined}
-            >
-              {renderedMessages.length === 0 ? (
-                <article className="reference-conversation-blank">
-                  <strong>New conversation</strong>
-                  <p>Send a message to begin a direct chat with Hermes.</p>
-                  <button
-                    className="reference-black-button"
-                    onClick={() => onRequestAction?.("flow:new-conversation")}
-                    type="button"
-                  >
-                    Start new conversation
-                  </button>
-                </article>
-              ) : null}
-
-              {transcriptVirtualized && transcriptWindow.topPadding > 0 ? (
-                <div
-                  aria-hidden="true"
-                  className="reference-chat-virtual-spacer"
-                  style={{ height: transcriptWindow.topPadding }}
-                />
-              ) : null}
-
-              {transcriptRows.map(item => {
-                const diagnostics = messageDiagnosticsById.get(item.id) || {};
-                const contradictionSignal = diagnostics.contradiction || null;
-                if (item.role === "user") {
-                  return (
-                    <div
-                      className="reference-user-bubble"
-                      data-mission-id={item.missionId || activeMissionId}
-                      data-runtime-id={item.runtimeId || activeRuntimeId}
-                      data-turn-id={item.id}
-                      key={item.id}
-                    >
-                      <p>{item.title}</p>
-                      <span>{item.meta || "Now"}</span>
-                    </div>
-                  );
-                }
-                return (
-                  <div
-                    className={cx("reference-agent-thread", item.pending ? "is-pending" : "")}
-                    data-mission-id={item.missionId || activeMissionId}
-                    data-runtime-id={item.runtimeId || activeRuntimeId}
-                    data-turn-id={item.id}
-                    key={item.id}
-                  >
-                    <div className="reference-agent-avatar">
-                      <div className="reference-brand-mark tiny">
-                        <span />
-                        <span />
-                        <span />
-                      </div>
-                    </div>
-                    <div className="reference-agent-thread-body">
-                      <p className="reference-thread-lead">
-                        {item.pending ? <CircleDashed className="pending" size={16} strokeWidth={2.1} /> : null}
-                        <span>{item.title}</span>
-                        {item.pending && diagnostics.pendingMs > 0 ? (
-                          <span className="reference-diagnostic-pill is-live">
-                            Thinking {formatElapsedDuration(diagnostics.pendingMs)}
-                          </span>
-                        ) : null}
-                        {!item.pending && diagnostics.latencyMs > 0 ? (
-                          <span className="reference-diagnostic-pill">
-                            Responded {formatElapsedDuration(diagnostics.latencyMs)}
-                          </span>
-                        ) : null}
-                        {contradictionSignal ? (
-                          <span className="reference-diagnostic-pill is-warn">Possible contradiction</span>
-                        ) : null}
-                      </p>
-                      {contradictionSignal ? (
-                        <div className="reference-contradiction-callout">
-                          <strong>Consistency signal</strong>
-                          <p>
-                            Potential contradiction with an earlier assistant message on:{" "}
-                            {contradictionSignal.subject || "shared context"}.
-                          </p>
-                        </div>
-                      ) : null}
-                      {item.detail || item.technicalDetail || item.chips?.length ? (
-                        <article className={cx("reference-report-panel compact", item.technicalDetail && !item.detail ? "trace-only" : "")}>
-                          {item.detail ? <p>{item.detail}</p> : null}
-                          {item.technicalDetail ? (
-                            <details className="reference-inline-trace">
-                              <summary>Route detail</summary>
-                              <p>{item.technicalDetail}</p>
-                            </details>
-                          ) : null}
-                          {item.chips?.length ? (
-                            <div className="reference-chip-row">
-                              {item.chips.map(chip => (
-                                <span className="reference-mini-pill" key={`${item.id}-${chip}`}>
-                                  {chip}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          <div className="reference-report-foot">
-                            <div className="reference-report-actions">
-                              <button onClick={() => onRequestAction?.("run:message-copy", { messageId: item.id })} type="button">Copy</button>
-                              <button onClick={() => onRequestAction?.("run:message-comment", { messageId: item.id })} type="button">Comment</button>
-                              <button onClick={() => onRequestAction?.("run:message-retry", { messageId: item.id })} type="button">Retry</button>
-                            </div>
-                            <span>{item.meta || "Now"}</span>
-                          </div>
-                        </article>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
-              {transcriptVirtualized && transcriptWindow.bottomPadding > 0 ? (
-                <div
-                  aria-hidden="true"
-                  className="reference-chat-virtual-spacer"
-                  style={{ height: transcriptWindow.bottomPadding }}
-                />
-              ) : null}
-            </div>
-
-            <ComposerDock
-              compact
-              draft={draft}
-              onAttach={onAttach}
-              onChangeDraft={onChangeDraft}
-              onDictation={onDictation}
-              onPaste={onPaste}
-              onSubmit={onSend}
-              placeholder="Message Hermes..."
-            >
-              {showSlashCommands ? (
-                <SlashCommandPanel
-                  className="in-composer"
-                  commands={slashCommands}
-                  draft={draft}
-                  onUseCommand={onUseSlashCommand}
-                />
-              ) : null}
-            </ComposerDock>
-          </section>
-
-          <aside className="reference-workbench-side">
-            <div className="reference-workbench-tabs">
-              {workbenchTabs.map(tab => (
-                <button
-                  className={workbenchTab === tab.id ? "active" : ""}
-                  key={tab.id}
-                  onClick={() => setWorkbenchTab(tab.id)}
-                  type="button"
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-            <div className="reference-workbench-url">
-              <span>{runtimeCompartment?.cwd || "workspace://current"}</span>
-              <b>{runtimeCompartment?.streaming === "live" ? "Live" : "Idle"}</b>
-            </div>
-            <div className="reference-workbench-canvas">
-              {workbenchTab === "browser" || workbenchTab === "snapshot" ? (
-                <article className="reference-workbench-card">
-                  <h4>Overview</h4>
-                  <p>Session: {runtimeCompartment?.sessionId || "pending"}</p>
-                  <p>Host: {runtimeCompartment?.host || "local"}</p>
-                  <p>Runtime: {titleizeToken(runtimeCompartment?.runtime || selectedRuntime)}</p>
-                  <p>Model: {runtimeCompartment?.route?.model || selectedRoute.model || selectedModelLabel}</p>
-                </article>
-              ) : null}
-              {workbenchTab === "terminal" ? (
-                <article className="reference-workbench-card">
-                  <h4>Runtime terminal</h4>
-                  <p>{compartmentEvents[compartmentEvents.length - 1]?.summary || "No terminal events yet."}</p>
-                </article>
-              ) : null}
-              {workbenchTab === "diff" ? (
-                <article className="reference-workbench-card">
-                  <h4>Diff summary</h4>
-                  <p>{processMoments[processMoments.length - 1]?.detail || "No diff summary reported yet."}</p>
-                </article>
-              ) : null}
-              {workbenchTab === "files" ? (
-                <article className="reference-workbench-card">
-                  <h4>Files changed</h4>
-                  {compartmentFiles.length ? (
-                    <ul>
-                      {compartmentFiles.map(file => <li key={`workbench-file-${file}`}>{file}</li>)}
-                    </ul>
-                  ) : (
-                    <p>No file receipts yet (chat replies can be read-only).</p>
-                  )}
-                </article>
-              ) : null}
-              {workbenchTab === "control" ? (
-                <article className="reference-workbench-card">
-                  <h4>Computer control</h4>
-                  <p>{runtimeCompartment?.restartControls?.canResume ? "Resume available" : "No resume control exposed yet."}</p>
-                </article>
-              ) : null}
-            </div>
-            <div className="reference-workbench-annotations">
-              <div className="reference-workbench-annotations-head">
-                <span>Annotations</span>
-                <b>{feedbackItems.length}</b>
-              </div>
-              {feedbackItems.slice(0, 3).map(item => (
-                <article className="reference-workbench-annotation" key={`annotation-${item.id}`}>
-                  <strong>{item.author}</strong>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-          </aside>
-        </div>
-
-        <section className="reference-runtime-dock">
-          <article className="reference-runtime-card">
-            <h4>Tool calls</h4>
-            <ul>
-              {compartmentEvents.length ? compartmentEvents.map((event, index) => (
-                <li key={`tool-call-${event.kind || index}`}>{event.kind || "event"} - {event.summary || "recorded"}</li>
-              )) : <li>No tool calls yet.</li>}
-            </ul>
-          </article>
-          <article className="reference-runtime-card">
-            <h4>Files changed</h4>
-            <ul>
-              {compartmentFiles.length ? compartmentFiles.map(file => <li key={`file-change-${file}`}>{file}</li>) : <li>No file changes yet.</li>}
-            </ul>
-          </article>
-          <article className="reference-runtime-card">
-            <h4>Approvals</h4>
-            <ul>
-              {compartmentApprovals.length ? compartmentApprovals.map((approval, index) => (
-                <li key={`approval-${approval?.id || index}`}>{approval?.status || approval?.decision || "approved"}</li>
-              )) : <li>No approvals yet.</li>}
-            </ul>
-          </article>
-          <article className="reference-runtime-card">
-            <h4>Runtime status</h4>
-            <p>Current branch: {runtimeCompartment?.cwd || "workspace not attached"}</p>
-            <p>Session ID: {runtimeCompartment?.sessionId || "pending"}</p>
-            <p>Tokens: recorded in runtime events</p>
-          </article>
-          <article className="reference-runtime-card">
-            <h4>Event stream</h4>
-            <ul>
-              {processMoments.length ? processMoments.map(item => <li key={`stream-${item.id}`}>{item.title}</li>) : <li>No event stream yet.</li>}
-            </ul>
-          </article>
-        </section>
-      </section>
-    );
-  }
-
-  return (
-    <section className={cx("reference-agent-run", `mode-${conversationMode}`)}>
-      {showMissionPanels && missionLoop ? (
-        <article className="reference-run-summary">
-          <div>
-            <span>Cycle phase</span>
-            <strong>{missionLoop.currentCyclePhase || "Plan"}</strong>
-          </div>
-          <div>
-            <span>Cycles</span>
-            <strong>{missionLoop.cycleCount || 0}</strong>
-          </div>
-          <div>
-            <span>Continuity</span>
-            <strong>{missionLoop.continuityDetail || missionLoop.continuityState || "Steady"}</strong>
-          </div>
-          <div>
-            <span>Work engine</span>
-            <strong>{missionLoop.currentRuntimeLane || "Primary thread"}</strong>
-          </div>
-        </article>
-      ) : null}
-
-      {showMissionPanels && missionLoop ? (
-        <article className="reference-run-summary t3-lane-surface">
-          <div>
-            <span>Runtime mode</span>
-            <strong>{runtimeModeLabel}</strong>
-          </div>
-          <div>
-            <span>Provider/runtime</span>
-            <strong>{selectedRoute.provider || "auto"} · {selectedRoute.model || selectedModelLabel}</strong>
-          </div>
-          <div>
-            <span>Checkpoint</span>
-            <strong>{checkpointSummary}</strong>
-          </div>
-          <div>
-            <span>Diff</span>
-            <strong>{diffSummary}</strong>
-          </div>
-          <div>
-            <span>Lanes</span>
-            <strong>{Math.max(1, delegatedLanes.length + 1)}</strong>
-          </div>
-          <div>
-            <span>Artifacts</span>
-            <strong>{artifactItems.length || 0}</strong>
-          </div>
-        </article>
-      ) : null}
-
-      {showMissionPanels ? (
-        <article
-          className="reference-selected-report-reader"
-          data-reference-selected-report-reader="true"
-          data-selected-message-id={selectedRunMessageId}
-          data-preview-state="selected-message"
-        >
-          <div className="reference-selected-report-head">
-            <div>
-              <span>Selected live report</span>
-              <strong>{selectedRunMessage ? agentMessageDisplayTitle(selectedRunMessage) : "Waiting for Hermes/runtime output"}</strong>
-            </div>
-            <small>{selectedRunMessageMeta || "Mission thread evidence"}</small>
-          </div>
-          {selectedRunMessageBody ? (
-            <pre data-reference-selected-report-body="true">{selectedRunMessageBody}</pre>
-          ) : (
-            <p>
-              {renderedMessages.length
-                ? "This selected row has no detailed runtime body yet. The reader stays empty instead of keeping an older frame."
-                : "The mission detail endpoint has not returned Hermes/runtime messages yet."}
-            </p>
-          )}
-        </article>
-      ) : null}
-
-      {runtimeCompartment ? (
-        <article className="agent-compartment-box" aria-label="Active agent runtime compartment">
-          <div className="agent-compartment-box-head">
-            <div>
-              <p className="eyebrow">Live runtime compartments · Runtime compartment</p>
-              <h2>{runtimeCompartment.sessionId || "pending session"}</h2>
-            </div>
-            <div className="agent-compartment-status">
-              <span className={cx("agent-live-dot", runtimeCompartment.streaming === "live" && "live")} />
-              <strong>{titleizeToken(runtimeCompartment.state || "recorded")}</strong>
-              <span>{runtimeCompartment.streaming === "live" ? "streaming" : "recorded"}</span>
-            </div>
-          </div>
-          <div className="agent-compartment-matrix">
-            <div>
-              <span>Runtime</span>
-              <strong>{titleizeToken(runtimeCompartment.runtime || selectedRuntime)}</strong>
-            </div>
-            <div>
-              <span>Route</span>
-              <strong>
-                {runtimeCompartment.route?.provider
-                  ? `${titleizeToken(runtimeCompartment.route.provider)} / ${runtimeCompartment.route?.model || runtimeCompartment.route?.model_id || selectedModelLabel}`
-                  : selectedModelLabel}
-              </strong>
-            </div>
-            <div>
-              <span>Host</span>
-              <strong>{titleizeToken(runtimeCompartment.host || "local")}</strong>
-            </div>
-            <div>
-              <span>Execution root</span>
-              <strong>{runtimeCompartment.cwd || "Not selected"}</strong>
-            </div>
-          </div>
-          <div className="agent-compartment-body agent-live-workbench-grid">
-            <div className="agent-compartment-lane">
-              <div className="agent-compartment-subhead">
-                <span>Hermes mission evidence · Tool/action timeline</span>
-                <b>{compartmentEvents.length}</b>
-              </div>
-              <div className="agent-compartment-event-list">
-                {compartmentEvents.length ? compartmentEvents.map((event, index) => (
-                  <div className="agent-compartment-event" key={`${event.kind || "event"}-${event.at || index}`}>
-                    <span>{titleizeToken(event.kind || event.status || "event")}</span>
-                    <strong>{event.summary || "Runtime event recorded"}</strong>
-                    <small>{event.at || event.status || "recorded"}</small>
-                  </div>
-                )) : <p className="agent-compartment-empty">No live tool events have reached the compartment yet.</p>}
-              </div>
-            </div>
-            <div className="agent-compartment-lane">
-              <div className="agent-compartment-subhead">
-                <span>NAS deploy readiness · Files and approvals</span>
-                <b>{compartmentFiles.length + compartmentApprovals.length}</b>
-              </div>
-              <div className="agent-compartment-chip-list">
-                {compartmentFiles.map(file => <code key={`file-${file}`}>{file}</code>)}
-                {compartmentApprovals.map((approval, index) => (
-                  <span key={`approval-${approval?.id || index}`}>{approval?.status || approval?.decision || "approval recorded"}</span>
-                ))}
-                {compartmentFiles.length + compartmentApprovals.length === 0 ? (
-                  <p className="agent-compartment-empty">No changed file or approval receipts attached yet.</p>
-                ) : null}
-              </div>
-            </div>
-          </div>
-          <div className="agent-compartment-body agent-live-workbench-grid">
-            <div className="agent-compartment-lane">
-              <div className="agent-compartment-subhead">
-                <span>Generated image artifacts</span>
-                <b>{visibleGeneratedArtifacts.length}/{generatedArtifactRows.length}</b>
-              </div>
-              <div className="agent-artifact-grid">
-                {visibleGeneratedArtifacts.length ? visibleGeneratedArtifacts.map((artifact, index) => {
-                  const imageUrl = artifactUrlForRecord(artifact);
-                  const manifestUrl = resolveReferenceArtifactUrl(artifact?.manifestUrl || artifact?.manifestPath || "");
-                  const label = artifactLabelForRecord(artifact, `artifact-${index + 1}`);
-                  return (
-                    <figure className="agent-artifact-card" key={`${artifact?.artifactId || label}-${index}`}>
-                      {imageUrl ? <img alt={label} src={imageUrl} /> : <div className="builder-live-review-image-missing">Preview not served</div>}
-                      <figcaption>
-                        <strong>{label}</strong>
-                        <span>{artifact?.servedArtifactId ? `served ${String(artifact.servedArtifactId).slice(0, 10)}` : artifact?.provider || "served artifact"}</span>
-                        {manifestUrl ? <a href={manifestUrl} rel="noreferrer" target="_blank">Manifest</a> : null}
-                      </figcaption>
-                    </figure>
-                  );
-                }) : <p className="agent-compartment-empty">No served image artifacts are available yet.</p>}
-              </div>
-              {visibleGeneratedArtifacts.length < generatedArtifactRows.length ? (
-                <button
-                  className="agent-proof-page-button"
-                  onClick={() => setGeneratedArtifactPage(page => page + 1)}
-                  type="button"
-                >
-                  Show more artifacts
-                </button>
-              ) : null}
-            </div>
-            <div className="agent-compartment-lane">
-              <div className="agent-compartment-subhead">
-                <span>Hermes mission evidence</span>
-                <b>{visibleHermesEvidence.length}/{hermesEvidenceRows.length}</b>
-              </div>
-              <div className="agent-compartment-event-list">
-                {visibleHermesEvidence.length ? visibleHermesEvidence.map((item, index) => (
-                  <div className="agent-compartment-event" key={`${item.missionId || "hermes"}-${item.timestamp || index}`}>
-                    <span>{titleizeToken(item.source || item.status || "evidence")}</span>
-                    <strong>{item.message || item.objective || "Hermes evidence recorded"}</strong>
-                    <small>{item.timestamp || item.status || "recorded"}</small>
-                    {asList(item.artifacts).length ? (
-                      <div className="agent-evidence-artifact-strip">
-                        {asList(item.artifacts).slice(0, 3).map((artifact, artifactIndex) => {
-                          const artifactUrl = artifactUrlForRecord(artifact);
-                          const artifactLabel = artifactLabelForRecord(artifact, `evidence-${artifactIndex + 1}`);
-                          const artifactPath = artifact?.path || artifact?.artifactPath || artifact?.servedUrl || artifactUrl;
-                          return (
-                            <a href={artifactUrl || "#"} key={`${item.missionId || "evidence"}-${artifactLabel}-${artifactIndex}`} rel="noreferrer" target="_blank">
-                              {isImageArtifactPath(artifactPath) && artifactUrl ? <img alt="" src={artifactUrl} /> : null}
-                              <span>{artifactLabel}</span>
-                            </a>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                )) : <p className="agent-compartment-empty">No Hermes evidence has been captured yet.</p>}
-              </div>
-              {visibleHermesEvidence.length < hermesEvidenceRows.length ? (
-                <button
-                  className="agent-proof-page-button"
-                  onClick={() => setHermesEvidencePage(page => page + 1)}
-                  type="button"
-                >
-                  Show more evidence
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <div className="agent-compartment-lane agent-nas-readiness-panel">
-            <div className="agent-compartment-subhead">
-              <span>NAS deploy readiness</span>
-              <b>{visibleNasChecks.filter(check => check?.passed).length}/{visibleNasChecks.length}</b>
-            </div>
-            <div className="agent-nas-check-grid">
-              {visibleNasChecks.length ? visibleNasChecks.map(check => (
-                <article className={cx("agent-nas-check", check.passed ? "passed" : check.required ? "blocked" : "warn")} key={check.checkId || check.label}>
-                  <span>{check.required ? "Required" : "Offline check"}</span>
-                  <strong>{check.label}</strong>
-                  <p>{check.details}</p>
-                </article>
-              )) : <p className="agent-compartment-empty">NAS deploy readiness has not been reported by the backend yet.</p>}
-            </div>
-          </div>
-          <div className="agent-compartment-actions">
-            <button onClick={() => onRequestAction?.("run:resume")} type="button">Resume</button>
-            <button onClick={() => onRequestAction?.("run:proof")} type="button">Proof</button>
-            <button onClick={() => onRequestAction?.("run:queue")} type="button">Queue</button>
-          </div>
-        </article>
-      ) : null}
-
-      {showMissionPanels && delegatedLanes.length > 0 ? (
-        <article className="reference-status-panel">
-          <div className="reference-status-panel-head">
-            <h3>Concurrent runtime lanes</h3>
-          </div>
-          <div className="reference-status-list">
-            {delegatedLanes.slice(0, 6).map((lane, index) => (
-              <div className="reference-status-row" key={lane.id || lane.session_id || `lane-${index}`}>
-                <StepState
-                  done={String(lane.status || "").toLowerCase() === "completed"}
-                  pending={String(lane.status || "").toLowerCase() === "running"}
-                  label={`${lane.role || `Lane ${index + 1}`} · ${lane.provider || lane.runtime_id || "runtime"}`}
-                />
-                <p>{lane.detail || lane.last_event || lane.status || "Active"}</p>
-              </div>
-            ))}
-          </div>
-        </article>
-      ) : null}
-
-      <div className="reference-chat-column">
-        {renderedMessages.length === 0 ? (
-          <article className="reference-conversation-blank">
-            <strong>{showMissionPanels ? "Mission conversation is ready" : "New conversation"}</strong>
-            <p>
-              {showMissionPanels
-                ? "Send a message or wait for the runtime to publish its next readable update."
-                : "Ask a question or switch the mode to Mission when you want file changes and a tracked work loop."}
-            </p>
-            {!showMissionPanels ? (
-              <button className="reference-black-button" onClick={() => onRequestAction?.("flow:new-conversation")} type="button">
-                Start new conversation
-              </button>
-            ) : null}
-          </article>
-        ) : null}
-
-        {renderedMessages.map((item, index) => {
-          const messageKey = stableAgentMessageKey(item, `reference-run-message-${index}`);
-          const selected = selectedRunMessageId === messageKey;
-          return item.role === "user" ? (
-            <div
-              aria-pressed={selected}
-              className={cx("reference-user-bubble", selected && "selected")}
-              data-mission-id={item.missionId || activeMissionId}
-              data-runtime-id={item.runtimeId || activeRuntimeId}
-              data-selected-agent-message={selected ? "true" : "false"}
-              data-turn-id={item.id}
-              onClick={event => selectRunMessage(messageKey, event)}
-              onKeyDown={event => handleRunMessageKeyDown(event, messageKey)}
-              role="button"
-              tabIndex={0}
-              key={item.id}
-            >
-              <p>{item.title}</p>
-              <span>{item.meta || "Now"}</span>
-            </div>
-          ) : (
-            <div
-              aria-pressed={selected}
-              className={cx("reference-agent-thread", item.pending ? "is-pending" : "", selected && "selected")}
-              data-mission-id={item.missionId || activeMissionId}
-              data-runtime-id={item.runtimeId || activeRuntimeId}
-              data-runtime-report={isRuntimeOutputAgentMessage(item) ? "true" : "false"}
-              data-selected-agent-message={selected ? "true" : "false"}
-              data-turn-id={item.id}
-              onClick={event => selectRunMessage(messageKey, event)}
-              onKeyDown={event => handleRunMessageKeyDown(event, messageKey)}
-              role="button"
-              tabIndex={0}
-              key={item.id}
-            >
-              <div className="reference-agent-avatar">
-                <div className="reference-brand-mark tiny">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              </div>
-              <div className="reference-agent-thread-body">
-                <p className="reference-thread-lead">
-                  {item.pending ? <CircleDashed className="pending" size={16} strokeWidth={2.1} /> : null}
-                  <span>{item.title}</span>
-                </p>
-                {item.detail || item.technicalDetail || item.chips?.length ? (
-                  <article className={cx("reference-report-panel compact", item.technicalDetail && !item.detail ? "trace-only" : "")}>
-                    {item.detail ? <p>{item.detail}</p> : null}
-                    {item.technicalDetail ? (
-                      <details className="reference-inline-trace">
-                        <summary>Route detail</summary>
-                        <p>{item.technicalDetail}</p>
-                      </details>
-                    ) : null}
-                    {item.chips?.length ? (
-                      <div className="reference-chip-row">
-                        {item.chips.map(chip => (
-                          <span className="reference-mini-pill" key={`${item.id}-${chip}`}>
-                            {chip}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="reference-report-foot">
-                      <div className="reference-report-actions">
-                        <button onClick={() => onRequestAction?.("run:message-copy", { messageId: item.id })} type="button">Copy</button>
-                        <button onClick={() => onRequestAction?.("run:message-comment", { messageId: item.id })} type="button">Comment</button>
-                        <button onClick={() => onRequestAction?.("run:message-retry", { messageId: item.id })} type="button">Retry</button>
-                      </div>
-                      <span>{item.meta || "Now"}</span>
-                    </div>
-                  </article>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
-
-        {showMissionPanels && processMoments.length > 0 ? (
-          <article className="reference-status-panel">
-            <div className="reference-status-panel-head">
-              <h3>Live mission activity</h3>
-              <button onClick={() => setShowTraceDetail(current => !current)} type="button">
-                {showTraceDetail ? "Hide trace" : "Show trace"}
-              </button>
-            </div>
-            <div className="reference-status-list">
-              {processMoments.map((moment, index) => (
-                <div className="reference-status-row" key={moment.id}>
-                  <StepState
-                    done={index < processMoments.length - 1}
-                    label={moment.title}
-                    pending={index === processMoments.length - 1}
-                  />
-                  {showTraceDetail && (moment.detail || moment.preview) ? (
-                    <p>{moment.preview || moment.detail}</p>
-                  ) : null}
-                  <button
-                    className="reference-row-comment"
-                    onClick={() => onRequestAction?.("run:moment-comment", { momentId: moment.id })}
-                    type="button"
-                  >
-                    Comment
-                  </button>
-                </div>
-              ))}
-            </div>
-          </article>
-        ) : null}
-
-        {showMissionPanels && feedbackItems.length > 0 ? (
-        <article className="reference-feedback-panel">
-          <div className="reference-feedback-tabs">
-            <button
-              className={detailTab === "feedback" ? "active" : ""}
-              onClick={() => setDetailTab("feedback")}
-              type="button"
-            >
-              Feedback
-            </button>
-            <button
-              className={detailTab === "notes" ? "active" : ""}
-              onClick={() => setDetailTab("notes")}
-              type="button"
-            >
-              Notes
-            </button>
-          </div>
-          <div className="reference-feedback-list">
-            {feedbackItems
-              .filter(item => (detailTab === "feedback" ? item.role !== "note" : true))
-              .slice(0, 3)
-              .map(item => (
-                <article className="reference-feedback-item" key={item.id}>
-                  <div className="reference-feedback-meta">
-                    <strong>{item.author}</strong>
-                    <span>{item.meta}</span>
-                  </div>
-                  <p>{item.body}</p>
-                  {item.role === "assistant" ? (
-                    <div className="reference-feedback-actions">
-                      <button onClick={() => onRequestAction?.("run:feedback-apply", { feedbackId: item.id })} type="button">Change applied</button>
-                      <button onClick={() => onRequestAction?.("run:feedback-view", { feedbackId: item.id })} type="button">View change</button>
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-          </div>
-        </article>
-        ) : null}
-      </div>
-
-      <ComposerDock
-        compact
-        draft={draft}
-        onAttach={onAttach}
-        onChangeDraft={onChangeDraft}
-        onDictation={onDictation}
-        onPaste={onPaste}
-        onSubmit={onSend}
-        placeholder={
-          activeCommentTarget
-            ? "Add a live comment..."
-            : showMissionPanels
-              ? "Comment live or steer the mission..."
-              : "Reply in this conversation..."
-        }
-      >
-        {activeCommentTarget ? (
-          <div className="reference-comment-target">
-            <span>Commenting on {activeCommentTarget.kind || "item"}</span>
-            <strong>{activeCommentTarget.title}</strong>
-            <button onClick={() => onRequestAction?.("run:clear-comment-target")} type="button">Clear</button>
-          </div>
-        ) : null}
-        {showMissionPanels ? (
-          <>
-            {actionModes.length > 0 ? (
-              <div className="reference-mode-strip compact" aria-label="Run mode">
-                {actionModes.map(option => (
-                  <button
-                    className={routeControls.actionMode === option.value ? "active" : ""}
-                    key={`run-mode-${option.value}`}
-                    onClick={() => routeControls.onActionModeChange?.(option.value)}
-                    type="button"
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <div className="reference-docked-controls">
-              <label className="reference-inline-select">
-                <span>Work engine</span>
-                <select onChange={event => onRuntimeChange(event.target.value)} value={selectedRuntime}>
-                  {runtimeSelectOptions.map(option => (
-                    <option key={`run-runtime-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="reference-inline-select">
-                <span>Route role</span>
-                <input readOnly value={`${titleizeToken(routeControls.role || "executor")} (auto)`} />
-              </label>
-              <label className="reference-inline-select">
-                <span>Model</span>
-                <select onChange={event => routeControls.onFieldChange?.("model", event.target.value)} value={selectedRoute.model || ""}>
-                  <option value="">{selectedModelLabel}</option>
-                  {asList(routeOptions.models).map(option => (
-                    <option key={`run-route-model-${option}`} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="reference-inline-select">
-                <span>Effort</span>
-                <select onChange={event => routeControls.onFieldChange?.("effort", event.target.value)} value={selectedRoute.effort || "default"}>
-                  {asList(routeOptions.efforts).map(option => (
-                    <option key={`run-route-effort-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className="reference-tool-button" onClick={() => routeControls.onSave?.()} type="button">
-                Save route
-              </button>
-            </div>
-          </>
-        ) : null}
-
-        {showSlashCommands ? (
-          <SlashCommandPanel
-            className="in-composer"
-            commands={slashCommands}
-            draft={draft}
-            onUseCommand={onUseSlashCommand}
-          />
-        ) : null}
-      </ComposerDock>
-    </section>
-  );
-}
-
-function LivePreviewSurface(props) {
-  const {
-    changedItems = [],
-    draft,
-    feedbackItems = [],
-    generatedImageArtifacts = [],
-    hermesEvidenceItems = [],
-    messages = [],
-    nasDeployChecks = [],
-    onAttach,
-    onChangeDraft,
-    onDictation,
-    onPaste,
-    onRequestAction,
-    onSend,
-    onUseSlashCommand,
-    projectLabel,
-    runtimeCompartment,
-    slashCommands = [],
-    timelineMoments = [],
-  } = props;
-  const [previewTab, setPreviewTab] = useState("preview");
-  const [previewDevice, setPreviewDevice] = useState("desktop");
-  const assistantMoments = timelineMoments.slice(-3);
-  const latestUserMessage = [...messages].reverse().find(item => item.role === "user");
-  const latestAssistantMessage = [...messages].reverse().find(item => item.role === "assistant");
-  const showSlashCommands = String(draft || "").trim().startsWith("/");
-  const hasRuntimeCompartment = Boolean(runtimeCompartment);
-  const agentActivityLabel = hasRuntimeCompartment
-    ? runtimeCompartment?.streaming === "live"
-      ? "Working"
-      : "Recorded"
-    : "Waiting for runtime";
-  const agentActivityDetail = hasRuntimeCompartment
-    ? latestAssistantMessage?.title || "Runtime evidence is attached to this live preview."
-    : "The preview is open, but no live runtime session has attached yet.";
-  const evidenceRows = [
-    {
-      id: "runtime",
-      action: "live:evidence:runtime",
-      label: "Runtime compartment",
-      value: runtimeCompartment?.sessionId || "No live session",
-      detail: runtimeCompartment?.state || runtimeCompartment?.runtime || "Waiting for runtime lane",
-      tone: runtimeCompartment ? "good" : "warn",
-    },
-    {
-      id: "images",
-      action: "live:evidence:images",
-      label: "Generated image artifacts",
-      value: String(asList(generatedImageArtifacts).length),
-      detail: asList(generatedImageArtifacts)[0]?.provider || "No served image artifacts",
-      tone: asList(generatedImageArtifacts).length ? "good" : "neutral",
-    },
-    {
-      id: "hermes",
-      action: "live:evidence:hermes",
-      label: "Hermes mission evidence",
-      value: String(asList(hermesEvidenceItems).length),
-      detail: asList(hermesEvidenceItems)[0]?.status || "No Hermes evidence captured",
-      tone: asList(hermesEvidenceItems).length ? "good" : "warn",
-    },
-    {
-      id: "nas",
-      action: "live:evidence:nas",
-      label: "NAS deploy readiness",
-      value: `${asList(nasDeployChecks).filter(check => check?.passed).length}/${asList(nasDeployChecks).length}`,
-      detail: asList(nasDeployChecks).length ? "Readiness checks attached" : "No readiness report",
-      tone: asList(nasDeployChecks).some(check => check?.required && !check?.passed) ? "warn" : "good",
-    },
-  ];
-
-  return (
-    <section className="reference-live-surface">
-      <div className="reference-live-sidebar-column">
-        <article className="reference-live-card">
-          <div className="reference-live-card-head">
-            <div className="reference-live-agent">
-              <div className="reference-brand-mark tiny">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div>
-                <strong>Syntelos Agent</strong>
-                <span>{agentActivityLabel}</span>
-              </div>
-            </div>
-          </div>
-          <p>{agentActivityDetail}</p>
-          <div className="reference-live-editing">
-            <span>
-              Editing: {changedItems[0] || "Current project surface"}
-            </span>
-            <CircleDashed size={18} strokeWidth={2.1} />
-          </div>
-        </article>
-
-        {latestUserMessage ? (
-          <article className="reference-live-card">
-            <div className="reference-live-agent user">
-              <div className="reference-user-mini">O</div>
-              <div>
-                <strong>You</strong>
-              </div>
-            </div>
-            <p>{latestUserMessage.title}</p>
-          </article>
-        ) : null}
-
-        {latestAssistantMessage?.detail ? (
-          <article className="reference-live-card">
-            <div className="reference-live-agent">
-              <div className="reference-brand-mark tiny">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div>
-                <strong>Syntelos Agent</strong>
-                <span>Thinking</span>
-              </div>
-            </div>
-            <p>{latestAssistantMessage.detail}</p>
-          </article>
-        ) : null}
-
-        <article className="reference-live-card reference-live-evidence-card">
-          <div className="reference-live-agent">
-            <div className="reference-brand-mark tiny">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div>
-              <strong>Live evidence</strong>
-              <span>Runtime, artifacts, Hermes, NAS</span>
-            </div>
-          </div>
-          <div className="reference-live-evidence-grid">
-            {evidenceRows.map(row => (
-              <button
-                className={cx("reference-live-evidence-row", row.tone)}
-                key={row.id}
-                onClick={() => onRequestAction?.(row.action)}
-                type="button"
-              >
-                <span>{row.label}</span>
-                <strong>{row.value}</strong>
-                <small>{row.detail}</small>
-              </button>
-            ))}
-          </div>
-        </article>
-
-        <article className="reference-live-card">
-          <div className="reference-live-agent">
-            <div className="reference-brand-mark tiny">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div>
-              <strong>Syntelos Agent</strong>
-              <span>Applying changes</span>
-            </div>
-          </div>
-          <div className="reference-checklist">
-            {assistantMoments.map((moment, index) => (
-              <StepState
-                done={index < assistantMoments.length - 1}
-                key={moment.id}
-                label={moment.title}
-                pending={index === assistantMoments.length - 1}
-              />
-            ))}
-          </div>
-        </article>
-
-        <ComposerDock
-          compact
-          draft={draft}
-          onAttach={onAttach}
-          onChangeDraft={onChangeDraft}
-          onDictation={onDictation}
-          onPaste={onPaste}
-          onSubmit={onSend}
-          placeholder="Ask your agent anything..."
-        >
-          {showSlashCommands ? (
-            <SlashCommandPanel
-              className="in-composer"
-              commands={slashCommands}
-              draft={draft}
-              onUseCommand={onUseSlashCommand}
-            />
-          ) : null}
-        </ComposerDock>
-      </div>
-
-      <div className="reference-preview-stage">
-        <div className="reference-preview-toolbar">
-          <div className="reference-preview-tabs">
-            <button
-              className={previewTab === "preview" ? "active" : ""}
-              onClick={() => setPreviewTab("preview")}
-              type="button"
-            >
-              Preview
-            </button>
-            <button
-              className={previewTab === "files" ? "active" : ""}
-              onClick={() => setPreviewTab("files")}
-              type="button"
-            >
-              Files
-            </button>
-            <button
-              className={previewTab === "terminal" ? "active" : ""}
-              onClick={() => setPreviewTab("terminal")}
-              type="button"
-            >
-              Terminal
-            </button>
-          </div>
-          <div className="reference-preview-actions">
-            <div className="reference-device-toggle">
-              <button
-                className={previewDevice === "desktop" ? "active" : ""}
-                onClick={() => setPreviewDevice("desktop")}
-                type="button"
-              >
-                <Monitor size={16} strokeWidth={1.9} />
-              </button>
-              <button
-                className={previewDevice === "laptop" ? "active" : ""}
-                onClick={() => setPreviewDevice("laptop")}
-                type="button"
-              >
-                <Laptop size={16} strokeWidth={1.9} />
-              </button>
-              <button
-                className={previewDevice === "mobile" ? "active" : ""}
-                onClick={() => setPreviewDevice("mobile")}
-                type="button"
-              >
-                <Smartphone size={16} strokeWidth={1.9} />
-              </button>
-            </div>
-            <IconButton icon={RefreshCw} label="Refresh preview" onClick={() => onRequestAction?.("live:refresh-preview")} />
-            <IconButton icon={Expand} label="Expand preview" onClick={() => onRequestAction?.("live:expand-preview")} />
-          </div>
-        </div>
-
-        <div className="reference-preview-canvas">
-          <div className="reference-preview-browser">
-            <div className="reference-browser-nav">
-              <div className="reference-browser-brand">
-                <div className="reference-brand-mark tiny">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-                <strong>{projectLabel}</strong>
-              </div>
-              <nav>
-                <span>Product</span>
-                <span>Features</span>
-                <span>Pricing</span>
-                <span>Resources</span>
-              </nav>
-              <button
-                className="reference-browser-cta"
-                onClick={() => onRequestAction?.("live:cta-start")}
-                type="button"
-              >
-                Get Started
-              </button>
-            </div>
-
-            <div className="reference-browser-hero">
-              <div className="reference-browser-chip">
-                <span>New</span>
-                <strong>{changedItems[0] || `${projectLabel} is updating live`}</strong>
-              </div>
-              <h2>{latestAssistantMessage?.title || `Build better software with ${projectLabel}.`}</h2>
-              <p>
-                {latestAssistantMessage?.detail ||
-                  "Live preview updates reflect the latest active mission decisions and UI edits."}
-              </p>
-              <div className="reference-browser-actions">
-                <button className="primary" onClick={() => onRequestAction?.("live:start-building")} type="button">Start Building</button>
-                <button className="secondary" onClick={() => onRequestAction?.("live:view-demo")} type="button">View Demo</button>
-              </div>
-              <div className="reference-browser-benefits">
-                <span>No credit card required</span>
-                <span>14-day free trial</span>
-                <span>Cancel anytime</span>
-              </div>
-            </div>
-
-            <div className="reference-preview-comment">
-              <div className="reference-preview-comment-head">
-                <span>{projectLabel}</span>
-                <strong>You</strong>
-                <em>Just now</em>
-              </div>
-              <p>{latestUserMessage?.title || "Add feedback or ask the agent..."}</p>
-              <div className="reference-preview-comment-foot">
-                <button onClick={() => onRequestAction?.("live:comment-react")} type="button">React</button>
-                <button className="send" onClick={() => onRequestAction?.("live:comment-send")} type="button">Send</button>
-              </div>
-            </div>
-
-            <div className="reference-preview-dashboard">
-              <aside className="reference-preview-sidebar">
-                <strong>{projectLabel}</strong>
-                <span className="active">Overview</span>
-                <span>Projects</span>
-                <span>Deployments</span>
-                <span>Analytics</span>
-              </aside>
-              <div className="reference-preview-dashboard-main">
-                <div className="reference-preview-dashboard-head">
-                  <strong>Overview</strong>
-                </div>
-                <div className="reference-preview-stats">
-                  <article>
-                    <span>Tracked changes</span>
-                    <strong>{Math.max(changedItems.length, 1)}</strong>
-                    <p>Visible in this mission</p>
-                  </article>
-                  <article>
-                    <span>Feedback items</span>
-                    <strong>{feedbackItems.length}</strong>
-                    <p>Across notes and comments</p>
-                  </article>
-                  <article>
-                    <span>Timeline moments</span>
-                    <strong>{timelineMoments.length}</strong>
-                    <p>Captured in the live trace</p>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function BuilderMetricCard({ item }) {
-  const Icon = item.icon;
-  return (
-    <article className="reference-builder-metric">
-      <div className="reference-builder-metric-icon">
-        <Icon size={24} strokeWidth={1.9} />
-      </div>
-      <div className="reference-builder-metric-copy">
-        <span>{item.label}</span>
-        <strong>{item.value}</strong>
-        <p className={cx("reference-metric-delta", item.tone)}>{item.delta}</p>
-      </div>
-      {item.id === "projects" ? <div aria-hidden="true" className="reference-mini-sparkline" /> : null}
-    </article>
-  );
-}
-
-function StatusBadge({ tone, label }) {
-  return <span className={cx("reference-status-badge", tone)}>{label}</span>;
-}
-
-function parseDurationSeconds(value) {
-  const text = String(value || "");
-  let total = 0;
-  const minutes = text.match(/(\d+)\s*m/);
-  const seconds = text.match(/(\d+)\s*s/);
-  if (minutes) {
-    total += Number(minutes[1]) * 60;
-  }
-  if (seconds) {
-    total += Number(seconds[1]);
-  }
-  return total || 0;
-}
-
-function formatMetricDuration(seconds) {
-  if (!seconds) {
-    return "—";
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return minutes > 0 ? `${minutes}m ${String(remainder).padStart(2, "0")}s` : `${remainder}s`;
-}
-
-function buildBuilderMetrics(rows) {
-  const safeRows = asList(rows);
-  const activeRuns = safeRows.filter(item => item.statusTone === "running").length;
-  const blockedRuns = safeRows.filter(item => ["failed", "warn"].includes(item.statusTone)).length;
-  const successRates = safeRows
-    .map(item => item.successRate)
-    .filter(value => typeof value === "number" && Number.isFinite(value));
-  const averageSuccess = successRates.length
-    ? Math.round(successRates.reduce((total, value) => total + value, 0) / successRates.length)
-    : 0;
-  const turningPoints = safeRows.map(item => parseDurationSeconds(item.turningPoint)).filter(Boolean);
-  const averageTurningPoint = turningPoints.length
-    ? Math.round(turningPoints.reduce((total, value) => total + value, 0) / turningPoints.length)
-    : 0;
-  return [
-    {
-      id: "projects",
-      label: "Total Projects",
-      value: String(safeRows.length),
-      delta: safeRows.length ? "Tracked from live missions" : "No live missions yet",
-      tone: safeRows.length ? "up" : "flat",
-      icon: Code2,
-    },
-    {
-      id: "runs",
-      label: "Active Runs",
-      value: String(activeRuns),
-      delta: blockedRuns ? `${blockedRuns} need attention` : "No blockers recorded",
-      tone: blockedRuns ? "down" : activeRuns ? "up" : "flat",
-      icon: Play,
-    },
-    {
-      id: "success",
-      label: "Success Rate",
-      value: averageSuccess ? `${averageSuccess}%` : "—",
-      delta: successRates.length ? `${successRates.length} run signal${successRates.length === 1 ? "" : "s"}` : "Waiting for run data",
-      tone: averageSuccess >= 90 ? "up" : averageSuccess ? "down" : "flat",
-      icon: CircleCheckBig,
-    },
-    {
-      id: "turning-point",
-      label: "Avg. Turning Point",
-      value: formatMetricDuration(averageTurningPoint),
-      delta: turningPoints.length ? "Derived from mission state" : "Waiting for timing data",
-      tone: averageTurningPoint ? "up" : "flat",
-      icon: Clock3,
-    },
-  ];
-}
-
-function BuilderSurface(props) {
-  const {
-    builderDetailOpen = false,
-    builderRows = [],
-    changedItems = [],
-    feedbackItems = [],
-    flowProjects = [],
-    onBackFromBuilder,
-    onOpenBuilderDetail,
-    onRequestAction,
-    onSelectFlow,
-    onSelectProject,
-    projectLabel,
-    ruleSets = [],
-    activeRuleSetId = "",
-    onOpenSkillStudio,
-    selectedProjectId,
-    timelineMoments = [],
-  } = props;
-  const [builderSearch, setBuilderSearch] = useState("");
-  const [builderPage, setBuilderPage] = useState(1);
-  const [detailFlowSearch, setDetailFlowSearch] = useState("");
-  const [detailTab, setDetailTab] = useState("flows");
-  const [detailPreviewTab, setDetailPreviewTab] = useState("preview");
-  const [detailFeedbackTab, setDetailFeedbackTab] = useState("feedback");
-  const pageSize = 8;
-  const builderSearchQuery = String(builderSearch || "").trim().toLowerCase();
-  const filteredBuilderRows =
-    builderSearchQuery.length === 0
-      ? builderRows
-      : builderRows.filter(row =>
-          [row.name, row.description, row.status, row.id]
-            .map(value => String(value || "").toLowerCase())
-            .some(value => value.includes(builderSearchQuery)),
-        );
-  const totalPages = Math.max(1, Math.ceil(filteredBuilderRows.length / pageSize));
-  const effectiveBuilderPage = Math.min(builderPage, totalPages);
-  const pageStart = (effectiveBuilderPage - 1) * pageSize;
-  const pagedBuilderRows = filteredBuilderRows.slice(pageStart, pageStart + pageSize);
-  const selectedRow = builderRows.find(item => item.selected) || builderRows[0] || null;
-  const activeProject =
-    flowProjects.find(item => item.id === selectedProjectId) || flowProjects[0] || null;
-  const detailFlowQuery = String(detailFlowSearch || "").trim().toLowerCase();
-  const detailFlowProjects =
-    detailFlowQuery.length === 0
-      ? flowProjects
-      : flowProjects
-          .map(project => {
-            const filteredFlows = asList(project.flows).filter(flow =>
-              [flow.title, flow.status, flow.updated]
-                .map(value => String(value || "").toLowerCase())
-                .some(value => value.includes(detailFlowQuery)),
-            );
-            const projectMatches = String(project.title || "").toLowerCase().includes(detailFlowQuery);
-            return {
-              ...project,
-              flows: projectMatches ? asList(project.flows) : filteredFlows,
-            };
-          })
-          .filter(project => asList(project.flows).length > 0);
-  const builderHighlights = [
-    ["Success rate", `${selectedRow?.successRate ?? 0}%`],
-    ["Runs", `${selectedRow?.runs ?? 0}`],
-    ["Turning point", selectedRow?.turningPoint || "—"],
-    ["Last update", selectedRow?.updated || selectedRow?.lastRunMeta || "—"],
-  ];
-  const virtualTimeline = useVirtualWindow(timelineMoments, {
-    itemHeight: 92,
-    viewportHeight: 430,
-    overscan: 5,
-  });
-  const builderMetrics = buildBuilderMetrics(builderRows);
-  const openBuilderDetailFromKey = (event, rowId) => {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-    event.preventDefault();
-    onOpenBuilderDetail(rowId);
-  };
-
-  if (builderDetailOpen && selectedRow) {
-    return (
-      <section className="reference-builder-detail">
-        <div className="reference-builder-detail-column left">
-          <button className="reference-back-link" onClick={onBackFromBuilder} type="button">
-            <ArrowLeft size={15} strokeWidth={2} />
-            <span>Back to Projects</span>
-          </button>
-          <div className="reference-builder-detail-head">
-            <strong>{activeProject?.title || projectLabel}</strong>
-            <StatusBadge label={selectedRow.status} tone={selectedRow.statusTone} />
-          </div>
-          <div className="reference-detail-tabs">
-            <button className={detailTab === "overview" ? "active" : ""} onClick={() => setDetailTab("overview")} type="button">Overview</button>
-            <button className={detailTab === "flows" ? "active" : ""} onClick={() => setDetailTab("flows")} type="button">Flows</button>
-            <button className={detailTab === "files" ? "active" : ""} onClick={() => setDetailTab("files")} type="button">Files</button>
-            <button className={detailTab === "settings" ? "active" : ""} onClick={() => setDetailTab("settings")} type="button">Settings</button>
-          </div>
-          <label className="reference-search-field">
-            <Search size={18} strokeWidth={1.9} />
-            <input
-              onChange={event => setDetailFlowSearch(event.target.value)}
-              placeholder="Search flows..."
-              value={detailFlowSearch}
-            />
-          </label>
-          <div className="reference-flow-detail-list">
-            {detailFlowProjects.map(project => (
-              <div className="reference-flow-detail-group" key={project.id}>
-                <button className="reference-project-row" onClick={() => onSelectProject(project.id)} type="button">
-                  <div className="reference-project-row-title">
-                    <FolderOpen size={15} strokeWidth={1.9} />
-                    <strong>{project.title}</strong>
-                  </div>
-                  <span>{project.count}</span>
-                </button>
-                {project.id === (activeProject?.id || selectedProjectId) ? (
-                  <div className="reference-flow-detail-items">
-                    {project.flows.map(flow => (
-                      <button
-                        className={cx("reference-flow-detail-item", flow.selected && "active")}
-                        key={flow.id}
-                        onClick={() => onSelectFlow(flow.id)}
-                        type="button"
-                      >
-                        <div>
-                          <strong>{flow.title}</strong>
-                          <p>
-                            <span className={cx("reference-flow-dot tiny", dotToneClass(flow.statusTone))} />
-                            {flow.status}
-                          </p>
-                        </div>
-                        <em>{flow.updated}</em>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <article className="reference-builder-side-card">
-            <div className="reference-builder-section-head">
-              <div>
-                <strong>Flow Snapshot</strong>
-                <span>Current status for the selected workstream</span>
-              </div>
-            </div>
-            <div className="reference-builder-stat-grid compact">
-              {builderHighlights.map(([label, value]) => (
-                <article key={label}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </article>
-              ))}
-            </div>
-          </article>
-        </div>
-
-        <div className="reference-builder-detail-column middle">
-          <div className="reference-builder-detail-title">
-            <div>
-              <h1>{selectedRow.name}</h1>
-              <p>{selectedRow.lastRunMeta} · {selectedRow.runs} changes · {selectedRow.description}</p>
-            </div>
-          </div>
-          <article className="reference-builder-timeline">
-            <div className="reference-builder-section-head">
-              <div>
-                <strong>Timeline</strong>
-                <span>
-                  Key moments from this flow · {virtualTimeline.totalCount} item{virtualTimeline.totalCount === 1 ? "" : "s"}
-                </span>
-              </div>
-            </div>
-            <div
-              className="reference-builder-moments virtualized"
-              onScroll={virtualTimeline.onScroll}
-              style={{ maxHeight: virtualTimeline.viewportHeight }}
-            >
-              {virtualTimeline.topPadding > 0 ? (
-                <div aria-hidden="true" className="reference-builder-virtual-spacer" style={{ height: virtualTimeline.topPadding }} />
-              ) : null}
-              {virtualTimeline.items.map(item => (
-                <article className={cx("reference-builder-moment", item.tone)} key={item.id}>
-                  <div className="reference-builder-moment-time">
-                    <span>{item.time}</span>
-                  </div>
-                  <div className="reference-builder-moment-body">
-                    <strong>{item.title}</strong>
-                    <p>{item.detail}</p>
-                    {item.preview ? <div className="reference-builder-preview-chip">{item.preview}</div> : null}
-                  </div>
-                </article>
-              ))}
-              {virtualTimeline.bottomPadding > 0 ? (
-                <div aria-hidden="true" className="reference-builder-virtual-spacer" style={{ height: virtualTimeline.bottomPadding }} />
-              ) : null}
-            </div>
-          </article>
-          <article className="reference-builder-summary-panel">
-            <div className="reference-builder-section-head">
-              <div>
-                <strong>Change Ledger</strong>
-                <span>Files, comments, and execution signals from this run</span>
-              </div>
-            </div>
-            <div className="reference-builder-stat-grid">
-              <article>
-                <span>Files touched</span>
-                <strong>{changedItems.length}</strong>
-              </article>
-              <article>
-                <span>Feedback items</span>
-                <strong>{feedbackItems.length}</strong>
-              </article>
-              <article>
-                <span>Work engine</span>
-                <strong>{activeProject?.title || projectLabel}</strong>
-              </article>
-            </div>
-            <div className="reference-builder-change-list">
-              {(changedItems.length ? changedItems : ["No file changes recorded for this flow yet."]).slice(0, 4).map(item => (
-                <div className="reference-builder-change-row" key={item}>
-                  <span className={cx("reference-flow-dot", changedItems.length ? "good" : "neutral")} />
-                  <p>{item}</p>
-                </div>
-              ))}
-            </div>
-          </article>
-        </div>
-
-        <div className="reference-builder-detail-column right">
-          <div className="reference-builder-detail-actions">
-            <button className="reference-topbar-pill active" onClick={() => onRequestAction?.("builder:detail-live-preview", { missionId: selectedRow.id })} type="button">
-              <Monitor size={16} strokeWidth={1.9} />
-              <span>Live Preview</span>
-            </button>
-            <button
-              className="reference-outline-button"
-              onClick={() => onRequestAction?.("builder:open-in-builder", { missionId: selectedRow.id })}
-              type="button"
-            >
-              <Hammer size={16} strokeWidth={1.9} />
-              <span>Open in Builder</span>
-            </button>
-            <IconButton
-              icon={MoreHorizontal}
-              label="More"
-              onClick={() => onRequestAction?.("builder:detail-more", { missionId: selectedRow.id })}
-            />
-          </div>
-          <article className="reference-builder-preview-panel">
-            <div className="reference-detail-tabs compact">
-              <button className={detailPreviewTab === "preview" ? "active" : ""} onClick={() => setDetailPreviewTab("preview")} type="button">Preview</button>
-              <button className={detailPreviewTab === "files" ? "active" : ""} onClick={() => setDetailPreviewTab("files")} type="button">Files</button>
-              <button className={detailPreviewTab === "changes" ? "active" : ""} onClick={() => setDetailPreviewTab("changes")} type="button">Changes ({changedItems.length})</button>
-            </div>
-            <div className="reference-builder-preview-surface">
-              <div className="reference-browser-brand">
-                <div className="reference-brand-mark tiny">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              <strong>{projectLabel}</strong>
-            </div>
-            <h2>{selectedRow.name}</h2>
-              <p>{changedItems[0] || "No live preview changes have been recorded for this flow yet."}</p>
-              <div className="reference-browser-actions">
-                <button className="primary" onClick={() => onRequestAction?.("builder:detail-primary", { missionId: selectedRow.id })} type="button">Primary Action</button>
-                <button className="secondary" onClick={() => onRequestAction?.("builder:detail-secondary", { missionId: selectedRow.id })} type="button">Secondary</button>
-              </div>
-            </div>
-          </article>
-          <article className="reference-feedback-panel builder">
-            <div className="reference-feedback-tabs">
-              <button className={detailFeedbackTab === "feedback" ? "active" : ""} onClick={() => setDetailFeedbackTab("feedback")} type="button">Feedback</button>
-              <button className={detailFeedbackTab === "notes" ? "active" : ""} onClick={() => setDetailFeedbackTab("notes")} type="button">Notes</button>
-            </div>
-            <div className="reference-feedback-list">
-              {feedbackItems
-                .filter(item => (detailFeedbackTab === "feedback" ? item.role !== "note" : true))
-                .slice(0, 3)
-                .map(item => (
-                <article className="reference-feedback-item" key={item.id}>
-                  <div className="reference-feedback-meta">
-                    <strong>{item.author}</strong>
-                    <span>{item.meta}</span>
-                  </div>
-                  <p>{item.body}</p>
-                  {item.role === "assistant" ? (
-                    <div className="reference-feedback-actions">
-                      <button onClick={() => onRequestAction?.("builder:feedback-apply", { feedbackId: item.id, missionId: selectedRow.id })} type="button">Change applied</button>
-                      <button onClick={() => onRequestAction?.("builder:feedback-view", { feedbackId: item.id, missionId: selectedRow.id })} type="button">View change</button>
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-            <div className="reference-feedback-composer">
-              <span>Add feedback or ask the agent...</span>
-              <ArrowUp size={16} strokeWidth={2} />
-            </div>
-          </article>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="reference-builder-surface">
-      <div className="reference-builder-head">
-        <div>
-          <h1>Builder</h1>
-          <p>Build, run, and iterate on all your vibe coding projects.</p>
-        </div>
-        <div className="reference-builder-head-actions">
-          <button
-            className="reference-outline-button strong"
-            onClick={() => onRequestAction?.("builder:new-project")}
-            type="button"
-          >
-            <Plus size={18} strokeWidth={1.9} />
-            <span>New Project</span>
-          </button>
-          <IconButton
-            icon={LayoutGrid}
-            label="Grid view"
-            onClick={() => onRequestAction?.("builder:toggle-view")}
-          />
-        </div>
-      </div>
-
-      <div className="reference-builder-metrics-row">
-        {builderMetrics.map(item => (
-          <BuilderMetricCard item={item} key={item.id} />
-        ))}
-      </div>
-
-      <div className="reference-builder-rule-strip">
-        <div>
-          <span>Rule Sets</span>
-          <strong>
-            {ruleSets.find(item => item.id === activeRuleSetId)?.name ||
-              ruleSets[0]?.name ||
-              "No rule set selected"}
-          </strong>
-          <p>
-            {ruleSets.find(item => item.id === activeRuleSetId)?.description ||
-              "Configure routing, approvals, autonomy, and execution targets before a builder run starts."}
-          </p>
-        </div>
-        <div className="reference-inline-actions">
-          {ruleSets.slice(0, 3).map(item => (
-            <StatusBadge
-              key={`builder-rule-${item.id}`}
-              label={item.name}
-              tone={item.id === activeRuleSetId ? "completed" : "paused"}
-            />
-          ))}
-          <button className="reference-outline-button strong" onClick={onOpenSkillStudio} type="button">
-            Edit rule sets
-          </button>
-        </div>
-      </div>
-
-      <div className="reference-builder-table-shell">
-        <div className="reference-builder-toolbar">
-          <label className="reference-search-field">
-            <Search size={18} strokeWidth={1.9} />
-            <input
-              onChange={event => {
-                setBuilderSearch(event.target.value);
-                setBuilderPage(1);
-              }}
-              placeholder="Search projects..."
-              value={builderSearch}
-            />
-          </label>
-          <button className="reference-select-button" onClick={() => onRequestAction?.("builder:filter-status")} type="button">
-            <span>Status</span>
-            <ChevronDown size={16} strokeWidth={1.9} />
-          </button>
-          <button className="reference-select-button" onClick={() => onRequestAction?.("builder:filter-stack")} type="button">
-            <span>Tech Stack</span>
-            <ChevronDown size={16} strokeWidth={1.9} />
-          </button>
-          <button className="reference-select-button" onClick={() => onRequestAction?.("builder:filter-updated")} type="button">
-            <span>Last Updated</span>
-            <ChevronDown size={16} strokeWidth={1.9} />
-          </button>
-          <button className="reference-select-button compact" onClick={() => onRequestAction?.("builder:filters")} type="button">
-            <Filter size={17} strokeWidth={1.9} />
-            <span>Filters</span>
-          </button>
-          <IconButton
-            icon={Settings}
-            label="Builder settings"
-            onClick={() => onRequestAction?.("builder:settings")}
-          />
-        </div>
-
-        <div className="reference-builder-table">
-          <div className="reference-builder-table-head">
-            <span>Project</span>
-            <span>Status</span>
-            <span>Last Run</span>
-            <span>Turning Point</span>
-            <span>Success Rate</span>
-            <span>Runs</span>
-            <span>Updated</span>
-            <span />
-          </div>
-
-          {pagedBuilderRows.map(row => {
-            const successRate =
-              typeof row.successRate === "number" && Number.isFinite(row.successRate)
-                ? Math.max(0, Math.min(100, row.successRate))
-                : null;
-            return (
-              <article
-                className={cx("reference-builder-row action", row.selected && "selected")}
-                key={row.id}
-                onClick={() => onOpenBuilderDetail(row.id)}
-                onKeyDown={event => openBuilderDetailFromKey(event, row.id)}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="reference-project-cell">
-                  <div className="reference-project-icon">
-                    <Code2 size={18} strokeWidth={1.9} />
-                  </div>
-                  <div>
-                    <strong>{row.name}</strong>
-                    <p>{row.description}</p>
-                  </div>
-                </div>
-                <div>
-                  <StatusBadge label={row.status} tone={row.statusTone} />
-                </div>
-                <div className="reference-table-dual">
-                  <strong>{row.lastRun}</strong>
-                  <span>{row.lastRunMeta}</span>
-                </div>
-                <div className="reference-table-dual">
-                  <strong>{row.turningPoint}</strong>
-                  <span className={cx("reference-turning-delta", row.turningPointTone)}>{row.turningPointDelta}</span>
-                </div>
-                <div className="reference-success-cell">
-                  <strong>{successRate === null ? "—" : `${successRate}%`}</strong>
-                  <div className="reference-success-track">
-                    <span style={{ width: `${successRate ?? 0}%` }} />
-                  </div>
-                </div>
-                <strong>{row.runs}</strong>
-                <span className="reference-updated">{row.updated}</span>
-                <IconButton
-                  icon={MoreHorizontal}
-                  label="Project actions"
-                  onClick={event => {
-                    event.stopPropagation();
-                    onRequestAction?.("builder:project-actions", { missionId: row.id });
-                  }}
-                />
-              </article>
-            );
-          })}
-          {!filteredBuilderRows.length ? (
-            <div className="reference-builder-empty-state">
-              <strong>{builderRows.length ? "No matches found" : "No builder runs yet"}</strong>
-              <p>
-                {builderRows.length
-                  ? "Try a different project search term."
-                  : "Start a mission from Agent or create a workspace run; Builder will populate from real mission activity."}
-              </p>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="reference-builder-pagination">
-          <span>
-            {filteredBuilderRows.length > 0
-              ? `Showing ${pageStart + 1} to ${Math.min(pageStart + pageSize, filteredBuilderRows.length)} of ${filteredBuilderRows.length} projects`
-              : "No projects to show yet"}
-          </span>
-          {filteredBuilderRows.length > 0 ? (
-            <div className="reference-page-buttons">
-              <button disabled={effectiveBuilderPage <= 1} onClick={() => setBuilderPage(page => Math.max(1, page - 1))} type="button">‹</button>
-              {Array.from({ length: totalPages }, (_, index) => index + 1).slice(0, 6).map(page => (
-                <button
-                  className={page === effectiveBuilderPage ? "active" : ""}
-                  key={`builder-page-${page}`}
-                  onClick={() => setBuilderPage(page)}
-                  type="button"
-                >
-                  {page}
-                </button>
-              ))}
-              <button disabled={effectiveBuilderPage >= totalPages} onClick={() => setBuilderPage(page => Math.min(totalPages, page + 1))} type="button">›</button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SkillHubSurface({ onRequestAction, studioState }) {
-  const {
-    activeRuleSetId,
-    activeSkillIds = [],
-    collectionTab = "skill",
-    onApplyProposal,
-    onAssistantFieldChange,
-    onAssistantSubmit,
-    onFieldChange,
-    onInsertDraft,
-    onListChange,
-    onPublish,
-    onRouteFieldChange,
-    onSaveDraft,
-    onSelectItem,
-    ruleSets = [],
-    selectedItem,
-    skills = [],
-    totals = { totalSkills: 0, activeSkills: 0, totalRuleSets: 0, activeRuleSets: 0, environments: 0, knowledgeBases: 0 },
-  } = studioState;
-  const assistant = selectedItem?.assistant || {};
-  const proposal = assistant.proposal || null;
-  const isRule = selectedItem?.kind === "rule";
-  const historyRows = asList(assistant.conversation);
-  const overridesValue = asList(selectedItem?.overrides)
-    .map(item => `${item.target} :: ${item.mode} :: ${item.detail}`)
-    .join("\n");
-  const [skillSearch, setSkillSearch] = useState("");
-  const searchTerm = String(skillSearch || "").trim().toLowerCase();
-  const visibleSkills =
-    searchTerm.length === 0
-      ? skills
-      : skills.filter(item =>
-          [item.name, item.summary, item.description]
-            .map(value => String(value || "").toLowerCase())
-            .some(value => value.includes(searchTerm)),
-        );
-  const visibleRuleSets =
-    searchTerm.length === 0
-      ? ruleSets
-      : ruleSets.filter(item =>
-          [item.name, item.summary, item.description]
-            .map(value => String(value || "").toLowerCase())
-            .some(value => value.includes(searchTerm)),
-        );
-
-  return (
-    <section className="reference-skill-surface detail-mode">
-      <div className="reference-skill-toolbar">
-        <div>
-          <p className="reference-breadcrumb">
-            Skills Hub / <strong>{selectedItem?.name || "Skill Studio"}</strong>
-          </p>
-          <div className="reference-inline-badges">
-            <h1>{selectedItem?.name || "Skills Hub"}</h1>
-            {selectedItem?.badge ? <span className="reference-surface-badge">{selectedItem.badge}</span> : null}
-          </div>
-        </div>
-        <div className="reference-builder-head-actions">
-          <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:version-history")} type="button">
-            <History size={16} strokeWidth={1.9} />
-            <span>Version History</span>
-          </button>
-          <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:propose-from-mission")} type="button">
-            <Sparkles size={16} strokeWidth={1.9} />
-            <span>Propose from mission</span>
-          </button>
-          <button className="reference-outline-button" onClick={onSaveDraft} type="button">
-            <FileText size={16} strokeWidth={1.9} />
-            <span>Save Draft</span>
-          </button>
-          <button className="reference-black-button" onClick={onPublish} type="button">
-            Publish
-          </button>
-          <IconButton icon={MoreHorizontal} label="More actions" onClick={() => onRequestAction?.("skills:more-actions")} />
-        </div>
-      </div>
-
-      <div className="reference-skill-detail-grid">
-        <article className="reference-skill-panel reference-studio-sidebar">
-          <SectionPillTabs
-            onChange={value => onSelectItem(value, value === "rule" ? ruleSets[0]?.id : skills[0]?.id)}
-            tabs={[
-              { value: "skill", label: "Skill" },
-              { value: "rule", label: "Rule Set" },
-            ]}
-            value={collectionTab}
-          />
-
-          <label className="reference-search-field">
-            <Search size={18} strokeWidth={1.9} />
-            <input
-              onChange={event => setSkillSearch(event.target.value)}
-              placeholder="Search skills & rule sets..."
-              value={skillSearch}
-            />
-          </label>
-
-          <div className="reference-studio-list-section">
-            <div className="reference-builder-section-head">
-              <strong>Skills</strong>
-              <button aria-label="Add skill" className="reference-mini-icon" onClick={() => onRequestAction?.("skills:add-skill")} type="button">
-                <Plus size={14} strokeWidth={2} />
-              </button>
-            </div>
-            <div className="reference-skill-list">
-              {visibleSkills.map(item => (
-                <button
-                  className={cx("reference-skill-row", selectedItem?.id === item.id && "active")}
-                  key={item.id}
-                  onClick={() => onSelectItem("skill", item.id)}
-                  type="button"
-                >
-                  <div>
-                    <strong>{item.name}</strong>
-                    <p>{item.summary}</p>
-                  </div>
-                  <div className="reference-list-item-meta">
-                    {activeSkillIds.includes(item.id) ? <span className="reference-flow-dot good" /> : null}
-                    <StatusBadge
-                      label={item.status}
-                      tone={item.status === "Draft" ? "paused" : "completed"}
-                    />
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="reference-studio-list-section">
-            <div className="reference-builder-section-head">
-              <strong>Rule Sets</strong>
-              <button aria-label="Add rule set" className="reference-mini-icon" onClick={() => onRequestAction?.("skills:add-rule-set")} type="button">
-                <Plus size={14} strokeWidth={2} />
-              </button>
-            </div>
-            <div className="reference-skill-list">
-              {visibleRuleSets.map(item => (
-                <button
-                  className={cx("reference-skill-row", selectedItem?.id === item.id && "active")}
-                  key={item.id}
-                  onClick={() => onSelectItem("rule", item.id)}
-                  type="button"
-                >
-                  <div>
-                    <strong>{item.name}</strong>
-                    <p>{item.summary}</p>
-                  </div>
-                  <div className="reference-list-item-meta">
-                    {activeRuleSetId === item.id ? <span className="reference-flow-dot good" /> : null}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <button className="reference-studio-archive" onClick={() => onRequestAction?.("skills:view-archived")} type="button">
-            <BookOpen size={16} strokeWidth={1.9} />
-            <span>View archived</span>
-          </button>
-        </article>
-
-        <article className="reference-skill-panel reference-studio-editor">
-          {selectedItem ? (
-            <>
-              <div className="reference-builder-section-head">
-                <strong>{selectedItem.badge}</strong>
-                <div className="reference-inline-actions">
-                  <button className="reference-link-button" onClick={() => onRequestAction?.("skills:edit-item", { itemId: selectedItem.id })} type="button">Edit</button>
-                  <button className="reference-link-button" onClick={() => onRequestAction?.("skills:preview-item", { itemId: selectedItem.id })} type="button">Preview</button>
-                </div>
-              </div>
-
-              <SurfaceField label="Name">
-                <input onChange={event => onFieldChange("name", event.target.value)} value={selectedItem.name} />
-              </SurfaceField>
-
-              <SurfaceField label="Description">
-                <textarea
-                  onChange={event => onFieldChange("description", event.target.value)}
-                  rows={3}
-                  value={selectedItem.description}
-                />
-              </SurfaceField>
-              {selectedItem.kind === "skill" ? (
-                <div className="reference-studio-lifecycle">
-                  <div className="reference-inline-badges">
-                    <StatusBadge label={`Validation: ${selectedItem.validationStatus || "Pending"}`} tone={(selectedItem.validationStatus || "").includes("Pass") ? "completed" : "running"} />
-                    <StatusBadge label={`Tests: ${selectedItem.testStatus || "Not run"}`} tone={(selectedItem.testStatus || "").includes("Pass") ? "completed" : "running"} />
-                    <StatusBadge label={`Publish: ${selectedItem.publishReadiness || "Needs review"}`} tone={(selectedItem.publishReadiness || "").includes("Ready") ? "completed" : "paused"} />
-                  </div>
-                  <p>{selectedItem.lastValidationSummary || "Validation summary unavailable."}</p>
-                  <p>{selectedItem.lastTestSummary || "Test summary unavailable."}</p>
-                  <div className="reference-inline-actions">
-                    <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:validate-item")} type="button">Validate</button>
-                    <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:test-item")} type="button">Run tests</button>
-                    <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:promote-learned")} type="button">Promote learned</button>
-                  </div>
-                  {selectedItem.reviewRequired ? <p>Human review required before publish.</p> : <p>Ready for publish review.</p>}
-                </div>
-              ) : null}
-            </>
-          ) : null}
-        </article>
-
-        <article className="reference-skill-panel reference-studio-assistant">
-          <div className="reference-builder-section-head">
-            <strong>Ask a model</strong>
-            <button className="reference-link-button" onClick={() => onRequestAction?.("skills:collapse-assistant")} type="button">Collapse</button>
-          </div>
-          <div className="reference-inline-form-row">
-            <SurfaceField label="Model">
-              <select
-                onChange={event => onAssistantFieldChange("model", event.target.value)}
-                value={assistant.model || "gpt-5.5"}
-              >
-                <option value="gpt-5.5">gpt-5.5</option>
-                <option value="GPT-4o">GPT-4o</option>
-                <option value="gpt-5.4-mini">gpt-5.4-mini</option>
-                <option value="gpt-5.4">gpt-5.4</option>
-                <option value="claude-sonnet-4.5">claude-sonnet-4.5</option>
-              </select>
-            </SurfaceField>
-            <SurfaceField label="Effort">
-              <select
-                onChange={event => onAssistantFieldChange("effort", event.target.value)}
-                value={assistant.effort || "Balanced"}
-              >
-                <option value="Low">Low</option>
-                <option value="Balanced">Balanced</option>
-                <option value="High">High</option>
-              </select>
-            </SurfaceField>
-          </div>
-
-          <div className="reference-studio-chat">
-            {historyRows.length > 0 ? (
-              historyRows.map((row, index) => (
-                <article className="reference-studio-chat-row" key={`${row.role}-${index}`}>
-                  <div className="reference-feedback-meta">
-                    <strong>{row.author}</strong>
-                    <span>{row.meta}</span>
-                  </div>
-                  <p>{row.body}</p>
-                </article>
-              ))
-            ) : (
-              <article className="reference-studio-chat-row empty">
-                <p>Use this panel to refine the selected skill or rule set and apply the proposal directly.</p>
-              </article>
-            )}
-          </div>
-
-          {proposal ? (
-            <div className="reference-studio-proposal">
-              <div className="reference-builder-section-head">
-                <strong>{isRule ? "Proposed changes" : "Guardrails (changes)"}</strong>
-                <StatusBadge label="Added" tone="completed" />
-              </div>
-              <pre>{proposal.changes.map(line => `+ ${line}`).join("\n")}</pre>
-              <div className="reference-inline-actions stretch">
-                <button className="reference-black-button" onClick={onApplyProposal} type="button">
-                  Apply changes
-                </button>
-                <button className="reference-outline-button" onClick={onInsertDraft} type="button">
-                  Insert as draft
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="reference-studio-compose">
-            <textarea
-              onChange={event => onAssistantFieldChange("prompt", event.target.value)}
-              placeholder={isRule ? "Ask the model to refine this rule set..." : "Ask the model to refine this skill..."}
-              rows={4}
-              value={assistant.prompt || ""}
-            />
-            <div className="reference-composer-footer compact">
-              <button className="reference-tool-button" onClick={() => onRequestAction?.("skills:attach-context")} type="button">
-                <Paperclip size={18} strokeWidth={1.9} />
-              </button>
-              <button className="reference-send-button solid" onClick={onAssistantSubmit} type="button">
-                <ArrowUp size={16} strokeWidth={2} />
-              </button>
-            </div>
-          </div>
-        </article>
-      </div>
-
-      {selectedItem ? (
-        <div className="reference-skill-detail-lower">
-          {isRule ? (
-            <>
-              <div className="reference-two-column-grid">
-                <SurfaceField label="Scope / Applies to">
-                  <input onChange={event => onFieldChange("scope", event.target.value)} value={selectedItem.scope} />
-                </SurfaceField>
-                <SurfaceField label="Autonomy mode">
-                  <input
-                    onChange={event => onFieldChange("autonomyMode", event.target.value)}
-                    value={selectedItem.autonomyMode}
-                  />
-                </SurfaceField>
-                <SurfaceField label="Approval mode">
-                  <input
-                    onChange={event => onFieldChange("approvalMode", event.target.value)}
-                    value={selectedItem.approvalMode}
-                  />
-                </SurfaceField>
-                <SurfaceField label="Default reviewer">
-                  <input onChange={event => onFieldChange("reviewer", event.target.value)} value={selectedItem.reviewer} />
-                </SurfaceField>
-              </div>
-
-              <div className="reference-rule-matrix">
-                <article>
-                  <strong>Allowed actions</strong>
-                  <textarea
-                    onChange={event => onListChange("allowedActions", event.target.value)}
-                    rows={4}
-                    value={joinEditorLines(selectedItem.allowedActions)}
-                  />
-                </article>
-                <article>
-                  <strong>Requires approval</strong>
-                  <textarea
-                    onChange={event => onListChange("requiresApproval", event.target.value)}
-                    rows={4}
-                    value={joinEditorLines(selectedItem.requiresApproval)}
-                  />
-                </article>
-                <article>
-                  <strong>Restricted actions</strong>
-                  <textarea
-                    onChange={event => onListChange("restrictedActions", event.target.value)}
-                    rows={4}
-                    value={joinEditorLines(selectedItem.restrictedActions)}
-                  />
-                </article>
-                <article>
-                  <strong>Special cases</strong>
-                  <textarea
-                    onChange={event => onListChange("specialCases", event.target.value)}
-                    rows={4}
-                    value={joinEditorLines(selectedItem.specialCases)}
-                  />
-                </article>
-              </div>
-
-              <div className="reference-route-plan-grid">
-                {Object.entries(selectedItem.routePlan || {}).map(([role, route]) => (
-                  <article className="reference-route-plan-card" key={role}>
-                    <strong>{role[0].toUpperCase() + role.slice(1)}</strong>
-                    <div className="reference-inline-form-row">
-                      <select
-                        onChange={event => onRouteFieldChange(role, "provider", event.target.value)}
-                        value={route.provider}
-                      >
-                        <option value="openai">OpenAI</option>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="minimax">MiniMax</option>
-                        <option value="openrouter">OpenRouter</option>
-                      </select>
-                      <select
-                        onChange={event => onRouteFieldChange(role, "effort", event.target.value)}
-                        value={route.effort}
-                      >
-                        <option value="low">Low</option>
-                        <option value="medium">Balanced</option>
-                        <option value="high">High</option>
-                      </select>
-                    </div>
-                    <input
-                      onChange={event => onRouteFieldChange(role, "model", event.target.value)}
-                      value={route.model}
-                    />
-                  </article>
-                ))}
-              </div>
-
-              <SurfaceField label="Folder or environment-specific overrides">
-                <textarea
-                  onChange={event =>
-                    onFieldChange(
-                      "overrides",
-                      event.target.value
-                        .split("\n")
-                        .map(line => line.trim())
-                        .filter(Boolean)
-                        .map(line => {
-                          const [target, mode, detail] = line.split("::").map(part => part.trim());
-                          return { target: target || "", mode: mode || "", detail: detail || "" };
-                        }),
-                    )
-                  }
-                  rows={5}
-                  value={overridesValue}
-                />
-              </SurfaceField>
-            </>
-          ) : (
-            <>
-              <SurfaceField label="Trigger conditions">
-                <textarea
-                  onChange={event => onFieldChange("triggerConditions", event.target.value)}
-                  rows={3}
-                  value={selectedItem.triggerConditions}
-                />
-              </SurfaceField>
-              <SurfaceField label="Instructions">
-                <textarea
-                  onChange={event => onListChange("instructions", event.target.value)}
-                  rows={7}
-                  value={joinEditorLines(selectedItem.instructions)}
-                />
-              </SurfaceField>
-              <SurfaceField label="Output style">
-                <textarea
-                  onChange={event => onListChange("outputStyle", event.target.value)}
-                  rows={4}
-                  value={joinEditorLines(selectedItem.outputStyle)}
-                />
-              </SurfaceField>
-              <SurfaceField label="Guardrails">
-                <textarea
-                  onChange={event => onListChange("guardrails", event.target.value)}
-                  rows={6}
-                  value={joinEditorLines(selectedItem.guardrails)}
-                />
-              </SurfaceField>
-            </>
-          )}
-        </div>
-      ) : null}
-
-      <div className="reference-skill-overview compact">
-        <article><Code2 size={20} strokeWidth={1.9} /><strong>{totals.totalSkills}</strong><span>Total Skills</span><p>{totals.activeSkills} active</p></article>
-        <article><FileText size={20} strokeWidth={1.9} /><strong>{totals.totalRuleSets}</strong><span>Rule Sets</span><p>{totals.activeRuleSets} active</p></article>
-        <article><Database size={20} strokeWidth={1.9} /><strong>{totals.environments}</strong><span>Environments</span><p>4 active</p></article>
-        <article><BookOpen size={20} strokeWidth={1.9} /><strong>{totals.knowledgeBases}</strong><span>Knowledge Bases</span><p>3 synced</p></article>
-      </div>
-    </section>
-  );
-}
-
-function RuleSetsSurface({ onRequestAction, studioState }) {
-  const {
-    activeRuleSetId,
-    onSelectItem,
-    ruleSets = [],
-    selectedItem,
-    totals = { totalRuleSets: 0, activeRuleSets: 0 },
-  } = studioState || {};
-  const selectedRule =
-    ruleSets.find(item => item.id === activeRuleSetId) ||
-    (selectedItem?.kind === "rule" ? selectedItem : null) ||
-    ruleSets[0] ||
-    null;
-
-  return (
-    <section className="reference-skill-surface detail-mode">
-      <div className="reference-skill-toolbar">
-        <div>
-          <p className="reference-breadcrumb">
-            Workspace / <strong>Rule Sets</strong>
-          </p>
-          <div className="reference-inline-badges">
-            <h1>Rule Sets</h1>
-            <span className="reference-surface-badge">Core policy</span>
-          </div>
-        </div>
-        <div className="reference-builder-head-actions">
-          <button className="reference-outline-button" onClick={() => onRequestAction?.("rule-sets:audit")} type="button">
-            <Shield size={16} strokeWidth={1.9} />
-            <span>Audit permissions</span>
-          </button>
-          <button className="reference-outline-button" onClick={() => onRequestAction?.("skills:add-rule-set")} type="button">
-            <Plus size={16} strokeWidth={1.9} />
-            <span>New rule set</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="reference-skill-detail-grid rule-set-overview-grid">
-        <article className="reference-skill-panel reference-studio-sidebar">
-          <div className="reference-builder-section-head">
-            <strong>Permission modes</strong>
-            <StatusBadge label={`${totals.activeRuleSets || 0} active`} tone="completed" />
-          </div>
-          <div className="reference-skill-list">
-            {ruleSets.map(item => (
-              <button
-                className={cx("reference-skill-row", selectedRule?.id === item.id && "active")}
-                key={item.id}
-                onClick={() => onSelectItem?.("rule", item.id)}
-                type="button"
-              >
-                <div>
-                  <strong>{item.name}</strong>
-                  <p>{item.summary}</p>
-                </div>
-                <div className="reference-list-item-meta">
-                  {activeRuleSetId === item.id ? <span className="reference-flow-dot good" /> : null}
-                  <StatusBadge label={item.approvalMode || "Policy"} tone={activeRuleSetId === item.id ? "completed" : "paused"} />
-                </div>
-              </button>
-            ))}
-          </div>
-        </article>
-
-        <article className="reference-skill-panel reference-studio-editor">
-          <div className="reference-builder-section-head">
-            <strong>{selectedRule?.name || "No rule set selected"}</strong>
-            <div className="reference-inline-actions">
-              <button className="reference-link-button" onClick={() => onRequestAction?.("rule-sets:duplicate", { ruleSetId: selectedRule?.id })} type="button">Duplicate</button>
-              <button className="reference-link-button" onClick={() => onRequestAction?.("rule-sets:edit", { ruleSetId: selectedRule?.id })} type="button">Edit</button>
-            </div>
-          </div>
-          {selectedRule ? (
-            <>
-              <div className="reference-two-column-grid">
-                <SurfaceField label="Applies to">
-                  <input readOnly value={selectedRule.scope || "Workspace"} />
-                </SurfaceField>
-                <SurfaceField label="Autonomy">
-                  <input readOnly value={selectedRule.autonomyMode || "Not configured"} />
-                </SurfaceField>
-                <SurfaceField label="Approval mode">
-                  <input readOnly value={selectedRule.approvalMode || "Not configured"} />
-                </SurfaceField>
-                <SurfaceField label="Reviewer">
-                  <input readOnly value={selectedRule.reviewer || "Operator"} />
-                </SurfaceField>
-              </div>
-
-              <div className="reference-rule-matrix">
-                <article>
-                  <strong>Allowed</strong>
-                  <ul>{asList(selectedRule.allowedActions).map(item => <li key={item}>{item}</li>)}</ul>
-                </article>
-                <article>
-                  <strong>Approval required</strong>
-                  <ul>{asList(selectedRule.requiresApproval).map(item => <li key={item}>{item}</li>)}</ul>
-                </article>
-                <article>
-                  <strong>Restricted</strong>
-                  <ul>{asList(selectedRule.restrictedActions).map(item => <li key={item}>{item}</li>)}</ul>
-                </article>
-                <article>
-                  <strong>Special cases</strong>
-                  <ul>{asList(selectedRule.specialCases).map(item => <li key={item}>{item}</li>)}</ul>
-                </article>
-              </div>
-            </>
-          ) : (
-            <p>No rule sets are available for this workspace.</p>
-          )}
-        </article>
-
-        <article className="reference-skill-panel reference-studio-assistant">
-          <div className="reference-builder-section-head">
-            <strong>Runtime guardrails</strong>
-            <StatusBadge label="Visible" tone="completed" />
-          </div>
-          <div className="reference-skill-overview compact nested">
-            <article><Shield size={20} strokeWidth={1.9} /><strong>{totals.totalRuleSets || ruleSets.length}</strong><span>Total</span><p>Rule sets</p></article>
-            <article><CircleCheckBig size={20} strokeWidth={1.9} /><strong>{totals.activeRuleSets || 0}</strong><span>Active</span><p>Applied now</p></article>
-            <article><SquareTerminal size={20} strokeWidth={1.9} /><strong>{asList(selectedRule?.requiresApproval).length}</strong><span>Approval gates</span><p>Commands and writes</p></article>
-          </div>
-          <p>
-            Rule Sets control how much autonomy the agent has before it reads files,
-            writes files, runs commands, uses tools, changes branches, or reaches outside
-            the selected workspace.
-          </p>
-          <button className="reference-black-button" onClick={() => onRequestAction?.("rule-sets:apply-active", { ruleSetId: selectedRule?.id })} type="button">
-            Apply to current run
-          </button>
-        </article>
-      </div>
-    </section>
-  );
-}
-
 function SettingsSurface({ onRequestAction, settingsState }) {
   const {
     activeRuleSet,
@@ -5310,6 +3087,8 @@ function SettingsSurface({ onRequestAction, settingsState }) {
     bridgeSessions = [],
     storageBridge = {},
     setupServices = [],
+    beginnerSetupCards = [],
+    safeUpdateAction = null,
     chatgptConnection = {},
     routeOptions = { harnesses: [], providers: [], efforts: [], models: [], routingStrategies: [], executionTargets: [] },
     runtimes = [],
@@ -5328,7 +3107,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
   } = settingsState;
   const tabDefs = [
     ["general", "General", Settings],
-    ["providers", "Models", Sparkles],
+    ["providers", "Models & Accounts", Sparkles],
     ["storage", "Storage", Database],
     ["tools", "Tools & Ports", SquareTerminal],
     ["rules", "Rules & Routing", Shield],
@@ -5746,13 +3525,67 @@ function SettingsSurface({ onRequestAction, settingsState }) {
             <article className="reference-settings-card">
               <div className="reference-builder-section-head">
                 <div>
-                  <strong>Linux and setup</strong>
-                  <span>Syntelos checks these for you and shows install or update buttons when something is missing.</span>
+                  <strong>Ready Tonight</strong>
+                  <span>Four lights: computer tools, AI accounts, agent runtimes, and messages.</span>
+                </div>
+                {safeUpdateAction ? (
+                  <button
+                    className="reference-outline-button"
+                    onClick={() => fluxioAction(onRequestAction, "setup:run-action", safeUpdateAction)}
+                    type="button"
+                  >
+                    Update everything
+                  </button>
+                ) : null}
+              </div>
+              <div className="reference-ready-tonight-grid" data-ready-tonight-setup="true">
+                {asList(beginnerSetupCards).length ? asList(beginnerSetupCards).map(card => {
+                  const status = String(card.status || "").toLowerCase();
+                  const tone = status.includes("ready") || status.includes("update") ? "good" : status.includes("failed") ? "bad" : "warn";
+                  const action = card.primaryAction || {};
+                  return (
+                    <article className={`tone-${tone}`} data-ready-tonight-card={card.cardId || card.label} key={card.cardId || card.label}>
+                      <span>{card.plainStatus || card.status || "Checking"}</span>
+                      <strong>{card.label}</strong>
+                      <p>{card.nextAction || "No next action recorded."}</p>
+                      <div className="reference-ready-tonight-actions">
+                        <button
+                          className="reference-outline-button"
+                          disabled={!action.actionId}
+                          onClick={() => fluxioAction(onRequestAction, "setup:run-action", action)}
+                          type="button"
+                        >
+                          {action.label || (status.includes("ready") ? "Verify" : "Fix")}
+                        </button>
+                        {card.receipt?.title || card.receipt?.status ? (
+                          <details>
+                            <summary>What happened?</summary>
+                            <p>{[card.receipt.title, card.receipt.status, card.receipt.executedAt].filter(Boolean).join(" · ")}</p>
+                          </details>
+                        ) : null}
+                      </div>
+                    </article>
+                  );
+                }) : (
+                  <article className="tone-warn">
+                    <span>Checking</span>
+                    <strong>Setup cards pending</strong>
+                    <p>Refresh setup health to load the beginner setup cards.</p>
+                  </article>
+                )}
+              </div>
+            </article>
+
+            <article className="reference-settings-card">
+              <div className="reference-builder-section-head">
+                <div>
+                  <strong>Advanced setup details</strong>
+                  <span>Technical service list stays here when a repair needs exact evidence.</span>
                 </div>
               </div>
               <div className="reference-settings-summary-grid">
                 {asList(setupServices)
-                  .filter(item => ["wsl2", "uv", "opencv", "openclaw", "hermes"].includes(item.serviceId))
+                  .filter(item => ["wsl2", "uv", "opencv", "openclaw", "hermes", "opencode_go_auth", "minimax_auth", "telegram_ready"].includes(item.serviceId))
                   .map(item => (
                     <article key={`setup-service-${item.serviceId}`}>
                       <span>{item.serviceId === "wsl2" ? "Linux helper" : item.label}</span>
@@ -6239,7 +4072,7 @@ function SettingsSurface({ onRequestAction, settingsState }) {
                         ))}
                       </div>
                     ) : (
-                      <p>No direct action is exposed yet.</p>
+                  <p>Live bridge actions appear after the service reports command capabilities.</p>
                     )}
                   </article>
                 ))
@@ -6605,332 +4438,6 @@ function SettingsSurface({ onRequestAction, settingsState }) {
   );
 }
 
-function LegacyFluxioReferenceShell(props) {
-  const {
-    agentScene,
-    activeCommentTarget,
-    appearance,
-    appearanceStyle,
-    builderDetailOpen,
-    builderRows,
-    changedItems,
-    currentProjectLabel,
-    draft,
-    favoriteFlows,
-    feedbackItems,
-    flowProjects,
-    generatedImageArtifacts,
-    hermesEvidenceItems,
-    messages,
-    nasDeployChecks,
-    conversationMode = "chat",
-    onAttach,
-    onBackFromBuilder,
-    onChangeDraft,
-    onDictation,
-    onHistory,
-    onIdleSubmit,
-    onInsertSlashCommand,
-    onMore,
-    onOpenBuilderDetail,
-    onOpenSettings,
-    onOpenSkillStudio,
-    onPaste,
-    onRequestAction,
-    onRuntimeChange,
-    onSend,
-    onSelectFlow,
-    onSelectProject,
-    onSetAgentScene,
-    onSetAppearance,
-    onSetSurface,
-    callBackend,
-    runtimeOptions,
-    runtimeStatus,
-    runtimeCompartment,
-    routeControls,
-    settingsState,
-    selectedEffortLabel,
-    selectedModelLabel,
-    selectedHarnessMeta,
-    selectedProjectId,
-    selectedRuntime,
-    slashCommands,
-    sidebarBehavior = "auto",
-    skillStudioState,
-    surface,
-    timelineMoments,
-    missionLoop,
-    workbenchState,
-  } = props;
-  const runtimeLabel =
-    runtimeOptions.find(option => option.value === selectedRuntime)?.label || selectedRuntime;
-  const showFlowSidebar = surface === "agent";
-  const showAgentTopbar = surface === "agent";
-  const topbarRoute = routeControls?.selectedRoute || {};
-  const topbarWorkspacePath = String(runtimeCompartment?.cwd || "").replace(/\\/g, "/");
-  const topbarWorkspaceLabel = topbarWorkspacePath
-    ? topbarWorkspacePath.split("/").filter(Boolean).slice(-2).join("/")
-    : "workspace";
-  const topbarHost = runtimeCompartment?.host || "local";
-  const topbarOnline = Boolean(runtimeCompartment);
-
-  const mainContent =
-    surface === "home" ? (
-      <HomeSurface onOpenSurface={onSetSurface} onRequestAction={onRequestAction} />
-    ) : surface === "skills" ? (
-      <SkillHubSurface onRequestAction={onRequestAction} studioState={skillStudioState} />
-    ) : surface === "rule-sets" ? (
-      <RuleSetsSurface onRequestAction={onRequestAction} studioState={skillStudioState} />
-    ) : surface === "images" ? (
-      <Suspense fallback={
-        <article className="fluxos-flow-empty">
-          <span>Images</span>
-          <strong>Loading image studio</strong>
-          <p>The mission-control shell is already interactive while the image playground bundle loads.</p>
-        </article>
-      }>
-        <ImagePlaygroundSurface callBackend={callBackend} />
-      </Suspense>
-    ) : surface === "workbench" ? (
-      <WorkbenchSurface
-        key={workbenchState?.missionId || currentProjectLabel || "workbench"}
-        onRequestAction={onRequestAction}
-        onSetSurface={onSetSurface}
-        workbenchState={workbenchState}
-      />
-    ) : surface === "settings" ? (
-      <SettingsSurface onRequestAction={onRequestAction} settingsState={settingsState} />
-    ) : surface === "agent" && agentScene === "idle" ? (
-      <AgentIdleSurface
-        draft={draft}
-        onAttach={onAttach}
-        onChangeDraft={onChangeDraft}
-        onDictation={onDictation}
-        onIdleSubmit={onIdleSubmit}
-        onRequestAction={onRequestAction}
-        onPaste={onPaste}
-        onRuntimeChange={onRuntimeChange}
-        onUseSlashCommand={onInsertSlashCommand}
-        runtimeOptions={runtimeOptions}
-        runtimeStatus={runtimeStatus}
-        routeControls={routeControls}
-        selectedEffortLabel={selectedEffortLabel}
-        selectedHarnessMeta={selectedHarnessMeta}
-        selectedModelLabel={selectedModelLabel}
-        selectedRuntime={selectedRuntime}
-        slashCommands={slashCommands}
-      />
-    ) : surface === "agent" && agentScene === "run" ? (
-      <AgentRunningSurface
-        key={workbenchState?.missionId || currentProjectLabel || "agent-run"}
-        draft={draft}
-        activeCommentTarget={activeCommentTarget}
-        conversationMode={conversationMode}
-        feedbackItems={feedbackItems}
-        generatedImageArtifacts={generatedImageArtifacts}
-        hermesEvidenceItems={hermesEvidenceItems}
-        missionLoop={missionLoop}
-        messages={messages}
-        nasDeployChecks={nasDeployChecks}
-        onAttach={onAttach}
-        onChangeDraft={onChangeDraft}
-        onDictation={onDictation}
-        onPaste={onPaste}
-        onRequestAction={onRequestAction}
-        onRuntimeChange={onRuntimeChange}
-        onSend={onSend}
-        onUseSlashCommand={onInsertSlashCommand}
-        runtimeCompartment={runtimeCompartment}
-        routeControls={routeControls}
-        runtimeOptions={runtimeOptions}
-        selectedEffortLabel={selectedEffortLabel}
-        selectedModelLabel={selectedModelLabel}
-        selectedRuntime={selectedRuntime}
-        selectedRuntimeLabel={runtimeLabel}
-        slashCommands={slashCommands}
-        timelineMoments={timelineMoments}
-        workbenchState={workbenchState}
-      />
-    ) : surface === "agent" && agentScene === "live" ? (
-      <LivePreviewSurface
-        key={workbenchState?.missionId || currentProjectLabel || "agent-live"}
-        changedItems={changedItems}
-        draft={draft}
-        feedbackItems={feedbackItems}
-        generatedImageArtifacts={generatedImageArtifacts}
-        hermesEvidenceItems={hermesEvidenceItems}
-        messages={messages}
-        nasDeployChecks={nasDeployChecks}
-        onAttach={onAttach}
-        onChangeDraft={onChangeDraft}
-        onDictation={onDictation}
-        onPaste={onPaste}
-        onRequestAction={onRequestAction}
-        onSend={onSend}
-        onUseSlashCommand={onInsertSlashCommand}
-        projectLabel={currentProjectLabel}
-        runtimeCompartment={runtimeCompartment}
-        slashCommands={slashCommands}
-        timelineMoments={timelineMoments}
-      />
-    ) : surface === "builder" ? (
-      <BuilderSurface
-        builderDetailOpen={builderDetailOpen}
-        builderRows={builderRows}
-        changedItems={changedItems}
-        feedbackItems={feedbackItems}
-        flowProjects={flowProjects}
-        onBackFromBuilder={onBackFromBuilder}
-        onOpenBuilderDetail={onOpenBuilderDetail}
-        onRequestAction={onRequestAction}
-        onOpenSkillStudio={onOpenSkillStudio}
-        onSelectFlow={onSelectFlow}
-        onSelectProject={onSelectProject}
-        projectLabel={currentProjectLabel}
-        activeRuleSetId={skillStudioState?.activeRuleSetId}
-        ruleSets={skillStudioState?.ruleSets}
-        selectedProjectId={selectedProjectId}
-        timelineMoments={timelineMoments}
-      />
-    ) : null;
-
-  return (
-    <div
-      className={cx("reference-shell", `surface-${surface}`)}
-      data-agent-scene={surface === "agent" ? agentScene : undefined}
-      data-detail-mode={showFlowSidebar || builderDetailOpen ? "true" : "false"}
-      data-density={appearance?.density || "comfortable"}
-      data-info-mode={appearance?.detailLevel || "balanced"}
-      data-look={appearance?.stylePreset || "graphite-gold"}
-      data-sidebar-behavior={sidebarBehavior}
-      style={appearanceStyle}
-    >
-      <aside className="reference-sidebar">
-        <div className="reference-sidebar-main">
-          <RailBrand />
-
-          <nav className="reference-sidebar-nav">
-            {surface === "home" ? (
-              <RailItem active icon={Home} label="Home" onClick={() => onSetSurface("home")} tone="home" />
-            ) : (
-              <RailItem active={surface === "home"} icon={Home} label="Home" onClick={() => onSetSurface("home")} />
-            )}
-
-            <div className="reference-sidebar-group">
-              <span>Workspace</span>
-              <RailItem
-                active={surface === "agent"}
-                icon={Bot}
-                label="Agent"
-                onClick={() => onSetSurface("agent")}
-              />
-              <RailItem
-                active={surface === "builder"}
-                icon={Hammer}
-                label="Builder"
-                onClick={() => onSetSurface("builder")}
-                tone={surface === "builder" ? "gold" : "neutral"}
-              />
-              <RailItem
-                active={surface === "skills"}
-                icon={Grid2x2}
-                label="Skills"
-                onClick={onOpenSkillStudio}
-              />
-              <RailItem
-                active={surface === "rule-sets"}
-                icon={Shield}
-                label="Rule Sets"
-                onClick={() => onSetSurface("rule-sets")}
-                tone={surface === "rule-sets" ? "gold" : "neutral"}
-              />
-              <RailItem
-                active={surface === "images"}
-                icon={Palette}
-                label="Images"
-                onClick={() => onSetSurface("images")}
-                tone={surface === "images" ? "gold" : "neutral"}
-              />
-              <RailItem
-                active={surface === "workbench"}
-                icon={Laptop}
-                label="Workbench"
-                onClick={() => onSetSurface("workbench")}
-              />
-              <RailItem
-                active={surface === "settings"}
-                icon={Settings}
-                label="Settings"
-                onClick={onOpenSettings}
-              />
-            </div>
-          </nav>
-        </div>
-
-        <SidebarProfile />
-      </aside>
-
-      <main className={cx("reference-main", showFlowSidebar && "with-flow-sidebar", surface === "settings" && "surface-settings")}>
-        {showFlowSidebar ? (
-          <>
-            <FlowSidebar
-              currentModeLabel="Agent"
-              favoriteFlows={favoriteFlows}
-              flowProjects={flowProjects}
-              onRequestAction={onRequestAction}
-              onOpenSettings={onOpenSettings}
-              onSelectFlow={onSelectFlow}
-              onSelectProject={onSelectProject}
-              selectedProjectId={selectedProjectId}
-            />
-            <div className="reference-main-panel">
-              {showAgentTopbar ? (
-                <div className="reference-topbar">
-                  <div className="reference-topbar-title">
-                    <strong>Agent Chat</strong>
-                    <div className="reference-project-pill">
-                      <Bot size={15} strokeWidth={1.9} />
-                      <span>Mission: {currentProjectLabel}</span>
-                      <ChevronDown size={15} strokeWidth={1.9} />
-                    </div>
-                    <div className="reference-chat-topbar-meta">
-                      <span>Model: {selectedModelLabel}</span>
-                      <span>Route: {topbarRoute.role || "primary"}</span>
-                      <span>Workspace: {topbarWorkspaceLabel}</span>
-                      <span>Host: {topbarHost}</span>
-                      <span className={cx("status", topbarOnline ? "online" : "offline")}>
-                        {topbarOnline ? "Online" : "Offline"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="reference-topbar-actions">
-                    <button className="reference-black-button" onClick={onHistory} type="button">
-                      Stop Agent
-                    </button>
-                    <button className="reference-outline-button" onClick={onMore} type="button">
-                      Pause
-                    </button>
-                    <button className="reference-outline-button" onClick={onMore} type="button">
-                      Share
-                    </button>
-                    <IconButton icon={MoreHorizontal} label="More actions" onClick={onMore} />
-                  </div>
-                </div>
-              ) : null}
-              <div className={cx("reference-main-body", surface === "settings" && "settings-body")}>{mainContent}</div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="reference-main-body">{mainContent}</div>
-          </>
-        )}
-      </main>
-    </div>
-  );
-}
-
 const FLUXIO_NAV_ITEMS = [
   { id: "home", label: "Home", Icon: Home },
   { id: "agent", label: "Agent", Icon: Bot },
@@ -7032,8 +4539,9 @@ const FLUXIO_DATABASES = [
 
 function fluxioAction(handler, fallback, payload) {
   if (typeof handler === "function") {
-    handler(fallback, payload);
+    return handler(fallback, payload);
   }
+  return undefined;
 }
 
 function MetricTile({ label, value, detail, tone = "neutral" }) {
@@ -7047,6 +4555,7 @@ function MetricTile({ label, value, detail, tone = "neutral" }) {
 }
 
 function FluxioComposer({
+  activeCommentTarget,
   draft,
   onAttach,
   onChangeDraft,
@@ -7057,6 +4566,7 @@ function FluxioComposer({
   placeholder = "Ask Fluxio to plan, edit, test, or review this project...",
 }) {
   const currentDraft = String(draft || "");
+  const [plusOpen, setPlusOpen] = useState(false);
   const submit = () => {
     if (typeof onSubmit === "function") {
       onSubmit();
@@ -7068,34 +4578,94 @@ function FluxioComposer({
     }
     fluxioAction(onRequestAction, "composer:send");
   };
+  const runPlusAction = (actionId, payload) => {
+    setPlusOpen(false);
+    if (actionId === "composer:attach") {
+      onAttach?.();
+      return;
+    }
+    fluxioAction(onRequestAction, actionId, payload);
+  };
+  const plusActions = [
+    ["composer:attach", "Attach context", "File, text, screenshot, or selected artifact"],
+    ["composer:plus:preview", "Preview", "Open artifact or HTML preview when available"],
+    ["composer:plus:browser", "Browser", "Click, inspect, upload, and capture browser proof"],
+    ["composer:plus:app", "Use app", "Oratio, JBheaven, MindTower, or another bridge"],
+    ["composer:plus:skill", "Use skill", "Hermes or OpenClaw skill lane"],
+    ["composer:plus:runtime", "Runtime", "Hermes, OpenClaw, Codex, or app-native thread"],
+    ["composer:plus:model", "Model", "Provider and model route"],
+    ["composer:plus:thinking", "Thinking", "Reasoning effort for the next turn"],
+    ["composer:plus:terminal", "Terminal", "Use command output as context"],
+    ["composer:plus:approval", "Approval", "Request or inspect a gated action"],
+    ["composer:plus:details", "Live details", "Show route, trace, receipts, and proof drawers"],
+  ];
 
   return (
     <section className="fluxos-composer" aria-label="Fluxio command composer">
+      {activeCommentTarget?.id ? (
+        <div className="reference-comment-target" data-executable-comment-target="true">
+          <span>{activeCommentTarget.kind || "Comment target"}</span>
+          <strong>{activeCommentTarget.title || activeCommentTarget.id}</strong>
+          <div className="reference-comment-target-actions">
+            <button onClick={() => fluxioAction(onRequestAction, "run:comment-edit")} type="button">
+              Run with edits
+            </button>
+            <button className="primary" onClick={() => fluxioAction(onRequestAction, "run:comment-execute")} type="button">
+              Run comment
+            </button>
+            <button aria-label="Clear comment target" onClick={() => fluxioAction(onRequestAction, "run:clear-comment-target")} type="button">
+              x
+            </button>
+          </div>
+        </div>
+      ) : null}
       <textarea
         aria-label="Command Fluxio"
+        data-agent-composer-draft="true"
         onChange={event => onChangeDraft?.(event.target.value)}
         placeholder={placeholder}
         value={currentDraft}
       />
       <div className="fluxos-composer-bar">
-        <div className="fluxos-chip-row">
-          {["repo", "screenshot", "terminal", "approval"].map(token => (
-            <button key={token} onClick={() => fluxioAction(onRequestAction, `composer:chip:${token}`)} type="button">
-              {titleizeToken(token)}
-            </button>
-          ))}
-        </div>
         <div className="fluxos-composer-actions">
-          <button aria-label="Attach context" onClick={onAttach} title="Attach context" type="button">
-            <Paperclip size={16} strokeWidth={1.9} />
-          </button>
-          <button aria-label="Start dictation" onClick={onDictation} title="Start dictation" type="button">
-            <Mic size={16} strokeWidth={1.9} />
-          </button>
-          <button className="primary" onClick={submit} type="button">
-            <ArrowUp size={17} strokeWidth={2.1} />
-            <span>Run</span>
-          </button>
+          <div className="fluxos-composer-left-actions">
+            <button
+              aria-expanded={plusOpen ? "true" : "false"}
+              aria-label="Add context or action"
+              className="fluxos-composer-plus-trigger"
+              data-composer-plus-button="true"
+              onClick={() => setPlusOpen(current => !current)}
+              title="Add context or action"
+              type="button"
+            >
+              <Plus size={16} strokeWidth={2} />
+            </button>
+            {plusOpen ? (
+              <div className="fluxos-composer-plus-menu" data-composer-plus-menu="true" role="menu">
+                {plusActions.map(([actionId, label, detail]) => (
+                  <button
+                    data-composer-plus-action={actionId}
+                    key={actionId}
+                    onClick={() => runPlusAction(actionId)}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <strong>{label}</strong>
+                    <span>{detail}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="fluxos-composer-right-actions">
+            <button aria-label="Start dictation" onClick={onDictation} title="Start dictation" type="button">
+              <Mic size={16} strokeWidth={1.9} />
+            </button>
+            <button className="primary" onClick={submit} type="button">
+              <ArrowUp size={17} strokeWidth={2.1} />
+              <span>Run</span>
+            </button>
+          </div>
         </div>
       </div>
       <div className="fluxos-composer-status" aria-label="Composer readiness">
@@ -7103,6 +4673,160 @@ function FluxioComposer({
         <span>Ready with workspace context</span>
         <button onClick={() => fluxioAction(onRequestAction, "composer:workspace")} type="button">Workspace: current</button>
       </div>
+    </section>
+  );
+}
+
+function normalizeReferenceTurnReceipt(value, fallback = {}) {
+  const receipt = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const route = receipt.route && typeof receipt.route === "object" ? receipt.route : fallback.route || {};
+  const command = receipt.command || fallback.command || "Not reported";
+  const assistantMessage = normalizeReferenceReceiptAssistantMessage(
+    [
+      receipt.assistantMessage,
+      receipt.modelMessage,
+      receipt.openRuntimeMessage,
+      receipt.agentMessage,
+      receipt.finalMessage,
+      fallback.assistantMessage,
+      fallback.modelMessage,
+      fallback.openRuntimeMessage,
+      fallback.agentMessage,
+      fallback.finalMessage,
+    ],
+    command,
+  );
+  return {
+    schema: receipt.schema || "fluxio.turn_receipt.v1",
+    command,
+    runtime: receipt.runtime || fallback.runtime || "Not reported",
+    provider: receipt.provider || route.provider || fallback.provider || "Not reported",
+    model: receipt.model || route.model_id || route.model || fallback.model || "Not reported",
+    effort: receipt.effort || route.effort || fallback.effort || "Not reported",
+    status: receipt.status || fallback.status || "recorded",
+    durationMs: receipt.durationMs ?? fallback.durationMs ?? "",
+    sourceType: receipt.sourceType || fallback.sourceType || "",
+    sourceMessageId: receipt.sourceMessageId || fallback.sourceMessageId || "",
+    sourceZone: receipt.sourceZone || fallback.sourceZone || "",
+    changedFiles: [
+      ...asList(receipt.changedFiles),
+      ...asList(receipt.filesChanged),
+      ...asList(fallback.changedFiles),
+      ...asList(fallback.filesChanged),
+    ].map(item => String(item || "").trim()).filter(Boolean),
+    toolTimeline: asList(receipt.toolTimeline || fallback.toolTimeline),
+    assistantMessage,
+    finalMessage: assistantMessage,
+    modelMessageSource: receipt.modelMessageSource || fallback.modelMessageSource || "",
+    modelMessageSourceLabel: receipt.modelMessageSourceLabel || fallback.modelMessageSourceLabel || "",
+    modelMessageSourceTitle: receipt.modelMessageSourceTitle || fallback.modelMessageSourceTitle || "",
+    modelMessageSourceId: receipt.modelMessageSourceId || fallback.modelMessageSourceId || "",
+    transcriptSessionId: receipt.transcriptSessionId || fallback.transcriptSessionId || "",
+    runSummary: receipt.runSummary || fallback.runSummary || "",
+  };
+}
+
+function normalizeReferenceReceiptAssistantMessage(value, command = "") {
+  const candidates = Array.isArray(value) ? value : [value];
+  for (const candidate of candidates) {
+    const normalized = normalizeReferenceReceiptAssistantCandidate(candidate, command);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function normalizeReferenceReceiptAssistantCandidate(value, command = "") {
+  const text = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!text) return "";
+  const collapsedText = text.replace(/\s+/g, " ").trim();
+  const commandText = String(command || "").replace(/\s+/g, " ").trim();
+  if (commandText && collapsedText === commandText) return "";
+  if (/^(command|feedback|response|reply)\s*:?\s+(\/volume\d+\/|[A-Z]:\\|wsl\s+|python\s+-m\s+|node\s+|npm\s+|pnpm\s+|yarn\s+|hermes\s+|opencode\s+|openclaw\s+|codex\s+)/i.test(collapsedText)) {
+    return "";
+  }
+  if (/^(\/volume\d+\/|[A-Z]:\\|wsl\s+|python\s+-m\s+|node\s+|npm\s+|pnpm\s+|yarn\s+|hermes\s+|opencode\s+|openclaw\s+|codex\s+)/i.test(collapsedText)) {
+    return "";
+  }
+  if (/\b(mission one-shot|execute model mission|--objective|--mission-id|--provider|--model)\b/i.test(collapsedText)) {
+    return "";
+  }
+  if (/\b(delegated runtime lane launched|delegated lane launched|file mutation completed|workspace search completed|approval required before|waiting for operator approval|lane action routed)\b/i.test(collapsedText)) {
+    return "";
+  }
+  const assistantMessage = finalAssistantMessageFromRuntimeOutput(text);
+  if (assistantMessage) return assistantMessage;
+  return text;
+}
+
+function FluxioTurnReceiptStrip({ receipt, runtimeCompartment }) {
+  const normalized = normalizeReferenceTurnReceipt(receipt || runtimeCompartment?.turnReceipt, {
+    runtime: runtimeCompartment?.runtime,
+    route: runtimeCompartment?.route,
+    changedFiles: runtimeCompartment?.filesChanged,
+    toolTimeline: runtimeCompartment?.toolTimeline || runtimeCompartment?.recentActivity,
+    status: runtimeCompartment?.state,
+    durationMs: runtimeCompartment?.lastRoundtripMs,
+  });
+  const changedFiles = asList(normalized.changedFiles);
+  const timeline = asList(normalized.toolTimeline);
+  const hasSignal =
+    normalized.command ||
+    changedFiles.length ||
+    timeline.length ||
+    normalized.runtime ||
+    normalized.assistantMessage;
+  if (!hasSignal) return null;
+  const duration = Number(normalized.durationMs);
+  const durationLabel = Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)}ms` : "Not reported";
+  const modelSourceParts = [
+    normalized.modelMessageSourceLabel,
+    normalized.modelMessageSourceTitle,
+    normalized.transcriptSessionId ? `session ${normalized.transcriptSessionId}` : "",
+  ].filter(Boolean);
+  return (
+    <section className="fluxos-turn-receipt-strip compact" data-turn-receipt="true" data-modified-files-strip="true">
+      <div className="fluxos-turn-receipt-grid" aria-label="Compact run receipt">
+        <strong>{titleizeToken(normalized.status || "recorded")}</strong>
+        <span>Runtime: {titleizeToken(normalized.runtime)}</span>
+        <span>Provider: {titleizeToken(normalized.provider)}</span>
+        <span>Model: {normalized.model}</span>
+        <span>Thinking: {titleizeToken(normalized.effort)}</span>
+        <span>Duration: {durationLabel}</span>
+      </div>
+      {normalized.sourceType === "comment" ? (
+        <p>Executed comment from {normalized.sourceZone || "selected row"} {normalized.sourceMessageId || ""}.</p>
+      ) : null}
+      <div className="fluxos-modified-files-strip">
+        <strong>{changedFiles.length ? `Modified files (${changedFiles.length})` : "No files modified"}</strong>
+        {changedFiles.length ? (
+          <div>
+            {changedFiles.slice(0, 4).map(file => <code key={`fluxos-modified-${file}`}>{file}</code>)}
+          </div>
+        ) : (
+          <span>No changed-file receipt was attached to this turn.</span>
+        )}
+      </div>
+      {(normalized.command || changedFiles.length > 4 || timeline.length || normalized.runSummary || normalized.assistantMessage) ? (
+        <details className="fluxos-message-trace">
+          <summary>Trace available</summary>
+          <p className="fluxos-turn-command">Command: {normalized.command || "Not reported"}</p>
+          <div className={`fluxos-turn-agent-message ${normalized.assistantMessage ? "" : "empty"}`.trim()} data-final-model-message="true">
+            <span>Model / OpenRuntime message</span>
+            <p>{normalized.assistantMessage || "No model or OpenRuntime message was returned for this run."}</p>
+            {modelSourceParts.length ? (
+              <small data-model-message-source="true">{modelSourceParts.join(" · ")}</small>
+            ) : null}
+          </div>
+          {changedFiles.length > 4 ? <pre>{changedFiles.join("\n")}</pre> : null}
+          {timeline.length ? <pre>{JSON.stringify(timeline.slice(-12), null, 2)}</pre> : null}
+          {normalized.runSummary ? <p>Run summary: {normalized.runSummary}</p> : null}
+          {normalized.assistantMessage ? <p>Model / OpenRuntime message: {normalized.assistantMessage}</p> : null}
+        </details>
+      ) : null}
     </section>
   );
 }
@@ -7224,6 +4948,7 @@ function FluxioHomeSurface(props) {
         </section>
 
         <FluxioComposer
+          activeCommentTarget={props.activeCommentTarget}
           draft={draft}
           onAttach={onAttach}
           onChangeDraft={onChangeDraft}
@@ -7239,12 +4964,15 @@ function FluxioHomeSurface(props) {
 
 function FluxioAgentSurface(props) {
   const {
+    agentLiveThreadProof,
     builderRows,
     draft,
     liveDataStatus,
     messages,
+    notificationItems = [],
     onAttach,
     onChangeDraft,
+    onConnectedAppHandoff,
     onDictation,
     onRequestAction,
     onRuntimeChange,
@@ -7257,28 +4985,109 @@ function FluxioAgentSurface(props) {
     selectedRuntimeLabel,
     timelineMoments,
     missionLoop,
+    missionWatchdog,
     workbenchState,
   } = props;
   const isLiveBackend = liveDataStatus?.previewMode === "live";
-  const allMessages = asList(messages);
+  const [agentClarityMode, setAgentClarityMode] = useState("focus");
+  const [localLaneControlReceipt, setLocalLaneControlReceipt] = useState(null);
+  const [agentPreviewWindowOpen, setAgentPreviewWindowOpen] = useState(false);
+  const agentPreviewPanelRef = useRef(null);
+  const normalizedAgentClarityMode = agentClarityMode === "full" ? "full" : "focus";
+  const agentFocusMode = isLiveBackend && normalizedAgentClarityMode === "focus";
+  const setLiveAgentClarityMode = mode => {
+    setAgentClarityMode(mode === "full" ? "full" : "focus");
+  };
+  const persistedMissionChatMessages = useMemo(() => {
+    if (typeof window === "undefined") {
+      return [];
+    }
+    const scopedMissionId = String(
+      workbenchState?.missionId ||
+        missionLoop?.missionId ||
+        missionLoop?.mission_id ||
+        "",
+    ).trim();
+    let transcriptMap = {};
+    try {
+      transcriptMap = JSON.parse(window.localStorage?.getItem("fluxio.chat.session_transcripts") || "{}");
+    } catch {
+      transcriptMap = {};
+    }
+    if (!transcriptMap || typeof transcriptMap !== "object" || Array.isArray(transcriptMap)) {
+      return [];
+    }
+    const exactSessionId = scopedMissionId ? `mission-chat-${scopedMissionId}` : "";
+    const directTurns = exactSessionId ? asList(transcriptMap[exactSessionId]) : [];
+    return directTurns
+      .map((turn, index) => {
+        const role = String(turn?.role || "").toLowerCase() === "assistant" ? "assistant" : "user";
+        const title = String(turn?.title || turn?.text || turn?.detail || "").trim();
+        if (!title) {
+          return null;
+        }
+        return {
+          id: turn?.id || `persisted-mission-chat-${index}`,
+          missionId: scopedMissionId,
+          role,
+          label: role === "assistant" ? "Hermes" : "You",
+          title,
+          detail: turn?.detail && turn.detail !== title ? turn.detail : "",
+          meta: turn?.meta || "",
+          createdAt: turn?.createdAt || "",
+          tone: turn?.tone || "neutral",
+          pending: Boolean(turn?.pending),
+          conversationTurn: true,
+          messageKind: "dialogue",
+          source: turn?.source || "",
+          chips: asList(turn?.chips).slice(0, 3),
+          technicalDetail: turn?.technicalDetail || "",
+          turnReceipt: turn?.turnReceipt && typeof turn.turnReceipt === "object" ? turn.turnReceipt : null,
+        };
+      })
+      .filter(Boolean)
+      .filter(message => !message.pending && isTrustedLiveDialogueSource(message));
+  }, [messages, missionLoop?.missionId, missionLoop?.mission_id, workbenchState?.missionId]);
+  const trustedPersistedMissionChatMessages = hasTrustedRuntimeReply(persistedMissionChatMessages)
+    ? persistedMissionChatMessages
+    : [];
+  const sourceMessages = asList(messages);
+  const sourceDialogueKeys = new Set(
+    sourceMessages
+      .filter(isAgentDialogueTurn)
+      .map(message =>
+        [
+          String(message?.role || "").toLowerCase(),
+          String(message?.title || message?.detail || "").replace(/\s+/g, " ").trim().toLowerCase(),
+        ].join(":"),
+      ),
+  );
+  const uniquePersistedMissionChatMessages = trustedPersistedMissionChatMessages.filter(message => {
+    const key = [
+      String(message?.role || "").toLowerCase(),
+      String(message?.title || message?.detail || "").replace(/\s+/g, " ").trim().toLowerCase(),
+    ].join(":");
+    return !sourceDialogueKeys.has(key);
+  });
+  const allMessages = uniquePersistedMissionChatMessages.length > 0
+    ? [...sourceMessages, ...uniquePersistedMissionChatMessages]
+    : sourceMessages;
   const compactMessages = compactAgentMessages(allMessages);
-  const visibleMessages = visibleAgentMessages(compactMessages, 36, 8, { requireRuntimeReports: isLiveBackend });
+  const visibleMessages = visibleAgentMessages(compactMessages, 36, 8, { requireRuntimeReports: isLiveBackend, requireTrustedDialogue: isLiveBackend });
   const hiddenMessageCount = Math.max(0, compactMessages.length - visibleMessages.length);
   const [selectedMessageId, setSelectedMessageId] = useState("");
   const [selectedDiagnosticMessageId, setSelectedDiagnosticMessageId] = useState("");
+  const [agentDismissedNotificationIds, setAgentDismissedNotificationIds] = useState(() => new Set());
   const selectionScopeRef = useRef("");
   const manualMessageSelectionRef = useRef(false);
+  const manualSelectedMessageKeyRef = useRef("");
+  const agentThreadRef = useRef(null);
+  const agentThreadNativeCleanupRef = useRef(null);
   const thinkingRows = orderedAgentMessagesNewestFirst(
     compactMessages.filter(message =>
-      !message?.traceOnly &&
-      !isRuntimeOutputAgentMessage(message) &&
-      !isControlRoomBookkeepingAgentMessage(message) &&
-      (
-        String(message?.label || message?.roleLabel || "").toLowerCase().includes("hermes") ||
-        String(message?.label || "").toLowerCase().includes("thinking") ||
-        String(message?.label || "").toLowerCase().includes("trace") ||
-        (message?.technicalDetail && !message?.traceOnly)
-      ),
+      !isRuntimeTranscriptIntegrityWarning(message) &&
+      !isProofArtifactAgentMessage(message) &&
+      isRuntimeActivityAgentMessage(message),
     ),
   ).slice(0, 5);
   const livePlanRows = orderedAgentMessagesNewestFirst(
@@ -7286,11 +5095,11 @@ function FluxioAgentSurface(props) {
       const label = String(message?.label || message?.roleLabel || "").toLowerCase();
       return (
         !isLowSignalAgentMessage(message) &&
-        !message?.traceOnly &&
-        !isRuntimeOutputAgentMessage(message) &&
+        !isRuntimeTranscriptIntegrityWarning(message) &&
+        !isProofArtifactAgentMessage(message) &&
         !isControlRoomBookkeepingAgentMessage(message) &&
         (
-          message?.processMessage ||
+          isRuntimeActivityAgentMessage(message) ||
           message?.emphasis ||
           label.includes("planner") ||
           label.includes("mission review") ||
@@ -7329,6 +5138,70 @@ function FluxioAgentSurface(props) {
     .slice(0, 4)
     .map(titleizeToken)
     .join(" / ");
+  const agentMissionRouteRows = ["planner", "executor", "verifier"]
+    .map(role => {
+      const lane = liveLaneRows.find(item => String(item.role || item.label || "").trim().toLowerCase() === role);
+      if (!lane) {
+        return null;
+      }
+      const providerRaw = String(lane.provider || lane.providerId || lane.provider_id || "").trim();
+      const modelRaw = String(lane.model || lane.modelId || lane.model_id || "").trim();
+      const effortRaw = String(lane.effort || "").trim();
+      const isDefaultAlias = value => /^(default|workspace default|profile default|route default|model default|provider default)$/i.test(String(value || "").trim());
+      const provider = isDefaultAlias(providerRaw) ? "" : providerRaw;
+      const model = isDefaultAlias(modelRaw) ? "" : modelRaw;
+      const effort = isDefaultAlias(effortRaw) ? "" : effortRaw;
+      return {
+        role,
+        provider,
+        model,
+        effort,
+        label: `${titleizeToken(role)} · ${provider ? titleizeToken(provider) : "provider not reported"} · ${model && model.toLowerCase() !== "default" ? model : "model not reported"}${effort ? ` · ${titleizeToken(effort)}` : ""}`,
+      };
+    })
+    .filter(Boolean);
+  const agentBottomRouteRows = [
+    ...agentMissionRouteRows,
+    {
+      role: "done",
+      provider: "",
+      model: "",
+      effort: "",
+      label: String(missionStatus || "").toLowerCase().includes("complete") ? "Done · completed" : "Done · pending",
+    },
+  ];
+  useEffect(() => {
+    setLocalLaneControlReceipt(null);
+  }, [workbenchState?.missionId]);
+  const buildLaneControlReceiptView = useCallback((lane, control, receipt = null, status = "pending") => {
+    const role = String(lane?.role || lane?.label || "").trim().toLowerCase() || "lane";
+    const action = receipt?.action || control?.action || control?.id || "inspect";
+    const inspectAction = ["inspect", "runtime"].includes(String(action || "").toLowerCase());
+    const mutationProof = receipt?.stateMutationProof || {
+      field: "mission.state.current_runtime_lane",
+      before: inspectAction ? role : "",
+      after: role,
+      observedAfterWrite: status === "recorded" || inspectAction,
+      observationSource: inspectAction ? "live-lane-inspect-noop" : "pending-backend-write",
+    };
+    return {
+      id: receipt?.receiptId || `local-${workbenchState?.missionId || "mission"}-${role}-${action}`,
+      missionId: receipt?.missionId || lane?.missionId || workbenchState?.missionId || "",
+      laneRole: role,
+      action,
+      label: control?.label || titleizeToken(action),
+      status: receipt?.status || status,
+      detail: receipt?.receiptId
+        ? `Durable lane control receipt ${receipt.receiptId} recorded ${action} for ${role}.`
+        : inspectAction
+          ? `Lane inspect proof observed ${role} from the live mission lane data; no mutation was required.`
+        : `Lane control receipt requested for ${role}; waiting for the live backend receipt.`,
+      stateMutationProof: mutationProof,
+      validation: receipt?.validation || {},
+      at: receipt?.generatedAt || new Date().toISOString(),
+    };
+  }, [workbenchState?.missionId]);
+  const visibleLaneControlReceipt = workbenchState?.laneControlReceipt || localLaneControlReceipt || null;
   const livePreviewUrlCandidates = [
     workbenchState?.previewUrl,
     workbenchState?.liveReview?.previewUrl,
@@ -7336,7 +5209,7 @@ function FluxioAgentSurface(props) {
     workbenchState?.liveReview?.previewActionUrl,
   ];
   const livePreviewActionUrl = livePreviewUrlCandidates.find(isUsablePreviewUrl) || "";
-  const livePreviewFrameUrl = livePreviewUrlCandidates.find(isMissionPreviewUrl) || "";
+  const livePreviewFrameUrl = livePreviewUrlCandidates.find(isWorkbenchPreviewFrameUrl) || "";
   const visibleMessageEntries = useMemo(
     () => visibleMessages.map((message, index) => ({
       key: stableAgentMessageKey(message, `message-${index}`),
@@ -7344,7 +5217,28 @@ function FluxioAgentSurface(props) {
     })).filter(entry => entry.key),
     [visibleMessages],
   );
-  const visibleMessageKeySignature = visibleMessageEntries.map(entry => entry.key).join("|");
+  const activeMissionIdForMessages = String(workbenchState?.missionId || "").trim();
+  const liveDialogueEntries = visibleMessageEntries.filter(entry =>
+    isAgentDialogueTurn(entry?.message) &&
+      isTrustedLiveDialogueSource(entry?.message) &&
+      (!activeMissionIdForMessages ||
+        String(entry?.message?.missionId || entry?.message?.mission_id || "").trim() === activeMissionIdForMessages),
+  );
+  const liveScopedMessageEntries = useMemo(
+    () => {
+      if (!isLiveBackend || !activeMissionIdForMessages) {
+        return visibleMessageEntries;
+      }
+      return visibleMessageEntries.filter(entry => {
+        const entryMissionId = String(entry?.message?.missionId || entry?.message?.mission_id || "").trim();
+        return entryMissionId === activeMissionIdForMessages;
+      });
+    },
+    [activeMissionIdForMessages, isLiveBackend, visibleMessageEntries],
+  );
+  const threadMessageEntries = isLiveBackend ? liveDialogueEntries : visibleMessageEntries;
+  const threadMessages = threadMessageEntries.map(entry => entry.message);
+  const visibleMessageKeySignature = threadMessageEntries.map(entry => entry.key).join("|");
   const selectableMessageEntries = useMemo(() => {
     const entries = [];
     const keys = new Set();
@@ -7353,11 +5247,11 @@ function FluxioAgentSurface(props) {
       keys.add(key);
       entries.push({ key, message });
     };
-    visibleMessages.forEach((message, index) => {
-      pushEntry(message, stableAgentMessageKey(message, `message-${index}`));
+    threadMessageEntries.forEach(({ message, key }, index) => {
+      pushEntry(message, key || stableAgentMessageKey(message, `message-${index}`));
     });
     return entries;
-  }, [visibleMessages]);
+  }, [threadMessageEntries]);
   const diagnosticMessageEntries = useMemo(() => {
     const entries = [];
     const keys = new Set();
@@ -7391,84 +5285,355 @@ function FluxioAgentSurface(props) {
       selectionScopeRef.current = messageSelectionScope;
       if (scopeChanged) {
         manualMessageSelectionRef.current = false;
+        manualSelectedMessageKeyRef.current = "";
       }
+      const manualEntry = manualSelectedMessageKeyRef.current
+        ? selectableMessageEntries.find(entry => entry.key === manualSelectedMessageKeyRef.current)
+        : null;
       const currentEntry = current
         ? selectableMessageEntries.find(entry => entry.key === current)
         : null;
+      const manualEntryMissionId = String(
+        manualEntry?.message?.missionId ||
+          manualEntry?.message?.mission_id ||
+          "",
+      ).trim();
       const currentEntryMissionId = String(
         currentEntry?.message?.missionId ||
           currentEntry?.message?.mission_id ||
-          workbenchState?.missionId ||
           "",
       ).trim();
       const scopedMissionId = String(workbenchState?.missionId || "").trim();
       if (
+        manualEntry &&
+        manualMessageSelectionRef.current &&
+        (!isLiveBackend || !scopedMissionId || !manualEntryMissionId || manualEntryMissionId === scopedMissionId)
+      ) {
+        return manualEntry.key;
+      }
+      if (
         current &&
         currentEntry &&
         manualMessageSelectionRef.current &&
-        (!isLiveBackend || !scopedMissionId || currentEntryMissionId === scopedMissionId)
+        (!isLiveBackend || !scopedMissionId || !currentEntryMissionId || currentEntryMissionId === scopedMissionId)
       ) {
         return current;
       }
-      const latestRuntimeOutputMessage = visibleMessages.find(isRuntimeOutputAgentMessage);
-      const latestMeaningfulMessage = latestRuntimeOutputMessage || visibleMessages.find(isMeaningfulDefaultAgentMessage);
+      const latestRuntimeOutputMessage = threadMessages.find(isRuntimeOutputAgentMessage);
+      const latestMeaningfulMessage = latestRuntimeOutputMessage || threadMessages.find(isMeaningfulDefaultAgentMessage);
       const defaultEntry =
-        visibleMessageEntries.find(entry => entry.message === latestMeaningfulMessage) ||
-        visibleMessageEntries.find(entry => entry.message === visibleMessages[visibleMessages.length - 1]) ||
+        threadMessageEntries.find(entry => entry.message === latestMeaningfulMessage) ||
+        threadMessageEntries.find(entry => entry.message === threadMessages[threadMessages.length - 1]) ||
         (isLiveBackend ? null : selectableMessageEntries[selectableMessageEntries.length - 1]);
       return defaultEntry?.key || "";
     });
-  }, [isLiveBackend, messageSelectionContentSignature, messageSelectionScope, selectableMessageEntries, visibleMessageEntries, visibleMessages, workbenchState?.missionId]);
+  }, [isLiveBackend, messageSelectionContentSignature, messageSelectionScope, selectableMessageEntries, threadMessageEntries, threadMessages, workbenchState?.missionId]);
   useEffect(() => {
     setSelectedDiagnosticMessageId("");
   }, [messageSelectionScope]);
+  useEffect(() => {
+    if (!isLiveBackend || !visibleMessageKeySignature) {
+      return;
+    }
+    const node = agentThreadRef.current;
+    if (!node) {
+      return;
+    }
+    const scrollToLatest = () => {
+      node.scrollTop = node.scrollHeight;
+    };
+    scrollToLatest();
+    const frame = window.requestAnimationFrame(scrollToLatest);
+    return () => window.cancelAnimationFrame(frame);
+  }, [isLiveBackend, messageSelectionScope, visibleMessageKeySignature]);
   const selectedMessageEntry = selectableMessageEntries.find(entry => entry.key === selectedMessageId) || null;
   const autoSelectedMessageEntry = isLiveBackend
-    ? selectedMessageEntry || visibleMessageEntries[0] || null
+    ? selectedMessageEntry || threadMessageEntries[0] || null
     : selectedMessageEntry;
   const resolvedSelectedMessageKey = autoSelectedMessageEntry?.key || "";
   const selectedMessage = autoSelectedMessageEntry?.message || null;
   const messageSelectionActive = Boolean(autoSelectedMessageEntry && selectedMessage);
-  const selectedMessagePreviewCandidates = previewUrlCandidatesForMessage(selectedMessage);
+  const selectedEvidenceMessage = selectedMessage || null;
+  const selectedMessagePreviewCandidates =
+    selectedEvidenceMessage && !isAgentDialogueTurn(selectedEvidenceMessage)
+      ? previewUrlCandidatesForMessage(selectedEvidenceMessage)
+      : [];
   const selectedMessagePreviewActionUrl = selectedMessagePreviewCandidates.find(isUsablePreviewUrl) || "";
-  const messageSelectionPinned = Boolean(autoSelectedMessageEntry || selectedMessageId);
-  const activePreviewActionUrl = messageSelectionPinned
+  const messageSelectionPinned = !agentPreviewWindowOpen && Boolean(autoSelectedMessageEntry || selectedMessageId);
+  const activePreviewActionUrl = agentPreviewWindowOpen
+    ? livePreviewActionUrl
+    : messageSelectionPinned
     ? selectedMessagePreviewActionUrl
     : isLiveBackend
-      ? ""
+      ? livePreviewActionUrl
       : livePreviewActionUrl;
-  const activePreviewFrameUrl = isLiveBackend || messageSelectionPinned ? "" : livePreviewFrameUrl;
+  const activePreviewFrameUrl = agentPreviewWindowOpen
+    ? livePreviewFrameUrl
+    : isLiveBackend || messageSelectionPinned
+      ? ""
+      : livePreviewFrameUrl;
   const livePreviewFrameBlocked = Boolean(activePreviewActionUrl && !activePreviewFrameUrl);
   const selectedMessageSourceLabel = [
-    selectedMessage?.label || selectedMessage?.roleLabel || "Live mission row",
-    selectedMessage?.runtimeId || workbenchState?.runtime || "",
-    selectedMessage?.createdAt || selectedMessage?.meta || "",
+    selectedEvidenceMessage?.label || selectedEvidenceMessage?.roleLabel || "Live runtime report",
+    selectedEvidenceMessage?.runtimeId || workbenchState?.runtime || "",
+    selectedEvidenceMessage?.createdAt || selectedEvidenceMessage?.meta || "",
   ].filter(Boolean).join(" · ");
-  const selectedMessageBody = selectedMessage ? agentMessageDisplayDetail(selectedMessage) : "";
-  const liveRuntimeReportCount = visibleMessages.filter(isRuntimeOutputAgentMessage).length;
+  const selectedMessageBody = selectedEvidenceMessage
+    ? agentMessageDisplayDetail(selectedEvidenceMessage) || agentMessageDisplayTitle(selectedEvidenceMessage)
+    : "";
+  const selectedMessageRuntimeLabel = selectedEvidenceMessage?.runtimeId || workbenchState?.runtime || "live";
+  const selectedMissionId = String(workbenchState?.missionId || "").trim();
+  const liveProofRows = asList(workbenchState?.proofDiff?.rows);
+  const liveProofArtifacts = asList(workbenchState?.artifacts);
+  const liveWatchdogIssue = [
+    ...asList(missionWatchdog?.issues),
+    ...asList(missionWatchdog?.problemRegistry?.problems),
+  ].find(item => {
+    const itemMissionId = String(
+      item?.missionId ||
+        item?.mission_id ||
+        item?.mission ||
+        item?.problem?.missionId ||
+        item?.problem?.mission_id ||
+        "",
+    ).trim();
+    return selectedMissionId && itemMissionId === selectedMissionId;
+  });
+  const liveProofNextAction = [
+    workbenchState?.progress?.nextAction,
+    liveWatchdogIssue?.firstStep,
+    liveWatchdogIssue?.nextAction,
+    liveWatchdogIssue?.detail,
+    liveWatchdogIssue?.message,
+    missionWatchdog?.nextAction,
+  ].map(value => String(value || "").trim()).find(Boolean) || "";
+  const liveProofSourceLabel = [
+    liveDataStatus?.source || "control-room summary",
+    selectedEvidenceMessage ? "selected mission detail" : "",
+    liveProofRows.length ? workbenchState?.proofDiff?.source || "proof rows" : "",
+    liveProofArtifacts.length ? "artifact rows" : "",
+  ].filter(Boolean).join(" + ");
+  const liveProofExcerpt = selectedMessageBody
+    ? firstUsefulRuntimeLine(selectedMessageBody).slice(0, 260)
+    : "";
+  const liveRuntimeReportCount = threadMessages.filter(isRuntimeOutputAgentMessage).length;
+  const liveDialogueCount = threadMessages.filter(isAgentDialogueTurn).length;
+  const liveProofBriefStats = [
+    ["Mission", selectedMissionId ? selectedMissionId.slice(0, 18) : "none", selectedMissionId ? "selected" : "not selected"],
+    ["Runtime", titleizeToken(workbenchState?.runtime || missionLoop?.runtime || "live"), selectedMessageRuntimeLabel || "live"],
+    ["Reports", liveRuntimeReportCount, selectedEvidenceMessage ? "selected" : "none selected"],
+    ["Proof", liveProofRows.length + liveProofArtifacts.length, liveProofRows.length ? "rows attached" : liveProofArtifacts.length ? "artifacts" : "empty"],
+  ];
+  const providerReadiness = workbenchState?.providerReadiness || {};
+  const runtimeCapabilityItems = asList(workbenchState?.runtimeCapabilityInventory?.items)
+    .slice(0, 4)
+    .map(item => {
+      const capabilityText = `${item?.key || ""} ${item?.id || ""} ${item?.label || ""} ${item?.detail || ""}`.toLowerCase();
+      if (capabilityText.includes("opencode") && providerReadiness?.openCodeGo?.ready) {
+        return {
+          ...item,
+          status: "ready",
+          detail: providerReadiness.openCodeGo.detail || "OPENCODE_API_KEY is visible to the runtime.",
+        };
+      }
+      if (capabilityText.includes("minimax") && providerReadiness?.minimax?.ready) {
+        return {
+          ...item,
+          status: "ready",
+          detail: item?.detail || providerReadiness.minimax.detail || "MiniMax auth is visible to the runtime.",
+        };
+      }
+      return item;
+    });
+  const connectedAppItems = asList(workbenchState?.connectedAppManager?.items).slice(0, 8);
+  const priorityConnectedAppItems = connectedAppItems
+    .slice()
+    .sort((left, right) => {
+      const leftId = String(left?.app_id || left?.id || "").toLowerCase();
+      const rightId = String(right?.app_id || right?.id || "").toLowerCase();
+      const priority = id => id === "oratio-viva" ? 0 : id === "mind-tower" ? 1 : id === "jbheaven" ? 2 : 3;
+      return priority(leftId) - priority(rightId);
+    })
+    .slice(0, 3)
+    .map(item => {
+      const nativeActions = asList(item.appNativeActions || item.action_hooks);
+      const prioritizedActions = nativeActions
+        .slice()
+        .sort((left, right) => {
+          const leftId = String(left?.hookId || left?.hook_id || left?.id || "").toLowerCase();
+          const rightId = String(right?.hookId || right?.hook_id || right?.id || "").toLowerCase();
+          const priority = id => id.includes("timebox") ? 0 : id.includes("skill") ? 1 : 2;
+          return priority(leftId) - priority(rightId);
+        });
+      const action =
+        prioritizedActions.find(candidate => String(candidate?.hookId || candidate?.hook_id || "").toLowerCase().includes("skill")) ||
+        prioritizedActions[0] ||
+        null;
+      const hookId = action?.hookId || action?.hook_id || action?.id || "";
+      const mode = action
+        ? (String(hookId).toLowerCase().includes("skill") ? "skill" : "run")
+        : "run";
+      const managerRole = titleizeToken(item.ui_hints?.runtimeManager || item.ui_hints?.bridgeRole || item.bridge_transport || "app manager");
+      const aliases = asList(item.ui_hints?.aliases).slice(0, 4).join(" · ");
+      const latestTask = item.latest_task_result || item.latestTaskResult || {};
+      const latestPayload = latestTask.payload || {};
+      const latestSummary =
+        item.latestSummary ||
+        latestTask.resultSummary ||
+        latestTask.result_summary ||
+        item.contextSummary ||
+        "No automation proof reported yet.";
+      const statusLabel =
+        item.statusLabel ||
+        `${titleizeToken(item.status || "unknown")} / ${titleizeToken(item.bridge_health || "unknown")}`;
+      const proofLabel = [
+        latestTask.label || latestTask.taskId || latestTask.task_id || "App automation",
+        latestTask.status ? titleizeToken(latestTask.status) : "",
+        latestTask.approvalStatus || latestTask.approval_status ? `approval ${titleizeToken(latestTask.approvalStatus || latestTask.approval_status)}` : "",
+      ].filter(Boolean).join(" · ");
+      const safeDirections = asList(latestPayload.safeDirections).slice(0, 3);
+      const skillCandidate = latestPayload.skillCandidate || item.ui_hints?.skillCandidate || "";
+      const startCommand = item.ui_hints?.startCommand || latestPayload.startCommand || "";
+      const healthUrl = item.ui_hints?.healthUrl || latestPayload.healthUrl || "";
+      const workspaceQuickActions = [
+        startCommand
+          ? {
+              action: {
+                actionId: `start-${item.app_id || item.id || ""}`,
+                label: "Start app",
+                commandSurface: "bridge.start_app",
+                requiresApproval: false,
+              },
+              hookId: `start-${item.app_id || item.id || ""}`,
+              mode: "workspace",
+              label: "Start app",
+              review: false,
+            }
+          : null,
+        healthUrl
+          ? {
+              action: {
+                actionId: `check-${item.app_id || item.id || ""}-health`,
+                label: "Check health",
+                commandSurface: "bridge.app_health",
+                requiresApproval: false,
+              },
+              hookId: `check-${item.app_id || item.id || ""}-health`,
+              mode: "workspace",
+              label: "Check health",
+              review: false,
+            }
+          : null,
+      ].filter(Boolean);
+      const nativeQuickActions = (prioritizedActions.length ? prioritizedActions : [action].filter(Boolean))
+        .slice(0, 2)
+        .map(candidate => {
+          const candidateHookId = candidate?.hookId || candidate?.hook_id || candidate?.id || "";
+          const candidateMode = String(candidateHookId).toLowerCase().includes("skill") ? "skill" : "run";
+          const baseLabel = candidate?.label || (candidateMode === "skill" ? "Make Skill" : "Use In Agent");
+          const visibleLabel = /^draft\b/i.test(String(baseLabel || "")) ? baseLabel : `Draft ${baseLabel}`;
+          return {
+            action: candidate,
+            hookId: candidateHookId,
+            mode: candidateMode,
+            label: visibleLabel,
+            review: Boolean(candidate?.requiresApproval || candidate?.requires_approval),
+          };
+        });
+      const quickActions = [...workspaceQuickActions, ...nativeQuickActions].slice(0, 4);
+      return {
+        item,
+        action,
+        mode,
+        hookId,
+        managerRole,
+        aliases,
+        label: action?.label || (mode === "skill" ? "Make Skill" : "Use In Agent"),
+        review: Boolean(action?.requiresApproval || action?.requires_approval),
+        quickActions,
+        latestSummary,
+        statusLabel,
+        proofLabel,
+        safeDirections,
+        skillCandidate,
+        startCommand,
+        healthUrl,
+      };
+    });
+  const liveThreadProof = agentLiveThreadProof?.schema === "fluxio.agent_live_thread_proof.v1"
+    ? agentLiveThreadProof
+    : null;
+  const liveThreadProofTone =
+    !liveThreadProof || ["loading", "waiting_for_detail", "no_mission_selected"].includes(liveThreadProof.status)
+      ? "warn"
+      : liveThreadProof.status === "error"
+        ? "bad"
+        : liveThreadProof.transcriptStatus === "attached" || Number(liveThreadProof.runtimeReportCount || 0) > 0
+          ? "good"
+          : "neutral";
+  const liveThreadProofStats = liveThreadProof
+    ? [
+        ["Messages", Number(liveThreadProof.agentMessageCount || 0), `${Number(liveThreadProof.realMessageCount || 0)} live rows`],
+        ["Transcript", titleizeToken(liveThreadProof.transcriptStatus || "pending"), liveThreadProof.transcriptSessionId || "no session"],
+        ["Budget", titleizeToken(liveThreadProof.budgetStatus || "pending"), liveThreadProof.payloadBytes ? `${Math.round(Number(liveThreadProof.payloadBytes) / 1000)} KB` : "no payload"],
+        ["Cache", titleizeToken(liveThreadProof.cacheStatus || "pending"), liveThreadProof.cacheFreshness || liveThreadProof.source || "live detail"],
+      ]
+    : [];
   const hasLiveRuntimeReports = liveRuntimeReportCount > 0;
-  const selectedMessageRuntimeLabel = selectedMessage?.runtimeId || workbenchState?.runtime || "live";
-  const selectedMessageTimeLabel = timestampLabel(selectedMessage?.createdAt || selectedMessage?.timestamp || selectedMessage?.time || "");
-  const selectedMessageKindLabel = isRuntimeOutputAgentMessage(selectedMessage)
-    ? "Hermes runtime report"
-    : isLiveRuntimeReportMessage(selectedMessage)
-      ? "Hermes transcript"
-    : selectedMessage?.processMessage
+  const liveMissionReportBlocked =
+    isLiveBackend &&
+    !hasLiveRuntimeReports &&
+    threadMessages.length === 0;
+  const selectedMessageTimeLabel = timestampLabel(selectedEvidenceMessage?.createdAt || selectedEvidenceMessage?.timestamp || selectedEvidenceMessage?.time || "");
+  const selectedMessageKindLabel = isRuntimeOutputAgentMessage(selectedEvidenceMessage)
+    ? "Proof artifact"
+    : isLiveRuntimeReportMessage(selectedEvidenceMessage)
+      ? "Runtime activity"
+    : selectedEvidenceMessage?.processMessage
       ? "Runtime trace"
-      : selectedMessage
+      : selectedEvidenceMessage
         ? "Mission message"
         : "Runtime report";
   const previewState = messageSelectionPinned
     ? "selected-message"
+    : agentPreviewWindowOpen
+      ? "agent-preview-window"
     : activePreviewFrameUrl
       ? "mission-frame"
       : "empty";
   const liveThreadFirstStats = [
-    ["Messages", visibleMessages.length, hiddenMessageCount > 0 ? `${hiddenMessageCount} older` : "shown"],
-    ["Selected", selectedMessage ? "1" : "0", selectedMessage ? "report pinned" : "waiting"],
+    ["Dialogue", liveDialogueCount, hiddenMessageCount > 0 ? `${hiddenMessageCount} evidence rows held back` : "mission scoped"],
+    ["Selected", selectedMessage ? "1" : "0", selectedMessage ? "turn pinned" : "waiting"],
     ["Lanes", liveLaneRows.length, liveLaneRoleSummary || "planner/executor/verifier"],
     ["Alerts", Number(liveDataStatus?.notificationCount || 0), `${Number(liveDataStatus?.sliceNotificationCount || 0)} slice`],
   ];
+  const liveAgentNotificationRows = isLiveBackend
+    ? asList(notificationItems)
+        .map((item, index) => ({ item, id: referenceNotificationId(item, index) }))
+        .slice(0, 4)
+        .filter(entry => entry.id && !agentDismissedNotificationIds.has(entry.id))
+    : [];
+  const clearAgentNotifications = useCallback(() => {
+    setAgentDismissedNotificationIds(current => {
+      const next = new Set(current);
+      for (const entry of liveAgentNotificationRows) {
+        next.add(entry.id);
+      }
+      return next;
+    });
+  }, [liveAgentNotificationRows]);
+  const dismissAgentNotification = useCallback(id => {
+    const normalized = String(id || "").trim();
+    if (!normalized) return;
+    setAgentDismissedNotificationIds(current => {
+      const next = new Set(current);
+      next.add(normalized);
+      return next;
+    });
+  }, []);
+  const restoreAgentNotifications = useCallback(() => {
+    setAgentDismissedNotificationIds(new Set());
+  }, []);
   const liveDiagnosticStats = [
     ["Trace", thinkingRows.length, "rows"],
     ["Lanes", liveLaneRows.length, liveLaneRoleSummary || "runtime"],
@@ -7478,21 +5643,76 @@ function FluxioAgentSurface(props) {
     workbenchState?.previewSourceLabel ||
     workbenchState?.previewLabel ||
     (isLiveBackend ? "No live preview frame attached" : "Local layout preview");
+  const selectedRoute = routeControls?.selectedRoute || {};
+  const agentLiveRouteStatus = [
+    titleizeToken(selectedRoute.provider || "openai-codex"),
+    selectedRoute.model || selectedModelLabel || "gpt-5.5",
+    titleizeToken(selectedRoute.effort || "high"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const selectAgentMessage = useCallback(messageKey => {
     const normalizedMessageKey = String(messageKey || "").trim();
-    if (!normalizedMessageKey) return;
+    if (!normalizedMessageKey.trim()) return;
     if (isLiveBackend && !selectableMessageKeySet.has(normalizedMessageKey)) return;
-    if (isLiveBackend) {
-      const entry = selectableMessageEntries.find(item => item.key === normalizedMessageKey);
-      const scopedMissionId = String(workbenchState?.missionId || "").trim();
-      const entryMissionId = String(entry?.message?.missionId || entry?.message?.mission_id || "").trim();
-      if (scopedMissionId && entryMissionId && entryMissionId !== scopedMissionId) {
-        return;
-      }
-    }
+    setAgentPreviewWindowOpen(false);
     manualMessageSelectionRef.current = true;
-    setSelectedMessageId(normalizedMessageKey);
-  }, [isLiveBackend, selectableMessageEntries, selectableMessageKeySet, workbenchState?.missionId]);
+    manualSelectedMessageKeyRef.current = normalizedMessageKey;
+    flushSync(() => {
+      setSelectedMessageId(normalizedMessageKey);
+    });
+  }, [isLiveBackend, selectableMessageKeySet]);
+  const openAgentPreviewWindow = useCallback(() => {
+    manualMessageSelectionRef.current = false;
+    manualSelectedMessageKeyRef.current = "";
+    setSelectedMessageId("");
+    setAgentPreviewWindowOpen(true);
+    window.requestAnimationFrame(() => {
+      agentPreviewPanelRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    });
+  }, []);
+  const bindAgentThreadRef = useCallback(node => {
+    if (agentThreadNativeCleanupRef.current) {
+      agentThreadNativeCleanupRef.current();
+      agentThreadNativeCleanupRef.current = null;
+    }
+    agentThreadRef.current = node;
+    if (!node || !isLiveBackend) return;
+    const selectFromDomEvent = event => {
+      const row = event.target?.closest?.('[data-agent-message-key][data-message-zone="thread"]');
+      if (!row || !node.contains(row)) return;
+      const messageKey = row.getAttribute("data-agent-message-key");
+      if (!messageKey) return;
+      node.setAttribute("data-live-agent-native-selected-key", messageKey);
+      window.__fluxioAgentThreadNativeSelectCount = Number(window.__fluxioAgentThreadNativeSelectCount || 0) + 1;
+      selectAgentMessage(messageKey);
+    };
+    const selectFromDomKey = event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.target?.closest?.('[data-agent-message-key][data-message-zone="thread"]');
+      if (!row || !node.contains(row)) return;
+      const messageKey = row.getAttribute("data-agent-message-key");
+      if (!messageKey) return;
+      event.preventDefault();
+      node.setAttribute("data-live-agent-native-selected-key", messageKey);
+      window.__fluxioAgentThreadNativeSelectCount = Number(window.__fluxioAgentThreadNativeSelectCount || 0) + 1;
+      selectAgentMessage(messageKey);
+    };
+    node.addEventListener("click", selectFromDomEvent, true);
+    node.addEventListener("pointerdown", selectFromDomEvent, true);
+    node.addEventListener("keydown", selectFromDomKey, true);
+    agentThreadNativeCleanupRef.current = () => {
+      node.removeEventListener("click", selectFromDomEvent, true);
+      node.removeEventListener("pointerdown", selectFromDomEvent, true);
+      node.removeEventListener("keydown", selectFromDomKey, true);
+    };
+  }, [isLiveBackend, selectAgentMessage]);
+  useEffect(() => () => {
+    if (agentThreadNativeCleanupRef.current) {
+      agentThreadNativeCleanupRef.current();
+      agentThreadNativeCleanupRef.current = null;
+    }
+  }, []);
   const selectDiagnosticMessage = useCallback(messageKey => {
     const normalizedMessageKey = String(messageKey || "").trim();
     if (!normalizedMessageKey) return;
@@ -7505,18 +5725,137 @@ function FluxioAgentSurface(props) {
       selectAgentMessage(messageKey);
     }
   }, [selectAgentMessage]);
+  const handleAgentThreadMessageSelectionEvent = useCallback(event => {
+    const row = event.target?.closest?.('[data-agent-message-key][data-message-zone="thread"]');
+    if (!row || !event.currentTarget?.contains?.(row)) return;
+    const messageKey = row.getAttribute("data-agent-message-key");
+    if (messageKey) selectAgentMessage(messageKey);
+  }, [selectAgentMessage]);
+  const handleAgentThreadMessageKeyDownCapture = useCallback(event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target?.closest?.('[data-agent-message-key][data-message-zone="thread"]');
+    if (!row || !event.currentTarget?.contains?.(row)) return;
+    const messageKey = row.getAttribute("data-agent-message-key");
+    if (!messageKey) return;
+    event.preventDefault();
+    selectAgentMessage(messageKey);
+  }, [selectAgentMessage]);
+  useEffect(() => {
+    if (!isLiveBackend) return undefined;
+    const node = agentThreadRef.current;
+    if (!node) return undefined;
+    const selectFromDomEvent = event => {
+      const row = event.target?.closest?.('[data-agent-message-key][data-message-zone="thread"]');
+      if (!row || !node.contains(row)) return;
+      const messageKey = row.getAttribute("data-agent-message-key");
+      if (messageKey) selectAgentMessage(messageKey);
+    };
+    const selectFromDomKey = event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.target?.closest?.('[data-agent-message-key][data-message-zone="thread"]');
+      if (!row || !node.contains(row)) return;
+      const messageKey = row.getAttribute("data-agent-message-key");
+      if (!messageKey) return;
+      event.preventDefault();
+      selectAgentMessage(messageKey);
+    };
+    node.addEventListener("click", selectFromDomEvent, true);
+    node.addEventListener("pointerdown", selectFromDomEvent, true);
+    node.addEventListener("keydown", selectFromDomKey, true);
+    return () => {
+      node.removeEventListener("click", selectFromDomEvent, true);
+      node.removeEventListener("pointerdown", selectFromDomEvent, true);
+      node.removeEventListener("keydown", selectFromDomKey, true);
+    };
+  }, [isLiveBackend, selectAgentMessage]);
   const handleDiagnosticMessageKeyDown = useCallback((event, messageKey) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       selectDiagnosticMessage(messageKey);
     }
   }, [selectDiagnosticMessage]);
+  const handleLiveLaneControl = useCallback(async (lane, control) => {
+    const laneWithMission = {
+      ...lane,
+      missionId: lane?.missionId || workbenchState?.missionId || "",
+    };
+    setLocalLaneControlReceipt(buildLaneControlReceiptView(laneWithMission, control, null, "pending"));
+    try {
+      const response = await fluxioAction(
+        onRequestAction,
+        `agent:lane:${control?.action || control?.id || "inspect"}`,
+        { lane: laneWithMission, control },
+      );
+      const durableReceipt = response?.laneControlReceipt || response?.receipt || null;
+      if (durableReceipt) {
+        setLocalLaneControlReceipt(buildLaneControlReceiptView(laneWithMission, control, durableReceipt, "recorded"));
+      }
+    } catch (error) {
+      setLocalLaneControlReceipt(current => {
+        const baseline = current || buildLaneControlReceiptView(laneWithMission, control, null, "error");
+        return {
+          ...baseline,
+          status: "error",
+          detail: `Lane control receipt failed: ${error}`,
+          stateMutationProof: {
+            ...baseline.stateMutationProof,
+            field: "mission.state.current_runtime_lane",
+            after: String(laneWithMission.role || laneWithMission.label || "lane").toLowerCase(),
+            observedAfterWrite: false,
+          },
+        };
+      });
+    }
+  }, [buildLaneControlReceiptView, onRequestAction, workbenchState?.missionId]);
   return (
-    <div className="fluxos-agent-grid">
+    <div
+      className="fluxos-agent-grid"
+      data-agent-clarity-mode={normalizedAgentClarityMode}
+      data-agent-focus-contract="agent-live-dialogue-first"
+      data-agent-preview-open={agentPreviewWindowOpen ? "true" : "false"}
+    >
       <section className="fluxos-agent-main">
         <div className="fluxos-section-head">
-          <span>Active run</span>
+          <span>Agent Live</span>
           <strong>{isLiveBackend ? workbenchState?.missionTitle || "Live NAS run state" : "Reproduce Fluxio UI and prepare merge"}</strong>
+          {isLiveBackend ? (
+            <div className="fluxos-agent-route-pills" aria-label="Agent route" aria-hidden={agentFocusMode ? "true" : "false"}>
+              {agentMissionRouteRows.length ? (
+                agentMissionRouteRows.map(route => (
+                  <span
+                    className={`mini-pill muted ${route.role === "executor" ? "agent-route-executor" : ""}`.trim()}
+                    data-agent-mission-route-role={route.role}
+                    key={`agent-route-${route.role}-${route.provider}-${route.model}`}
+                  >
+                    {route.label}
+                  </span>
+                ))
+              ) : (
+                <>
+                  <span className="mini-pill muted">{agentLiveRouteStatus}</span>
+                  <span className="mini-pill muted">Route not reported</span>
+                </>
+              )}
+            </div>
+          ) : null}
+          {isLiveBackend ? (
+            <div className="fluxos-builder-clarity-switch" aria-label="Agent clarity mode" data-agent-clarity-switch="true">
+              <button
+                className={agentFocusMode ? "active" : ""}
+                onClick={() => setLiveAgentClarityMode("focus")}
+                type="button"
+              >
+                Live
+              </button>
+              <button
+                className={!agentFocusMode ? "active" : ""}
+                onClick={() => setLiveAgentClarityMode("full")}
+                type="button"
+              >
+                Details
+              </button>
+            </div>
+          ) : null}
         </div>
         <LiveOperationsBrief
           activeRows={[]}
@@ -7525,11 +5864,90 @@ function FluxioAgentSurface(props) {
           onOpenNotifications={() => onRequestAction?.("notifications:show-live-stack")}
           onOpenQueue={() => onRequestAction?.("builder:open-project-queue")}
           projectProgressHistory={props.projectProgressHistory}
-          threadRows={visibleMessages}
+          threadRows={threadMessages}
           workbenchState={workbenchState}
         />
         {isLiveBackend ? (
-          <div className="fluxos-agent-progress" aria-label="Mission progress">
+          <section className="fluxos-agent-notification-rail" aria-label="Live Agent notification controls" data-live-agent-notification-rail="true">
+            <div className="fluxos-thread-head">
+              <span>Live notifications</span>
+              <strong>
+                {liveAgentNotificationRows.length} shown
+                {Number(liveDataStatus?.notificationCount || 0) ? ` · ${Number(liveDataStatus.notificationCount || 0)} total` : ""}
+              </strong>
+            </div>
+            <div className="fluxos-agent-notification-actions">
+              <button
+                data-notification-clear-all="true"
+                disabled={liveAgentNotificationRows.length === 0}
+                onClick={clearAgentNotifications}
+                type="button"
+              >
+                Mark visible read
+              </button>
+              <button
+                data-notification-restore-dismissed="true"
+                disabled={agentDismissedNotificationIds.size === 0}
+                onClick={restoreAgentNotifications}
+                type="button"
+              >
+                Restore
+              </button>
+              <button onClick={() => onRequestAction?.("notifications:show-live-stack")} type="button">
+                Open stack
+              </button>
+            </div>
+            {liveAgentNotificationRows.length ? (
+              <div className="fluxos-agent-notification-list">
+                {liveAgentNotificationRows.map(({ item, id }) => {
+                  const missionId = item?.missionId || item?.mission_id || "";
+                  const title = firstMeaningfulNotificationLine(item) || item?.title || item?.headline || "Live mission update";
+                  const detail = item?.agentMessage || item?.detail || item?.message || item?.summary || "Live NAS notification.";
+                  return (
+                    <article data-notification-card="true" key={id}>
+                      <div>
+                        <span>{titleizeToken(item?.kind || item?.type || "mission update")}</span>
+                        <strong>{sanitizeDisplayTitle(title)}</strong>
+                        <p>{sanitizeDisplayTitle(detail)}</p>
+                        <small>{timestampLabel(item?.createdAt || item?.timestamp || item?.time || "") || (missionId ? `Mission ${missionId}` : "Live NAS")}</small>
+                      </div>
+                      <div>
+                        <button
+                          disabled={!missionId}
+                          onClick={() => missionId && onSelectFlow?.(missionId)}
+                          type="button"
+                        >
+                          Open
+                        </button>
+                        <button
+                          data-notification-dismiss-inline="true"
+                          onClick={() => dismissAgentNotification(id)}
+                          type="button"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <article className="fluxos-flow-empty">
+                <span>Live data only</span>
+                <strong>No visible notifications</strong>
+                <p>Agent is connected to live NAS data; dismissed updates can be restored above.</p>
+              </article>
+            )}
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <div
+            aria-atomic="true"
+            aria-label="Mission progress"
+            aria-live="polite"
+            className="fluxos-agent-progress"
+            role="status"
+          >
             <div>
               <span>{missionStatus}</span>
               <strong>{progressLabel}</strong>
@@ -7544,14 +5962,14 @@ function FluxioAgentSurface(props) {
         ) : null}
         {isLiveBackend ? (
           <section
-            aria-label="Thread-first Agent command band"
+            aria-label="Agent Live command band"
             className="fluxos-agent-thread-first-band"
             data-live-agent-thread-first-band="true"
           >
             <div className="fluxos-agent-thread-first-copy">
-              <span>Thread-first Agent</span>
+              <span>Mission controls</span>
               <strong>{workbenchState?.missionTitle || "Live mission thread"}</strong>
-              <p>{workbenchState?.progress?.nextAction || "Read the current Hermes/runtime report, then inspect proof or lane controls only when needed."}</p>
+              <p>{workbenchState?.progress?.nextAction || "Continue, modify, launch, verify, or summarize this Hermes mission."}</p>
             </div>
             <div className="fluxos-agent-thread-first-metrics" aria-label="Live Agent thread metrics">
               {liveThreadFirstStats.map(([label, value, detail]) => (
@@ -7564,31 +5982,338 @@ function FluxioAgentSurface(props) {
             </div>
             <div className="fluxos-agent-thread-first-actions">
               <button
-                disabled={!selectedMessage}
-                onClick={() => document.querySelector(".fluxos-selected-message-proof")?.scrollIntoView({ block: "nearest", behavior: "smooth" })}
+                data-live-agent-action="continue"
+                onClick={() => onRequestAction?.("agent:continue-prefill")}
                 type="button"
               >
-                Focus selected report
+                Continue
               </button>
-              <button onClick={() => onSetSurface?.("workbench")} type="button">
-                Open Workbench
+              <button
+                data-live-agent-action="modify"
+                onClick={() => onRequestAction?.("run:modify")}
+                type="button"
+              >
+                Modify
               </button>
-              <button onClick={() => onRequestAction?.("notifications:show-live-stack")} type="button">
-                Show notifications
+              <button
+                data-live-agent-action="launch"
+                data-live-agent-launch-action="true"
+                onClick={() => onRequestAction?.("launch:mission", { sourceSurface: "agent" })}
+                type="button"
+              >
+                Launch
+              </button>
+              <button
+                data-live-agent-action="verify"
+                onClick={() => {
+                  setLiveAgentClarityMode("full");
+                  onRequestAction?.("run:proof");
+                }}
+                type="button"
+              >
+                Verify
+              </button>
+              <button
+                data-live-agent-action="summarize"
+                onClick={() => onRequestAction?.("run:summarize")}
+                type="button"
+              >
+                Summarize
+              </button>
+              <button
+                data-live-agent-action="preview"
+                disabled={!livePreviewActionUrl}
+                onClick={openAgentPreviewWindow}
+                title={livePreviewActionUrl ? "Open the live preview window inside Agent" : "No preview URL has been reported yet"}
+                type="button"
+              >
+                Preview
               </button>
             </div>
           </section>
         ) : null}
         {isLiveBackend ? (
           <section
-            aria-label="Selected live Agent report reader"
+            aria-label="Agent Live thread connection"
+            className={`fluxos-agent-live-thread-proof tone-${liveThreadProofTone}`}
+            data-agent-live-thread-proof="true"
+            data-live-thread-proof-status={liveThreadProof?.status || "missing"}
+          >
+            <div className="fluxos-agent-live-thread-proof-copy">
+              <span>Thread connection</span>
+              <strong>{liveThreadProof?.statusLabel || "Waiting for live mission detail"}</strong>
+              <p>
+                {liveThreadProof?.nextAction ||
+                  "This proves the Agent Live panel is attached to the selected mission detail."}
+              </p>
+            </div>
+            <div className="fluxos-agent-live-thread-proof-grid" aria-label="Agent Live connection metrics">
+              {liveThreadProofStats.length ? liveThreadProofStats.map(([label, value, detail]) => (
+                <article data-agent-live-thread-proof-metric={String(label).toLowerCase()} key={`live-thread-proof-${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              )) : (
+                <article data-agent-live-thread-proof-metric="missing">
+                  <span>Live detail</span>
+                  <strong>Pending</strong>
+                  <small>No mission-detail proof object is attached.</small>
+                </article>
+              )}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend && runtimeCapabilityItems.length ? (
+          <section
+            className="fluxos-runtime-capability-strip"
+            aria-label="Runtime capability inventory"
+            data-runtime-capability-inventory="true"
+          >
+            {runtimeCapabilityItems.map(item => (
+              <article key={item.key || item.label}>
+                <span>{titleizeToken(item.runtime || workbenchState?.runtime || "runtime")}</span>
+                <strong>{item.label}</strong>
+                <small>{titleizeToken(item.status || "available")} · {item.detail}</small>
+              </article>
+            ))}
+          </section>
+        ) : null}
+        {isLiveBackend && priorityConnectedAppItems.length ? (
+          <section
+            aria-label="Connected app runtime handoff lane"
+            className="fluxos-connected-app-quick-lane"
+            data-agent-connected-app-quick-lane="true"
+          >
+            <div>
+              <span>App handoff lane</span>
+              <strong>Use your apps through Agent runtimes</strong>
+            </div>
+            <div className="fluxos-connected-app-quick-items">
+              {priorityConnectedAppItems.map(row => (
+                <article
+                  data-agent-connected-app-quick-card="true"
+                  data-connected-app-id={row.item.app_id || row.item.id || ""}
+                  data-connected-app-manager-role={row.managerRole}
+                  data-connected-app-next-action={row.label}
+                  data-connected-app-readiness={row.statusLabel}
+                  data-connected-app-proof={row.proofLabel}
+                  key={`connected-app-quick-${row.item.id || row.item.session_id || row.item.app_id || row.label}`}
+                >
+                  <span>{row.managerRole}</span>
+                  <strong>{row.item.label || row.item.app_name || row.item.app_id || "Connected app"}</strong>
+                  <small>{row.aliases ? `Aliases: ${row.aliases}` : "Aliases not reported"}</small>
+                  <em data-connected-app-automation-proof="true">
+                    {row.proofLabel ? `${row.proofLabel}: ${row.latestSummary}` : row.latestSummary}
+                  </em>
+                  <small data-connected-app-safe-directions="true">
+                    {row.safeDirections.length
+                      ? `Safe next: ${row.safeDirections[0]}`
+                      : row.skillCandidate
+                        ? `Skill route: ${row.skillCandidate}`
+                        : `Readiness: ${row.statusLabel}`}
+                  </small>
+                  {row.startCommand || row.healthUrl ? (
+                    <small data-connected-app-execution-truth="true">
+                      {row.startCommand ? `Start: ${row.startCommand}` : `Health: ${row.healthUrl}`}
+                    </small>
+                  ) : null}
+                  <div className="fluxos-connected-app-quick-actions">
+                    {row.quickActions.map(actionRow => (
+                      <button
+                        data-agent-connected-app-native-action={actionRow.hookId || actionRow.label}
+                        data-agent-connected-app-native-mode={actionRow.mode}
+                        key={`${row.item.app_id || row.item.id || row.label}-${actionRow.hookId || actionRow.label}`}
+                        onClick={() => (
+                          actionRow.mode === "workspace"
+                            ? fluxioAction(onRequestAction, "setup:run-action", actionRow.action)
+                            : typeof onConnectedAppHandoff === "function"
+                            ? onConnectedAppHandoff(row.item, actionRow.mode, actionRow.action)
+                            : fluxioAction(onRequestAction, actionRow.mode === "skill" ? "bridge:make-skill" : "bridge:agent-handoff", { session: row.item, action: actionRow.action })
+                        )}
+                        type="button"
+                      >
+                        {actionRow.label} · {actionRow.review ? "review" : "ready"}
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend && connectedAppItems.length ? (
+          <section
+            aria-label="App runtime manager"
+            className="fluxos-connected-app-manager"
+            data-agent-connected-app-manager="true"
+          >
+            <div className="fluxos-thread-head">
+              <span>App runtime manager</span>
+              <strong>{connectedAppItems.length} bridge{connectedAppItems.length === 1 ? "" : "s"}</strong>
+            </div>
+            <div className="fluxos-connected-app-manager-grid">
+              {connectedAppItems.map(item => {
+                const nativeActions = asList(item.appNativeActions || item.action_hooks);
+                const managerRole = titleizeToken(item.ui_hints?.runtimeManager || item.ui_hints?.bridgeRole || item.bridge_transport || "app manager");
+                const nextNativeAction = nativeActions[0];
+                const nextActionLabel = nextNativeAction?.label || titleizeToken(nextNativeAction?.hookId || nextNativeAction?.hook_id || "Use in Agent");
+                const nextActionReview = Boolean(nextNativeAction?.requiresApproval || nextNativeAction?.requires_approval);
+                const appId = item.app_id || item.id || "";
+                const latestPayload = item.latest_task_result?.payload || {};
+                const startCommand = item.ui_hints?.startCommand || latestPayload.startCommand || "";
+                const healthUrl = item.ui_hints?.healthUrl || latestPayload.healthUrl || item.ui_hints?.bridgeHealthUrl || "";
+                return (
+                <article
+                  data-agent-connected-app-card="true"
+                  data-connected-app-manager-role={managerRole}
+                  data-connected-app-native-action-count={nativeActions.length}
+                  data-connected-app-next-action={nextActionLabel}
+                  data-connected-app-id={item.app_id || item.id || ""}
+                  key={item.id || item.session_id || item.app_id || item.label}
+                >
+                  <div>
+                    <span>{managerRole}</span>
+                    <strong>{item.label || item.app_name || item.app_id || "Connected app"}</strong>
+                    <p>{item.latestSummary || item.latest_task_result?.resultSummary || "No live context body reported yet."}</p>
+                    <p className="fluxos-connected-app-next" data-connected-app-next-action-copy="true">
+                      Next: {nextActionLabel} · {nextActionReview ? "review before write" : "ready to draft/run"}
+                    </p>
+                    {item.contextSummary && item.contextSummary !== item.latestSummary ? (
+                      <p>{item.contextSummary}</p>
+                    ) : null}
+                    <small>{item.statusLabel || `${titleizeToken(item.status || "unknown")} / ${titleizeToken(item.bridge_health || "unknown")}`}</small>
+                    {asList(item.ui_hints?.aliases).length ? (
+                      <small data-connected-app-aliases="true">Aliases: {asList(item.ui_hints.aliases).slice(0, 5).join(" · ")}</small>
+                    ) : null}
+                  </div>
+                  {nativeActions.length ? (
+                    <div className="fluxos-connected-app-hook-list" data-connected-app-native-actions="true">
+                      {nativeActions.slice(0, 3).map(action => {
+                        const hookId = action?.hookId || action?.hook_id || action?.id || "";
+                        const mode = action?.handoffMode || (String(hookId).toLowerCase().includes("skill") ? "skill" : "run");
+                        const requiresApproval = Boolean(action?.requiresApproval || action?.requires_approval);
+                        return (
+                          <button
+                            data-agent-connected-app-native-action={hookId || action?.label || "app-action"}
+                            data-agent-connected-app-native-mode={mode}
+                            key={`${item.id || item.app_id}-${hookId || action?.label}`}
+                            onClick={() => (
+                              typeof onConnectedAppHandoff === "function"
+                                ? onConnectedAppHandoff(item, mode, action)
+                                : fluxioAction(onRequestAction, mode === "skill" ? "bridge:make-skill" : "bridge:agent-handoff", { session: item, action })
+                            )}
+                            type="button"
+                          >
+                            <strong>{action?.label || titleizeToken(hookId || "App action")}</strong>
+                            <span>{requiresApproval ? "Review" : "Ready"} · {titleizeToken(action?.riskLevel || action?.risk_level || "low")}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="fluxos-connected-app-actions">
+                    {startCommand && appId ? (
+                      <button
+                        data-agent-connected-app-action="start"
+                        onClick={() =>
+                          fluxioAction(onRequestAction, "setup:run-action", {
+                            actionId: `start-${appId}`,
+                            label: `Start ${item.app_name || item.label || appId}`,
+                            commandSurface: "bridge.start_app",
+                            requiresApproval: false,
+                          })
+                        }
+                        type="button"
+                      >
+                        Start app
+                      </button>
+                    ) : null}
+                    {healthUrl && appId ? (
+                      <button
+                        data-agent-connected-app-action="health"
+                        onClick={() =>
+                          fluxioAction(onRequestAction, "setup:run-action", {
+                            actionId: `check-${appId}-health`,
+                            label: `Check ${item.app_name || item.label || appId} health`,
+                            commandSurface: "bridge.app_health",
+                            requiresApproval: false,
+                          })
+                        }
+                        type="button"
+                      >
+                        Check health
+                      </button>
+                    ) : null}
+                    <button
+                      data-agent-connected-app-action="use"
+                      onClick={() => (
+                        typeof onConnectedAppHandoff === "function"
+                          ? onConnectedAppHandoff(item, "run")
+                          : fluxioAction(onRequestAction, "bridge:agent-handoff", { session: item })
+                      )}
+                      type="button"
+                    >
+                      Use in Agent
+                    </button>
+                    <button
+                      data-agent-connected-app-action="skill"
+                      onClick={() => (
+                        typeof onConnectedAppHandoff === "function"
+                          ? onConnectedAppHandoff(item, "skill")
+                          : fluxioAction(onRequestAction, "bridge:make-skill", { session: item })
+                      )}
+                      type="button"
+                    >
+                      Make skill
+                    </button>
+                  </div>
+                </article>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            aria-label="Mission evidence brief"
+            className="fluxos-agent-proof-brief"
+            data-live-agent-no-fallback="true"
+            data-live-agent-proof-brief="true"
+          >
+            <div className="fluxos-agent-proof-brief-copy">
+              <span>Mission evidence</span>
+              <strong>{selectedEvidenceMessage ? agentMessageDisplayTitle(selectedEvidenceMessage) : workbenchState?.missionTitle || "No selected runtime report"}</strong>
+              <p data-live-agent-proof-source="true">{liveProofSourceLabel || "Live source unavailable; no cached proof is rendered."}</p>
+            </div>
+            <div className="fluxos-agent-proof-brief-metrics" aria-label="Live proof brief metrics">
+              {liveProofBriefStats.map(([label, value, detail]) => (
+                <article key={`agent-proof-brief-${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-agent-proof-brief-next" data-live-agent-next-repair="true">
+              <span>{liveProofNextAction ? "Next repair/action" : "No live next action returned"}</span>
+              <p>{liveProofNextAction || "The selected mission detail did not return a next-action field; Fluxio leaves this as an explicit live-data gap."}</p>
+              {liveProofExcerpt ? <em>{liveProofExcerpt}</em> : <em>No selected runtime excerpt attached yet.</em>}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            aria-label="Agent Live evidence reader"
+            aria-live="polite"
             className="fluxos-agent-selected-report"
+            data-live-report-blocked-state={liveMissionReportBlocked ? "true" : "false"}
             data-live-selected-report-reader="true"
           >
             <div className="fluxos-agent-selected-report-head">
               <div>
-                <span>Selected live report</span>
-                <strong>{selectedMessage ? agentMessageDisplayTitle(selectedMessage) : "Waiting for live Agent report"}</strong>
+                <span>Evidence reader</span>
+                <strong>{selectedEvidenceMessage ? agentMessageDisplayTitle(selectedEvidenceMessage) : liveMissionReportBlocked ? "No real runtime report returned" : "Waiting for Agent Live evidence"}</strong>
               </div>
               <div className="fluxos-agent-selected-report-meta" aria-label="Selected report source">
                 <em>{selectedMessageKindLabel}</em>
@@ -7606,11 +6331,11 @@ function FluxioAgentSurface(props) {
             ) : (
               <article className="fluxos-flow-empty" data-live-report-empty-state="true">
                 <span>Live data only</span>
-                <strong>{hasLiveRuntimeReports ? "No selected report body returned yet" : "No Hermes runtime reports on this selected mission"}</strong>
+                <strong>{hasLiveRuntimeReports ? "No selected evidence body returned yet" : "No evidence body selected"}</strong>
                 <p>
                   {hasLiveRuntimeReports
-                    ? "The Agent keeps the selection pinned here instead of filling the reader with fallback text."
-                    : "This mission detail returned no Runtime output body, so Fluxio leaves the reader empty instead of reusing the F1 frame or any older report."}
+                    ? "Agent Live keeps the selection pinned here instead of filling the reader with fallback text."
+                    : "Fluxio leaves this reader empty instead of promoting transcript-integrity warnings, checkpoint fragments, the F1 frame, or any older report into the selected message."}
                 </p>
                 {!hasLiveRuntimeReports && preferredRunningLiveMissionId ? (
                   <button
@@ -7618,7 +6343,7 @@ function FluxioAgentSurface(props) {
                     onClick={() => onSelectFlow?.(preferredRunningLiveMissionId)}
                     type="button"
                   >
-                    Open running Hermes mission
+                    Attach active mission
                   </button>
                 ) : null}
               </article>
@@ -7626,28 +6351,37 @@ function FluxioAgentSurface(props) {
           </section>
         ) : null}
         {isLiveBackend ? (
-          <section
-            aria-label="Agent diagnostics shelf"
-            className="fluxos-agent-diagnostics-shelf"
-            data-agent-diagnostics-shelf="true"
+          <details
+            aria-label="Advanced runtime controls"
+            className="fluxos-agent-advanced-drawer"
+            data-agent-advanced-drawer="true"
+            data-agent-advanced-drawer-kind="runtime"
+            open={!agentFocusMode}
           >
-            <div>
-              <span>Diagnostics</span>
-              <strong>Trace, lanes, and plan stay below the report thread.</strong>
-            </div>
-            <div className="fluxos-agent-diagnostics-metrics">
-              {liveDiagnosticStats.map(([label, value, detail]) => (
-                <article key={`agent-diagnostic-${label}`}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                  <small>{detail}</small>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {isLiveBackend ? (
-          <section className="fluxos-agent-lane-board" aria-label="Live sub-agent lane board" data-live-agent-lane-board="true">
+            <summary>
+              <span>Advanced runtime controls</span>
+              <strong>{`${liveLaneRows.length || 0} lanes · ${thinkingRows.length || 0} trace rows`}</strong>
+            </summary>
+            <section
+              aria-label="Agent diagnostics shelf"
+              className="fluxos-agent-diagnostics-shelf"
+              data-agent-diagnostics-shelf="true"
+            >
+              <div>
+                <span>Diagnostics</span>
+                <strong>Trace, lanes, and proof controls stay in this drawer until needed.</strong>
+              </div>
+              <div className="fluxos-agent-diagnostics-metrics">
+                {liveDiagnosticStats.map(([label, value, detail]) => (
+                  <article key={`agent-diagnostic-${label}`}>
+                    <span>{label}</span>
+                    <strong>{value}</strong>
+                    <small>{detail}</small>
+                  </article>
+                ))}
+              </div>
+            </section>
+            <section className="fluxos-agent-lane-board" aria-label="Live sub-agent lane board" data-live-agent-lane-board="true">
             <div className="fluxos-thread-head">
               <span>Sub-agent lane board</span>
               <strong>
@@ -7696,7 +6430,7 @@ function FluxioAgentSurface(props) {
                             data-lane-control-action={control.action || control.id || ""}
                             disabled={control.enabled === false}
                             key={`${lane.id || index}-${control.id || control.action}`}
-                            onClick={() => fluxioAction(onRequestAction, `agent:lane:${control.action || control.id || "inspect"}`, { lane, control })}
+                            onClick={() => void handleLiveLaneControl(lane, control)}
                             type="button"
                           >
                             {control.label || titleizeToken(control.action || control.id || "Open")}
@@ -7714,29 +6448,27 @@ function FluxioAgentSurface(props) {
                 <p>The Agent lane board stays empty until the selected NAS mission exposes delegated sessions or provider capability lanes.</p>
               </article>
             )}
-            {workbenchState?.laneControlReceipt ? (
+            {visibleLaneControlReceipt ? (
               <article className="fluxos-agent-lane-receipt" data-live-agent-lane-control-receipt="true">
                 <span>Lane control receipt</span>
-                <strong>{workbenchState.laneControlReceipt.label || titleizeToken(workbenchState.laneControlReceipt.action || "Action")}</strong>
-                <p>{workbenchState.laneControlReceipt.detail || "Lane action routed."}</p>
-                {workbenchState.laneControlReceipt.stateMutationProof?.field ? (
+                <strong>{visibleLaneControlReceipt.label || titleizeToken(visibleLaneControlReceipt.action || "Action")}</strong>
+                <p>{visibleLaneControlReceipt.detail || "Lane action routed."}</p>
+                {visibleLaneControlReceipt.stateMutationProof?.field ? (
                   <div className="fluxos-agent-lane-proof" data-live-agent-lane-mutation-proof="true">
-                    <em>{workbenchState.laneControlReceipt.stateMutationProof.field}</em>
+                    <em>{visibleLaneControlReceipt.stateMutationProof.field}</em>
                     <strong>
                       {[
-                        workbenchState.laneControlReceipt.stateMutationProof.before || "empty",
-                        workbenchState.laneControlReceipt.stateMutationProof.after || "empty",
+                        visibleLaneControlReceipt.stateMutationProof.before || "empty",
+                        visibleLaneControlReceipt.stateMutationProof.after || "empty",
                       ].join(" -> ")}
                     </strong>
-                    <span>{workbenchState.laneControlReceipt.stateMutationProof.observedAfterWrite ? "Observed after write" : "Write observation pending"}</span>
+                    <span>{visibleLaneControlReceipt.stateMutationProof.observedAfterWrite ? "Observed after write" : "Write observation pending"}</span>
                   </div>
                 ) : null}
               </article>
             ) : null}
-          </section>
-        ) : null}
-        {isLiveBackend ? (
-          <section className="fluxos-thinking-panel" aria-label="Live runtime thinking and trace">
+            </section>
+            <section className="fluxos-thinking-panel" aria-label="Live runtime thinking and trace">
             <div className="fluxos-thread-head">
               <span>Thinking and runtime trace</span>
               <strong>{thinkingRows.length ? `${thinkingRows.length} live rows` : "waiting"}</strong>
@@ -7762,11 +6494,11 @@ function FluxioAgentSurface(props) {
               >
                 <div className="fluxos-message-head">
                   <span>{[message.label || message.roleLabel || "Runtime", message.meta || message.createdAt || ""].filter(Boolean).join(" · ")}</span>
-                  <strong>{agentMessageDisplayTitle(message)}</strong>
+                  <strong>Trace: {agentMessageDisplayTitle(message)}</strong>
                 </div>
                 {agentMessageDisplayDetail(message) ? <p>{agentMessageDisplayDetail(message)}</p> : null}
                 {message.technicalDetail ? (
-                  <details className="fluxos-message-trace" open={index === thinkingRows.length - 1}>
+                  <details className="fluxos-message-trace">
                     <summary>Raw trace</summary>
                     <p>{String(message.technicalDetail).slice(0, 900)}</p>
                   </details>
@@ -7780,33 +6512,67 @@ function FluxioAgentSurface(props) {
                 <p>The selected mission thread is real; this panel stays empty until Hermes emits process or thinking evidence.</p>
               </article>
             )}
-          </section>
+            </section>
+          </details>
         ) : null}
-        <section className="fluxos-thread">
+        <section
+          className="fluxos-thread"
+          data-live-agent-thread-router="true"
+          onClickCapture={handleAgentThreadMessageSelectionEvent}
+          onKeyDownCapture={handleAgentThreadMessageKeyDownCapture}
+          onPointerDownCapture={handleAgentThreadMessageSelectionEvent}
+          ref={bindAgentThreadRef}
+        >
           <div className="fluxos-thread-head">
-            <span>{isLiveBackend ? "Live Hermes/runtime reports" : "Thread"}</span>
+            <span>{isLiveBackend ? "Hermes dialogue" : "Thread"}</span>
             <strong>
-              {visibleMessages.length} shown
-              {hiddenMessageCount > 0 ? ` · ${hiddenMessageCount} older` : ""}
+              {isLiveBackend
+                ? (threadMessageEntries.length ? `${threadMessageEntries.length} real turn${threadMessageEntries.length === 1 ? "" : "s"}` : "No dialogue yet")
+                : `${threadMessages.length} shown${hiddenMessageCount > 0 ? ` · ${hiddenMessageCount} older` : ""}`}
             </strong>
           </div>
-          {visibleMessages.length ? visibleMessages.map((message, index) => {
-            const messageDetail = agentMessageDisplayDetail(message);
-            const messageMeta = [message.label || message.roleLabel || "", message.meta || message.createdAt || ""]
+          {threadMessageEntries.length ? threadMessageEntries.map(({ message, key: messageKey }, index) => {
+            const messageIsOperatorFollowUp = isOperatorFollowUpAgentMessage(message);
+            const messageIsHermesReply = isHermesDialogueReplyAgentMessage(message);
+            const messageIsDialogueTurn = messageIsOperatorFollowUp || messageIsHermesReply || isAgentDialogueTurn(message);
+            const messageDetail = messageIsDialogueTurn
+              ? String(message.detail || message.content || message.message || "").trim()
+              : agentMessageDisplayDetail(message);
+            const messageRole = messageIsOperatorFollowUp && (!message.role || message.role === "runtime")
+              ? "operator"
+              : message.role || "assistant";
+            const messageSpeaker = messageIsOperatorFollowUp || messageRole === "user" || messageRole === "operator"
+              ? "You"
+              : messageIsHermesReply || messageRole === "assistant"
+                ? /hermes/i.test(`${message.meta || ""} ${asList(message.chips).join(" ")}`)
+                  ? "Hermes"
+                  : message.label || message.roleLabel || "Hermes"
+                : agentMessageDisplayTitle(message);
+            const messageBody = messageIsDialogueTurn
+              ? messageDetail || agentMessageDisplayTitle(message)
+              : messageDetail;
+            const messageMeta = [
+              messageIsDialogueTurn ? "" : message.label || message.roleLabel || "",
+              message.meta || message.createdAt || "",
+            ]
               .filter(Boolean)
+              .filter(part => String(part || "").trim() !== String(messageSpeaker || "").trim())
               .join(" · ");
-            const messageKey = stableAgentMessageKey(message, `message-${index}`);
             const messageSelected = selectedMessageId === messageKey;
             return (
               <article
                 aria-pressed={messageSelected}
-                className={`fluxos-message role-${message.role || "assistant"} ${message.processMessage ? "process" : ""} ${message.emphasis ? "emphasis" : ""} ${messageSelected ? "selected" : ""}`.trim()}
+                className={`fluxos-message role-${messageRole} ${messageIsDialogueTurn ? "dialogue-turn" : ""} ${message.processMessage && !messageIsOperatorFollowUp && !messageIsHermesReply ? "process" : ""} ${message.emphasis && !messageIsHermesReply ? "emphasis" : ""} ${messageSelected ? "selected" : ""}`.trim()}
+                data-agent-conversation-bubble={messageIsDialogueTurn ? "true" : "false"}
                 data-agent-message-key={messageKey}
                 data-mission-id={message.missionId || workbenchState?.missionId || ""}
                 data-message-zone="thread"
                 data-runtime-id={message.runtimeId || workbenchState?.runtime || ""}
                 data-runtime-report={isRuntimeOutputAgentMessage(message) ? "true" : "false"}
-                data-hermes-transcript={isLiveRuntimeReportMessage(message) ? "true" : "false"}
+                data-hermes-transcript={!messageIsDialogueTurn && isLiveRuntimeReportMessage(message) ? "true" : "false"}
+                data-agent-dialogue-turn={isAgentDialogueTurn(message) ? "true" : "false"}
+                data-agent-proof-artifact={isProofArtifactAgentMessage(message) ? "true" : "false"}
+                data-agent-runtime-activity={isRuntimeActivityAgentMessage(message) ? "true" : "false"}
                 data-selected-agent-message={messageSelected ? "true" : "false"}
                 data-turn-id={messageKey}
                 key={messageKey}
@@ -7817,16 +6583,16 @@ function FluxioAgentSurface(props) {
               >
                 <div className="fluxos-message-head">
                   <span>{messageMeta}</span>
-                  <strong>{agentMessageDisplayTitle(message)}</strong>
+                  <strong>{messageIsDialogueTurn ? messageSpeaker : agentMessageDisplayTitle(message)}</strong>
                 </div>
-                {messageDetail ? <p>{messageDetail}</p> : null}
+                {messageBody ? <p>{messageBody}</p> : null}
                 {message.technicalDetail ? (
                   <details className="fluxos-message-trace">
                     <summary>Runtime trace</summary>
                     <p>{String(message.technicalDetail).slice(0, 720)}</p>
                   </details>
                 ) : null}
-                {asList(message.chips).length > 0 ? (
+                {!messageIsOperatorFollowUp && !messageIsHermesReply && asList(message.chips).length > 0 ? (
                   <div className="fluxos-message-chips">
                     {asList(message.chips).slice(0, 4).map(chip => <span key={`${message.id || index}-${chip}`}>{chip}</span>)}
                   </div>
@@ -7835,16 +6601,16 @@ function FluxioAgentSurface(props) {
             );
           }) : isLiveBackend ? (
             <article className="fluxos-flow-empty">
-              <span>Live data only</span>
-              <strong>No Hermes/runtime report rows loaded for this mission</strong>
-              <p>The agent thread will stay empty until the NAS returns current mission messages. Planner steps, file reads, and archived bookkeeping stay out of the main message list. The live thread shows concrete Runtime output bodies first, then real Hermes transcript rows for historical missions that did not emit a final Runtime output body. It never reuses an older frame or bundled sample message.</p>
+              <span>Dialogue only</span>
+              <strong>No Hermes chat reply yet</strong>
+              <p>No Hermes chat transcript is attached for this mission. The latest Model / OpenRuntime message is shown in the run receipt below, while proof, audits, file reads, route context, checkpoints, and commands stay behind evidence or trace drawers.</p>
               {preferredRunningLiveMissionId ? (
                 <button
                   data-live-active-mission-switch="true"
                   onClick={() => onSelectFlow?.(preferredRunningLiveMissionId)}
                   type="button"
                 >
-                  Open running Hermes mission
+                  Attach active mission
                 </button>
               ) : null}
             </article>
@@ -7861,7 +6627,19 @@ function FluxioAgentSurface(props) {
             );
           })}
         </section>
+        <FluxioTurnReceiptStrip runtimeCompartment={runtimeCompartment} />
 
+        <details
+          aria-label={isLiveBackend ? "Advanced plan and diagnostic steps" : "Plan"}
+          className={isLiveBackend ? "fluxos-agent-advanced-drawer fluxos-agent-plan-drawer" : "fluxos-agent-plan-drawer"}
+          data-agent-advanced-drawer="true"
+          data-agent-advanced-drawer-kind="plan"
+          open={!isLiveBackend || !agentFocusMode}
+        >
+          <summary>
+            <span>{isLiveBackend ? "Plan and diagnostic steps" : "Plan"}</span>
+            <strong>{isLiveBackend ? `${livePlanRows.length || 0} steps` : `${AGENT_PLAN.length} steps`}</strong>
+          </summary>
         <div className="fluxos-plan-list">
           {isLiveBackend ? (
             livePlanRows.length > 0 ? livePlanRows.map((message, index) => {
@@ -7884,7 +6662,7 @@ function FluxioAgentSurface(props) {
               >
                 <span>{message.tone === "good" ? <Check size={16} strokeWidth={2} /> : message.tone === "bad" ? <CircleHelp size={16} strokeWidth={2} /> : <CircleDashed size={16} strokeWidth={2} />}</span>
                 <div>
-                  <strong>{agentMessageDisplayTitle(message)}</strong>
+                  <strong>Diagnostic: {agentMessageDisplayTitle(message)}</strong>
                   {agentMessageDisplayDetail(message) ? <p>{agentMessageDisplayDetail(message)}</p> : null}
                 </div>
               </article>
@@ -7906,21 +6684,40 @@ function FluxioAgentSurface(props) {
             </article>
           ))}
         </div>
+        </details>
 
         <FluxioComposer
+          activeCommentTarget={props.activeCommentTarget}
           draft={draft}
           onAttach={onAttach}
           onChangeDraft={onChangeDraft}
           onDictation={onDictation}
           onRequestAction={onRequestAction}
           onSend={onSend}
-          placeholder="Continue the run, ask for a review, or request a browser check..."
+          placeholder="Message Hermes about this mission..."
         />
+        {isLiveBackend && agentBottomRouteRows.length ? (
+          <div className="fluxos-agent-bottom-route-summary" data-agent-bottom-route-summary="true" aria-label="Mission stage summary">
+            {agentBottomRouteRows.map(route => (
+              <span
+                className={route.role === "executor" ? "active" : route.role === "done" && /completed/i.test(route.label) ? "done" : ""}
+                data-agent-bottom-route-role={route.role}
+                key={`agent-bottom-route-${route.role}-${route.provider}-${route.model}`}
+              >
+                <strong>{titleizeToken(route.role)}</strong>
+                <em>{route.role === "done" ? route.label.replace(/^Done\s*·\s*/i, "") : [route.provider ? titleizeToken(route.provider) : "", route.model || ""].filter(Boolean).join(" / ") || "not reported"}</em>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section
           className="fluxos-preview-panel"
-          data-live-message-selection-version="v26"
+          ref={agentPreviewPanelRef}
+          data-live-message-selection-version="v29"
+        data-agent-preview-window="true"
+        data-agent-preview-window-open={agentPreviewWindowOpen ? "true" : "false"}
         data-preview-state={previewState}
         data-selected-message-id={resolvedSelectedMessageKey}
         data-selected-message-requested-id={selectedMessageId}
@@ -7930,7 +6727,9 @@ function FluxioAgentSurface(props) {
           <span />
             <strong>
               {isLiveBackend
-                ? messageSelectionPinned
+                ? agentPreviewWindowOpen
+                  ? "Agent preview window"
+                : messageSelectionPinned
                   ? `Selected message: ${selectedMessage?.label || selectedMessage?.roleLabel || "Agent"}`
                   : livePreviewLabel
                 : "/control?surface=agent"}
@@ -7974,15 +6773,19 @@ function FluxioAgentSurface(props) {
                 </div>
               </article>
             ) : activePreviewFrameUrl ? (
-              <article className="fluxos-flow-empty fluxos-frame-blocked">
-                <span>Live URL captured</span>
-                <strong>Open the live artifact in a new tab</strong>
-                <p>The Agent surface no longer embeds live mission frames. It stays on Hermes/runtime messages so an older served preview cannot remain stuck while you switch rows.</p>
+              <>
+                <iframe
+                  className="fluxos-live-preview-frame"
+                  data-agent-preview-frame="true"
+                  key={`${workbenchState?.missionId || "mission"}:${activePreviewFrameUrl}`}
+                  src={activePreviewFrameUrl}
+                  title="Agent live preview"
+                />
                 <div className="fluxos-preview-empty-actions">
                   <button onClick={() => window.open(activePreviewFrameUrl, "_blank", "noopener,noreferrer")} type="button">Open new tab</button>
                   <button onClick={() => fluxioAction(onRequestAction, "preview:refresh")} type="button">Refresh</button>
                 </div>
-              </article>
+              </>
             ) : livePreviewFrameBlocked ? (
               <article className="fluxos-flow-empty fluxos-frame-blocked">
                 <span>Live URL captured</span>
@@ -8005,13 +6808,11 @@ function FluxioAgentSurface(props) {
               </article>
             )
           ) : (
-            <>
-              <div className="fluxos-preview-card wide" />
-              <div className="fluxos-preview-card active" />
-              <div className="fluxos-preview-card narrow" />
-              <div className="fluxos-selector one">Hero</div>
-              <div className="fluxos-selector two">CTA passes</div>
-            </>
+            <article className="fluxos-flow-empty">
+              <span>Agent preview</span>
+              <strong>Preview opens here when a real target exists</strong>
+              <p>No square fixture blocks are drawn. Agent keeps a clean bordered window for served HTML, localhost apps, or selected proof artifacts.</p>
+            </article>
           )}
         </div>
         <div className="fluxos-tool-grid">
@@ -8051,9 +6852,65 @@ function FluxioAgentSurface(props) {
 }
 
 function FluxioBuilderSurface(props) {
-  const { builderRows, changedItems, liveDataStatus, onOpenBuilderDetail, onRequestAction, onSelectFlow, onSelectProject, projectProgressHistory, systemAuditDigest, timelineMoments, workbenchState } = props;
+  const { builderRows, changedItems, liveDataStatus, missionWatchdog, notificationItems, onOpenBuilderDetail, onRequestAction, onSelectFlow, onSelectProject, projectProgressHistory, systemAuditDigest, timelineMoments, workbenchState } = props;
+  const [builderClarityMode, setBuilderClarityMode] = useState(() => {
+    if (typeof window === "undefined") return "focus";
+    return window.localStorage?.getItem("fluxio.builder.clarityMode") || "focus";
+  });
+  const [builderTimelineHorizon, setBuilderTimelineHorizon] = useState(() => {
+    if (typeof window === "undefined") return "phase";
+    return window.localStorage?.getItem("fluxio.builder.timelineHorizon") || "phase";
+  });
+  const [builderTimelineDensity, setBuilderTimelineDensity] = useState(() => {
+    if (typeof window === "undefined") return "comfortable";
+    return window.localStorage?.getItem("fluxio.builder.timelineDensity") || "comfortable";
+  });
+  const [builderTimelineShowDone, setBuilderTimelineShowDone] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage?.getItem("fluxio.builder.timelineShowDone") === "true";
+  });
   const sourceRows = asList(builderRows);
   const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const normalizedBuilderClarityMode = builderClarityMode === "full" ? "full" : "focus";
+  const normalizedBuilderTimelineHorizon = ["phase", "month", "quarter", "year"].includes(builderTimelineHorizon)
+    ? builderTimelineHorizon
+    : "phase";
+  const normalizedBuilderTimelineDensity = builderTimelineDensity === "compact" ? "compact" : "comfortable";
+  const builderTimelineScaleLabels = {
+    phase: ["Now", "Build", "Verify", "Proof"],
+    month: ["Week 1", "Week 2", "Week 3", "Week 4"],
+    quarter: ["Now", "30d", "60d", "90d"],
+    year: ["Q1", "Q2", "Q3", "Q4"],
+  }[normalizedBuilderTimelineHorizon];
+  const builderFocusMode = isLiveBackend && normalizedBuilderClarityMode === "focus";
+  const setLiveBuilderClarityMode = mode => {
+    const nextMode = mode === "full" ? "full" : "focus";
+    setBuilderClarityMode(nextMode);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.builder.clarityMode", nextMode);
+    }
+  };
+  const setLiveBuilderTimelineHorizon = horizon => {
+    const nextHorizon = ["phase", "month", "quarter", "year"].includes(horizon) ? horizon : "phase";
+    setBuilderTimelineHorizon(nextHorizon);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.builder.timelineHorizon", nextHorizon);
+    }
+  };
+  const setLiveBuilderTimelineDensity = density => {
+    const nextDensity = density === "compact" ? "compact" : "comfortable";
+    setBuilderTimelineDensity(nextDensity);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.builder.timelineDensity", nextDensity);
+    }
+  };
+  const toggleLiveBuilderTimelineDone = () => {
+    const nextValue = !builderTimelineShowDone;
+    setBuilderTimelineShowDone(nextValue);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.builder.timelineShowDone", nextValue ? "true" : "false");
+    }
+  };
   const liveRows = sortLiveBuilderRows(sourceRows);
   const liveLoading = isLiveBackend && liveDataStatus?.loading && sourceRows.length === 0;
   const rows = sourceRows.length ? liveRows.slice(0, isLiveBackend ? 8 : 4) : liveLoading || isLiveBackend ? [] : BUILDER_FLOWS;
@@ -8101,23 +6958,90 @@ function FluxioBuilderSurface(props) {
   const selectedContext = rows.find(row => row?.selected)?.contextRoots || rows[0]?.contextRoots || {};
   const selectedMissionRow = rows.find(row => row?.selected) || rows[0] || {};
   const selectedMissionId = selectedMissionRow?.id || selectedMissionRow?.missionId || selectedMissionRow?.mission_id || "";
+  const builderActionMissionId = selectedMissionId || String(workbenchState?.missionId || "").trim();
   const selectedProviderCapabilities = selectedMissionRow?.providerCapabilities || selectedMissionRow?.provider_capabilities || {};
   const providerCapabilityRows = asList(selectedProviderCapabilities?.providers);
   const providerLaneRows = asList(selectedProviderCapabilities?.lanes);
   const selectedRouteDecisionRows = providerLaneRows.length
     ? providerLaneRows.slice(0, 4)
-    : [
+    : isLiveBackend
+      ? []
+      : [
         { role: "planner", provider: "openai-codex", model: "gpt-5.5", effort: "high", reason: "Plan and route the mission." },
         { role: "executor", provider: selectedProviderCapabilities.runtimeId || selectedMissionRow.runtimeId || "hermes", model: "task-fit", effort: "high", reason: "Execute through the selected runtime lane." },
         { role: "verifier", provider: "openai-codex", model: "gpt-5.5", effort: "high", reason: "Verify diffs, browser proof, and receipts." },
       ];
   const selectedThreadRows = (
-    asList(workbenchState?.agentThreadPreview).length > 0
+    isLiveBackend
       ? asList(workbenchState?.agentThreadPreview)
-      : asList(workbenchState?.runtimeOps)
+      : asList(workbenchState?.agentThreadPreview).length > 0
+        ? asList(workbenchState?.agentThreadPreview)
+        : asList(workbenchState?.runtimeOps)
   )
     .filter(item => !isLowSignalAgentMessage(item))
     .slice(0, 3);
+  const liveNotificationRows = isLiveBackend ? asList(notificationItems).slice(0, 4) : [];
+  const latestNotification = liveNotificationRows[0] || null;
+  const firstWatchdogProblem =
+    asList(missionWatchdog?.problemRegistry?.problems).find(item => !["closed", "resolved", "dismissed"].includes(String(item?.status || "open").toLowerCase())) ||
+    asList(missionWatchdog?.issues)[0] ||
+    null;
+  const firstLiveThreadLine =
+    selectedThreadRows.map(item => firstUsefulRuntimeLine(agentMessageDisplayDetail(item))).find(Boolean) ||
+    selectedThreadRows.map(item => item.title || item.label || "").find(Boolean) ||
+    "";
+  const selectedMissionProgressValue =
+    selectedProgressValue ??
+    progressPercentValue(selectedMissionRow?.progress);
+  const liveControlRailRows = isLiveBackend ? [
+    {
+      id: "mission",
+      label: "Mission",
+      value: selectedMissionProgressValue == null ? titleizeToken(selectedMissionRow?.status || "Live") : `${selectedMissionProgressValue}%`,
+      detail: selectedMissionRow?.name || selectedMissionRow?.title || "No selected mission row",
+      tone: liveBlockedCount > 0 ? "warn" : liveActiveCount > 0 ? "good" : "neutral",
+      action: "Open Agent",
+      disabled: !selectedMissionId,
+      onClick: () => onOpenBuilderDetail?.(selectedMissionId),
+    },
+    {
+      id: "agent",
+      label: "Agent report",
+      value: selectedThreadRows.length ? `${selectedThreadRows.length} live` : "Waiting",
+      detail: firstLiveThreadLine || "No runtime report row returned for this mission yet.",
+      tone: selectedThreadRows.length ? "good" : "warn",
+      action: "Read thread",
+      disabled: !selectedMissionId,
+      onClick: () => onOpenBuilderDetail?.(selectedMissionId),
+    },
+    {
+      id: "notify",
+      label: "Notifications",
+      value: `${liveNotificationRows.length} visible`,
+      detail: latestNotification
+        ? (latestNotification.agentMessage || latestNotification.detail || latestNotification.message || latestNotification.title || "Live notification")
+        : "No live notification rows returned on this refresh.",
+      tone: liveNotificationRows.length ? "good" : "warn",
+      action: "Open stack",
+      disabled: false,
+      onClick: () => onRequestAction?.("notifications:show-live-stack"),
+    },
+    {
+      id: "watchdog",
+      label: "Watchdog",
+      value: missionWatchdog ? `${missionWatchdog.issueCount || 0} issues` : "Pending",
+      detail:
+        firstWatchdogProblem?.firstRepairStep ||
+        firstWatchdogProblem?.firstStep ||
+        firstWatchdogProblem?.detail ||
+        missionWatchdog?.nextAction ||
+        "No live watchdog report returned yet.",
+      tone: Number(missionWatchdog?.bad || 0) > 0 ? "bad" : Number(missionWatchdog?.warn || 0) > 0 ? "warn" : missionWatchdog ? "good" : "neutral",
+      action: "Refresh",
+      disabled: false,
+      onClick: () => onRequestAction?.("watchdog:refresh"),
+    },
+  ] : [];
   const projectHealthRows = rows.map((row, index) => ({
     id: row?.id || `project-health-${index}`,
     title: row?.workspaceName || row?.description || row?.name || "Workspace",
@@ -8149,6 +7073,52 @@ function FluxioBuilderSurface(props) {
       relatedHoldCount,
     };
   });
+  const builderQueuePressureRows = useMemo(() => {
+    if (!missionWatchdog) return [];
+    const seen = new Set();
+    const rows = [];
+    const pushQueuePressure = (sourceItem, sourceIndex) => {
+      const item = asRecord(sourceItem);
+      if (String(item.kind || "") !== "workspace_queue_pressure") return;
+      const evidence = asList(item.evidence).map(value => String(value || ""));
+      const evidenceValue = key => {
+        const prefix = `${key}=`;
+        const match = evidence.find(value => value.startsWith(prefix));
+        return match ? match.slice(prefix.length) : "";
+      };
+      const scopeEvidence = asRecord(item.scopeEvidence);
+      const missionId = item.missionId || item.mission_id || "";
+      const blockingMissionId = item.blockingMissionId || evidenceValue("blockingMissionId");
+      const key =
+        item.problemId ||
+        item.issueId ||
+        `${missionId || "mission"}-${blockingMissionId || "slot"}-${sourceIndex}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const scopeSafety = item.scopeSafety || evidenceValue("scopeSafety") || "unknown";
+      rows.push({
+        key,
+        missionId,
+        blockingMissionId,
+        missionTitle: item.missionTitle || item.title || "Queued mission",
+        title: item.title || "Queued mission is waiting behind a long-running workspace slot",
+        detail: item.detail || "The watchdog is holding this mission because another mission owns the active workspace slot.",
+        firstRepairStep:
+          item.firstRepairStep ||
+          item.firstStep ||
+          "Keep it queued or split the objective into a non-overlapping lane.",
+        severity: item.severity || "info",
+        scopeSafety,
+        activeFileCount: Number(scopeEvidence.activeFileCount || evidenceValue("activeScopeFiles") || 0),
+        queuedFileCount: Number(scopeEvidence.queuedFileCount || evidenceValue("queuedScopeFiles") || 0),
+        overlapFiles: asList(scopeEvidence.overlapFiles).slice(0, 3),
+        canParallelize: scopeSafety === "safe",
+      });
+    };
+    asList(missionWatchdog.issues).forEach(pushQueuePressure);
+    asList(missionWatchdog.problemRegistry?.problems).forEach(pushQueuePressure);
+    return rows;
+  }, [missionWatchdog]);
   const liveGuideRows = isLiveBackend ? [
     {
       id: "mission",
@@ -8200,6 +7170,8 @@ function FluxioBuilderSurface(props) {
           status,
           tone: blockerCount > 0 ? "warn" : isActiveBuilderRow(row) ? "good" : "neutral",
           progress: progressValue,
+          progressKind: row?.progressKind || (row?.displayAsCompletion === false ? "non_completion_progress" : ""),
+          progressLabel: row?.progressLabel || (row?.displayAsCompletion === false ? "Proof repair readiness" : ""),
           detail:
             (isSelectedMission ? workbenchState?.progress?.nextAction : "") ||
             row?.progressNextAction ||
@@ -8272,8 +7244,8 @@ function FluxioBuilderSurface(props) {
   const systemLossAhead = Number(systemLossBreakdown.mustBeatStatus?.ahead ?? t3AheadCount);
   const systemLossTotal = Number(systemLossBreakdown.mustBeatStatus?.total ?? (t3TotalCount || 7));
   const systemLossHeadline = systemLossHasOutOf20
-    ? `${systemLossScore}/20 · loss ${systemLossAmount}/20`
-    : `loss pressure ${Number(systemLossBreakdown.score || 0)}/100 · ${titleizeToken(systemLossBreakdown.severity || "low")}`;
+    ? `${systemLossScore}/20 · gap ${systemLossAmount}/20`
+    : `gap pressure ${Number(systemLossBreakdown.score || 0)}/100 · ${titleizeToken(systemLossBreakdown.severity || "low")}`;
   const systemLossSubline = systemLossHasOutOf20
     ? `${systemLossAhead}/${systemLossTotal} T3 categories ahead`
     : systemLossBreakdown.nextAction || "Keep sampling live outcomes.";
@@ -8285,15 +7257,342 @@ function FluxioBuilderSurface(props) {
     detail: item.primaryGap || item.detail || item.evidence || item.nextAction || "Keep collecting live proof.",
     nextAction: item.nextAction || "",
   }));
+  const designDebtSummary = systemAuditDigest?.designDebtSummary || {};
+  const designDebtRows = asList(designDebtSummary.rows);
+  const goalCompletionAudit = systemAuditDigest?.goalCompletionAudit || {};
+  const goalCompletionRows = asList(goalCompletionAudit.rows);
+  const missionAdvancementSummary = systemAuditDigest?.missionAdvancementSummary || {};
+  const missionProofAdvancementRows = asList(missionAdvancementSummary.rows);
+  const operatorNextPath = systemAuditDigest?.operatorNextPath || {};
+  const operatorNextPathSteps = asList(operatorNextPath.steps);
+  const speedSupervisorSummary = systemAuditDigest?.speedSupervisorSummary || {};
+  const speedSupervisorRows = asList(speedSupervisorSummary.rows);
   const topQueueRow = schedulingQueueRows[0] || null;
   const queueFirstHeldCount = schedulingQueueRows.filter(item => item.safeToLaunch === false).length;
   const queueFirstNotificationCount = Number(liveDataStatus?.notificationCount || 0);
   const queueFirstSliceCount = Number(liveDataStatus?.sliceNotificationCount || 0);
+  const liveControlState = liveDataStatus?.liveControlState || {};
+  const runtimeRouteProof = liveDataStatus?.runtimeRouteProof || {};
+  const runtimeProofReceipt = runtimeRouteProof?.proof || {};
+  const runtimeProofVerified = Boolean(runtimeRouteProof?.minimaxM3Verified);
+  const runtimeFrontendProvider =
+    runtimeProofReceipt.provider || runtimeRouteProof.frontendExecutorProvider || "minimax";
+  const runtimeFrontendModel =
+    runtimeProofReceipt.model || runtimeRouteProof.frontendExecutorModel || "MiniMax-M3";
+  const runtimeProofRows = [
+    {
+      label: "Hermes binary",
+      value: runtimeRouteProof?.hermesCommandVisible ? "Visible" : "Missing",
+      detail: runtimeRouteProof?.hermesVersion || runtimeRouteProof?.hermesCommand || "No live Hermes command on backend PATH.",
+      tone: runtimeRouteProof?.hermesCommandVisible ? "good" : "bad",
+    },
+    {
+      label: "Frontend executor",
+      value: runtimeProofVerified ? `${runtimeFrontendProvider} / ${runtimeFrontendModel} verified` : "Proof pending",
+      detail: runtimeProofVerified
+        ? `${runtimeFrontendProvider} / ${runtimeFrontendModel} · ${runtimeProofReceipt.elapsedMs || 0}ms`
+        : "Run a Hermes MiniMax-M3 chat once; Builder will show the resulting backend receipt.",
+      tone: runtimeProofVerified ? "good" : "warn",
+    },
+    {
+      label: "Proof source",
+      value: runtimeProofReceipt?.checkedAt ? "Recorded" : "Not recorded",
+      detail: runtimeProofReceipt?.checkedAt || runtimeRouteProof?.source || "No authenticated runtime receipt yet.",
+      tone: runtimeProofReceipt?.checkedAt ? "good" : "warn",
+    },
+  ];
+  const zeroActiveQueueHealthy = Boolean(
+    liveControlState.zeroActiveQueueHealthy ||
+      (schedulingQueueRows.length > 0 && liveActiveCount === 0 && liveQueuedCount === 0 && liveBlockedCount === 0),
+  );
+  const liveControlStateLabel = zeroActiveQueueHealthy
+    ? "Healthy zero-active state"
+    : liveActiveCount > 0
+      ? "Active mission state"
+      : "Ready for launch";
+  const liveControlStateDetail = zeroActiveQueueHealthy
+    ? (liveControlState.detail || "No mission is running; the NAS scheduler queue remains visible and actionable.")
+    : (liveControlState.detail || workbenchState?.progress?.nextAction || "Builder is reading current NAS summary data.");
+  const selectedTimelineTitle =
+    selectedMissionRow?.name || selectedMissionRow?.title || "";
+  const builderTimelineHeadline = liveActiveCount > 0 && selectedTimelineTitle
+    ? `Running: ${selectedTimelineTitle}`
+    : selectedTimelineTitle || (topQueueRow ? `Next: #${topQueueRow.rank} ${topQueueRow.title}` : "Ready for the next mission");
+  const builderTimelineContext = topQueueRow
+    ? `Next queued: #${topQueueRow.rank} ${topQueueRow.title} · ${topQueueRow.safeToLaunch ? "safe to launch" : "held"}`
+    : liveControlStateDetail;
+  const completedBuilderTimelineRows = builderTimelineShowDone
+    ? metricRows
+        .filter(item => {
+          const status = String(item?.status || item?.state || "").trim().toLowerCase();
+          return ["completed", "done"].includes(status);
+        })
+        .slice(0, 2)
+        .map((item, index) => ({
+          id: `completed-${item.id || item.missionId || item.mission_id || index}`,
+          selected: false,
+          lane: "Done",
+          title: item.name || item.title || "Completed mission",
+          detail: item.summary || item.turningPoint || "Completed mission remains visible because completed rows are enabled.",
+          progress: 100,
+          start: Math.min(82, 54 + index * 12),
+          span: 30,
+          tone: "good",
+          meta: "Done",
+          phaseLabel: "Done",
+          checkpointLabel: "proof archived",
+          dependencyLabel: "complete",
+          actionLabel: "Open",
+          onClick: () => onOpenBuilderDetail?.(item.id || item.missionId || item.mission_id),
+        }))
+    : [];
+  const builderTimelineRows = [
+    selectedMissionId ? {
+      id: `mission-${selectedMissionId}`,
+      selected: true,
+      lane: liveActiveCount > 0 ? "Running" : "Selected",
+      title: selectedMissionRow?.name || selectedMissionRow?.title || "Selected live mission",
+      detail: workbenchState?.progress?.nextAction || selectedMissionRow?.turningPoint || selectedMissionRow?.summary || "Open Agent for the current thread and proof.",
+      progress: selectedMissionProgressValue == null ? 38 : selectedMissionProgressValue,
+      start: 2,
+      span: Math.max(22, Math.min(88, selectedMissionProgressValue == null ? 42 : selectedMissionProgressValue)),
+      tone: liveBlockedCount > 0 ? "warn" : liveActiveCount > 0 ? "good" : "neutral",
+      meta: selectedThreadRows.length ? `${selectedThreadRows.length} rows` : titleizeToken(selectedMissionRow?.status || "live"),
+      phaseLabel: liveActiveCount > 0 ? "Now" : "Selected",
+      checkpointLabel: selectedMissionProgressValue == null ? "progress pending" : `${selectedMissionProgressValue}% state`,
+      dependencyLabel: selectedThreadRows.length ? "thread proof ready" : "open Agent proof",
+      actionLabel: "Agent",
+      onClick: () => onOpenBuilderDetail?.(selectedMissionId),
+    } : null,
+    ...schedulingQueueRows.slice(0, 4).map((item, index) => ({
+      id: `queue-${item.workspaceId || item.rank || index}`,
+      selected: false,
+      lane: `Queue ${item.rank || index + 1}`,
+      title: item.title || "Queued project",
+      detail: item.recommendedAction || item.reason || projectProgressHistory?.scheduler?.nextAction || "Review before launch.",
+      progress: item.safeToLaunch ? 18 : 8,
+      start: Math.min(72, 16 + index * 14),
+      span: item.safeToLaunch ? 24 : 18,
+      tone: item.safeToLaunch ? "good" : "warn",
+      meta: item.safeToLaunch ? "Safe" : item.activeCount ? `${item.activeCount} active` : item.blockedCount ? `${item.blockedCount} blocked` : "Held",
+      phaseLabel: index === 0 ? "Next" : "Queued",
+      checkpointLabel: item.safeToLaunch ? "ready window" : "dependency hold",
+      dependencyLabel: item.safeToLaunch ? "scope safe" : "wait for active mission",
+      actionLabel: item.safeToLaunch ? "Launch" : "Open",
+      onClick: () => item.workspaceId && onSelectProject?.(item.workspaceId),
+    })),
+    ...reviewRows.slice(0, 2).map((item, index) => ({
+      id: `blocked-${item.id || item.missionId || index}`,
+      selected: false,
+      lane: "Blocked",
+      title: item.name || item.title || "Blocked mission",
+      detail: item.turningPoint || item.nextAction || item.summary || "Inspect proof before continuing.",
+      progress: progressPercentValue(item.progress) ?? 12,
+      start: 10 + index * 18,
+      span: 28,
+      tone: "bad",
+      meta: titleizeToken(item.status || "blocked"),
+      phaseLabel: "Blocked",
+      checkpointLabel: titleizeToken(item.status || "needs repair"),
+      dependencyLabel: "proof required",
+      actionLabel: "Inspect",
+      onClick: () => onOpenBuilderDetail?.(item.id || item.missionId || item.mission_id),
+    })),
+    ...completedBuilderTimelineRows,
+  ].filter(Boolean).slice(0, builderTimelineShowDone ? 8 : 6);
+  const builderTimelineProofRows = [
+    {
+      label: "Agent thread",
+      value: selectedThreadRows.length ? `${selectedThreadRows.length} live` : "Waiting",
+      detail: firstLiveThreadLine || "Open Agent for the selected mission transcript.",
+      tone: selectedThreadRows.length ? "good" : "warn",
+    },
+    {
+      label: "Verifier",
+      value: proofDiffRows.length ? `${proofDiffRows.length} rows` : titleizeToken(goalCompletionAudit?.status || "proof"),
+      detail: goalCompletionAudit?.nextAction || workbenchState?.progress?.nextAction || "Run proof from Agent when the diff is ready.",
+      tone: proofDiffRows.length || goalCompletionAudit?.schema ? "good" : "neutral",
+    },
+    {
+      label: "Queue",
+      value: schedulingQueueRows.length ? `${schedulingQueueRows.length} ranked` : "Empty",
+      detail: topQueueRow?.recommendedAction || topQueueRow?.reason || projectProgressHistory?.scheduler?.nextAction || "No scheduler action is pending.",
+      tone: topQueueRow?.safeToLaunch ? "good" : topQueueRow ? "warn" : "neutral",
+    },
+  ];
+  const builderOperatorDockRows = [
+    {
+      id: "mission-state",
+      label: "State",
+      value: selectedMissionProgressValue == null ? titleizeToken(selectedMissionRow?.status || "Live") : `${selectedMissionProgressValue}%`,
+      detail: workbenchState?.progress?.label || workbenchState?.progress?.nextAction || titleizeToken(selectedMissionRow?.status || "Live mission"),
+      tone: liveBlockedCount > 0 ? "warn" : liveActiveCount > 0 ? "good" : "neutral",
+    },
+    {
+      id: "thread",
+      label: "Thread",
+      value: selectedThreadRows.length ? `${selectedThreadRows.length} live` : "Open Agent",
+      detail: firstLiveThreadLine || "Mission transcript and latest runtime messages.",
+      action: "Agent",
+      disabled: !selectedMissionId,
+      onClick: () => onOpenBuilderDetail?.(selectedMissionId),
+      tone: selectedThreadRows.length ? "good" : "warn",
+    },
+    {
+      id: "proof",
+      label: "Proof",
+      value: runtimeProofVerified ? `${runtimeFrontendProvider} / ${runtimeFrontendModel}` : "Pending",
+      detail: runtimeProofVerified ? "Hermes backend route verified." : "Run proof from Agent when the route is ready.",
+      action: "Verify",
+      onClick: () => onRequestAction?.("run:proof"),
+      tone: runtimeProofVerified ? "good" : "warn",
+    },
+    {
+      id: "queue",
+      label: "Queue",
+      value: schedulingQueueRows.length ? `${schedulingQueueRows.length} ranked` : "Clear",
+      detail: topQueueRow?.title || projectProgressHistory?.scheduler?.nextAction || "No queued project is blocking launch.",
+      action: "Queue",
+      disabled: !topQueueRow?.workspaceId,
+      onClick: () => onSelectProject?.(topQueueRow?.workspaceId),
+      tone: topQueueRow?.safeToLaunch ? "good" : topQueueRow ? "warn" : "neutral",
+    },
+  ];
+  const storageTriageSummary = systemAuditDigest?.storageTriageSummary || {};
+  const nasStoragePressure = systemAuditDigest?.nasStoragePressure || {};
+  const nasStorageAvailableBytes = Number(nasStoragePressure.availableBytes || 0);
+  const nasStorageUsedPercent = Number(nasStoragePressure.usedPercent || 0);
+  const nasStorageStatusKey = String(nasStoragePressure.status || "").trim().toLowerCase();
+  const nasStorageProbeFailed =
+    Boolean(nasStoragePressure.probeTimedOut) || Boolean(nasStoragePressure.probeConnectFailed);
+  const nasStorageMeasuredUsageAvailable = Boolean(
+    nasStoragePressure.measuredUsageAvailable ?? !nasStorageProbeFailed,
+  );
+  const nasStorageHasEvidence = Boolean(
+    nasStoragePressure.schema ||
+      nasStoragePressure.checkedAt ||
+      nasStoragePressure.source ||
+      nasStorageStatusKey,
+  );
+  const nasStorageUsageLine = nasStorageMeasuredUsageAvailable
+    ? `${nasStorageUsedPercent || storageTriageSummary.usedPercent || 0}% used · ${storageTriageSummary.generatedCandidateCount || 0} generated cleanup`
+    : `usage unverified · ${storageTriageSummary.generatedCandidateCount || 0} generated cleanup`;
+  const nasStorageMeasuredPressure =
+    nasStorageHasEvidence &&
+    nasStorageMeasuredUsageAvailable &&
+    (nasStorageStatusKey === "critical" ||
+      nasStorageStatusKey === "full" ||
+      nasStorageAvailableBytes <= 0 ||
+      nasStorageUsedPercent >= 99);
+  const nasStorageBlockDetail = nasStorageMeasuredPressure
+    ? `${nasStoragePressure.mount || "/volume1/Saclay"} reports ${nasStorageUsedPercent}% used with ${nasStorageAvailableBytes} available bytes. Mission resume stays blocked until real headroom returns.`
+    : !nasStorageHasEvidence
+      ? `${nasStoragePressure.mount || "/volume1/Saclay"} needs a live NAS storage check because no current df evidence is loaded. This is not measured full; the UI must not treat this as a measured full disk.`
+      : `${nasStoragePressure.mount || "/volume1/Saclay"} usage is unverified because the bounded NAS probe did not return df data. This is not measured full; the UI must not treat this as a measured full disk. Mission resume needs a fresh NAS check or a local workspace.`;
+  const storageTriageRows = asList(storageTriageSummary.rows);
+  const storageOperatorHandoff = storageTriageSummary?.handoff || {};
+  const storageAdminChecklist = asList(storageOperatorHandoff.adminChecklist);
+  const deploymentDurabilitySummary = systemAuditDigest?.deploymentDurabilitySummary || {};
+  const deploymentTemporaryCount = Number(deploymentDurabilitySummary.temporarySymlinkCount || 0);
+  const deploymentDurabilityBlocked =
+    deploymentDurabilitySummary.schema &&
+    deploymentDurabilitySummary.durable === false;
+  const nasStorageBlocked =
+    !nasStorageHasEvidence ||
+    nasStorageProbeFailed ||
+    !nasStorageMeasuredUsageAvailable ||
+    nasStorageMeasuredPressure;
+  const liveMissionOutputQuality = systemAuditDigest?.liveMissionOutputQuality || {};
+  const missionArtifactRepairPlan = systemAuditDigest?.missionArtifactRepairPlan || {};
+  const missionArtifactRepairRows = asList(missionArtifactRepairPlan.repairs);
+  const missionArtifactRepairStorage = missionArtifactRepairPlan.storagePreflight || {};
+  const artifactRepairRows = missionArtifactRepairRows.length > 0
+    ? missionArtifactRepairRows
+    : asList(liveMissionOutputQuality.repairMissionRows);
+  const artifactRepairCount = Number(
+    missionArtifactRepairPlan.repairMissionCount ||
+      missionArtifactRepairRows.length ||
+      liveMissionOutputQuality.repairMissionCount ||
+      artifactRepairRows.length ||
+      liveMissionOutputQuality.weakMissionCount ||
+      0,
+  );
+  const goalArtifactRepairCount = artifactRepairCountFromGoalRows(goalCompletionRows);
+  const firstViewportArtifactRepairCount = Math.max(artifactRepairCount, goalArtifactRepairCount);
+  const artifactRepairCanResume = missionArtifactRepairRows.length > 0
+    ? missionArtifactRepairRows.some(item => item?.canResumeNow !== false)
+    : missionArtifactRepairStorage?.canResume !== false;
+  const artifactRepairBlockedByCurrentStorage = artifactRepairCanResume === false && nasStorageBlocked;
+  const artifactRepairBlocked =
+    String(missionArtifactRepairPlan.status || "").trim().toLowerCase() === "repairs_blocked_by_nas_storage" ||
+    String(missionArtifactRepairPlan.status || "").trim().toLowerCase() === "repairs_ready" ||
+    String(liveMissionOutputQuality.status || "").trim().toLowerCase() === "needs_artifact_repair" ||
+    firstViewportArtifactRepairCount > 0;
+  const criticalBlockerRows = [
+    deploymentDurabilityBlocked ? {
+      id: "deployment-durability",
+      label: "Deployment durability",
+      title: deploymentDurabilitySummary.headline || "NAS deployment is not durable",
+      detail: deploymentTemporaryCount
+        ? `${deploymentTemporaryCount} active release path${deploymentTemporaryCount === 1 ? "" : "s"} point into /tmp. The app is working now, but this recovery patch is not reboot-durable.`
+        : "The deployment is live, but the audit did not prove durable writable release paths.",
+      action: deploymentDurabilitySummary.nextAction || "Free durable NAS space, write the patched files into the release, restart, and rerun live verification.",
+      tone: "bad",
+    } : null,
+    nasStorageBlocked ? {
+      id: "nas-storage-pressure",
+      label: "NAS write check",
+      title: nasStorageMeasuredPressure ? "NAS measured storage pressure" : "NAS write state unverified",
+      detail: nasStorageBlockDetail,
+      action: nasStorageMeasuredPressure
+        ? nasStoragePressure.nextAction || "Free volume/snapshot space, then rerun storage pressure verification."
+        : nasStoragePressure.nextAction || "Rerun the bounded NAS storage probe or switch this mission to a local workspace.",
+      tone: nasStorageMeasuredPressure ? "bad" : "warn",
+    } : null,
+    artifactRepairBlocked ? {
+      id: "artifact-repair-gate",
+      label: "Mission proof",
+      title: artifactRepairCanResume === false
+        ? artifactRepairBlockedByCurrentStorage
+          ? `${firstViewportArtifactRepairCount || 1} artifact repair${(firstViewportArtifactRepairCount || 1) === 1 ? "" : "s"} blocked by NAS storage`
+          : `${firstViewportArtifactRepairCount || 1} artifact repair${(firstViewportArtifactRepairCount || 1) === 1 ? "" : "s"} waiting for proof`
+        : `${firstViewportArtifactRepairCount || 1} artifact repair gate${(firstViewportArtifactRepairCount || 1) === 1 ? "" : "s"} open`,
+      detail:
+        missionArtifactRepairPlan.nextAction ||
+        liveMissionOutputQuality.nextAction ||
+        "Resume failed missions only with a hard artifact gate and real runtime-output body.",
+      action:
+        artifactRepairCanResume === false
+          ? artifactRepairBlockedByCurrentStorage
+            ? "Repair rows are visible, but resume remains disabled until NAS storage preflight passes."
+            : "Repair rows are visible, but resume remains disabled by stale or missing proof preflight, not a measured NAS-full state."
+          : artifactRepairRows[0]?.command || artifactRepairRows[0]?.action || "Open the failed mission in Agent and Workbench proof.",
+      tone: "warn",
+      missionId: artifactRepairRows[0]?.missionId || artifactRepairRows[0]?.mission_id || "",
+      canResume: artifactRepairCanResume,
+    } : null,
+  ].filter(Boolean);
+  const operatorPriorityRows = [
+    ...systemLossDriverRows.slice(0, 2).map(item => ({
+      id: `loss-${item.id}`,
+      label: item.lane,
+      title: item.title,
+      detail: item.nextAction || item.detail,
+      tone: Number(item.loss || 0) >= 3 ? "bad" : "warn",
+    })),
+    ...asList(systemAuditDigest?.badFirst).slice(0, 2).map((item, index) => ({
+      id: `bad-first-${item.title || index}`,
+      label: "Still weak",
+      title: item.title || "Current gap",
+      detail: item.detail || item.nextAction || "Open the related mission and attach proof.",
+      tone: "warn",
+    })),
+  ].slice(0, 4);
   return (
-    <div className="fluxos-builder">
+    <div className="fluxos-builder" data-builder-clarity-mode={normalizedBuilderClarityMode}>
       <section className="fluxos-builder-main">
         <div className="fluxos-section-head">
-          <span>Builder overview</span>
+          <span>Builder</span>
           <strong>{isLiveBackend ? "Live NAS mission readiness" : "Project readiness"}</strong>
         </div>
         <div className="fluxos-live-data-banner" aria-label="Live data source">
@@ -8308,6 +7607,227 @@ function FluxioBuilderSurface(props) {
             {liveDataStatus?.refreshing && !liveLoading ? " · full snapshot refreshing" : ""}
           </p>
         </div>
+        {isLiveBackend ? (
+          <section
+            className="fluxos-builder-timeline"
+            aria-label="Live Builder mission timeline"
+            data-builder-timeline-density={normalizedBuilderTimelineDensity}
+            data-builder-timeline-horizon={normalizedBuilderTimelineHorizon}
+            data-builder-timeline-show-done={builderTimelineShowDone ? "true" : "false"}
+            data-builder-timeline-canvas-polish="v2"
+            data-live-builder-timeline="true"
+          >
+            <div className="fluxos-builder-timeline-head">
+              <div>
+                <span>Mission timeline</span>
+                <strong>{builderTimelineHeadline}</strong>
+                <p className="fluxos-builder-timeline-context">{builderTimelineContext}</p>
+                <span className="fluxos-builder-timeline-source">
+                  {isLiveBackend ? "Live NAS" : "Preview"} · {liveDataStatus?.source || "control-room summary"} · {liveMissionCount} missions
+                </span>
+                <div
+                  className="fluxos-builder-timeline-display-controls"
+                  aria-label="Timeline display controls"
+                  data-builder-timeline-display-controls="true"
+                >
+                  <div>
+                    <span>Horizon</span>
+                    {[
+                      ["phase", "Phase"],
+                      ["month", "Month"],
+                      ["quarter", "90d"],
+                      ["year", "Year"],
+                    ].map(([value, label]) => (
+                      <button
+                        aria-pressed={normalizedBuilderTimelineHorizon === value}
+                        className={normalizedBuilderTimelineHorizon === value ? "active" : ""}
+                        data-builder-timeline-horizon-option={value}
+                        key={`timeline-horizon-${value}`}
+                        onClick={() => setLiveBuilderTimelineHorizon(value)}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div>
+                    <span>Density</span>
+                    {[
+                      ["comfortable", "Comfort"],
+                      ["compact", "Compact"],
+                    ].map(([value, label]) => (
+                      <button
+                        aria-pressed={normalizedBuilderTimelineDensity === value}
+                        className={normalizedBuilderTimelineDensity === value ? "active" : ""}
+                        data-builder-timeline-density-option={value}
+                        key={`timeline-density-${value}`}
+                        onClick={() => setLiveBuilderTimelineDensity(value)}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      aria-pressed={builderTimelineShowDone}
+                      className={builderTimelineShowDone ? "active" : ""}
+                      data-builder-timeline-toggle-done="true"
+                      onClick={toggleLiveBuilderTimelineDone}
+                      type="button"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="fluxos-builder-timeline-actions">
+                <button data-builder-timeline-action="continue" disabled={!builderActionMissionId} onClick={() => onOpenBuilderDetail?.(builderActionMissionId)} type="button">
+                  Continue
+                </button>
+                <button data-builder-timeline-action="modify" disabled={!builderActionMissionId} onClick={() => onRequestAction?.("run:modify")} type="button">
+                  Modify
+                </button>
+                <button data-builder-timeline-action="launch" onClick={() => onRequestAction?.("launch:mission")} type="button">
+                  Launch
+                </button>
+                <button data-builder-timeline-action="verify" onClick={() => onRequestAction?.("run:proof")} type="button">
+                  Verify
+                </button>
+                <button data-builder-timeline-action="summarize" disabled={!builderActionMissionId} onClick={() => onRequestAction?.("run:summarize")} type="button">
+                  Summarize
+                </button>
+                <button data-builder-timeline-action="agent" disabled={!builderActionMissionId} onClick={() => onOpenBuilderDetail?.(builderActionMissionId)} type="button">
+                  Agent
+                </button>
+              </div>
+            </div>
+            <div className="fluxos-builder-timeline-body">
+              <div className="fluxos-builder-timeline-scale" aria-hidden="true" data-builder-timeline-gantt-semantics="true">
+                {builderTimelineScaleLabels.map(label => <span key={`timeline-scale-${label}`}>{label}</span>)}
+              </div>
+              <div className="fluxos-builder-timeline-rows">
+                {builderTimelineRows.length > 0 ? builderTimelineRows.map(item => (
+                  <button
+                    aria-label={`Open details for ${item.title}`}
+                    className={`tone-${item.tone || "neutral"}`.trim()}
+                    data-builder-timeline-selected-row={item.selected ? "true" : "false"}
+                    data-live-builder-timeline-row="true"
+                    key={item.id}
+                    onClick={item.onClick}
+                    style={{ "--timeline-start": `${item.start}%`, "--timeline-span": `${item.span}%`, "--timeline-progress": `${item.progress}%` }}
+                    title={`Open details for ${item.title}`}
+                    type="button"
+                  >
+                    <span className="fluxos-builder-timeline-row-lane">{item.lane}</span>
+                    <strong className="fluxos-builder-timeline-row-title">{item.title}</strong>
+                    <span className="fluxos-builder-timeline-row-state" data-live-builder-timeline-row-state="true">
+                      <small>{item.phaseLabel || "Plan"}</small>
+                      <small>{item.checkpointLabel || item.meta || "checkpoint"}</small>
+                      <small>{item.dependencyLabel || "dependency clear"}</small>
+                    </span>
+                    <span className="fluxos-builder-timeline-row-bar" aria-hidden="true">
+                      <span className="fluxos-builder-timeline-row-marker start" />
+                      <span className="fluxos-builder-timeline-row-marker finish" />
+                      <i />
+                    </span>
+                    <em className="fluxos-builder-timeline-row-meta">{item.meta}</em>
+                    <span className="fluxos-builder-timeline-row-action">{item.actionLabel || "Open"}</span>
+                    <p className="fluxos-builder-timeline-row-detail">{item.detail}</p>
+                  </button>
+                )) : (
+                  <article className="fluxos-builder-timeline-empty">
+                    <span>Live NAS only</span>
+                    <strong>No timeline rows returned</strong>
+                    <p>Launch a mission or wait for the authenticated summary to return mission and queue rows.</p>
+                  </article>
+                )}
+              </div>
+            </div>
+            <aside className="fluxos-builder-timeline-proof" aria-label="Timeline proof and next action">
+              {builderTimelineProofRows.map(item => (
+                <article className={`tone-${item.tone || "neutral"}`} key={`timeline-proof-${item.label}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </aside>
+          </section>
+        ) : null}
+        {!isLiveBackend ? (
+          <section
+            className="fluxos-builder-preview-state"
+            aria-label="Builder preview state"
+            data-builder-preview-state="true"
+          >
+            <div className="fluxos-builder-preview-copy">
+              <span>Preview mode</span>
+              <strong>Builder workspace is ready for live mission rows</strong>
+              <p>
+                This surface is showing preview readiness because the authenticated NAS mission feed is not attached.
+                Live mode replaces these rows with the mission timeline, queue, proof, and launch controls.
+              </p>
+            </div>
+            <div className="fluxos-builder-preview-grid" aria-label="Builder preview readiness checks">
+              {rows.slice(0, 4).map((row, index) => (
+                <article className={`tone-${row.tone || row.statusTone || "neutral"}`} key={row.id || row.name || `builder-preview-${index}`}>
+                  <span>{row.status || row.lane || "Ready"}</span>
+                  <strong>{row.name || row.title || "Builder flow"}</strong>
+                  <p>{row.description || row.detail || row.lastRunMeta || "Open live mode to attach authenticated mission evidence."}</p>
+                  <button onClick={() => onOpenBuilderDetail?.(row.id || row.missionId || row.mission_id || "")} type="button">
+                    Open
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            className="fluxos-builder-operator-dock"
+            aria-label="Builder operator dock"
+            data-live-builder-operator-dock="true"
+          >
+            {builderOperatorDockRows.map(item => (
+              <article className={`tone-${item.tone || "neutral"}`} key={`builder-operator-dock-${item.id}`}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <p>{item.detail}</p>
+                {item.action ? (
+                  <button disabled={item.disabled} onClick={item.onClick} type="button">
+                    {item.action}
+                  </button>
+                ) : null}
+              </article>
+            ))}
+          </section>
+        ) : null}
+        {isLiveBackend ? (
+          <section
+            className={`fluxos-runtime-proof-strip ${runtimeProofVerified ? "verified" : "pending"}`}
+            aria-label="Hermes MiniMax-M3 runtime proof"
+            data-live-hermes-m3-runtime-proof="true"
+            data-live-hermes-m3-verified={runtimeProofVerified ? "true" : "false"}
+          >
+            <div className="fluxos-runtime-proof-copy">
+              <span>Hermes/M3 runtime proof</span>
+              <strong>{runtimeProofVerified ? "Backend route is proven" : "Backend route proof is pending"}</strong>
+              <p>
+                {runtimeProofVerified
+                  ? `Last live reply: ${runtimeProofReceipt.replyPreview || "Hermes MiniMax-M3 answered through the authenticated backend."}`
+                  : "This panel is populated only from the live backend route receipt and runtime PATH check."}
+              </p>
+            </div>
+            <div className="fluxos-runtime-proof-grid">
+              {runtimeProofRows.map(item => (
+                <article className={`tone-${item.tone}`} key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <LiveOperationsBrief
           activeRows={activeRows}
           liveDataStatus={liveDataStatus}
@@ -8319,6 +7839,69 @@ function FluxioBuilderSurface(props) {
           threadRows={selectedThreadRows}
           workbenchState={workbenchState}
         />
+        {isLiveBackend ? (
+          <section
+            className="fluxos-live-command-rail"
+            aria-label="Live Builder progress, Agent report, notifications, and Watchdog"
+            data-live-builder-command-rail="true"
+          >
+            <div className="fluxos-live-command-rail-head">
+              <div>
+                <span>Live control strip</span>
+                <strong>Quick mission actions</strong>
+              </div>
+              <p>
+                Hermes-first Builder view. MiniMax-M3 is the frontend executor route when authenticated and available;
+                this strip only renders rows returned by the live NAS summary/detail endpoints.
+              </p>
+            </div>
+            <div className="fluxos-live-command-rail-grid">
+              {liveControlRailRows.map(item => (
+                <article className={`tone-${item.tone || "neutral"}`} key={`live-command-rail-${item.id}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <p>{item.detail}</p>
+                  <button disabled={item.disabled} onClick={item.onClick} type="button">
+                    {item.action}
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend && goalCompletionAudit?.schema ? (
+          <section className="fluxos-first-blocker" aria-label="Live objective blocker" data-live-objective-blocker="true">
+            <div>
+              <span>Objective state</span>
+              <strong>{`${Number(goalCompletionAudit.completionPercent || 0)}% proven · ${titleizeToken(goalCompletionAudit.status || "partial")}`}</strong>
+              <p>
+                {goalCompletionAudit.topBlocker?.label
+                  ? `Blocked by ${goalCompletionAudit.topBlocker.label}: ${goalCompletionAudit.topBlocker.nextAction || goalCompletionAudit.nextAction || ""}`
+                  : goalCompletionAudit.nextAction || "Completion is calculated from live NAS, mission, T3, proof, and deployment evidence."}
+              </p>
+            </div>
+            <div className="fluxos-first-blocker-metrics">
+              <article className={nasStorageBlocked ? "bad" : "ok"}>
+                <span>Storage</span>
+                <strong>{nasStorageBlocked ? "Blocked" : "Writable"}</strong>
+                <p>{nasStorageUsageLine}</p>
+              </article>
+              <article
+                className={deploymentDurabilityBlocked ? "bad" : "ok"}
+                data-deployment-durability-summary="true"
+              >
+                <span>Durability</span>
+                <strong>{deploymentDurabilityBlocked ? "Temporary" : "Durable"}</strong>
+                <p>{deploymentDurabilityBlocked ? `${deploymentTemporaryCount || 0} /tmp release path${deploymentTemporaryCount === 1 ? "" : "s"}` : "Release paths passed"}</p>
+              </article>
+              <article className={artifactRepairBlocked ? "warn" : "ok"}>
+                <span>Proof repair</span>
+                <strong>{firstViewportArtifactRepairCount || 0}</strong>
+                <p>{artifactRepairBlocked ? "mission gates need repair" : "no active repair gate"}</p>
+              </article>
+            </div>
+          </section>
+        ) : null}
         {isLiveBackend ? (
           <section
             className="fluxos-queue-first-band"
@@ -8336,7 +7919,14 @@ function FluxioBuilderSurface(props) {
                 {topQueueRow?.recommendedAction ||
                   topQueueRow?.reason ||
                   workbenchState?.progress?.nextAction ||
-                  "Open the live Agent thread or launch a mission to create the next ranked project row."}
+                  liveControlStateDetail}
+              </p>
+              <p
+                className={`fluxos-queue-first-state ${zeroActiveQueueHealthy ? "healthy" : "active"}`.trim()}
+                data-live-zero-active-state={zeroActiveQueueHealthy ? "healthy" : "active-or-ready"}
+              >
+                <span>{liveControlStateLabel}</span>
+                <em>{liveControlStateDetail}</em>
               </p>
             </div>
             <div className="fluxos-queue-first-metrics" aria-label="Queue-first live Builder metrics">
@@ -8368,8 +7958,13 @@ function FluxioBuilderSurface(props) {
               <button disabled={!selectedMissionId} onClick={() => onOpenBuilderDetail?.(selectedMissionId)} type="button">
                 Open live Agent
               </button>
-              <button onClick={() => onRequestAction?.("launch:mission")} type="button">
-                Launch next mission
+              <button
+                data-launch-blocked-by-storage={nasStorageBlocked ? "true" : "false"}
+                disabled={nasStorageBlocked}
+                onClick={() => onRequestAction?.("launch:mission")}
+                type="button"
+              >
+                {nasStorageBlocked ? "Launch blocked by storage" : "Launch next mission"}
               </button>
             </div>
           </section>
@@ -8401,6 +7996,144 @@ function FluxioBuilderSurface(props) {
             </div>
           </section>
         ) : null}
+        {isLiveBackend && builderFocusMode ? (
+          <section
+            className="fluxos-builder-focus-drawer"
+            aria-label="Builder focus proof drawer"
+            data-builder-focus-disclosure="true"
+          >
+            <div>
+              <span>Focus view</span>
+              <strong>Diagnostics are folded below the operator path</strong>
+              <p>
+                The visible Builder path keeps live mission state, Agent report, queue, notifications, and objective blockers first.
+                Full proof panels stay live and verifier-visible; switch to Full when you need the audit trail.
+              </p>
+            </div>
+            <div className="fluxos-builder-focus-drawer-grid">
+              <article>
+                <span>Audit rows</span>
+                <strong>{goalCompletionRows.length || 0}</strong>
+                <p>Requirement-by-requirement proof is folded in Focus.</p>
+              </article>
+              <article>
+                <span>Queue rows</span>
+                <strong>{schedulingQueueRows.length || 0}</strong>
+                <p>The top ranked project remains visible in the command band.</p>
+              </article>
+              <article>
+                <span>Launch proof</span>
+                <strong>{publicLaunchSteps.length || 0}</strong>
+                <p>Public launch and release-packet proof stay in Full mode.</p>
+              </article>
+              <article>
+                <span>Diff rows</span>
+                <strong>{proofDiffRows.length || 0}</strong>
+                <p>Supervisor proof diff is available from Full or Agent detail.</p>
+              </article>
+              <article data-provider-admission-focus-summary="true">
+                <span>Admission vs quota</span>
+                <strong>{selectedProviderCapabilities.readyLaneCount || 0}/{providerLaneRows.length || selectedProviderCapabilities.laneCount || 0}</strong>
+                <p>Auth decides launch admission; unreported quota is not a provider-limit claim.</p>
+              </article>
+            </div>
+            <button onClick={() => setLiveBuilderClarityMode("full")} type="button">
+              Open full diagnostics
+            </button>
+          </section>
+        ) : null}
+        {isLiveBackend && operatorNextPath?.schema ? (
+          <section
+            className="fluxos-operator-next-path"
+            aria-label="Live operator next path"
+            data-live-operator-next-path="true"
+          >
+            <div className="fluxos-section-head">
+              <span>Operator next path</span>
+              <strong>{operatorNextPath.headline || "Follow the live proof-first path"}</strong>
+            </div>
+            <p>
+              {`${operatorNextPath.blockedStepCount || 0} blocked · ${operatorNextPath.operatorConfidenceScore || 0}/100 confidence · live audit only`}
+            </p>
+            <div className="fluxos-operator-next-steps">
+              {operatorNextPathSteps.map((item, index) => (
+                <article
+                  className={`status-${item.status || "open"}`}
+                  data-operator-next-step={item.id || index}
+                  key={`operator-next-step-${item.id || index}`}
+                >
+                  <span>{`${String(index + 1).padStart(2, "0")} · ${item.label || "Step"}`}</span>
+                  <strong>{item.title || "Live operator step"}</strong>
+                  <p>{item.detail || item.action || "No live detail recorded."}</p>
+                  <em>{item.action || item.command || "No action recorded."}</em>
+                  {item.missionId ? (
+                    <button onClick={() => onOpenBuilderDetail?.(item.missionId)} type="button">
+                      Open mission proof
+                    </button>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend && goalCompletionAudit?.schema ? (
+          <section
+            className={`fluxos-goal-completion status-${goalCompletionAudit.status || "partial"}`}
+            aria-label="Objective completion audit"
+            data-goal-completion-audit="true"
+          >
+            <div className="fluxos-section-head">
+              <span>Objective completion audit</span>
+              <strong>{`${Number(goalCompletionAudit.completionPercent || 0)}% proven · ${titleizeToken(goalCompletionAudit.status || "partial")}`}</strong>
+            </div>
+            <p>
+              {goalCompletionAudit.topBlocker?.label
+                ? `Top blocker: ${goalCompletionAudit.topBlocker.label}. ${goalCompletionAudit.topBlocker.nextAction || goalCompletionAudit.nextAction || ""}`
+                : goalCompletionAudit.nextAction || "Completion is calculated from live NAS, mission, T3, proof, and deployment evidence."}
+            </p>
+            <div className="fluxos-goal-completion-grid">
+              {goalCompletionRows.slice(0, 12).map(item => (
+                <article className={`status-${item.status || "missing"}`} data-goal-completion-row="true" key={item.id || item.label}>
+                  <span>{titleizeToken(item.status || "missing")}</span>
+                  <strong>{item.label || item.id}</strong>
+                  <p>{item.evidence || "No live evidence recorded."}</p>
+                  <em>{item.nextAction || "No next action recorded."}</em>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend && speedSupervisorSummary?.schema ? (
+          <section
+            className={`fluxos-speed-supervisor status-${speedSupervisorSummary.status || "watch"}`}
+            aria-label="Live speed and supervisor summary"
+            data-speed-supervisor-summary="true"
+          >
+            <div className="fluxos-section-head">
+              <span>Speed supervisor</span>
+              <strong>
+                {speedSupervisorSummary.supervisorStale
+                  ? "Watchdog state is stale"
+                  : speedSupervisorSummary.status === "pass"
+                    ? "Fast live path"
+                    : "Measured live path needs attention"}
+              </strong>
+            </div>
+            <p>
+              {`${Number(speedSupervisorSummary.summaryMaxWallMs || 0).toFixed(1)}ms summary · ${Number(speedSupervisorSummary.detailMaxWallMs || 0).toFixed(1)}ms detail · `}
+              {`${speedSupervisorSummary.watchdogCompletedReceipts || 0} watchdog receipts`}
+            </p>
+            <div className="fluxos-speed-supervisor-grid">
+              {speedSupervisorRows.map((item, index) => (
+                <article className={`status-${item.status || "watch"}`} key={`speed-supervisor-${item.id || index}`}>
+                  <span>{item.label || "Live gate"}</span>
+                  <strong>{item.metric || item.status || "Measured"}</strong>
+                  <p>{item.detail || "No live supervisor detail recorded."}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {isLiveBackend ? (
           <section
             className="fluxos-mission-advancement-digest"
@@ -8417,8 +8150,9 @@ function FluxioBuilderSurface(props) {
             <div className="fluxos-mission-advancement-grid">
               {missionAdvancementRows.length > 0 ? missionAdvancementRows.map(item => (
                 <button
-                  className={`tone-${item.tone}`}
+                  className={cx(`tone-${item.tone}`, ["proof_repair", "runtime_budget_exhausted"].includes(item.progressKind) && "proof-repair")}
                   data-live-advancement-mission="true"
+                  data-progress-kind={item.progressKind || undefined}
                   key={item.id}
                   onClick={() => onOpenBuilderDetail?.(item.id)}
                   type="button"
@@ -8427,10 +8161,10 @@ function FluxioBuilderSurface(props) {
                   <strong>{item.title}</strong>
                   <p>{item.detail}</p>
                   <div>
-                    {item.progress == null ? <em>No numeric progress</em> : <em>{`${item.progress}%`}</em>}
+                    {item.progress == null ? <em>No numeric progress</em> : <em>{`${item.progress}%${item.progressLabel ? ` · ${item.progressLabel}` : ""}`}</em>}
                     {item.meta ? <em>{item.meta}</em> : null}
                   </div>
-                  {item.progress == null ? null : <i aria-label={`Mission progress ${item.progress}%`} style={{ "--progress": `${item.progress}%` }} />}
+                  {item.progress == null ? null : <i aria-label={`${item.progressLabel || "Mission progress"} ${item.progress}%`} style={{ "--progress": `${item.progress}%` }} />}
                 </button>
               )) : (
                 <article className="fluxos-flow-empty">
@@ -8473,6 +8207,107 @@ function FluxioBuilderSurface(props) {
           threadRows={selectedThreadRows}
           workbenchState={workbenchState}
         />
+        {isLiveBackend && criticalBlockerRows.length > 0 ? (
+          <section
+            className="fluxos-critical-blockers"
+            aria-label="Critical live Builder blockers"
+            data-builder-critical-blockers="true"
+          >
+            <div className="fluxos-section-head">
+              <span>Live blockers</span>
+              <strong>Do not trust unattended launches until these clear</strong>
+            </div>
+            <div className="fluxos-critical-blockers-grid">
+              {criticalBlockerRows.map(item => (
+                <article
+                  className={`tone-${item.tone}`}
+                  data-deployment-durability-summary={item.id === "deployment-durability" ? "true" : undefined}
+                  key={item.id}
+                >
+                  <span>{item.label}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                  <em>{item.action}</em>
+                  {item.missionId ? (
+                    <button
+                      data-repair-can-resume={item.canResume === false ? "false" : "true"}
+                      onClick={() => onOpenBuilderDetail?.(item.missionId)}
+                      type="button"
+                    >
+                      {item.canResume === false ? "Inspect blocked repair" : "Open repair mission"}
+                    </button>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+            {storageOperatorHandoff?.schema ? (
+              <article className="fluxos-storage-handoff" data-storage-operator-handoff="true">
+                <span>Storage handoff</span>
+                <strong>{storageOperatorHandoff.summary || "Operator storage review required."}</strong>
+                <p>
+                  {storageOperatorHandoff.generatedCleanupAvailable
+                    ? `${storageOperatorHandoff.generatedCandidateCount || 0} generated cleanup candidate(s), ${storageOperatorHandoff.estimatedGeneratedReclaimableMB || 0} MB estimated.`
+                    : "No generated Syntelos cleanup is available; keep deletion decisions in NAS admin tools."}
+                </p>
+                <code>{storageOperatorHandoff.primaryCommand || "npm run plan:nas-storage-cleanup"}</code>
+                <ul>
+                  {storageAdminChecklist.slice(0, 3).map(item => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </article>
+            ) : null}
+          </section>
+        ) : null}
+        {isLiveBackend && systemLossBreakdown?.schema && builderFocusMode ? (
+          <section
+            className="fluxos-system-loss"
+            aria-label="System gap breakdown"
+            data-system-loss-current="true"
+          >
+            <div>
+              <span>System gap</span>
+              <strong>{systemLossHeadline}</strong>
+              <p>{systemLossSubline}</p>
+            </div>
+            <div className="fluxos-system-loss-drivers">
+              {systemLossDriverRows.map(item => (
+                <article key={item.id}>
+                  <span>{`${item.lane} · gap ${item.loss}`}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                  {item.nextAction ? <em>{item.nextAction}</em> : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {isLiveBackend && operatorPriorityRows.length > 0 ? (
+          <section
+            className="fluxos-operator-priority"
+            aria-label="Builder operator priority risks"
+            data-builder-operator-priority="true"
+          >
+            <div className="fluxos-section-head">
+              <span>Focus mode priorities</span>
+              <strong>{builderFocusMode ? "Only live blockers and next actions" : "Live blockers stay pinned"}</strong>
+            </div>
+            <div className="fluxos-operator-priority-grid">
+              {operatorPriorityRows.map(item => (
+                <article className={`tone-${item.tone}`} key={item.id}>
+                  <span>{item.label}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+            {builderFocusMode ? (
+              <p className="fluxos-operator-priority-note">
+                Provider routing, T3 parity tables, proof packets, and route internals are hidden in Focus mode. Switch to Full for diagnostics.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
         {isLiveBackend ? (
           <section className="fluxos-project-queue" aria-label="Live multi-project Builder queue" data-live-builder-queue="true">
             <div className="fluxos-section-head">
@@ -8485,16 +8320,54 @@ function FluxioBuilderSurface(props) {
               {projectProgressHistory?.scheduler?.nextAction ||
                 "Builder waits for the live NAS scheduling contract instead of guessing project order."}
             </p>
+            {builderQueuePressureRows.length > 0 ? (
+              <div className="fluxos-project-queue-pressure" data-live-builder-queue-pressure="true">
+                <div className="fluxos-project-queue-pressure-head">
+                  <span>Queue pressure from watchdog</span>
+                  <strong>{builderQueuePressureRows.length} held mission{builderQueuePressureRows.length === 1 ? "" : "s"} · {missionWatchdog?.bad || 0} bad</strong>
+                  <p>The current hold is overlap-based, not a runtime crash. Split the objective or wait unless scope safety is marked safe.</p>
+                </div>
+                <div className="fluxos-project-queue-pressure-list">
+                  {builderQueuePressureRows.slice(0, 4).map(item => (
+                    <article className={cx("fluxos-project-queue-pressure-row", item.canParallelize ? "safe" : "held")} key={`fluxos-queue-pressure-${item.key}`}>
+                      <span>{titleizeToken(item.severity)} · {titleizeToken(item.scopeSafety)} scope</span>
+                      <strong>{item.missionTitle}</strong>
+                      <p>{item.detail}</p>
+                      <p>blocking mission {item.blockingMissionId || "unknown"} · active {item.activeFileCount} files · queued {item.queuedFileCount} files</p>
+                      {item.overlapFiles.length > 0 ? <p>overlap files: {item.overlapFiles.join(" · ")}</p> : null}
+                      <p>{item.firstRepairStep}</p>
+                      {item.canParallelize ? (
+                        <button
+                          onClick={() => onRequestAction?.("watchdog:parallelize-worktree", { missionId: item.missionId })}
+                          type="button"
+                        >
+                          Parallelize worktree
+                        </button>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : isLiveBackend ? (
+              <div className="fluxos-project-queue-pressure clear" data-live-builder-queue-pressure="clear">
+                <span>Queue pressure from watchdog</span>
+                <strong>No live workspace hold reported</strong>
+                <p>Builder can use the scheduler row state without a watchdog queue-pressure override.</p>
+              </div>
+            ) : null}
             {schedulingQueueRows.length > 0 ? (
               <div className="fluxos-project-queue-list">
                 {schedulingQueueRows.slice(0, 6).map(item => (
                   <button
                     className={cx("fluxos-project-queue-row", item.safeToLaunch ? "safe" : "held")}
+                    data-builder-queue-action="open-workspace"
+                    data-builder-queue-state={item.safeToLaunch ? "safe-to-launch" : "held"}
+                    data-builder-queue-workspace-id={item.workspaceId || ""}
                     key={`live-builder-queue-${item.workspaceId || item.rank}`}
                     onClick={() => onSelectProject?.(item.workspaceId)}
                     type="button"
                   >
-                    <span>#{item.rank} · {titleizeToken(item.state || "watch")} · priority {item.priorityScore || 0}</span>
+                    <span>#{item.rank} · {titleizeToken(item.state || "watch")} · priority {item.priorityScore || 0} · {item.safeToLaunch ? "actionable" : "held"}</span>
                     <strong>{item.title}</strong>
                     <p>{item.recommendedAction || item.reason || "No live scheduling action recorded."}</p>
                     <p>
@@ -8518,11 +8391,11 @@ function FluxioBuilderSurface(props) {
             )}
           </section>
         ) : null}
-        {isLiveBackend && selectedProviderCapabilities?.schema ? (
+        {isLiveBackend ? (
           <section className="fluxos-gap-radar" aria-label="Provider capability truth">
             <div className="fluxos-section-head">
               <span>Provider capability truth</span>
-              <strong>{titleizeToken(selectedProviderCapabilities.status || "unknown")}</strong>
+              <strong>{titleizeToken(selectedProviderCapabilities.status || "route contract pending")}</strong>
             </div>
             <p>
               {`${providerLaneRows.length || selectedProviderCapabilities.laneCount || 0} planner/executor/verifier lanes · `}
@@ -8538,7 +8411,7 @@ function FluxioBuilderSurface(props) {
               <span>Admission vs quota</span>
               <strong>Auth decides whether the runtime can launch; quota is separate live usage evidence.</strong>
               <p>
-                Quota unreported means Hermes/OpenClaw has no live quota or rate-window report for that provider.
+                Quota unreported means the live Hermes control room has no quota or rate-window report for that provider.
                 It is not a provider-limit or exhausted-usage claim.
               </p>
             </div>
@@ -8581,7 +8454,7 @@ function FluxioBuilderSurface(props) {
             </div>
           </section>
         ) : null}
-        {liveAdvancementRows.length > 0 ? (
+        {liveAdvancementRows.length > 0 && !builderFocusMode ? (
           <section className="fluxos-gap-radar" aria-label="Live mission advancement">
             <div className="fluxos-section-head">
               <span>Live mission advancement</span>
@@ -8612,7 +8485,7 @@ function FluxioBuilderSurface(props) {
             </div>
           </section>
         ) : null}
-        {systemAuditDigest?.schema ? (
+        {systemAuditDigest?.schema && !builderFocusMode ? (
           <section className="fluxos-gap-radar" aria-label="T3 gap radar">
             <div className="fluxos-section-head">
               <span>T3 gap radar</span>
@@ -8662,21 +8535,141 @@ function FluxioBuilderSurface(props) {
             {systemLossBreakdown?.schema ? (
               <div
                 className="fluxos-system-loss"
-                aria-label="System loss breakdown"
+                aria-label="System gap breakdown"
                 data-system-loss-current="true"
               >
                 <div>
-                  <span>System loss</span>
+                  <span>System gap</span>
                   <strong>{systemLossHeadline}</strong>
                   <p>{systemLossSubline}</p>
                 </div>
                 <div className="fluxos-system-loss-drivers">
                   {systemLossDriverRows.map(item => (
                     <article key={item.id}>
-                      <span>{`${item.lane} · loss ${item.loss}`}</span>
+                      <span>{`${item.lane} · gap ${item.loss}`}</span>
                       <strong>{item.title}</strong>
                       <p>{item.detail}</p>
                       {item.nextAction ? <em>{item.nextAction}</em> : null}
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {storageTriageSummary?.schema ? (
+              <div
+                className="fluxos-storage-triage"
+                aria-label="NAS storage triage"
+                data-storage-triage-summary="true"
+              >
+                <div>
+                  <span>Storage triage</span>
+                  <strong>
+                    {`${storageTriageSummary.usedPercent || nasStorageUsedPercent || 0}% used · ${storageTriageSummary.generatedCandidateCount || 0} generated cleanup`}
+                  </strong>
+                  <p>
+                    {storageTriageSummary.largestAccountedPath
+                      ? `${storageTriageSummary.largestAccountedPath} accounts for ${storageTriageSummary.largestAccountedGB || 0} GB in bounded probes.`
+                      : storageTriageSummary.nextAction || "Storage triage is grounded in live NAS probes."}
+                  </p>
+                </div>
+                <div className="fluxos-storage-triage-grid">
+                  {storageTriageRows.slice(0, 5).map(item => (
+                    <article className={item.severity || "medium"} key={item.id || item.title}>
+                      <span>{`${titleizeToken(item.kind || "probe")} · ${item.safeToDelete ? "allowlisted" : "operator review"}`}</span>
+                      <strong>{item.title || "Storage probe"}</strong>
+                      <p>{item.detail || item.nextAction || "No detail recorded."}</p>
+                      {item.nextAction ? <em>{item.nextAction}</em> : null}
+                    </article>
+                  ))}
+                </div>
+                {storageOperatorHandoff?.schema ? (
+                  <div className="fluxos-storage-handoff compact" data-storage-operator-handoff="true">
+                    <span>Operator handoff</span>
+                    <strong>{storageOperatorHandoff.summary}</strong>
+                    <code>{storageOperatorHandoff.primaryCommand || "npm run plan:nas-storage-cleanup"}</code>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {deploymentDurabilitySummary?.schema ? (
+              <div
+                className="fluxos-storage-triage"
+                aria-label="Deployment durability"
+                data-deployment-durability-summary="true"
+              >
+                <div>
+                  <span>Deployment durability</span>
+                  <strong>{deploymentDurabilitySummary.headline || titleizeToken(deploymentDurabilitySummary.status || "unknown")}</strong>
+                  <p>
+                    {deploymentTemporaryCount
+                      ? `${deploymentTemporaryCount} live path${deploymentTemporaryCount === 1 ? "" : "s"} point into /tmp; release claims stay capped until durable files replace them.`
+                      : deploymentDurabilitySummary.nextAction || "Deployment durability is checked from active release paths."}
+                  </p>
+                </div>
+                <div className="fluxos-storage-triage-grid">
+                  {asList(deploymentDurabilitySummary.checkedPaths).slice(0, 4).map(item => (
+                    <article className={item.severity || "medium"} key={item.path || item.target}>
+                      <span>{item.temporaryTarget ? "temporary recovery" : "symlink"}</span>
+                      <strong>{item.path || "Release path"}</strong>
+                      <p>{item.target || "No symlink target recorded."}</p>
+                      <em>{item.detail || deploymentDurabilitySummary.nextAction}</em>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {designDebtSummary?.schema ? (
+              <div
+                className="fluxos-design-debt"
+                aria-label="Design and operator experience debt"
+                data-design-debt-summary="true"
+              >
+                <div>
+                  <span>Design debt</span>
+                  <strong>{designDebtSummary.headline || "Operator experience debt is being tracked."}</strong>
+                  <p>
+                    {`Interface ${designDebtSummary.interfaceScoreOutOf20 || "--"}/20 · launch ${designDebtSummary.launchScoreOutOf20 || "--"}/20 · ${designDebtSummary.repairMissionCount || 0} repair mission${Number(designDebtSummary.repairMissionCount || 0) === 1 ? "" : "s"}`}
+                  </p>
+                </div>
+                <div className="fluxos-design-debt-grid">
+                  {designDebtRows.slice(0, 4).map(item => (
+                    <article className={item.severity || "medium"} key={item.id || item.title}>
+                      <span>{titleizeToken(item.status || item.severity || "open")}</span>
+                      <strong>{item.title || "Design debt"}</strong>
+                      <p>{item.detail || item.nextAction || "Keep the UI tied to live proof."}</p>
+                      {item.nextAction ? <em>{item.nextAction}</em> : null}
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {missionAdvancementSummary?.schema ? (
+              <div
+                className="fluxos-mission-advancement"
+                aria-label="Live mission advancement"
+                data-mission-advancement-summary="true"
+              >
+                <div>
+                  <span>Mission advancement</span>
+                  <strong>
+                    {`${missionAdvancementSummary.realOutputMissionCount || 0} real-output · ${missionAdvancementSummary.repairMissionCount || 0} repair`}
+                  </strong>
+                  <p>{missionAdvancementSummary.nextAction || "Keep mission rows grounded in live runtime output."}</p>
+                </div>
+                <div className="fluxos-mission-advancement-grid">
+                  {missionProofAdvancementRows.slice(0, 4).map(item => (
+                    <article className={item.health || "unknown"} key={item.missionId || item.title}>
+                      <span>{`${item.runtime || "runtime"} · ${titleizeToken(item.status || "unknown")}`}</span>
+                      <strong>{item.title || item.missionId}</strong>
+                      <p>
+                        {`${titleizeToken(item.health || "unknown")} · ${item.agentMessageCount || 0} messages · ${item.runtimeOutputCount || 0} outputs`}
+                      </p>
+                      <em>
+                        {item.proofStateLabel ||
+                          (item.evidenceScreenshotPath
+                            ? "screenshot proof attached"
+                            : "runtime proof state not attached")}
+                      </em>
                     </article>
                   ))}
                 </div>
@@ -8826,6 +8819,22 @@ function FluxioBuilderSurface(props) {
                   <strong>Next publish action</strong>
                   <em>{publicLaunchRepairPacket.nextAction || publicLaunchReadiness.nextAction}</em>
                 </button>
+                <button type="button">
+                  <strong>Verifier command</strong>
+                  <em>
+                    {asList(publicLaunchRepairPacket.commands)[0]?.command ||
+                      publicLaunchRepairPacket.stagingPlan?.verifyCommand ||
+                      "npm run verify:public-launch"}
+                  </em>
+                </button>
+                <button type="button">
+                  <strong>Receipt targets</strong>
+                  <em>
+                    {asList(publicLaunchRepairPacket.receiptTargets)[0]?.path ||
+                      publicLaunchReadiness.stagingProof?.evidencePath ||
+                      ".agent_control/public_launch_readiness/latest.json"}
+                  </em>
+                </button>
                 {asList(publicLaunchRepairPacket.orderedLanes).slice(0, 5).map(item => (
                   <button key={`public-launch-repair-lane-${item.lane}`} type="button">
                     <strong>{`${titleizeToken(item.lane || "lane")} · ${item.count || 0}`}</strong>
@@ -8921,7 +8930,10 @@ function FluxioBuilderSurface(props) {
             {selectedProgressValue == null ? (
               <em>No live percentage returned</em>
             ) : (
-              <i aria-label={`Selected mission progress ${selectedProgressValue}%`} style={{ "--progress": `${selectedProgressValue}%` }} />
+              <i
+                aria-label={`${workbenchState?.progress?.label || "Selected mission progress"} ${selectedProgressValue}%`}
+                style={{ "--progress": `${selectedProgressValue}%` }}
+              />
             )}
             <div className="fluxos-selected-agent-events">
               {selectedThreadRows.length > 0 ? selectedThreadRows.map(item => (
@@ -8946,13 +8958,21 @@ function FluxioBuilderSurface(props) {
               ? row
               : [row.title || row.name || "Workspace flow", row.kind || row.status || "run", row.status || "active", row.progress];
             const width = progressWidth(tuple[3]);
+            const progressLabel = row?.progressLabel || (row?.displayAsCompletion === false ? "Non-completion progress" : "");
+            const progressKind = row?.progressKind || (row?.displayAsCompletion === false ? "non_completion_progress" : "");
             return (
-              <button className={cx("fluxos-flow-card", isLiveBackend && "live-row")} key={`${tuple[0]}-${index}`} onClick={() => onSelectFlow?.(row?.id || tuple[0])} type="button">
+              <button
+                className={cx("fluxos-flow-card", isLiveBackend && "live-row", ["proof_repair", "runtime_budget_exhausted"].includes(progressKind) && "proof-repair")}
+                data-progress-kind={progressKind || undefined}
+                key={`${tuple[0]}-${index}`}
+                onClick={() => onSelectFlow?.(row?.id || tuple[0])}
+                type="button"
+              >
                 <span>{tuple[1]}</span>
                 <strong>{tuple[0]}</strong>
-                <p>{tuple[2]}</p>
+                <p>{progressLabel ? `${tuple[2]} · ${progressLabel}` : tuple[2]}</p>
                 {width ? (
-                  <div aria-label={`Live progress ${width}`}><i style={{ width }} /></div>
+                  <div aria-label={`${progressLabel || "Live progress"} ${width}`}><i style={{ width }} /></div>
                 ) : isLiveBackend ? (
                   <small className="fluxos-live-progress-missing">No numeric progress returned by NAS</small>
                 ) : (
@@ -9062,7 +9082,7 @@ function FluxioBuilderSurface(props) {
           <article>
             <span>Sub-agent lanes</span>
             <strong>{projectHealthRows.reduce((total, item) => total + item.laneCount, 0)} planner/executor/verifier lane{projectHealthRows.reduce((total, item) => total + item.laneCount, 0) === 1 ? "" : "s"}</strong>
-            <p>Delegated Hermes/OpenClaw lane counts are carried from the live mission rows instead of hidden in logs.</p>
+            <p>Delegated Hermes lane counts are carried from the live mission rows instead of hidden in logs. Compatibility lanes are shown only when a live row names them.</p>
           </article>
         </div>
         {isLiveBackend && proofDiffRows.length === 0 ? (
@@ -9121,6 +9141,19 @@ function FluxioBuilderSurface(props) {
 
 function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, surface }) {
   const effectiveStudioState = studioState || skillStudioState || {};
+  const [skillsClarityMode, setSkillsClarityMode] = useState(() => {
+    if (typeof window === "undefined") return "focus";
+    return window.localStorage?.getItem("fluxio.skills.clarityMode") || "focus";
+  });
+  const normalizedSkillsClarityMode = skillsClarityMode === "full" ? "full" : "focus";
+  const skillsFocusMode = effectiveStudioState?.liveReady && normalizedSkillsClarityMode === "focus";
+  const setLiveSkillsClarityMode = mode => {
+    const nextMode = mode === "full" ? "full" : "focus";
+    setSkillsClarityMode(nextMode);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.skills.clarityMode", nextMode);
+    }
+  };
   const ruleSets = asList(effectiveStudioState?.ruleSets).slice(0, 4);
   const isRuleSets = surface === "rule-sets";
   const feedbackLoop = effectiveStudioState?.feedbackLoop || {};
@@ -9131,6 +9164,12 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
   const repairCount = Number(feedbackLoop.repairCount || 0);
   const reinforceCount = Number(feedbackLoop.reinforceCount || 0);
   const heldSkillCount = asList(routing.activeRepairSkillIds).length;
+  const liveSkillRegistryReady = Boolean(
+    effectiveStudioState?.liveReady &&
+      (asList(effectiveStudioState?.skills).length > 0 ||
+        Number(effectiveStudioState?.totals?.totalSkills || 0) > 0 ||
+        measuredSkillCount > 0),
+  );
   const liveSkills = asList(effectiveStudioState?.skills)
     .filter(item => {
       if (!effectiveStudioState?.liveReady) {
@@ -9150,7 +9189,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             ? "Live mission-slice feedback marked this skill for repair before reuse."
             : item.nextAction === "reinforce"
               ? "Live mission-slice feedback marked this skill as useful for future routing."
-              : "Live mission-slice feedback captured this skill in the current system-loss loop.",
+              : "Live mission-slice feedback captured this skill in the current system-gap loop.",
         status: item.nextAction || "measured",
         sourceType: item.sourceKind || "mission-slice",
         category: item.missionId || item.mission_id || "mission feedback",
@@ -9164,6 +9203,41 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
       .slice(0, 8)
     : [];
   const displayedSkills = liveSkills.length > 0 ? liveSkills : feedbackSkillRows;
+  const skillSourceMode = liveSkills.length > 0
+    ? "live NAS registry"
+    : feedbackSkillRows.length > 0
+      ? "mission-slice feedback"
+      : liveSkillRegistryReady
+        ? "live registry returned zero rows"
+        : "no live registry rows";
+  const runtimeRouteProof = effectiveStudioState?.runtimeRouteProof || {};
+  const runtimeRouteReceipt = runtimeRouteProof?.lastSuccessfulChat || runtimeRouteProof?.receipt || {};
+  const m3RouteVerified = Boolean(
+    runtimeRouteProof?.verified ||
+      runtimeRouteReceipt?.model === "MiniMax-M3" ||
+      runtimeRouteProof?.frontendExecutorModel === "MiniMax-M3",
+  );
+  const frontendRouteModel =
+    runtimeRouteReceipt?.model ||
+    runtimeRouteProof?.frontendExecutorModel ||
+    "MiniMax-M3";
+  const frontendRouteProvider =
+    runtimeRouteReceipt?.provider ||
+    runtimeRouteProof?.frontendExecutorProvider ||
+    "minimax-oauth";
+  const hermesSkillsHubFacts = [
+    ["Runtime", "Hermes", "harness"],
+    ["Frontend", frontendRouteModel, frontendRouteProvider],
+    ["Skill format", "SKILL.md", "procedures"],
+    ["Source", "Live", skillSourceMode],
+  ];
+  const codeModSkillRows = [
+    ["simplify-code", "Hermes", "Code cleanup and targeted refactors"],
+    ["test-driven-development", "Hermes", "Test-first repair and regression coverage"],
+    ["codex", "Hermes", "Codex-style coding delegation"],
+    ["opencode", "Hermes", "OpenCode compatible coding sessions"],
+    ["workspace-skill", "OpenClaw", "Workspace or ClawHub managed skill"],
+  ];
   const redTeamEscalation =
     effectiveStudioState?.redTeamEscalation ||
     studioState?.redTeamEscalation ||
@@ -9171,19 +9245,41 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
     {};
   const redTeamHistory = asList(redTeamEscalation.history).slice(-6);
   return (
-    <div className="fluxos-skills">
+    <div
+      className="fluxos-skills"
+      data-skills-clarity-mode={normalizedSkillsClarityMode}
+      data-skills-focus-contract="capability-routing-first"
+    >
       <section className="fluxos-skills-list">
         <div className="fluxos-section-head">
           <span>{isRuleSets ? "Rule Sets" : "Skill library"}</span>
           <strong>{isRuleSets ? "Core policy and Approval gates" : effectiveStudioState?.liveReady ? "Live measured capabilities" : "Awaiting NAS skill registry"}</strong>
+          {effectiveStudioState?.liveReady && !isRuleSets ? (
+            <div className="fluxos-builder-clarity-switch" aria-label="Skills clarity mode" data-live-skills-clarity-switch="true">
+              <button
+                className={skillsFocusMode ? "active" : ""}
+                onClick={() => setLiveSkillsClarityMode("focus")}
+                type="button"
+              >
+                Focus
+              </button>
+              <button
+                className={!skillsFocusMode ? "active" : ""}
+                onClick={() => setLiveSkillsClarityMode("full")}
+                type="button"
+              >
+                Full
+              </button>
+            </div>
+          ) : null}
         </div>
         {effectiveStudioState?.liveReady && !isRuleSets ? (
           <section className="fluxos-skill-command-band" aria-label="Live skills command band" data-live-skills-command-band="true">
             <div>
               <span>Live skills</span>
-              <strong>System-loss routing</strong>
+              <strong>System-gap routing</strong>
               <p>
-                {`${displayedSkills.length} visible NAS skill rows. ${repairCount} repair, ${reinforceCount} reinforce, ${heldSkillCount} held before reuse.`}
+                {`${displayedSkills.length} visible rows from ${skillSourceMode}. ${repairCount} repair, ${reinforceCount} reinforce, ${heldSkillCount} held before reuse.`}
               </p>
             </div>
             <div className="fluxos-skill-command-metrics" aria-label="Live skill routing metrics">
@@ -9201,15 +9297,111 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
               ))}
             </div>
             <div className="fluxos-skill-command-actions">
-              <button onClick={() => fluxioAction(onRequestAction, "skills:review-system-loss")} type="button">Review loss</button>
+              <button onClick={() => fluxioAction(onRequestAction, "skills:review-system-loss")} type="button">Review gap</button>
               <button onClick={() => fluxioAction(onRequestAction, "skills:open-repair-queue")} type="button">Repair queue</button>
               <button disabled={repairProposals.length === 0} onClick={() => fluxioAction(onRequestAction, `skills:apply-repair:${repairProposals[0]?.skillId || repairProposals[0]?.proposalId || "next"}`)} type="button">Apply repair</button>
             </div>
           </section>
         ) : null}
         {effectiveStudioState?.liveReady && !isRuleSets ? (
-          <div className="fluxos-live-skill-summary" aria-label="Live skill catalog source">
-            <span>{effectiveStudioState.liveSource || "control-room skill catalog"}</span>
+          <section
+            className={cx("fluxos-skill-route-proof", m3RouteVerified && "verified")}
+            aria-label="MiniMax M3 frontend skill route"
+            data-live-skills-m3-route-proof="true"
+            data-live-skills-m3-route-state={m3RouteVerified ? "verified" : "pending"}
+          >
+            <div>
+              <span>Frontend executor</span>
+              <strong>{m3RouteVerified ? "Hermes to MiniMax-M3 is verified" : "Hermes to MiniMax-M3 is pending proof"}</strong>
+              <p>
+                MiniMax-M3 is used for frontend/design execution only through Hermes routing. Codex stays the planner/verifier lane.
+              </p>
+            </div>
+            <div className="fluxos-skill-route-proof-grid">
+              <article>
+                <span>Harness</span>
+                <strong>Hermes</strong>
+                <small>default runtime</small>
+              </article>
+              <article>
+                <span>Model</span>
+                <strong>{frontendRouteModel}</strong>
+                <small>{frontendRouteProvider}</small>
+              </article>
+              <article>
+                <span>Reference</span>
+                <strong>MiniMax M3</strong>
+                <small>coding and agentic model</small>
+              </article>
+            </div>
+          </section>
+        ) : null}
+        {effectiveStudioState?.liveReady && !isRuleSets ? (
+          <section
+            className="fluxos-hermes-skill-source"
+            aria-label="Hermes live skill source"
+            data-live-hermes-skill-source="true"
+            data-live-skill-source-mode={skillSourceMode}
+          >
+            <div>
+              <span>Hermes Skills Hub</span>
+              <strong>{skillSourceMode}</strong>
+              <p>
+                Hermes skills are runtime-loadable procedures. Fluxio shows live NAS registry rows first,
+                then mission-slice feedback rows; it does not fill this page with static sample skills.
+                External references are used as routing guidance, not as fake live rows.
+              </p>
+            </div>
+            <div className="fluxos-hermes-skill-source-grid" aria-label="Hermes skill registry facts">
+              {hermesSkillsHubFacts.map(([label, value, detail]) => (
+                <article key={`hermes-skill-source-${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {effectiveStudioState?.liveReady && !isRuleSets ? (
+          <section
+            className="fluxos-code-mod-skill-lane"
+            aria-label="Code mod skill lane"
+            data-code-mod-skill-lane="true"
+          >
+            <div>
+              <span>Code mod lane</span>
+              <strong>Hermes uses coding skills by default</strong>
+              <p>
+                Code-mod missions should record the selected skill in mission proof. OpenClaw skills stay available when the operator explicitly picks an OpenClaw workspace skill.
+              </p>
+            </div>
+            <div className="fluxos-code-mod-skill-grid">
+              {codeModSkillRows.map(([skillId, runtime, detail]) => (
+                <article key={`code-mod-skill-${skillId}`}>
+                  <span>{runtime}</span>
+                  <strong>{skillId}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-skill-command-actions">
+              <button onClick={() => fluxioAction(onRequestAction, "skills:use-code-mod:hermes:simplify-code")} type="button">Use Hermes code mod</button>
+              <button onClick={() => fluxioAction(onRequestAction, "skills:restore-hermes-code-mod")} type="button">Restore Hermes skills</button>
+              <button onClick={() => fluxioAction(onRequestAction, "skills:update-openclaw")} type="button">Update OpenClaw skills</button>
+            </div>
+          </section>
+        ) : null}
+        {effectiveStudioState?.liveReady && !isRuleSets ? (
+          <div
+            className="fluxos-live-skill-summary"
+            aria-label="Live skill catalog source"
+            data-live-skills-feedback="true"
+            data-measured-skill-count={measuredSkillCount}
+            data-repair-skill-count={repairCount}
+            data-reinforce-skill-count={reinforceCount}
+          >
+            <span>{effectiveStudioState.liveSource || skillSourceMode || "control-room skill catalog"}</span>
             <strong>{`${effectiveStudioState?.totals?.totalSkills || displayedSkills.length} real skill rows`}</strong>
             <em>{`${measuredSkillCount} measured · ${repairCount} repair · ${reinforceCount} reinforce`}</em>
           </div>
@@ -9233,6 +9425,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
         )) : displayedSkills.length > 0 ? displayedSkills.map(item => (
           <button
             className="fluxos-skill-card"
+            data-connected-app-skill-draft={String(item?.sourceType || "").toLowerCase() === "connected_app" ? "true" : "false"}
             data-live-skill-row={effectiveStudioState?.liveReady ? "true" : "false"}
             data-skill-feedback-state={item?.feedbackSummary?.selectionPolicy?.state || item?.feedbackSummary?.trend || item?.status || "live"}
             data-skill-id={item.id || item.name || ""}
@@ -9248,7 +9441,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             <span>{item.status || item.promotionState || "live"}</span>
             <em>
               {item?.feedbackSummary?.latestSystemLoss != null
-                ? `loss ${item.feedbackSummary.latestSystemLoss} · ${item.feedbackSummary.selectionPolicy?.state || item.feedbackSummary.trend || "measured"}`
+                ? `gap ${item.feedbackSummary.latestSystemLoss} · ${item.feedbackSummary.selectionPolicy?.state || item.feedbackSummary.trend || "measured"}`
                 : asList(item.tags).slice(0, 2).join(" · ") || item.category || "measured"}
             </em>
           </button>
@@ -9264,20 +9457,27 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
           </article>
         )}
       </section>
-      <section className="fluxos-editor">
+      <section className="fluxos-editor" data-live-skills-secondary-panel="true">
         <div className="fluxos-section-head">
           <span>{isRuleSets ? "Ruleset editor" : "Mission-slice feedback loop"}</span>
-          <strong>{isRuleSets ? ruleSets[0]?.name || "Frontend merge policy" : "System loss routing"}</strong>
+          <strong>{isRuleSets ? ruleSets[0]?.name || "Frontend merge policy" : "System gap routing"}</strong>
         </div>
         {!isRuleSets ? (
-          <div className="fluxos-loss-routing" aria-label="System loss routing">
+          <div
+            className="fluxos-loss-routing"
+            aria-label="System gap routing"
+            data-live-skills-feedback="true"
+            data-measured-skill-count={measuredSkillCount}
+            data-repair-skill-count={repairCount}
+            data-reinforce-skill-count={reinforceCount}
+          >
             <div className="fluxos-loss-routing-head">
               <span>{routing.enabled ? "Active" : "Collecting evidence"}</span>
               <strong>
                 {`${measuredSkillCount} measured · ${repairCount} repair · ${reinforceCount} reinforce`}
               </strong>
               <p>
-                {`Prefer slices at or below ${routing.preferThreshold ?? 0.15} loss. Deprioritize skills at or above ${routing.deprioritizeThreshold ?? 0.55} loss until repair evidence is clean.`}
+                {`Prefer slices at or below ${routing.preferThreshold ?? 0.15} gap. Deprioritize skills at or above ${routing.deprioritizeThreshold ?? 0.55} gap until repair evidence is clean.`}
               </p>
             </div>
             <div className="fluxos-loss-chip-row">
@@ -9290,12 +9490,12 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
                 <article key={item.feedbackId || `${item.skillId}-${item.createdAt}`}>
                   <span>{item.nextAction || "review"}</span>
                   <strong>{item.label || item.skillId || "Skill"}</strong>
-                  <p>{`loss ${item.systemLoss ?? "n/a"} · improvement ${item.improvementScore ?? "n/a"}`}</p>
+                  <p>{`gap ${item.systemLoss ?? "n/a"} · improvement ${item.improvementScore ?? "n/a"}`}</p>
                 </article>
               )) : (
                 <article>
                   <span>Awaiting first slice</span>
-                  <strong>No system-loss feedback yet</strong>
+                  <strong>No system-gap feedback yet</strong>
                   <p>Run a mission slice to score the selected skills against execution and verification evidence.</p>
                 </article>
               )}
@@ -9375,7 +9575,7 @@ Approval:
                 <article>
                   <span>Repair queue</span>
                   <strong>No live repair proposal returned</strong>
-                  <p>High-loss skills will appear here when mission-slice feedback produces a repair action.</p>
+                  <p>High-gap skills will appear here when mission-slice feedback produces a repair action.</p>
                 </article>
               )}
             </div>
@@ -9503,8 +9703,26 @@ function FluxioImagesSurface({ callBackend, onRequestAction }) {
 
 function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction, onSetSurface, timelineMoments = [], workbenchState }) {
   const isLiveBackend = liveDataStatus?.previewMode === "live";
+  const [workbenchClarityMode, setWorkbenchClarityMode] = useState(() => {
+    if (typeof window === "undefined") return "focus";
+    return window.localStorage?.getItem("fluxio.workbench.clarityMode") || "focus";
+  });
+  const normalizedWorkbenchClarityMode = workbenchClarityMode === "full" ? "full" : "focus";
+  const workbenchFocusMode = isLiveBackend && normalizedWorkbenchClarityMode === "focus";
+  const setLiveWorkbenchClarityMode = mode => {
+    const nextMode = mode === "full" ? "full" : "focus";
+    setWorkbenchClarityMode(nextMode);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.workbench.clarityMode", nextMode);
+    }
+  };
   const runtimeOps = asList(workbenchState?.runtimeOps).slice(0, 8);
   const artifacts = asList(workbenchState?.artifacts).slice(0, 8);
+  const artifactGate = workbenchState?.artifactGate && typeof workbenchState.artifactGate === "object"
+    ? workbenchState.artifactGate
+    : {};
+  const artifactGatePassed = Boolean(artifactGate.passed);
+  const artifactGateStatus = artifactGate.status || (artifactGatePassed ? "passed" : "missing_required_output");
   const notificationEvents = asList(workbenchState?.notificationEvents).filter(item => Number(item?.count || 0) > 0).slice(0, 6);
   const progressValue = clampPercent(workbenchState?.progress?.value);
   const liveThreadRows = visibleAgentMessages(compactAgentMessages(messages), 12, 6, { requireRuntimeReports: isLiveBackend });
@@ -9517,7 +9735,21 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
     })),
     [liveThreadRows],
   );
-  const liveThreadRowKeySignature = liveThreadRowEntries.map(entry => entry.key).join("|");
+  const activeMissionIdForWorkbenchMessages = String(workbenchState?.missionId || "").trim();
+  const scopedLiveThreadRowEntries = useMemo(
+    () => {
+      if (!isLiveBackend || !activeMissionIdForWorkbenchMessages) {
+        return liveThreadRowEntries;
+      }
+      return liveThreadRowEntries.filter(entry => {
+        const entryMissionId = String(entry?.item?.missionId || entry?.item?.mission_id || "").trim();
+        return entryMissionId === activeMissionIdForWorkbenchMessages;
+      });
+    },
+    [activeMissionIdForWorkbenchMessages, isLiveBackend, liveThreadRowEntries],
+  );
+  const scopedLiveThreadRows = scopedLiveThreadRowEntries.map(entry => entry.item);
+  const liveThreadRowKeySignature = scopedLiveThreadRowEntries.map(entry => entry.key).join("|");
   const workbenchSelectionScope = [
     liveDataStatus?.previewMode || "preview",
     workbenchState?.missionId || "",
@@ -9536,7 +9768,6 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
       const currentEntryMissionId = String(
         currentEntry?.item?.missionId ||
           currentEntry?.item?.mission_id ||
-          workbenchState?.missionId ||
           "",
       ).trim();
       const scopedMissionId = String(workbenchState?.missionId || "").trim();
@@ -9544,19 +9775,19 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         current &&
         currentEntry &&
         manualWorkbenchMessageSelectionRef.current &&
-        (!isLiveBackend || !scopedMissionId || currentEntryMissionId === scopedMissionId)
+        (!isLiveBackend || !scopedMissionId || !currentEntryMissionId || currentEntryMissionId === scopedMissionId)
       ) {
         return current;
       }
-      const runtimeReport = liveThreadRows.find(isRuntimeOutputAgentMessage);
-      const meaningful = runtimeReport || liveThreadRows.find(isMeaningfulDefaultAgentMessage) || liveThreadRows[0] || null;
+      const runtimeReport = scopedLiveThreadRows.find(isRuntimeOutputAgentMessage);
+      const meaningful = runtimeReport || scopedLiveThreadRows.find(isMeaningfulDefaultAgentMessage) || scopedLiveThreadRows[0] || null;
       if (!meaningful) return "";
-      const meaningfulEntry = liveThreadRowEntries.find(entry => entry.item === meaningful);
+      const meaningfulEntry = scopedLiveThreadRowEntries.find(entry => entry.item === meaningful);
       return meaningfulEntry?.key || "";
     });
-  }, [isLiveBackend, liveThreadRowEntries, liveThreadRows, workbenchSelectionScope, liveThreadRowKeySignature, workbenchState?.missionId]);
+  }, [isLiveBackend, liveThreadRowEntries, scopedLiveThreadRowEntries, scopedLiveThreadRows, workbenchSelectionScope, liveThreadRowKeySignature, workbenchState?.missionId]);
   const selectedWorkbenchMessage =
-    liveThreadRowEntries.find(entry => entry.key === selectedWorkbenchMessageId)?.item ||
+    scopedLiveThreadRowEntries.find(entry => entry.key === selectedWorkbenchMessageId)?.item ||
     null;
   const selectedWorkbenchBody = selectedWorkbenchMessage ? agentMessageDisplayDetail(selectedWorkbenchMessage) : "";
   const messagePreviewCandidates = previewUrlCandidatesForMessage(selectedWorkbenchMessage);
@@ -9569,7 +9800,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         workbenchState?.liveReview?.previewActionUrl,
       ];
   const previewActionUrl = previewUrlCandidates.find(isUsablePreviewUrl) || "";
-  const previewFrameUrl = selectedWorkbenchMessage || isLiveBackend ? "" : previewUrlCandidates.find(isMissionPreviewUrl) || "";
+  const previewFrameUrl = selectedWorkbenchMessage ? "" : previewUrlCandidates.find(isWorkbenchPreviewFrameUrl) || "";
   const previewFrameBlocked = Boolean(previewActionUrl && !previewFrameUrl && !selectedWorkbenchMessage);
   const livePreviewState = selectedWorkbenchMessage
     ? "selected-message"
@@ -9601,7 +9832,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           status: item.tone || item.kind || "live",
           timestamp: item.timestamp || item.createdAt || item.time || "",
         }))
-      : liveThreadRows
+      : scopedLiveThreadRows
         .filter(item => item.processMessage || item.emphasis || item.technicalDetail)
         .map(item => ({
           id: item.id,
@@ -9611,11 +9842,65 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           timestamp: item.createdAt || item.timestamp || "",
         }));
   const workbenchProofMetrics = [
-    ["Messages", liveThreadRows.length, selectedWorkbenchMessage ? "runtime reports" : "waiting for thread"],
+    ["Messages", scopedLiveThreadRows.length, selectedWorkbenchMessage ? "runtime reports" : "waiting for thread"],
     ["Artifacts", artifacts.length, artifacts.length ? "returned by NAS" : "none returned"],
+    ["Gate", artifactGatePassed ? "Pass" : "Block", titleizeToken(artifactGateStatus)],
     ["Operations", operationRows.length, operationRows.length ? "live timeline" : "none returned"],
     ["Signals", notificationEvents.reduce((total, item) => total + Number(item?.count || 0), 0), "notifications"],
   ];
+  const runtimeOutputReceiptRows = scopedLiveThreadRows.filter(isRuntimeOutputAgentMessage);
+  const workbenchExecutionReceipts = [
+    ...artifacts.map((item, index) => ({
+      id: item.id || item.path || `artifact-receipt-${index}`,
+      kind: "artifact",
+      title: item.title || item.path || "Mission artifact",
+      detail: item.detail || item.path || item.url || "Artifact row returned by the selected live mission.",
+      status: item.status || "reported",
+      action: item.url || item.previewUrl || item.path || "",
+    })),
+    ...runtimeOutputReceiptRows.slice(-3).map((item, index) => ({
+      id: item.id || `runtime-output-receipt-${index}`,
+      kind: "runtime output",
+      title: agentMessageDisplayTitle(item),
+      detail: runtimeOutputText(item) || agentMessageDisplayDetail(item) || "Runtime output row returned by the mission thread.",
+      status: item.tone || "reported",
+      action: "",
+    })),
+    selectedWorkbenchMessage && runtimeOutputReceiptRows.length === 0 ? {
+      id: selectedWorkbenchMessage.id || selectedWorkbenchMessageId || "selected-message-proof",
+      kind: "selected proof",
+      title: agentMessageDisplayTitle(selectedWorkbenchMessage),
+      detail: agentMessageDisplayDetail(selectedWorkbenchMessage) || "Selected message is the only live proof currently available.",
+      status: "message-only",
+      action: "",
+    } : null,
+    artifactGate && artifactGate.passed === false ? {
+      id: `${workbenchState?.missionId || "mission"}:hard-artifact-gate`,
+      kind: "hard gate",
+      title: "Completion blocked until artifact proof exists",
+      detail: artifactGate.failure || artifactGate.nextAction || "Mission needs a runtime-output body or served artifact before completion is trusted.",
+      status: artifactGateStatus,
+      action: "",
+    } : null,
+  ].filter(Boolean).slice(0, 5);
+  const workbenchExecutionState = artifacts.length > 0 || previewActionUrl
+    ? "ready"
+    : runtimeOutputReceiptRows.length > 0
+      ? "review"
+      : scopedLiveThreadRows.length > 0
+        ? "blocked"
+        : liveDataStatus?.loading
+          ? "loading"
+          : "missing";
+  const workbenchExecutionNextAction = workbenchExecutionState === "ready"
+    ? "Open the served artifact or run a screenshot/proof capture against the live mission output."
+    : workbenchExecutionState === "review"
+      ? "Review runtime-output receipts, then capture proof or promote the artifact to a served preview."
+      : workbenchExecutionState === "blocked"
+        ? "This mission has live thread rows but no artifact/runtime-output body. Relaunch or resume with a hard artifact gate."
+        : workbenchExecutionState === "loading"
+          ? "Waiting for the NAS mission detail endpoint."
+          : "No live artifact execution evidence returned for the selected mission.";
   const noPreviewLabel = liveDataStatus?.loading
     ? "Connecting to live preview evidence"
     : artifacts.length > 0
@@ -9627,7 +9912,11 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
       ? "The selected mission has output artifacts, but no served iframe URL. Open the artifact rows below for review."
       : "No placeholder preview is drawn. The selected mission thread, progress, and runtime events are the current evidence.";
   return (
-    <div className="fluxos-workbench">
+    <div
+      className="fluxos-workbench"
+      data-workbench-clarity-mode={normalizedWorkbenchClarityMode}
+      data-workbench-focus-contract="proof-execution-first"
+    >
       <section className="fluxos-rail-panel fluxos-workbench-live-state">
         <div className="fluxos-section-head">
           <span>Live state</span>
@@ -9656,7 +9945,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         {isLiveBackend ? (
           <div className="fluxos-workbench-thread" aria-label="Selected mission live thread">
             <span>Mission thread</span>
-            {liveThreadRowEntries.length > 0 ? liveThreadRowEntries.map(({ item, key: messageKey }) => {
+            {scopedLiveThreadRowEntries.length > 0 ? scopedLiveThreadRowEntries.map(({ item, key: messageKey }) => {
               const selected = selectedWorkbenchMessageId === messageKey;
               return (
               <article
@@ -9665,12 +9954,22 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
                 data-agent-message-key={messageKey}
                 key={messageKey}
                 onClick={() => {
+                  const entryMissionId = String(item?.missionId || item?.mission_id || "").trim();
+                  const scopedMissionId = activeMissionIdForWorkbenchMessages;
+                  if (isLiveBackend && scopedMissionId && entryMissionId !== scopedMissionId) {
+                    return;
+                  }
                   manualWorkbenchMessageSelectionRef.current = true;
                   setSelectedWorkbenchMessageId(messageKey);
                 }}
                 onKeyDown={event => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
+                    const entryMissionId = String(item?.missionId || item?.mission_id || "").trim();
+                    const scopedMissionId = activeMissionIdForWorkbenchMessages;
+                    if (isLiveBackend && scopedMissionId && entryMissionId !== scopedMissionId) {
+                      return;
+                    }
                     manualWorkbenchMessageSelectionRef.current = true;
                     setSelectedWorkbenchMessageId(messageKey);
                   }
@@ -9692,6 +9991,56 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         ) : null}
       </section>
       <section className="fluxos-browser-pane">
+        {isLiveBackend ? (
+          <section
+            aria-label="Live Workbench artifact execution"
+            className={`fluxos-workbench-execution state-${workbenchExecutionState}`}
+            data-hard-artifact-gate={artifactGateStatus}
+            data-live-workbench-execution="true"
+            data-live-workbench-execution-state={workbenchExecutionState}
+          >
+            <div className="fluxos-workbench-execution-copy">
+              <span>Artifact execution</span>
+              <strong>{titleizeToken(workbenchExecutionState)}</strong>
+              <p>{workbenchExecutionNextAction}</p>
+            </div>
+            <div className="fluxos-workbench-execution-receipts" data-live-workbench-execution-receipts="true">
+              {workbenchExecutionReceipts.length > 0 ? workbenchExecutionReceipts.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    if (item.action && isUsablePreviewUrl(item.action)) {
+                      window.open(item.action, "_blank", "noopener,noreferrer");
+                      return;
+                    }
+                    fluxioAction(onRequestAction, "workbench:open-execution-receipt", {
+                      missionId: workbenchState?.missionId,
+                      receiptId: item.id,
+                      kind: item.kind,
+                    });
+                  }}
+                  type="button"
+                >
+                  <span>{titleizeToken(item.kind)}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                  <em>{titleizeToken(item.status)}</em>
+                </button>
+              )) : (
+                <article data-live-workbench-execution-missing="true">
+                  <span>Live data only</span>
+                  <strong>No execution receipt returned</strong>
+                  <p>The Workbench will not invent an artifact. Open Agent or resume the mission with a hard served-artifact gate.</p>
+                </article>
+              )}
+            </div>
+            <div className="fluxos-workbench-execution-actions">
+              <button disabled={!previewActionUrl} onClick={() => previewActionUrl && window.open(previewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open artifact</button>
+              <button onClick={() => fluxioAction(onRequestAction, "workbench:run-artifact-check", { missionId: workbenchState?.missionId })} type="button">Run artifact check</button>
+              <button onClick={() => onSetSurface?.("agent")} type="button">Open Agent</button>
+            </div>
+          </section>
+        ) : null}
         {isLiveBackend ? (
           <section
             aria-label="Live Workbench proof controls"
@@ -9729,33 +10078,18 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           data-preview-state={livePreviewState}
           data-selected-message-id={selectedWorkbenchMessageId}
         >
-          {isLiveBackend && selectedWorkbenchMessage ? (
-            <article className="fluxos-flow-empty fluxos-selected-message-proof">
-              <span>Selected live message</span>
-              <strong>{agentMessageDisplayTitle(selectedWorkbenchMessage)}</strong>
-              {selectedWorkbenchBody ? (
-                <pre className="fluxos-selected-message-body" data-live-selected-message-body="true">{selectedWorkbenchBody}</pre>
-              ) : (
-                <p>{selectedWorkbenchMessage.meta || "This row has no served preview artifact. The Workbench stays pinned to the selected message instead of reusing an older frame."}</p>
-              )}
-              <div className="fluxos-preview-empty-actions">
-                {previewActionUrl ? (
-                  <button onClick={() => window.open(previewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open preview</button>
-                ) : null}
-                <button onClick={() => fluxioAction(onRequestAction, "run:message-comment", { messageId: selectedWorkbenchMessage.id })} type="button">Comment</button>
-              </div>
-            </article>
-          ) : isLiveBackend && previewFrameUrl ? (
+          {previewFrameUrl ? (
             <>
               <iframe
                 className="fluxos-live-preview-frame"
+                data-workbench-preview-frame="true"
                 key={`${workbenchState?.missionId || "mission"}:${selectedWorkbenchMessageId || "mission"}:${previewFrameUrl}`}
                 src={previewFrameUrl}
                 title="Live workbench preview"
               />
               <div className="fluxos-preview-policy-note">
                 <strong>Embedded preview can be refused by the target site.</strong>
-                <p>Open the served URL or artifact directly; this panel will not draw placeholder UI over live mode.</p>
+                <p>Workbench embeds local targets and served artifacts directly; use the open action if the target refuses framing.</p>
               </div>
             </>
           ) : isLiveBackend && previewFrameBlocked ? (
@@ -9769,26 +10103,26 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
               </div>
             </article>
           ) : !isLiveBackend ? (
-            <>
-              <div className="fluxos-preview-card wide" />
-              <div className="fluxos-preview-card active" />
-              <div className="fluxos-selector one">{isLiveBackend ? "Live target" : "Local target"}</div>
-              <div className="fluxos-selector two">Layout diff</div>
-            </>
+            <article className="fluxos-flow-empty">
+              <span>Local target</span>
+              <strong>Fixture review surface ready</strong>
+              <p>Preview mode renders a quiet proof surface here. Live mode replaces this with the served local program, app page, or artifact iframe.</p>
+            </article>
           ) : (
             <article className="fluxos-flow-empty">
               <span>Live data only</span>
-              <strong>{noPreviewLabel}</strong>
-              <p>{noPreviewCopy}</p>
+              <strong>No served preview artifact returned</strong>
+              <p>The selected mission has live thread data, but no served HTML or artifact URL. Preview and Browser stay empty until the backend returns a real target.</p>
               <div className="fluxos-preview-empty-actions">
                 <button onClick={() => onSetSurface?.("agent")} type="button">Open Agent thread</button>
+                <button onClick={() => fluxioAction(onRequestAction, "workbench:run-artifact-check", { missionId: workbenchState?.missionId })} type="button">Run artifact check</button>
                 <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Capture proof</button>
               </div>
             </article>
           )}
         </div>
         {isLiveBackend ? (
-          <div className="fluxos-artifact-list" aria-label="Live mission artifacts">
+          <div className="fluxos-artifact-list" aria-label="Live mission artifacts" data-live-workbench-secondary-panel="true">
             {artifacts.length > 0 ? artifacts.map(item => (
               <article key={item.id}>
                 <span>{titleizeToken(item.status || "artifact")}</span>
@@ -9805,7 +10139,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           </div>
         ) : null}
       </section>
-      <section className="fluxos-action-timeline">
+      <section className="fluxos-action-timeline" data-live-workbench-secondary-panel="true">
         <div className="fluxos-section-head">
           <span>Runtime operations</span>
           <strong>Hermes and browser action timeline</strong>
@@ -9845,17 +10179,111 @@ function FluxioPhoneProgressSurface({
   onRequestAction,
   onSelectFlow,
   onSetSurface,
+  overnightDigest = null,
+  webPushState = null,
+  workbenchState = null,
 }) {
   const isLiveBackend = liveDataStatus?.previewMode === "live";
-  const liveRows = isLiveBackend ? sortLiveBuilderRows(builderRows) : [];
+  const sourceMissionRows = asList(builderRows).length
+    ? builderRows
+    : asList(liveDataStatus?.missionRows).length
+      ? liveDataStatus.missionRows
+      : asList(liveDataStatus?.missions);
+  const liveRows = isLiveBackend
+    ? sortLiveBuilderRows(sourceMissionRows.map(normalizePhoneMissionRow).filter(Boolean))
+    : [];
   const runningRows = liveRows.filter(row => {
     const status = String(row.status || row.statusLabel || "").toLowerCase();
     return status === "running" || status === "delegated" || status === "active";
   });
-  const visibleRows = (runningRows.length ? runningRows : liveRows).slice(0, 6);
-  const notifications = isLiveBackend ? asList(notificationItems).slice(0, 8) : [];
+  const visibleRows = (runningRows.length ? runningRows : liveRows).slice(0, 3);
+  const sourceNotifications = asList(notificationItems).length
+    ? notificationItems
+    : asList(liveDataStatus?.notificationRows).length
+      ? liveDataStatus.notificationRows
+      : asList(liveDataStatus?.notifications);
+  const allNotifications = isLiveBackend ? asList(sourceNotifications) : [];
+  const notifications = allNotifications.slice(0, 4);
   const sliceNotifications = notifications.filter(item => item.kind === "mission_slice_completed");
   const topRow = visibleRows[0] || null;
+  const topProgressValue = clampPercent(topRow?.progress) ?? clampPercent(workbenchState?.progress?.value);
+  const topProgressLabel = topProgressValue == null
+    ? (workbenchState?.progress?.label || "Live mission state")
+    : `${topProgressValue}% · ${workbenchState?.progress?.label || "Live progress"}`;
+  const digest = overnightDigest && typeof overnightDigest === "object" ? overnightDigest : {};
+  const delivery = digest?.delivery && typeof digest.delivery === "object" ? digest.delivery : {};
+  const liveWebPush = liveDataStatus?.webPushStatus && typeof liveDataStatus.webPushStatus === "object"
+    ? liveDataStatus.webPushStatus
+    : {};
+  const liveNtfy = liveDataStatus?.ntfyStatus && typeof liveDataStatus.ntfyStatus === "object"
+    ? liveDataStatus.ntfyStatus
+    : {};
+  const liveSummaryReady = Boolean(
+    liveDataStatus?.summaryReady ||
+      liveDataStatus?.summarySchema ||
+      liveDataStatus?.refreshedAt ||
+      asList(liveDataStatus?.missionRows).length ||
+      asList(liveDataStatus?.notificationRows).length,
+  );
+  const webPushSubscriptionCount = Number(
+    liveWebPush.subscriptionCount ||
+      delivery.webPushSubscriptionCount ||
+      webPushState?.subscriptionCount ||
+      0,
+  );
+  const webPushSenderConfigured = Boolean(
+    liveWebPush.senderConfigured ||
+      delivery.webPushSenderConfigured ||
+      webPushState?.senderConfigured ||
+      webPushState?.configured,
+  );
+  const webPushDependencyAvailable = Boolean(
+    liveWebPush.dependencyAvailable ||
+      delivery.webPushDependencyAvailable ||
+      webPushState?.dependencyAvailable,
+  );
+  const webPushReady = Boolean(
+    delivery.webPushReady ||
+      (webPushSenderConfigured && webPushSubscriptionCount > 0) ||
+      ["subscribed", "delivered"].includes(webPushState?.status),
+  );
+  const webPushStatus = webPushReady
+    ? "ready"
+    : webPushSenderConfigured
+      ? "needs_subscription"
+      : "needs_sender";
+  const webPushHeadline = webPushReady
+    ? "Closed-tab push is registered"
+    : webPushSenderConfigured
+      ? "Sender ready, register this browser"
+      : "Provision Web Push sender";
+  const webPushFailureStates = new Set([
+    "service_worker_not_ready",
+    "subscription_lookup_error",
+    "subscription_failed",
+    "record_failed",
+    "error",
+  ]);
+  const webPushFailureMessage = webPushFailureStates.has(String(webPushState?.status || ""))
+    ? webPushState?.message
+    : "";
+  const webPushDetail = webPushReady
+    ? "This browser has a live subscription for closed-tab mission alerts."
+    : webPushFailureMessage ||
+      liveWebPush.nextAction ||
+      delivery.webPushNextAction ||
+      webPushState?.message ||
+      (webPushSenderConfigured
+        ? "Register this phone or tablet browser once to receive slice-complete alerts with the tab closed."
+        : "Provision VAPID keys before browser subscriptions can be recorded.");
+  const webPushAction = webPushSenderConfigured ? "Register browser" : "Provision push";
+  const ntfyReady = Boolean(liveNtfy.senderConfigured || delivery.ntfyReady);
+  const ntfyTopicConfigured = Boolean(liveNtfy.configured || delivery.ntfyTopicConfigured);
+  const ntfyDetail = liveNtfy.nextAction || delivery.ntfyNextAction || (
+    ntfyTopicConfigured
+      ? "ntfy can receive mission updates through the iOS app."
+      : "Configure an ntfy topic to use the open-source iOS push path."
+  );
   const openMission = missionId => {
     const normalized = String(missionId || "").trim();
     if (!normalized) return;
@@ -9863,11 +10291,11 @@ function FluxioPhoneProgressSurface({
       onSelectFlow(normalized);
       return;
     }
-    onSetSurface?.("agent");
+      onSetSurface?.("agent");
   };
   const phoneMetrics = [
     ["Running", Number(liveDataStatus?.runningMissionCount || runningRows.length || 0), `${Number(liveDataStatus?.activeMissionCount || liveRows.length || 0)} active`],
-    ["Alerts", Number(liveDataStatus?.notificationCount || notifications.length || 0), `${Number(liveDataStatus?.sliceNotificationCount || sliceNotifications.length || 0)} slice`],
+    ["Alerts", Number(liveDataStatus?.notificationCount || allNotifications.length || 0), `${Number(liveDataStatus?.sliceNotificationCount || sliceNotifications.length || 0)} slice`],
     ["Queue", Number(liveDataStatus?.queuedMissionCount || 0), "live summary"],
     ["Blocked", Number(liveDataStatus?.blockedMissionCount || 0), "needs action"],
   ];
@@ -9884,6 +10312,18 @@ function FluxioPhoneProgressSurface({
     );
   }
 
+  if (!liveSummaryReady && visibleRows.length === 0 && allNotifications.length === 0) {
+    return (
+      <div className="fluxos-phone-progress loading" data-live-phone-progress-loading="true">
+        <section className="fluxos-phone-hero">
+          <span>Phone progress</span>
+          <strong>Loading NAS live summary</strong>
+          <p>The phone surface is waiting for authenticated mission rows, notification rows, and push setup state before it renders live progress.</p>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="fluxos-phone-progress" data-live-phone-progress="true">
       <section className="fluxos-phone-hero">
@@ -9894,6 +10334,26 @@ function FluxioPhoneProgressSurface({
             topRow?.detail ||
             "A compact live view for checking mission progress, slice notifications, and next actions away from the desktop."}
         </p>
+        <div
+          aria-atomic="true"
+          aria-live="polite"
+          className="fluxos-phone-status-row"
+          data-phone-status-row="true"
+          role="status"
+        >
+          <article>
+            <span>Mission</span>
+            <strong>{titleizeToken(topRow?.status || topRow?.statusLabel || "live")}</strong>
+          </article>
+          <article>
+            <span>Progress</span>
+            <strong>{topProgressLabel}</strong>
+          </article>
+          <article>
+            <span>Push</span>
+            <strong>{ntfyReady ? "ntfy ready" : webPushReady ? "Armed" : webPushSenderConfigured ? "Needs browser" : "Needs sender"}</strong>
+          </article>
+        </div>
         <div className="fluxos-phone-actions">
           <button disabled={!topRow?.id} onClick={() => openMission(topRow?.id || topRow?.missionId)} type="button">
             Open top mission
@@ -9913,13 +10373,77 @@ function FluxioPhoneProgressSurface({
         ))}
       </section>
 
+      <section
+        className={`fluxos-phone-push-proof status-${webPushStatus}`}
+        aria-label="Closed-tab phone push proof"
+        data-phone-web-push-proof="true"
+        data-phone-web-push-status={webPushStatus}
+      >
+        <div>
+          <span>Closed-tab push</span>
+          <strong>{webPushHeadline}</strong>
+          <p>{webPushDetail}</p>
+          {!webPushReady && webPushState?.pushPermissionState ? (
+            <small>Push API permission: {titleizeToken(webPushState.pushPermissionState)}</small>
+          ) : null}
+        </div>
+        <div className="fluxos-phone-push-proof-grid">
+          <article>
+            <span>Sender</span>
+            <strong>{webPushSenderConfigured ? "Ready" : "Missing"}</strong>
+            <small>{webPushDependencyAvailable ? "dependency ready" : "dependency unknown"}</small>
+          </article>
+          <article>
+            <span>Subscriptions</span>
+            <strong>{webPushSubscriptionCount}</strong>
+            <small>live NAS count</small>
+          </article>
+        </div>
+        {!webPushReady ? (
+          <button
+            data-phone-web-push-action="true"
+            onClick={() => fluxioAction(onRequestAction, webPushSenderConfigured ? "notifications:register-web-push" : "notifications:provision-web-push")}
+            type="button"
+          >
+            {webPushAction}
+          </button>
+        ) : null}
+      </section>
+
+      <section
+        className={`fluxos-phone-push-proof status-${ntfyReady ? "ready" : "needs_sender"}`}
+        aria-label="ntfy phone push proof"
+        data-phone-ntfy-proof="true"
+        data-phone-ntfy-status={ntfyReady ? "ready" : "needs_topic"}
+      >
+        <div>
+          <span>ntfy phone push</span>
+          <strong>{ntfyReady ? "Open-source iOS channel ready" : "Configure ntfy topic"}</strong>
+          <p>{ntfyDetail}</p>
+        </div>
+        <div className="fluxos-phone-push-proof-grid">
+          <article>
+            <span>Topic</span>
+            <strong>{ntfyTopicConfigured ? "Set" : "Missing"}</strong>
+            <small>live NAS config</small>
+          </article>
+          <article>
+            <span>Token</span>
+            <strong>{liveNtfy.tokenConfigured ? "Set" : "Optional"}</strong>
+            <small>{liveNtfy.serverUrl || "ntfy server"}</small>
+          </article>
+        </div>
+      </section>
+
       <section className="fluxos-phone-mission-list" aria-label="Live phone mission list">
         <div className="fluxos-thread-head">
           <span>Live missions</span>
           <strong>{visibleRows.length} shown</strong>
         </div>
         {visibleRows.length ? visibleRows.map(row => {
-          const progressValue = clampPercent(row.progress);
+              const progressValue = row === topRow
+                ? topProgressValue
+                : clampPercent(row.progress);
           const missionId = row.id || row.missionId || row.mission_id || "";
           return (
             <button
@@ -9950,11 +10474,12 @@ function FluxioPhoneProgressSurface({
       <section className="fluxos-phone-notifications" aria-label="Live phone notifications" data-phone-notification-stack="true">
         <div className="fluxos-thread-head">
           <span>Notifications</span>
-          <strong>{notifications.length} visible</strong>
+          <strong>{notifications.length} of {allNotifications.length} visible</strong>
         </div>
         {notifications.length ? notifications.map(item => {
           const missionId = item.missionId || item.mission_id || "";
-          const title = item.title || item.headline || item.label || "Mission update";
+          const liveLead = firstMeaningfulNotificationLine(item);
+          const title = liveLead || item.title || item.headline || item.label || "Mission update";
           const detail = item.agentMessage || item.detail || item.message || item.summary || "Live mission notification.";
           return (
             <button
@@ -9965,7 +10490,7 @@ function FluxioPhoneProgressSurface({
             >
               <span>{item.kind === "mission_slice_completed" ? "Slice" : titleizeToken(item.kind || "Update")}</span>
               <strong>{title}</strong>
-              <p>{detail}</p>
+              {detail && detail !== title ? <p>{detail}</p> : null}
               <small>{timestampLabel(item.createdAt || item.timestamp || item.time || "")}</small>
             </button>
           );
@@ -9982,75 +10507,318 @@ function FluxioPhoneProgressSurface({
 }
 
 function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, settingsState, themes = FLUXIO_THEMES }) {
-  return (
-    <div className="fluxos-settings">
-      <section className="fluxos-theme-lab">
-        <div className="fluxos-section-head">
-          <span>Theme engine</span>
-          <strong>One layout, multiple operating moods</strong>
-        </div>
-        <div className="fluxos-theme-grid" aria-label="Theme preview cards">
-          {themes.map(theme => (
-            <button
-              aria-pressed={activeTheme === theme.id}
-              className={activeTheme === theme.id ? "active" : ""}
-              data-preview-theme={theme.id}
-              key={theme.id}
-              onClick={() => onSelectTheme?.(theme.id)}
-              type="button"
-            >
-              <span className="fluxos-theme-preview" aria-hidden="true">
-                <i />
-                <b />
-                <em />
-              </span>
-              <strong>{theme.label}</strong>
-              <small>Best for {theme.bestFor}</small>
-              <span>Density: {theme.density}</span>
-              <span>Motion: {theme.motion}</span>
-              <span>Contrast: {theme.contrast}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-      <section className="fluxos-database-lab">
-        <div className="fluxos-section-head">
-          <span>Databases</span>
-          <strong>Colorful data layer for runs, memory, and artifacts</strong>
-        </div>
-        <div className="fluxos-database-grid" aria-label="Fluxio databases">
-          {FLUXIO_DATABASES.map(([id, label, copy, status, tone]) => (
-            <button
-              className={`tone-${tone}`}
-              key={id}
-              onClick={() => fluxioAction(onRequestAction, `database:open:${id}`)}
-              type="button"
-            >
-              <span className="fluxos-database-orb">
-                <Database size={24} strokeWidth={1.75} />
-              </span>
-              <strong>{label}</strong>
-              <small>{copy}</small>
-              <em>{status}</em>
-            </button>
-          ))}
-        </div>
-      </section>
-      {[
-        ["Models", "Provider accounts, model routes, reasoning level, and fallbacks."],
-        ["Rules & Routing", "Approval policy, write scope, destructive action handling."],
-        ["Workspace", "Local path, NAS bridge, runtime compartment, and file watching."],
-        ["Appearance", "Density, contrast, reduced motion, and command palette."],
-      ].map(([title, copy]) => (
-        <section className="fluxos-settings-card" key={title}>
-          <div className="fluxos-section-head">
-            <span>{title}</span>
-            <strong>{settingsState?.activeTab === title.toLowerCase() ? "Active" : "Configured"}</strong>
-          </div>
-          <p>{copy}</p>
-          <button onClick={() => fluxioAction(onRequestAction, `settings:${title.toLowerCase()}`)} type="button">Open {title}</button>
-        </section>
+  const activeTab = settingsState?.activeTab === "general" ? "workspace" : settingsState?.activeTab || "providers";
+  const providers = Array.isArray(settingsState?.providers) ? settingsState.providers : [];
+  const routeProviders = Array.isArray(settingsState?.routeOptions?.providers)
+    ? settingsState.routeOptions.providers
+    : [];
+  const routeModels = Array.isArray(settingsState?.routeOptions?.models)
+    ? settingsState.routeOptions.models
+    : [];
+  const routeEfforts = Array.isArray(settingsState?.routeOptions?.efforts)
+    ? settingsState.routeOptions.efforts
+    : [];
+  const routeHarnesses = Array.isArray(settingsState?.routeOptions?.harnesses)
+    ? settingsState.routeOptions.harnesses
+    : [];
+  const routingStrategies = Array.isArray(settingsState?.routeOptions?.routingStrategies)
+    ? settingsState.routeOptions.routingStrategies
+    : [];
+  const executionTargets = Array.isArray(settingsState?.routeOptions?.executionTargets)
+    ? settingsState.routeOptions.executionTargets
+    : [];
+  const codexImportItems = asList(settingsState?.codexImport?.workspaces || settingsState?.codexImport?.items);
+  const setupServices = asList(settingsState?.setupServices);
+  const setupCards = asList(settingsState?.beginnerSetupCards);
+  const runtimes = asList(settingsState?.runtimes);
+  const bridgeSessions = asList(settingsState?.bridgeSessions);
+  const readyProviderCount = providers.filter(item => item.status || item.hasSecret).length;
+  const openSettingsTab = tabId => {
+    settingsState?.onSetTab?.(tabId);
+  };
+  const settingSections = [
+    {
+      id: "providers",
+      label: "Models & Accounts",
+      status: providers.length ? `${readyProviderCount}/${providers.length} ready` : "Not reported",
+      detail: "Provider keys, OAuth links, model routes, and thinking effort.",
+    },
+    {
+      id: "workspace",
+      label: "Workspace",
+      status: settingsState?.workspaceName || "Local workspace",
+      detail: "Local folder, Codex import, NAS bridge, and file routing.",
+    },
+    {
+      id: "appearance",
+      label: "Appearance",
+      status: themes.find(theme => theme.id === activeTheme)?.label || activeTheme,
+      detail: "Theme, density, contrast, and command feel.",
+    },
+    {
+      id: "rules",
+      label: "Rules & Routing",
+      status: settingsState?.activeRuleSet?.name || "Default policy",
+      detail: "Approval policy, route strategy, runtime target, and safeguards.",
+    },
+    {
+      id: "runtimes",
+      label: "Runtimes & Rooms",
+      status: runtimes.length ? `${runtimes.length} runtimes` : "Not reported",
+      detail: "Hermes, OpenClaw, bridge sessions, and rooms/gateways.",
+    },
+    {
+      id: "databases",
+      label: "Databases",
+      status: `${FLUXIO_DATABASES.length} stores`,
+      detail: "Runs, memory, receipts, artifacts, and app data.",
+    },
+    {
+      id: "team",
+      label: "Team Manager",
+      status: setupCards.length ? `${setupCards.length} setup cards` : "Setup",
+      detail: "Beginner setup cards, service actions, and account readiness.",
+    },
+  ];
+  const activeSection = settingSections.find(item => item.id === activeTab) || settingSections[0];
+  const renderActionButton = (label, onClick, extra = {}) => (
+    <button disabled={extra.disabled} key={extra.key} onClick={onClick} title={extra.title || ""} type="button">
+      {label}
+    </button>
+  );
+  const renderOptionChips = values => (
+    <div className="fluxos-settings-chip-row">
+      {asList(values).slice(0, 12).map(item => (
+        <span key={item.value || item.label || item}>{item.label || item.value || item}</span>
       ))}
+      {asList(values).length > 12 ? <span>+{asList(values).length - 12} more</span> : null}
+    </div>
+  );
+  const renderProviderSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-models-accounts="true">
+      <div className="fluxos-settings-route-summary" data-settings-route-models="true">
+        <article>
+          <span>Providers</span>
+          <strong>{routeProviders.map(item => item.label || item.value).join(" / ") || "Not reported"}</strong>
+        </article>
+        <article>
+          <span>Models</span>
+          <strong>{routeModels.slice(0, 6).join(" / ") || "Not reported"}</strong>
+          <p>{routeModels.length} model route options, including OpenCodeGo when configured.</p>
+        </article>
+        <article>
+          <span>Thinking</span>
+          <strong>{routeEfforts.map(item => item.label || item.value).join(" / ") || "Not reported"}</strong>
+        </article>
+      </div>
+      <div className="fluxos-settings-provider-grid" data-settings-provider-grid="true">
+        {providers.map(provider => {
+          const ready = Boolean(provider.status || provider.hasSecret);
+          return (
+            <article
+              className={`fluxos-settings-provider-card tone-${ready ? "good" : "warn"}`}
+              data-settings-provider-row={provider.id}
+              key={provider.id}
+            >
+              <div>
+                <span>{provider.env}</span>
+                <strong>{provider.label}</strong>
+                <p>{provider.note}</p>
+              </div>
+              <em>{provider.statusLabel || (ready ? "Ready" : "Needs login")}</em>
+              {provider.statusDetail ? <p>{provider.statusDetail}</p> : null}
+              <div className="fluxos-settings-provider-actions">
+                {provider.quickAuth ? renderActionButton(
+                  provider.quickAuth.ready ? `${provider.label} connected` : provider.quickAuth.label,
+                  () => provider.onQuickAuth?.(),
+                  { disabled: provider.quickAuth.disabled || !provider.onQuickAuth, title: provider.quickAuth.detail },
+                ) : null}
+                {asList(provider.authLinks).map(link => {
+                  const linkLabel = link.label || (provider.id === "opencode-go" ? "OpenCodeGo provider docs" : "Provider docs");
+                  return renderActionButton(linkLabel, () => link.onClick?.(), {
+                    key: `${provider.id}-${linkLabel}`,
+                    title: provider.id === "opencode-go" ? "OpenCodeGo provider docs" : linkLabel,
+                  });
+                })}
+              </div>
+              <label>
+                <span>{provider.label} API key</span>
+                <input
+                  autoComplete="off"
+                  onChange={event => provider.onDraftChange?.(event.target.value)}
+                  placeholder={provider.hasSecret ? "Stored" : "Paste API key"}
+                  type="password"
+                  value={provider.draft || ""}
+                />
+              </label>
+              <div className="fluxos-settings-provider-actions">
+                {renderActionButton(provider.savingState === "saving" ? "Saving..." : "Save key", () => provider.onSave?.(), {
+                  disabled: provider.savingState === "saving",
+                })}
+                {renderActionButton(provider.savingState === "clearing" ? "Clearing..." : "Clear key", () => provider.onClear?.(), {
+                  disabled: provider.savingState === "clearing",
+                })}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+  const renderWorkspaceSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-workspace-panel="true">
+      <div className="fluxos-settings-fact-grid">
+        <article><span>Name</span><strong>{settingsState?.workspaceName || "Workspace"}</strong></article>
+        <article><span>ID</span><strong>{settingsState?.workspaceId || "Not reported"}</strong></article>
+        <article><span>Storage bridge</span><strong>{settingsState?.storageBridge?.status || settingsState?.storageBridge?.state || "Not reported"}</strong></article>
+      </div>
+      <div className="fluxos-settings-action-row">
+        {renderActionButton("Pick workspace folder", () => settingsState?.onPickWorkspaceFolder?.())}
+        {renderActionButton("Refresh Codex workspaces", () => settingsState?.onRefreshCodexImport?.())}
+        {renderActionButton("Import all Codex workspaces", () => settingsState?.onImportAllCodexWorkspaces?.())}
+      </div>
+      <div className="fluxos-settings-list">
+        {codexImportItems.length ? codexImportItems.slice(0, 6).map(item => (
+          <button key={item.id || item.path || item.name} onClick={() => settingsState?.onImportCodexWorkspace?.(item)} type="button">
+            <span>{item.name || item.label || "Codex workspace"}</span>
+            <strong>{item.path || item.root || item.id || "No path reported"}</strong>
+          </button>
+        )) : (
+          <article><span>Codex import</span><strong>No imported workspaces reported</strong></article>
+        )}
+      </div>
+    </div>
+  );
+  const renderAppearanceSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-appearance-panel="true">
+      <div className="fluxos-theme-grid" aria-label="Theme preview cards">
+        {themes.map(theme => (
+          <button
+            aria-pressed={activeTheme === theme.id}
+            className={activeTheme === theme.id ? "active" : ""}
+            data-preview-theme={theme.id}
+            key={theme.id}
+            onClick={() => onSelectTheme?.(theme.id)}
+            type="button"
+          >
+            <span className="fluxos-theme-preview" aria-hidden="true"><i /><b /><em /></span>
+            <strong>{theme.label}</strong>
+            <small>{theme.bestFor}</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  const renderRulesSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-rules-panel="true">
+      <div className="fluxos-settings-fact-grid">
+        <article><span>Active rule set</span><strong>{settingsState?.activeRuleSet?.name || "Default policy"}</strong><p>{settingsState?.activeRuleSet?.description || "No rule-set detail reported."}</p></article>
+        <article><span>Execution targets</span>{renderOptionChips(executionTargets)}</article>
+        <article><span>Route strategies</span>{renderOptionChips(routingStrategies)}</article>
+      </div>
+      <div className="fluxos-settings-action-row">
+        {renderActionButton("Apply active rule set", () => settingsState?.onApplyActiveRuleSet?.())}
+        {renderActionButton("Save workspace policy", () => settingsState?.onSaveWorkspacePolicy?.())}
+      </div>
+    </div>
+  );
+  const renderRuntimeSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-runtimes-panel="true">
+      <div className="fluxos-settings-fact-grid">
+        <article><span>Harnesses</span>{renderOptionChips(routeHarnesses)}</article>
+        <article><span>Bridge sessions</span><strong>{bridgeSessions.length || "None reported"}</strong></article>
+        <article><span>Runtime rows</span><strong>{runtimes.length || "Not reported"}</strong></article>
+      </div>
+      <div className="fluxos-settings-list">
+        {runtimes.length ? runtimes.slice(0, 8).map(item => (
+          <article key={item.id || item.name || item.label}>
+            <span>{item.id || item.runtime || "runtime"}</span>
+            <strong>{item.label || item.name || item.runtime || "Runtime"}</strong>
+            <p>{item.status || item.detail || item.version || "No runtime detail reported."}</p>
+          </article>
+        )) : <article><span>Runtimes</span><strong>Hermes/OpenClaw status not reported in this snapshot</strong></article>}
+      </div>
+    </div>
+  );
+  const renderDatabaseSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-databases-panel="true">
+      <div className="fluxos-database-grid" aria-label="Fluxio databases">
+        {FLUXIO_DATABASES.map(([id, label, copy, status, tone]) => (
+          <button className={`tone-${tone}`} key={id} onClick={() => fluxioAction(onRequestAction, `database:open:${id}`)} type="button">
+            <span className="fluxos-database-orb"><Database size={22} strokeWidth={1.75} /></span>
+            <strong>{label}</strong>
+            <small>{copy}</small>
+            <em>{status}</em>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  const renderTeamSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-team-panel="true">
+      <div className="fluxos-settings-list">
+        {setupCards.length ? setupCards.map(item => (
+          <article key={item.id || item.label || item.title}>
+            <span>{item.state || item.status || "Setup"}</span>
+            <strong>{item.label || item.title || "Setup card"}</strong>
+            <p>{item.detail || item.description || item.nextAction || "No setup detail reported."}</p>
+          </article>
+        )) : <article><span>Setup</span><strong>No beginner setup cards reported</strong></article>}
+        {setupServices.slice(0, 8).map(item => (
+          <button key={item.id || item.actionId || item.label} onClick={() => fluxioAction(onRequestAction, item.actionId || item.id || "setup:service")} type="button">
+            <span>{item.status || item.state || "Service"}</span>
+            <strong>{item.label || item.title || item.id || "Service action"}</strong>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  const renderActivePanel = () => {
+    if (activeTab === "providers") return renderProviderSettings();
+    if (activeTab === "workspace") return renderWorkspaceSettings();
+    if (activeTab === "appearance") return renderAppearanceSettings();
+    if (activeTab === "rules") return renderRulesSettings();
+    if (activeTab === "runtimes") return renderRuntimeSettings();
+    if (activeTab === "databases") return renderDatabaseSettings();
+    if (activeTab === "team") return renderTeamSettings();
+    return renderProviderSettings();
+  };
+  return (
+    <div className="fluxos-settings" data-settings-active-tab={activeTab}>
+      <aside className="fluxos-settings-nav" aria-label="Settings categories">
+        <div>
+          <span>Settings</span>
+          <strong>{activeSection.label}</strong>
+        </div>
+        {settingSections.map(section => (
+          <button
+            aria-current={activeTab === section.id ? "page" : undefined}
+            className={activeTab === section.id ? "active" : ""}
+            data-settings-card-tab={section.id}
+            data-settings-tab-button={section.id}
+            key={section.id}
+            onClick={() => openSettingsTab(section.id)}
+            type="button"
+          >
+            <span>{section.label}</span>
+            <strong>{section.status}</strong>
+            <small>{section.detail}</small>
+          </button>
+        ))}
+      </aside>
+      <section
+        className="fluxos-settings-detail-panel"
+        data-settings-detail-panel="true"
+        data-settings-tab-panel={activeTab}
+        aria-label={`${activeSection.label} settings`}
+      >
+        <div className="fluxos-section-head">
+          <span>{activeSection.label}</span>
+          <strong>{activeSection.status}</strong>
+        </div>
+        <p className="fluxos-settings-panel-lede">{activeSection.detail}</p>
+        {renderActivePanel()}
+      </section>
     </div>
   );
 }
@@ -10063,15 +10831,32 @@ function FluxioSurfaceContent(props) {
   if (props.surface === "images") return <FluxioImagesSurface {...props} />;
   if (props.surface === "workbench") return <FluxioWorkbenchSurface {...props} />;
   if (props.surface === "settings") return <FluxioSettingsSurface {...props} />;
-  if (props.agentScene === "idle") {
-    return <AgentIdleSurface {...props} onUseSlashCommand={props.onInsertSlashCommand} />;
-  }
   return (
     <FluxioAgentSurface
       key={props.workbenchState?.missionId || props.currentProjectLabel || "agent-run"}
       {...props}
       onUseSlashCommand={props.onInsertSlashCommand}
     />
+  );
+}
+
+function FluxioProviderAdmissionTruth({ compact = false, liveDataStatus, routeControls, selectedHarnessMeta }) {
+  if (liveDataStatus?.previewMode !== "live") return null;
+  const route = routeControls?.selectedRoute || {};
+  const runtimeLabel = route.runtime || route.harness || selectedHarnessMeta?.label || "selected Hermes route";
+  return (
+    <section
+      className={cx("fluxos-provider-admission-truth", compact ? "compact" : "")}
+      data-provider-admission-truth="true"
+      aria-label="Provider admission truth"
+    >
+      <span>Admission vs quota</span>
+      <strong>Auth decides whether {runtimeLabel} can launch; quota is separate live usage evidence.</strong>
+      <p>
+        Quota unreported means the live control room has no quota or rate-window report for that provider.
+        It is not a provider-limit or exhausted-usage claim.
+      </p>
+    </section>
   );
 }
 
@@ -10213,6 +10998,15 @@ function FluxioAgentOS(props) {
             <button className="primary" onClick={onMore} type="button">Command</button>
           </div>
         </header>
+
+        {surface !== "builder" ? (
+          <FluxioProviderAdmissionTruth
+            compact
+            liveDataStatus={liveDataStatus}
+            routeControls={routeControls}
+            selectedHarnessMeta={selectedHarnessMeta}
+          />
+        ) : null}
 
         <FluxioSurfaceContent
           {...props}

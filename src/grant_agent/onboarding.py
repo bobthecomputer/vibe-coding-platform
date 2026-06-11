@@ -32,6 +32,7 @@ MINIMAX_GLOBAL_OPENCLAW_DOCS = "https://platform.minimax.io/docs/token-plan/open
 MINIMAX_CN_OPENCLAW_DOCS = "https://platform.minimaxi.com/docs/token-plan/openclaw"
 MINIMAX_GLOBAL_API_PORTAL = "https://platform.minimax.io/user-center/basic-information/interface-key"
 MINIMAX_CN_API_PORTAL = "https://platform.minimaxi.com/user-center/basic-information/interface-key"
+OPENCLAW_OPENCODEGO_DOCS = "https://open-claw.bot/docs/providers/opencode-go/"
 
 _ONBOARDING_CACHE_TTL_SECONDS = max(
     float(os.environ.get("FLUXIO_ONBOARDING_CACHE_TTL_SECONDS", "300")),
@@ -164,7 +165,7 @@ def _minimax_auth_label(mode: str) -> str:
         "oauth",
         "oauth-cn",
     }:
-        return "MiniMax OpenClaw OAuth"
+        return "MiniMax broker OAuth"
     if normalized == "minimax-api":
         return "API key"
     return "not configured"
@@ -195,6 +196,8 @@ def _auth_store_has_provider(path: Path, provider_id: str) -> bool:
 
     def visit(value: object) -> bool:
         if isinstance(value, dict):
+            if needle in {str(item).strip().lower() for item in value.keys()}:
+                return True
             for key in ("providers", "credential_pool"):
                 nested = value.get(key)
                 if isinstance(nested, dict) and needle in {
@@ -215,6 +218,36 @@ def _auth_store_has_provider(path: Path, provider_id: str) -> bool:
         return False
 
     return visit(payload)
+
+
+def _provider_secret_store_has_provider(root: Path, provider_id: str) -> bool:
+    path = root / ".agent_control" / "provider_secrets.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    providers = payload.get("providers")
+    if isinstance(providers, dict) and provider_id in providers:
+        return True
+    return provider_id in payload
+
+
+def _opencode_go_auth_present(root: Path) -> bool:
+    if os.environ.get("OPENCODE_API_KEY"):
+        return True
+    if _provider_secret_store_has_provider(root, "opencode-go"):
+        return True
+    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+    return (
+        _auth_store_has_provider(home / ".openclaw" / "auth.json", "opencode-go")
+        or _auth_store_has_provider(
+            home / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json",
+            "opencode-go",
+        )
+        or _auth_store_has_provider(home / ".local" / "share" / "opencode" / "auth.json", "opencode-go")
+    )
 
 
 def _hermes_auth_store_candidates() -> list[Path]:
@@ -1099,6 +1132,117 @@ def _overall_install_state(dependencies: list[dict], installer_ready: bool) -> s
     return "missing"
 
 
+def _beginner_setup_status(dependencies: list[dict]) -> str:
+    required = [item for item in dependencies if item.get("required")]
+    if any(item.get("stage") in {"failed", "missing"} for item in required):
+        return "Failed"
+    if any(item.get("stage") in {"install_available", "verify_pending"} for item in required):
+        return "Needs login" if any("auth" in str(item.get("dependencyId", "")) for item in required) else "Needs setup"
+    if any(item.get("updateAvailable") for item in dependencies):
+        return "Update available"
+    return "Ready"
+
+
+def _beginner_card_status(rows: list[dict]) -> str:
+    if not rows:
+        return "Ready"
+    if any(item.get("stage") == "failed" for item in rows):
+        return "Failed"
+    if any(item.get("stage") in {"missing", "install_available"} for item in rows if item.get("required")):
+        return "Needs setup"
+    if any(item.get("stage") in {"missing", "install_available"} for item in rows):
+        return "Needs login"
+    if any(item.get("updateAvailable") for item in rows):
+        return "Update available"
+    if any(item.get("stage") == "verify_pending" for item in rows):
+        return "Needs setup"
+    return "Ready"
+
+
+def _build_beginner_setup_cards(
+    dependencies: list[dict],
+    *,
+    service_management: list[dict],
+    setup_history: list[dict],
+    verify_action: dict,
+) -> list[dict]:
+    by_id = {str(item.get("dependencyId") or ""): item for item in dependencies}
+
+    def rows(ids: list[str]) -> list[dict]:
+        return [by_id[item] for item in ids if item in by_id]
+
+    def primary_action(group_rows: list[dict]) -> dict:
+        for item in group_rows:
+            actions = _service_actions_for_dependency(item)
+            if actions:
+                return actions[0]
+        return verify_action
+
+    def receipt(group_rows: list[dict]) -> dict:
+        records = []
+        ids = {str(item.get("dependencyId") or "") for item in group_rows}
+        for record in setup_history:
+            dependency_id = str(record.get("proposal", {}).get("args", {}).get("dependencyId") or "")
+            if dependency_id in ids or not ids:
+                records.append(record)
+        return _last_action_summary(records[-1]) if records else {}
+
+    service_by_id = {str(item.get("serviceId") or ""): item for item in service_management}
+
+    def card(card_id: str, label: str, ids: list[str], plain_next: str) -> dict:
+        group_rows = rows(ids)
+        status = _beginner_card_status(group_rows)
+        missing = [
+            str(item.get("label") or item.get("dependencyId") or "")
+            for item in group_rows
+            if item.get("stage") not in {"healthy", "update_available"}
+        ]
+        return {
+            "cardId": card_id,
+            "label": label,
+            "status": status,
+            "plainStatus": {
+                "Ready": "Green light",
+                "Update available": "Green light, update waiting",
+                "Needs setup": "Yellow light",
+                "Needs login": "Yellow light",
+                "Failed": "Red light",
+            }.get(status, status),
+            "nextAction": plain_next if status == "Ready" else (missing[0] if missing else plain_next),
+            "primaryAction": primary_action(group_rows),
+            "receipt": receipt(group_rows),
+            "serviceIds": ids,
+            "services": [service_by_id[item] for item in ids if item in service_by_id],
+        }
+
+    return [
+        card(
+            "computer_tools",
+            "Computer tools",
+            ["wsl2", "node", "python", "uv", "opencv", "tauri_prereqs"],
+            "Computer tools are ready.",
+        ),
+        card(
+            "ai_accounts",
+            "AI accounts",
+            ["model_auth", "minimax_auth", "opencode_go_auth"],
+            "AI accounts are connected.",
+        ),
+        card(
+            "agent_runtimes",
+            "Agent runtimes",
+            ["hermes", "openclaw"],
+            "Hermes and OpenClaw are ready.",
+        ),
+        card(
+            "messages",
+            "Messages",
+            ["telegram_ready"],
+            "Messages can reach the operator.",
+        ),
+    ]
+
+
 def _node_install_command(platform_name: str) -> str:
     normalized = (platform_name or "").strip().lower()
     if normalized == "windows":
@@ -1186,6 +1330,17 @@ def _runtime_stack_repair_actions(
                 "autoRunFollowUp": True,
             }
         )
+    elif checks["openclaw"]["installed"]:
+        batch_commands.append(
+            {
+                "label": "Refresh OpenClaw skills",
+                "dependencyId": "openclaw_skills",
+                "command": "openclaw skills update --all",
+                "followUp": "openclaw status --usage --json",
+                "platform": platform_name,
+                "autoRunFollowUp": False,
+            }
+        )
     if not checks["hermes"]["installed"]:
         batch_commands.append(
             {
@@ -1206,6 +1361,17 @@ def _runtime_stack_repair_actions(
                 "followUp": hermes_update.get("follow_up", ""),
                 "platform": "wsl2",
                 "autoRunFollowUp": True,
+            }
+        )
+    elif checks["hermes"]["installed"]:
+        batch_commands.append(
+            {
+                "label": "Check Hermes skills",
+                "dependencyId": "hermes_skills",
+                "command": "hermes skills list",
+                "followUp": "",
+                "platform": "wsl2",
+                "autoRunFollowUp": False,
             }
         )
     if not batch_commands:
@@ -1283,6 +1449,12 @@ def _build_setup_health(
         f"MiniMax auth path is configured through {_minimax_auth_label(minimax_auth_mode)}."
         if minimax_auth_configured
         else "Save a MiniMax API key, or complete and verify MiniMax auth in OpenClaw outside this app before routing MiniMax runs."
+    )
+    opencode_go_auth_configured = _opencode_go_auth_present(root)
+    opencode_go_details = (
+        "OpenCodeGo is ready through OPENCODE_API_KEY or OpenClaw auth."
+        if opencode_go_auth_configured
+        else "Save an OpenCodeGo API key as OPENCODE_API_KEY, or run OpenClaw onboarding for opencode-go."
     )
     tauri_required = _tauri_prereqs_required(root, platform_name)
     cargo_check = (
@@ -1641,6 +1813,28 @@ def _build_setup_health(
             ],
         },
         {
+            "dependencyId": "opencode_go_auth",
+            "label": "OpenCodeGo auth",
+            "category": "agent_runtime",
+            "required": False,
+            "installed": opencode_go_auth_configured,
+            "version": "OPENCODE_API_KEY" if opencode_go_auth_configured else "not configured",
+            "details": opencode_go_details,
+            "repairActions": []
+            if opencode_go_auth_configured
+            else [
+                {
+                    "actionId": "opencode-go-api",
+                    "label": "Connect OpenCodeGo",
+                    "description": "Open the OpenCodeGo provider guide and use OPENCODE_API_KEY for the opencode-go route.",
+                    "command": _shell_open_url_command(OPENCLAW_OPENCODEGO_DOCS, platform_name),
+                    "followUp": 'Run `openclaw onboard --auth-choice opencode-go` or `openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"`.',
+                    "kind": "auth",
+                    "platform": platform_name,
+                }
+            ],
+        },
+        {
             "dependencyId": "guided_mission",
             "label": "First guided mission",
             "category": "readiness",
@@ -1753,6 +1947,22 @@ def _build_setup_health(
         for dependency in dependencies
         if dependency["serviceCategory"] != "workflow_gate"
     ]
+    beginner_setup_cards = _build_beginner_setup_cards(
+        dependencies,
+        service_management=service_management,
+        setup_history=setup_history,
+        verify_action=verify_action,
+    )
+    safe_update_action = runtime_stack_actions[0] if runtime_stack_actions else {
+        "actionId": "safe_update_everything",
+        "label": "Update everything",
+        "description": "Re-check Hermes, OpenClaw, skills, provider readiness, and message setup without changing secrets.",
+        "commandSurface": "setup.verify",
+        "kind": "verify",
+        "platform": platform_name,
+        "surface": "setup",
+        "autoRunVerify": True,
+    }
     summary_items = [
         item for item in service_management if item.get("required", False)
     ]
@@ -1767,6 +1977,14 @@ def _build_setup_health(
         "missingDependencies": missing_dependencies,
         "repairActions": filtered_repair_actions,
         "globalActions": [verify_action],
+        "safeUpdateAction": {
+            **safe_update_action,
+            "actionId": safe_update_action.get("actionId") or "safe_update_everything",
+            "label": "Update everything",
+            "description": safe_update_action.get("description")
+            or "Safely update/check runtimes, skills, provider readiness, and routes.",
+        },
+        "beginnerSetupCards": beginner_setup_cards,
         "actionHistoryByDependency": history_by_dependency,
         "serviceManagement": service_management,
         "serviceManagementSummary": {

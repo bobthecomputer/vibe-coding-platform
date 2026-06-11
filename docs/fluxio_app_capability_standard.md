@@ -37,3 +37,21 @@ The current implementation ships:
 - bridge-lab registry snapshots in the control room
 
 It does not yet ship broad third-party app execution.
+
+## Operator Handoff Contract
+
+Connected app cards should support two safe handoffs:
+
+1. `Use in Agent`
+   Seeds the Agent composer with the app name, bridge role, aliases, requested task, current context preview, status, and bridge health. The Agent then chooses the runtime/provider route and reports what is ready or missing before any app write.
+
+2. `Make skill`
+   Seeds a Skill Studio draft prompt from the app context. The draft must name the trigger, required context, allowed actions, approval rules, tests, and conditions where the skill must not run.
+
+Both actions are explicit user actions. They do not execute app writes silently.
+
+## Follow-On Personal Manager Apps
+
+`Mind Tower` is registered as a follow-on personal manager/time-management bridge. It is intentionally `manifest_only` until a real local bridge exposes health, context, task execution, and approval callbacks. The manifest carries aliases such as `tower`, `time manager`, and `JBHABCN` so rough operator wording can still route to the right app context.
+
+This keeps the app visible to Agent and Skill Studio without pretending the bridge is already live.

@@ -28,6 +28,7 @@ from grant_agent.mission_control import (
     _recover_evidence_path,
     _sync_project_tree,
     build_harness_lab_snapshot,
+    build_integration_readiness_snapshot,
     build_summary_harness_lab_snapshot,
     build_red_team_escalation_snapshot,
     build_release_readiness_snapshot,
@@ -41,6 +42,7 @@ from grant_agent.mission_control import (
 )
 from grant_agent.mission_watchdog import (
     build_mission_watchdog_report,
+    prune_stale_generated_agent_runs,
     write_mission_watchdog_report,
     write_watchdog_supervisor_state,
 )
@@ -49,6 +51,99 @@ from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
 class MissionControlTests(unittest.TestCase):
+    def test_verification_summary_handles_structured_failed_check_rows(self) -> None:
+        mission = mission_control_module.Mission(
+            mission_id="mission_structured_failure",
+            workspace_id="workspace",
+            runtime_id="hermes",
+            objective="Keep lane receipts durable.",
+            success_checks=[],
+        )
+        mission.proof.failed_checks = [
+            {"checkId": "lane_control_receipt", "detail": "Receipt command returned proof."},
+            {"title": "Artifact gate", "status": "failed"},
+        ]
+
+        summary = mission_control_module._verification_summary_for_mission(mission, "failed")
+
+        self.assertEqual(summary, "Failed: lane_control_receipt, Artifact gate")
+
+    def test_runtime_compartment_snapshot_derives_mission_chat_mission_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            compartment_dir = root / ".agent_control" / "runtime_compartments"
+            compartment_dir.mkdir(parents=True)
+            mission = mission_control_module.Mission(
+                mission_id="mission_live",
+                workspace_id="workspace",
+                runtime_id="hermes",
+                objective="Keep Agent Live attached to real dialogue.",
+                title="Agent Live thread",
+                success_checks=[],
+            )
+            (compartment_dir / "mission-chat-mission_live.json").write_text(
+                json.dumps(
+                    {
+                        "sessionId": "mission-chat-mission_live",
+                        "runtime": "hermes",
+                        "messages": [
+                            {"role": "operator", "text": "Continue this mission."},
+                            {
+                                "role": "assistant",
+                                "text": "I can continue from the persisted thread.",
+                                "source": "backend-model-message",
+                            },
+                        ],
+                        "turnReceipt": {
+                            "schema": "fluxio.turn_receipt.v1",
+                            "assistantMessage": "I can continue from the persisted thread.",
+                            "command": "hermes chat -q <prompt>",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = mission_control_module._build_runtime_compartments_snapshot(root, [mission])
+            item = next(row for row in snapshot["items"] if row["sessionId"] == "mission-chat-mission_live")
+
+            self.assertEqual(item["missionId"], "mission_live")
+            self.assertEqual(item["missionTitle"], "Agent Live thread")
+            self.assertEqual(len(item["messages"]), 2)
+            self.assertEqual(item["turnReceipt"]["assistantMessage"], "I can continue from the persisted thread.")
+            self.assertEqual(item["turnReceipts"][0]["command"], "hermes chat -q <prompt>")
+
+    def test_bootstrap_summary_includes_runtime_compartments_for_agent_live_dialogue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            compartment_dir = control_dir / "runtime_compartments"
+            compartment_dir.mkdir(parents=True)
+            store = ControlRoomStore(root)
+            (compartment_dir / "mission-chat-mission_live.json").write_text(
+                json.dumps(
+                    {
+                        "sessionId": "mission-chat-mission_live",
+                        "runtime": "hermes",
+                        "messages": [
+                            {"role": "operator", "text": "Show the persisted conversation."},
+                            {"role": "assistant", "text": "This is real persisted dialogue."},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = store.build_bootstrap_summary_snapshot()
+            sessions = [
+                item.get("sessionId")
+                for item in summary["runtimeCompartments"]["items"]
+                if isinstance(item, dict)
+            ]
+
+            self.assertIn("mission-chat-mission_live", sessions)
+            self.assertEqual(summary["runtimeCompartments"]["source"], "agent_control_runtime_state")
+
     def test_control_room_json_loader_reuses_unchanged_file_parse(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -79,6 +174,97 @@ class MissionControlTests(unittest.TestCase):
             store._write_json_if_changed(path, [{"value": 2}])
 
             self.assertEqual(store._load_json(path, []), [{"value": 2}])
+
+    def test_missing_mission_row_recovers_from_live_autonomous_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            store.save_missions([])
+            session_path = control_dir / "runtime_sessions" / "delegate_live.json"
+            session_path.parent.mkdir(parents=True, exist_ok=True)
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_live",
+                        "runtime_id": "hermes",
+                        "launch_command": (
+                            "hermes chat -q 'Resume mission mission_recovered with "
+                            ".agent_control/mission_artifacts hard artifact gate'"
+                        ),
+                        "status": "running",
+                        "session_path": str(session_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (control_dir / "autonomous_workflows.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "autonomous-workflows.v1",
+                        "workflows": [
+                            {
+                                "schemaVersion": "autonomous-workflow-record.v1",
+                                "workflowId": "workflow_mission_recovered",
+                                "missionId": "mission_recovered",
+                                "workspaceId": workspace.workspace_id,
+                                "title": "Build a recovered live mission",
+                                "objective": "Build a recovered live mission with real artifacts.",
+                                "status": "running",
+                                "runtimeId": "hermes",
+                                "mode": "Autopilot",
+                                "createdAt": "2026-06-02T00:00:00+00:00",
+                                "updatedAt": "2026-06-02T01:00:00+00:00",
+                                "currentPhase": "execute",
+                                "continuityState": "delegated_active",
+                                "continuityDetail": "hermes lane is still active and restart-safe.",
+                                "runBudget": {
+                                    "mode": "Autopilot",
+                                    "maxRuntimeSeconds": 7200,
+                                    "remainingSeconds": 3600,
+                                    "status": "delegated_active",
+                                    "runUntilBehavior": "continue_until_blocked",
+                                },
+                                "executionScope": {"workspace_root": str(root), "execution_root": str(root)},
+                                "executionPolicy": {"profile_name": "builder"},
+                                "runtimeSummary": {
+                                    "latestSessionId": "session_live",
+                                    "currentRuntimeLane": "hermes",
+                                    "lastRuntimeEvent": "hard artifact repair running",
+                                },
+                                "verification": {
+                                    "commands": ["python -m pytest"],
+                                    "lastResult": "pending",
+                                    "passedChecks": [],
+                                    "failedChecks": [],
+                                    "verificationFailures": [],
+                                },
+                                "risk": {"blockers": [], "stopReason": ""},
+                                "changedFiles": [],
+                                "evidenceFiles": [],
+                                "lastProofSummary": "Recovered workflow proof summary.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            recovered = store.get_mission("mission_recovered")
+
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual(recovered.mission_id, "mission_recovered")
+            self.assertEqual(recovered.runtime_id, "hermes")
+            self.assertEqual(recovered.state.status, "running")
+            self.assertEqual(recovered.state.continuity_state, "delegated_active")
+            self.assertEqual(len(recovered.delegated_runtime_sessions), 1)
+            self.assertEqual(recovered.delegated_runtime_sessions[0].delegated_id, "delegate_live")
+            detail = store.build_mission_detail_snapshot("mission_recovered", event_limit=5)
+            self.assertIn("mission_recovered", json.dumps(detail))
+            self.assertIn("Build a recovered live mission", json.dumps(detail))
 
     def test_red_team_escalation_snapshot_counts_more_than_default_visible_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -209,6 +395,96 @@ class MissionControlTests(unittest.TestCase):
                 report["problemRegistry"]["firstOpenProblem"]["firstRepairStep"],
             )
 
+    def test_watchdog_prunes_only_stale_generated_agent_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            runs_root = root / ".agent_runs"
+            stale_session = runs_root / "session_stale"
+            current_session = runs_root / "session_current"
+            protected_session = runs_root / "session_protected"
+            for session in (stale_session, current_session, protected_session):
+                session.mkdir(parents=True)
+                (session / "timeline.jsonl").write_text("x" * 32, encoding="utf-8")
+            old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=3)).timestamp()
+            os.utime(stale_session, (old_timestamp, old_timestamp))
+            os.utime(protected_session, (old_timestamp, old_timestamp))
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep latest session evidence",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.latest_session_id = "session_protected"
+
+            retention = prune_stale_generated_agent_runs(
+                root=root,
+                missions=[mission],
+                workspaces=store.load_workspaces(),
+                retention_minutes=60,
+                min_bytes=1,
+                max_delete_per_pass=20,
+            )
+
+            self.assertEqual(retention["status"], "pruned")
+            self.assertEqual(retention["deletedCount"], 1)
+            self.assertFalse(stale_session.exists())
+            self.assertTrue(current_session.exists())
+            self.assertTrue(protected_session.exists())
+
+    def test_mission_watchdog_ignores_stale_historical_delegated_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep only current delegated heartbeat actionable",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1800
+            stale = DelegatedRuntimeSession(
+                delegated_id="delegate_old",
+                runtime_id="hermes",
+                launch_command="old",
+                status="running",
+                updated_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+                heartbeat_status="stale",
+                heartbeat_age_seconds=7200,
+            )
+            current = DelegatedRuntimeSession(
+                delegated_id="delegate_current",
+                runtime_id="hermes",
+                launch_command="current",
+                status="running",
+                updated_at=datetime.now(timezone.utc).isoformat(),
+                heartbeat_status="healthy",
+                heartbeat_age_seconds=5,
+            )
+            mission.delegated_runtime_sessions = [stale, current]
+            store.save_missions([mission])
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            self.assertNotIn(
+                "stale_runtime_heartbeat",
+                {item["kind"] for item in report["issues"]},
+            )
+
     def test_mission_watchdog_flags_stale_running_mission(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -243,6 +519,203 @@ class MissionControlTests(unittest.TestCase):
                 {item["kind"] for item in report["issues"]},
             )
             self.assertEqual(report["summary"]["warn"], 1)
+
+    def test_mission_watchdog_flags_dead_active_delegated_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep a live delegated lane honest",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1200
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_dead",
+                    runtime_id="hermes",
+                    launch_command="hermes chat",
+                    status="running",
+                    pid=99999999,
+                    heartbeat_status="healthy",
+                    heartbeat_age_seconds=5,
+                )
+            ]
+            store.save_missions([mission])
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "delegated_runtime_process_gone"
+            )
+            self.assertEqual(issue["severity"], "bad")
+            self.assertIn("delegate_dead", issue["evidence"][0])
+            self.assertIn("--action resume", issue["firstStep"])
+
+    def test_mission_watchdog_uses_terminal_session_file_before_dead_pid_alarm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Do not relaunch a delegate that already completed",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1200
+            session_path = root / ".agent_control" / "runtime_sessions" / "delegate_completed.json"
+            session_path.parent.mkdir(parents=True)
+            stale_embedded = DelegatedRuntimeSession(
+                delegated_id="delegate_completed",
+                runtime_id="hermes",
+                launch_command="hermes chat",
+                status="running",
+                session_path=str(session_path),
+                pid=99999999,
+                heartbeat_status="healthy",
+                heartbeat_age_seconds=5,
+            )
+            completed_file = DelegatedRuntimeSession(
+                delegated_id="delegate_completed",
+                runtime_id="hermes",
+                launch_command="hermes chat",
+                status="completed",
+                detail="Delegated runtime process completed.",
+                session_path=str(session_path),
+                pid=99999999,
+                exit_code=0,
+                acknowledged=True,
+            )
+            session_path.write_text(json.dumps(asdict(completed_file), indent=2), encoding="utf-8")
+            mission.delegated_runtime_sessions = [stale_embedded]
+            store.save_missions([mission])
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            kinds = {item["kind"] for item in report["issues"]}
+            self.assertNotIn("delegated_runtime_process_gone", kinds)
+            self.assertNotIn("delegated_runtime_completed_unreconciled", kinds)
+
+    def test_mission_watchdog_ignores_dead_historical_delegate_when_newer_lane_is_live(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep only the latest active delegated lane actionable",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1200
+            old = datetime.now(timezone.utc) - timedelta(minutes=5)
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_old_dead",
+                    runtime_id="hermes",
+                    launch_command="hermes chat",
+                    status="running",
+                    pid=99999999,
+                    updated_at=old.isoformat(),
+                    heartbeat_status="stale",
+                    heartbeat_age_seconds=300,
+                ),
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_current_live",
+                    runtime_id="hermes",
+                    launch_command="hermes chat",
+                    status="running",
+                    pid=os.getpid(),
+                    updated_at=datetime.now(timezone.utc).isoformat(),
+                    heartbeat_status="healthy",
+                    heartbeat_age_seconds=2,
+                ),
+            ]
+            store.save_missions([mission])
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            self.assertNotIn(
+                "delegated_runtime_process_gone",
+                {item["kind"] for item in report["issues"]},
+            )
+
+    def test_mission_watchdog_flags_unreconciled_completed_delegate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Move completed delegated output into verification",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.remaining_runtime_seconds = 1200
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_done",
+                    runtime_id="hermes",
+                    launch_command="hermes chat",
+                    status="completed",
+                    exit_code=0,
+                    acknowledged=False,
+                    updated_at=datetime.now(timezone.utc).isoformat(),
+                )
+            ]
+            store.save_missions([mission])
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+            )
+
+            issue = next(
+                item
+                for item in report["issues"]
+                if item["kind"] == "delegated_runtime_completed_unreconciled"
+            )
+            self.assertEqual(issue["severity"], "bad")
+            self.assertIn("delegate_done", issue["evidence"][0])
+            self.assertIn("--action resume", issue["firstStep"])
 
     def test_mission_watchdog_flags_runtime_cycle_state_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -344,10 +817,14 @@ class MissionControlTests(unittest.TestCase):
             )
             active.state.status = "running"
             active.state.remaining_runtime_seconds = 36000
-            active.created_at = (
-                datetime.now(timezone.utc) - timedelta(minutes=130)
-            ).isoformat()
+            stale_at = (datetime.now(timezone.utc) - timedelta(minutes=130)).isoformat()
+            active.created_at = stale_at
             store.update_mission(active)
+            missions = store.load_missions()
+            for item in missions:
+                if item.mission_id == active.mission_id:
+                    item.updated_at = stale_at
+            store.save_missions(missions)
             queued = store.create_mission(
                 workspace_id=workspace.workspace_id,
                 runtime_id="hermes",
@@ -378,6 +855,51 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(report["summary"]["queuePressure"], 1)
             self.assertEqual(report["summary"]["queuePressureUnknown"], 1)
 
+    def test_mission_watchdog_does_not_report_queue_pressure_after_recent_blocker_movement(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            active = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Resume a long-running Hermes proof",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+            active.state.status = "running"
+            active.state.remaining_runtime_seconds = 36000
+            active.created_at = (
+                datetime.now(timezone.utc) - timedelta(minutes=130)
+            ).isoformat()
+            store.update_mission(active)
+            store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Queued follow-up behind fresh active work",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=43200,
+            )
+
+            report = build_mission_watchdog_report(
+                root=root,
+                missions=store.load_missions(),
+                workspaces=store.load_workspaces(),
+                stale_minutes=60,
+                now=datetime.now(timezone.utc),
+            )
+
+            self.assertNotIn(
+                "workspace_queue_pressure",
+                {item["kind"] for item in report["issues"]},
+            )
+            self.assertEqual(report["summary"]["queuePressure"], 0)
+
     def test_mission_watchdog_allows_parallel_worktree_when_file_scopes_are_disjoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -395,11 +917,15 @@ class MissionControlTests(unittest.TestCase):
             )
             active.state.status = "running"
             active.state.remaining_runtime_seconds = 36000
-            active.created_at = (
-                datetime.now(timezone.utc) - timedelta(minutes=130)
-            ).isoformat()
+            stale_at = (datetime.now(timezone.utc) - timedelta(minutes=130)).isoformat()
+            active.created_at = stale_at
             active.proof.changed_files = ["web/src/notifications/NotificationStack.jsx"]
             store.update_mission(active)
+            missions = store.load_missions()
+            for item in missions:
+                if item.mission_id == active.mission_id:
+                    item.updated_at = stale_at
+            store.save_missions(missions)
             queued = store.create_mission(
                 workspace_id=workspace.workspace_id,
                 runtime_id="hermes",
@@ -451,10 +977,14 @@ class MissionControlTests(unittest.TestCase):
             )
             active.state.status = "running"
             active.state.remaining_runtime_seconds = 36000
-            active.created_at = (
-                datetime.now(timezone.utc) - timedelta(minutes=130)
-            ).isoformat()
+            stale_at = (datetime.now(timezone.utc) - timedelta(minutes=130)).isoformat()
+            active.created_at = stale_at
             store.update_mission(active)
+            missions = store.load_missions()
+            for item in missions:
+                if item.mission_id == active.mission_id:
+                    item.updated_at = stale_at
+            store.save_missions(missions)
             queued = store.create_mission(
                 workspace_id=workspace.workspace_id,
                 runtime_id="hermes",
@@ -581,6 +1111,66 @@ class MissionControlTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(public_launch["publicationProof"]["nextAction"], "Attach publication proof.")
+
+    def test_summary_digest_preserves_public_launch_repair_packet_operator_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            evidence_dir = root / ".agent_control" / "public_launch_readiness"
+            evidence_dir.mkdir(parents=True)
+            (evidence_dir / "latest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.public_launch_readiness.v1",
+                        "ok": True,
+                        "status": "ready_for_public_launch",
+                        "internalPacketReady": True,
+                        "missing": [],
+                        "blockers": [],
+                        "repairPacket": {
+                            "schema": "fluxio.public_launch_repair_packet.v1",
+                            "status": "ready_for_public_launch",
+                            "canClaimPublicLaunch": True,
+                            "sourceCoverage": "full_git_status",
+                            "releaseBlockingPathCount": 0,
+                            "nextAction": "Keep public launch receipts current.",
+                            "orderedLanes": [
+                                {
+                                    "lane": "verifier",
+                                    "count": 2,
+                                    "nextAction": "Rerun public launch verifiers.",
+                                }
+                            ],
+                            "commands": [
+                                {
+                                    "label": "Final public launch readiness check",
+                                    "command": "npm run verify:public-launch",
+                                }
+                            ],
+                            "receiptTargets": [
+                                {
+                                    "label": "Public launch receipt",
+                                    "path": ".agent_control/public_launch_readiness/latest.json",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = ControlRoomStore(root)
+
+            summary = store.build_summary_snapshot()
+            repair_packet = summary["systemAuditDigest"]["publicLaunchReadiness"]["repairPacket"]
+
+            self.assertEqual(repair_packet["orderedLanes"][0]["lane"], "verifier")
+            self.assertEqual(
+                repair_packet["commands"][0]["command"],
+                "npm run verify:public-launch",
+            )
+            self.assertEqual(
+                repair_packet["receiptTargets"][0]["path"],
+                ".agent_control/public_launch_readiness/latest.json",
+            )
 
     def test_public_launch_digest_prefers_fresher_readiness_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -722,11 +1312,15 @@ class MissionControlTests(unittest.TestCase):
             )
             active.state.status = "running"
             active.state.remaining_runtime_seconds = 36000
-            active.created_at = (
-                datetime.now(timezone.utc) - timedelta(minutes=130)
-            ).isoformat()
+            stale_at = (datetime.now(timezone.utc) - timedelta(minutes=130)).isoformat()
+            active.created_at = stale_at
             active.proof.changed_files = ["web/src/fluxio/FluxioShell.jsx"]
             store.update_mission(active)
+            missions = store.load_missions()
+            for item in missions:
+                if item.mission_id == active.mission_id:
+                    item.updated_at = stale_at
+            store.save_missions(missions)
             queued = store.create_mission(
                 workspace_id=workspace.workspace_id,
                 runtime_id="hermes",
@@ -737,6 +1331,10 @@ class MissionControlTests(unittest.TestCase):
                 max_runtime_seconds=43200,
             )
             queued.proof.changed_files = ["web/src/fluxio/FluxioShell.jsx"]
+            queued.state.stop_reason = "artifact_gate_failed"
+            queued.proof.blocked_by = [
+                "Hard artifact gate failed: no concrete runtime-output body or served artifact was recorded."
+            ]
             store.update_mission(queued)
 
             report = build_mission_watchdog_report(
@@ -755,6 +1353,8 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(issue["scopeSafety"], "overlap")
             self.assertEqual(issue["scopeEvidence"]["overlapFiles"], ["web/src/fluxio/fluxioshell.jsx"])
             self.assertIn("Do not parallelize automatically", issue["firstStep"])
+            self.assertIn("plan_mission_artifact_repairs.py", issue["firstStep"])
+            self.assertIn("--action resume --launch-async", issue["firstStep"])
             self.assertNotIn("--action parallelize-worktree", issue["firstStep"])
             self.assertEqual(report["summary"]["queuePressureOverlap"], 1)
 
@@ -1351,6 +1951,7 @@ Run available tests/build/smoke checks and record proof artifacts.
             snapshot = store.build_snapshot()
 
             self.assertEqual(len(snapshot["workspaces"]), 1)
+            self.assertEqual(snapshot["workspaces"][0]["default_runtime"], "hermes")
             self.assertEqual(snapshot["workspaces"][0]["workspace_type"], "tauri-python")
             self.assertEqual(snapshot["workspaces"][0]["preferred_harness"], "fluxio_hybrid")
             self.assertEqual(snapshot["workspaces"][0]["routing_strategy"], "profile_default")
@@ -1429,6 +2030,7 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertFalse(snapshot["efficiencyAutotune"]["eligible"])
             workflow = snapshot["workflowStudio"]["recipes"][0]
             self.assertIn("reviewStatus", workflow)
+            self.assertEqual(workflow["runtimeChoice"], "hermes")
             self.assertIn("serviceIds", workflow)
             self.assertIn("verificationDefaults", workflow)
 
@@ -1632,7 +2234,7 @@ Run available tests/build/smoke checks and record proof artifacts.
 
     def test_web_backend_summary_cache_version_tracks_live_progress_semantics(self) -> None:
         self.assertIn(
-            "2026-05-31.live_progress.v1",
+            "2026-06-01.proof_safe_progress.v2",
             (
                 pathlib.Path(__file__).resolve().parents[1]
                 / "src"
@@ -1640,6 +2242,284 @@ Run available tests/build/smoke checks and record proof artifacts.
                 / "web_backend.py"
             ).read_text(encoding="utf-8"),
         )
+
+    def test_summary_failed_mission_progress_uses_proof_repair_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Do not display failed mission runtime budget as completion.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=100,
+            )
+            mission.state.status = "verification_failed"
+            mission.state.elapsed_runtime_seconds = 99
+            mission.state.remaining_runtime_seconds = 1
+            mission.state.verification_failures = ["hard_artifact_gate"]
+            mission.proof.failed_checks = ["Hard artifact gate failed"]
+            mission.action_history = [
+                {
+                    "action_id": "action_patch",
+                    "proposal": {"kind": "file_patch", "title": "Patch target file"},
+                    "result": {"result_summary": "File mutation completed."},
+                }
+            ]
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(progress["schema"], "fluxio.mission_live_progress.v1")
+            self.assertEqual(progress["source"], "mission_proof_repair_readiness")
+            self.assertEqual(progress["label"], "Proof repair readiness")
+            self.assertEqual(progress["progressKind"], "proof_repair")
+            self.assertFalse(progress["displayAsCompletion"])
+            self.assertLess(progress["value"], 99)
+            self.assertLessEqual(progress["value"], 64)
+
+    def test_summary_queued_mission_progress_does_not_use_stale_runtime_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Do not display queued work as nearly complete.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=100,
+            )
+            mission.state.status = "queued"
+            mission.state.queue_position = 4
+            mission.state.elapsed_runtime_seconds = 99
+            mission.state.remaining_runtime_seconds = 1
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(progress["schema"], "fluxio.mission_live_progress.v1")
+            self.assertEqual(progress["source"], "mission_activity_signals")
+            self.assertEqual(progress["label"], "Queued live state")
+            self.assertEqual(progress["value"], 4)
+            self.assertEqual(progress["progressKind"], "runtime_progress")
+            self.assertTrue(progress["displayAsCompletion"])
+
+    def test_summary_over_budget_running_mission_is_not_completion_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Do not display exhausted runtime budget as normal completion progress.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=100,
+            )
+            mission.state.status = "running"
+            mission.state.planner_loop_status = "running"
+            mission.state.elapsed_runtime_seconds = 125
+            mission.state.remaining_runtime_seconds = 0
+            mission.state.time_budget_status = "running"
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(summary["counts"]["activeMissions"], 0)
+            self.assertEqual(summary["counts"]["blockedMissions"], 1)
+            self.assertEqual(summary["liveControlState"]["activeMissionCount"], 0)
+            self.assertEqual(summary["liveControlState"]["blockedMissionCount"], 1)
+            self.assertEqual(progress["schema"], "fluxio.mission_live_progress.v1")
+            self.assertEqual(progress["source"], "mission_runtime_budget_exhausted")
+            self.assertEqual(progress["label"], "Runtime budget exhausted")
+            self.assertEqual(progress["progressKind"], "runtime_budget_exhausted")
+            self.assertFalse(progress["displayAsCompletion"])
+            self.assertEqual(progress["value"], 99)
+            self.assertIn("Extend the runtime budget", progress["nextAction"])
+
+    def test_summary_over_budget_running_mission_does_not_block_next_active_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            exhausted = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="This stale run should not keep the active slot.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=100,
+            )
+            exhausted.state.status = "running"
+            exhausted.state.planner_loop_status = "running"
+            exhausted.state.elapsed_runtime_seconds = 360
+            exhausted.state.remaining_runtime_seconds = 0
+            exhausted.state.time_budget_status = "running"
+            store.update_mission(exhausted)
+
+            fresh = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="This mission should get the active workspace slot.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=600,
+            )
+
+            summary = store.build_summary_snapshot()
+            workspace_row = next(
+                item for item in summary["workspaces"] if item["workspace_id"] == workspace.workspace_id
+            )
+            exhausted_row = next(
+                item for item in summary["missions"] if item["mission_id"] == exhausted.mission_id
+            )
+            fresh_row = next(
+                item for item in summary["missions"] if item["mission_id"] == fresh.mission_id
+            )
+
+            self.assertEqual(workspace_row["activeMissionId"], fresh.mission_id)
+            self.assertEqual(summary["counts"]["activeMissions"], 0)
+            self.assertEqual(summary["counts"]["blockedMissions"], 1)
+            self.assertEqual(exhausted_row["liveProgress"]["progressKind"], "runtime_budget_exhausted")
+            self.assertNotEqual(fresh_row["liveProgress"]["progressKind"], "runtime_budget_exhausted")
+
+    def test_summary_running_mission_with_extended_remaining_budget_is_not_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show renewed active budget as live progress, not a stale exhaustion warning.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=100,
+            )
+            mission.state.status = "running"
+            mission.state.planner_loop_status = "running"
+            mission.state.elapsed_runtime_seconds = 125
+            mission.state.remaining_runtime_seconds = 25
+            mission.state.time_budget_status = "delegated_active"
+            mission.delegated_runtime_sessions.append(
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_extended_budget",
+                    runtime_id="hermes",
+                    launch_command="python -m grant_agent.runtime_worker",
+                    status="running",
+                )
+            )
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(progress["schema"], "fluxio.mission_live_progress.v1")
+            self.assertEqual(progress["source"], "mission_activity_signals")
+            self.assertEqual(progress["label"], "Live activity progress")
+            self.assertEqual(progress["progressKind"], "runtime_progress")
+            self.assertTrue(progress["displayAsCompletion"])
+            self.assertEqual(progress["maxRuntimeSeconds"], 150)
+            self.assertEqual(progress["remainingSeconds"], 25)
+            self.assertLess(progress["value"], 99)
+            self.assertNotIn("Extend the runtime budget", progress["nextAction"])
+
+    def test_summary_fresh_running_delegated_mission_uses_activity_progress_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show a newly launched runtime lane as started, not dead.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.state.planner_loop_status = "running"
+            mission.state.elapsed_runtime_seconds = 0
+            mission.state.remaining_runtime_seconds = 3600
+            mission.state.time_budget_status = "delegated_active"
+            mission.delegated_runtime_sessions.append(
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_fresh",
+                    runtime_id="hermes",
+                    launch_command="hermes chat -q demo",
+                    status="running",
+                )
+            )
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(progress["schema"], "fluxio.mission_live_progress.v1")
+            self.assertEqual(progress["source"], "mission_activity_signals")
+            self.assertEqual(progress["label"], "Live activity progress")
+            self.assertEqual(progress["progressKind"], "runtime_progress")
+            self.assertTrue(progress["displayAsCompletion"])
+            self.assertGreater(progress["value"], 0)
+
+    def test_summary_reconcile_pending_over_budget_mission_is_not_completion_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Do not show reconcile-pending over-budget rows as completion.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=100,
+            )
+            mission.state.status = "running"
+            mission.state.planner_loop_status = "running"
+            mission.state.elapsed_runtime_seconds = 125
+            mission.state.remaining_runtime_seconds = 25
+            mission.state.time_budget_status = "reconcile_pending"
+            store.update_mission(mission)
+
+            summary = store.build_summary_snapshot()
+            row = next(item for item in summary["missions"] if item["mission_id"] == mission.mission_id)
+            progress = row["liveProgress"]
+
+            self.assertEqual(progress["source"], "mission_runtime_budget_exhausted")
+            self.assertEqual(progress["label"], "Runtime budget exhausted")
+            self.assertEqual(progress["progressKind"], "runtime_budget_exhausted")
+            self.assertFalse(progress["displayAsCompletion"])
+            self.assertEqual(progress["remainingSeconds"], 25)
+            self.assertIn("Extend the runtime budget", progress["nextAction"])
 
     def test_summary_snapshot_is_lightweight_and_notification_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1842,8 +2722,8 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertGreaterEqual(len(slice_notifications), 1)
             self.assertEqual(slice_notifications[0]["severity"], "success")
             self.assertIn("Slice completed", slice_notifications[0]["title"])
-            self.assertIn("system loss 0.18", slice_notifications[0]["detail"])
-            self.assertIn("system loss 0.18", slice_notifications[0]["agentMessage"])
+            self.assertIn("system gap 0.18", slice_notifications[0]["detail"])
+            self.assertIn("system gap 0.18", slice_notifications[0]["agentMessage"])
             self.assertEqual(
                 summary["missionWatchdog"]["supervisor"]["schema"],
                 "fluxio.mission_watchdog_supervisor.v1",
@@ -1889,6 +2769,10 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertTrue(summary["overnightDigest"]["delivery"]["appLike"])
             self.assertTrue(summary["overnightDigest"]["delivery"]["receiptBacked"])
             self.assertIn("browser_notification", summary["overnightDigest"]["delivery"]["channels"])
+            self.assertIn("webPushReady", summary["overnightDigest"]["delivery"])
+            self.assertIn("webPushSenderConfigured", summary["overnightDigest"]["delivery"])
+            self.assertIn("webPushSubscriptionCount", summary["overnightDigest"]["delivery"])
+            self.assertIn("webPushNextAction", summary["overnightDigest"]["delivery"])
             self.assertEqual(summary["overnightDigest"]["counts"]["active"], 1)
             self.assertEqual(
                 summary["projectProgressHistory"]["schema"],
@@ -1990,6 +2874,7 @@ Run available tests/build/smoke checks and record proof artifacts.
                 summary["missionLaunchShortcuts"][0]["recommendedRuntime"],
                 {"hermes", "openclaw"},
             )
+            self.assertEqual(summary["missionLaunchShortcuts"][0]["runtime"], "hermes")
             self.assertIn("launch=mission", summary["missionLaunchShortcuts"][0]["urlPath"])
             self.assertIn("mission-quickstart", summary["missionLaunchShortcuts"][0]["cliCommand"])
             self.assertTrue(summary["mobileWeb"]["summaryFirst"])
@@ -2065,6 +2950,235 @@ Run available tests/build/smoke checks and record proof artifacts.
                 detail["proofDigest"]["latest"]["skillFeedback"][0]["skillId"],
                 "design-taste-frontend",
             )
+
+    def test_bootstrap_summary_keeps_slice_notifications_outside_visible_mission_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            old_slice = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep slice feedback visible in bootstrap notifications.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            old_slice.title = "Older slice mission"
+            old_slice.state.status = "completed"
+            old_slice.created_at = "2026-05-01T00:00:00+00:00"
+            old_slice.updated_at = "2026-05-01T00:00:00+00:00"
+            old_slice.learned_skill_events = [
+                {
+                    "kind": "skill.slice_feedback",
+                    "skillId": "agent-thread-reader",
+                    "systemLoss": 0.12,
+                    "nextAction": "Keep report-first Agent visible.",
+                    "timestamp": "2026-06-02T01:00:00+00:00",
+                }
+            ]
+            store.update_mission(old_slice)
+            for index in range(mission_control_module.CONTROL_ROOM_BOOTSTRAP_MISSION_LIMIT + 3):
+                mission = store.create_mission(
+                    workspace_id=workspace.workspace_id,
+                    runtime_id="hermes",
+                    objective=f"Recent running mission {index}",
+                    success_checks=[],
+                    mode="Autopilot",
+                    verification_commands=[],
+                    max_runtime_seconds=3600,
+                )
+                mission.state.status = "running"
+                mission.created_at = f"2026-06-01T00:{index:02d}:00+00:00"
+                mission.updated_at = f"2026-06-01T00:{index:02d}:00+00:00"
+                store.update_mission(mission)
+
+            summary = store.build_bootstrap_summary_snapshot()
+
+            visible_ids = {item["mission_id"] for item in summary["missions"]}
+            self.assertNotIn(old_slice.mission_id, visible_ids)
+            self.assertTrue(
+                any(
+                    item["kind"] == "mission_slice_completed"
+                    and item["missionId"] == old_slice.mission_id
+                    and "agent-thread-reader" in item["detail"]
+                    for item in summary["notifications"]
+                )
+            )
+
+    def test_running_notification_hydrates_missing_workflow_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep running Hermes output visible in notifications.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "running"
+            mission.delegated_runtime_sessions = []
+            mission.state.last_runtime_event = "running"
+            mission.action_history = []
+            store.update_mission(mission)
+            runtime_sessions_root = root / ".agent_control" / "runtime_sessions"
+            runtime_sessions_root.mkdir(parents=True, exist_ok=True)
+            (runtime_sessions_root / "delegate_live.json").write_text(
+                json.dumps(
+                    {
+                        "missionId": mission.mission_id,
+                        "delegated_id": "delegate_live",
+                        "runtime_id": "hermes",
+                        "launch_command": "hermes resume mission",
+                        "status": "running",
+                        "latest_events": [
+                            {
+                                "kind": "runtime.output",
+                                "message": "Hermes produced live slice output for the active mission.",
+                                "created_at": "2026-06-02T04:20:00+00:00",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = store.build_bootstrap_summary_snapshot()
+
+            mission_notifications = [
+                item
+                for item in summary["notifications"]
+                if item.get("kind") == "mission_status"
+                and item.get("missionId") == mission.mission_id
+            ]
+            self.assertTrue(mission_notifications)
+            self.assertIn("Hermes produced live slice output", mission_notifications[0]["agentMessage"])
+            self.assertEqual(
+                mission_notifications[0]["agentMessageSource"],
+                "runtime_output:hermes:delegate_live",
+            )
+
+    def test_completed_runtime_status_emits_slice_notification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Notify when a runtime-backed slice completes.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.title = "Runtime backed slice"
+            mission.state.status = "completed"
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_done",
+                    runtime_id="hermes",
+                    launch_command="hermes run",
+                    status="completed",
+                    latest_events=[
+                        {
+                            "kind": "runtime.output",
+                            "message": "Hermes completed the report body.",
+                        }
+                    ],
+                )
+            ]
+            store.update_mission(mission)
+
+            summary = store.build_bootstrap_summary_snapshot()
+
+            slice_notifications = [
+                item
+                for item in summary["notifications"]
+                if item.get("kind") == "mission_slice_completed"
+                and item.get("missionId") == mission.mission_id
+            ]
+            self.assertTrue(slice_notifications)
+            self.assertIn("Slice completed: Runtime backed slice", slice_notifications[0]["title"])
+            self.assertIn("Hermes completed the report body", slice_notifications[0]["agentMessage"])
+            self.assertEqual(
+                slice_notifications[0]["agentMessageSource"],
+                "runtime_output:hermes:delegate_done",
+            )
+
+    def test_overnight_digest_separates_repair_from_safely_held_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            blocker = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Active mission owns the shared file scope.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            blocker.state.status = "running"
+            blocker.state.queue_position = 0
+            store.update_mission(blocker)
+
+            held = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Queued mission should wait instead of overlapping the active writes.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            held.state.status = "queued"
+            held.state.queue_position = 1
+            held.state.blocking_mission_id = blocker.mission_id
+            held.proof.failed_checks = ["Artifact gate waits for the active scope."]
+            store.update_mission(held)
+
+            failed = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Failed mission needs a real repair action.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=1800,
+            )
+            failed.state.status = "verification_failed"
+            failed.proof.failed_checks = ["Verifier failed."]
+            failed.proof.summary = "Verifier failed."
+            store.update_mission(failed)
+
+            summary = store.build_summary_snapshot()
+            digest = summary["overnightDigest"]
+
+            self.assertEqual(digest["headline"], "1 mission(s) need repair · 1 held safely")
+            self.assertIn("1 repair · 1 held", digest["phoneSummary"])
+            self.assertEqual(digest["counts"]["actionRequired"], 1)
+            self.assertEqual(digest["counts"]["heldQueued"], 1)
+            self.assertEqual(digest["counts"]["blocked"], 1)
+            self.assertEqual(digest["counts"]["attention"], 2)
+            self.assertIn("split their file scope", digest["nextAction"])
+            focus_by_id = {item["missionId"]: item for item in digest["focusItems"]}
+            self.assertEqual(focus_by_id[failed.mission_id]["attentionKind"], "repair")
+            self.assertEqual(focus_by_id[held.mission_id]["attentionKind"], "held_queue")
+            self.assertEqual(focus_by_id[held.mission_id]["blockingMissionId"], blocker.mission_id)
+            self.assertIn("Held behind active mission", focus_by_id[held.mission_id]["summary"])
+            self.assertIn("Keep queued", focus_by_id[held.mission_id]["nextAction"])
 
     def test_summary_defers_terminal_context_roots_to_mission_detail(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2745,7 +3859,7 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertFalse(mission_payload["providerTruth"]["authPresent"])
             self.assertEqual(
                 mission_payload["providerTruth"]["authPath"],
-                "MiniMax OpenClaw OAuth",
+                "MiniMax broker OAuth",
             )
             mission.state.provider_runtime_truth = mission_payload["providerTruth"]
             executor_lane = next(
@@ -2757,6 +3871,47 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertEqual(executor_lane["health"], "blocked")
             self.assertIn("MiniMax", executor_lane["blocker"])
             self.assertNotIn("OpenAI Codex coding path", executor_lane["blocker"])
+
+    def test_hermes_auth_store_wsl_probe_ignores_login_banner_noise(self) -> None:
+        noisy_stdout = (
+            "\x1b[1;31mMessage from Kali developers\x1b[00m\n"
+            "This is a minimal installation of Kali Linux.\n"
+            "kali-linux\t/home/kali"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "HOME": str(root),
+                    "HERMES_AUTH_STORE": "",
+                    "HERMES_HOME": "",
+                    "FLUXIO_RUNTIME_HOME": "",
+                    "SYNTELOS_RUNTIME_HOME": "",
+                    "FLUXIO_DISABLE_WSL_AUTH_DISCOVERY": "",
+                },
+                clear=False,
+            ), mock.patch("grant_agent.mission_control.os.name", "nt"), mock.patch(
+                "grant_agent.mission_control.subprocess.run",
+                return_value=mock.Mock(stdout=noisy_stdout),
+            ):
+                candidates = mission_control_module.hermes_auth_store_candidates(root)
+
+            candidate_text = "\n".join(str(candidate) for candidate in candidates)
+            self.assertIn("kali-linux", candidate_text)
+            self.assertIn("home", candidate_text)
+            self.assertNotIn("Message from Kali developers", candidate_text)
+
+            with mock.patch.dict(
+                os.environ,
+                {"HOME": str(root), "FLUXIO_DISABLE_WSL_AUTH_DISCOVERY": ""},
+                clear=False,
+            ), mock.patch("grant_agent.mission_control.os.name", "nt"), mock.patch(
+                "grant_agent.mission_control.subprocess.run",
+                return_value=mock.Mock(stdout=None),
+            ):
+                candidates = mission_control_module.hermes_auth_store_candidates(root)
+            self.assertTrue(candidates)
 
     def test_minimax_portal_auth_marks_provider_truth_ready_with_openclaw_oauth(self) -> None:
         with mock.patch.dict(
@@ -2814,7 +3969,7 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertTrue(mission_payload["providerTruth"]["authPresent"])
             self.assertEqual(
                 mission_payload["providerTruth"]["authPath"],
-                "MiniMax OpenClaw OAuth",
+                "MiniMax broker OAuth",
             )
             mission.state.provider_runtime_truth = mission_payload["providerTruth"]
             executor_lane = next(
@@ -2823,7 +3978,7 @@ Run available tests/build/smoke checks and record proof artifacts.
                 if item["role"] == "executor"
             )
             self.assertTrue(executor_lane["authPresent"])
-            self.assertEqual(executor_lane["authPath"], "MiniMax OpenClaw OAuth")
+            self.assertEqual(executor_lane["authPath"], "MiniMax broker OAuth")
             self.assertEqual(executor_lane["health"], "ready")
             self.assertEqual(executor_lane["blocker"], "")
 
@@ -2883,7 +4038,7 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertTrue(mission_payload["providerTruth"]["authPresent"])
             self.assertEqual(
                 mission_payload["providerTruth"]["authPath"],
-                "MiniMax OpenClaw OAuth",
+                "MiniMax broker OAuth",
             )
             mission.state.provider_runtime_truth = mission_payload["providerTruth"]
             executor_lane = next(
@@ -2893,6 +4048,7 @@ Run available tests/build/smoke checks and record proof artifacts.
             )
             self.assertTrue(executor_lane["authPresent"])
             self.assertEqual(executor_lane["health"], "ready")
+            self.assertEqual(executor_lane["model"], "MiniMax-M3")
 
     def test_runtime_provider_env_file_marks_minimax_ready_for_cli_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2964,6 +4120,7 @@ Run available tests/build/smoke checks and record proof artifacts.
                 }
                 self.assertTrue(providers_by_id["minimax"]["authPresent"])
                 self.assertEqual(providers_by_id["minimax"]["health"], "ready")
+                self.assertEqual(providers_by_id["minimax"]["models"], ["MiniMax-M3"])
                 self.assertEqual(providers_by_id["minimax"]["readyRoles"], 1)
                 self.assertEqual(
                     providers_by_id["minimax"]["quota"]["status"],
@@ -3541,6 +4698,9 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertIn("setup_repair", workflow_map)
             self.assertIn("agent_long_run", workflow_map)
             self.assertIn("nas_bridge_run", workflow_map)
+            self.assertEqual(workspace["default_runtime"], "hermes")
+            self.assertEqual(workflow_map["agent_long_run"]["runtimeChoice"], "hermes")
+            self.assertEqual(workflow_map["nas_bridge_run"]["runtimeChoice"], "hermes")
             self.assertEqual(workflow_map["nas_bridge_run"]["reviewStatus"], "reviewed")
             self.assertEqual(workflow_map["setup_repair"]["status"], "blocked")
             self.assertEqual(workflow_map["setup_repair"]["reviewStatus"], "reviewed")
@@ -3635,6 +4795,34 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertEqual(snapshot["sessionHealth"]["delegatedHealthyCount"], 1)
             self.assertEqual(snapshot["sessionHealth"]["delegatedStaleCount"], 0)
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
+
+    def test_harness_lab_session_health_does_not_count_orphaned_runtime_pid_as_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            runtime_root = root / ".agent_control" / "runtime_sessions"
+            runtime_root.mkdir(parents=True)
+            (runtime_root / "delegate_orphaned.json").write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_orphaned",
+                        "runtime_id": "hermes",
+                        "status": "running",
+                        "heartbeat_status": "healthy",
+                        "heartbeat_at": "2026-01-01T00:00:00+00:00",
+                        "heartbeat_interval_seconds": 10,
+                        "pid": 99999999,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch("grant_agent.mission_control._runtime_pid_alive", return_value=False):
+                snapshot = build_harness_lab_snapshot(root)
+
+            self.assertEqual(snapshot["sessionHealth"]["activeCount"], 0)
+            self.assertEqual(snapshot["sessionHealth"]["staleHeartbeatCount"], 0)
+            self.assertEqual(snapshot["sessionHealth"]["delegatedStaleCount"], 0)
+            self.assertEqual(snapshot["sessionHealth"]["orphanedActiveCount"], 1)
 
     def test_summary_harness_lab_uses_mission_session_index_without_full_runtime_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3773,6 +4961,74 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertGreaterEqual(readiness["score"], 90)
             self.assertIn("proofReadiness", readiness)
             self.assertFalse(readiness["proofReadiness"]["ready"])
+
+    def test_release_quality_counts_live_continuity_without_erasing_terminal_completion(self) -> None:
+        quality = mission_control_module._release_quality_score(
+            completion_rate=45,
+            completed_or_continuing_rate=75,
+            delegated_run_rate=40,
+            resume_run_rate=95,
+            resume_completion_rate=47,
+            resume_completed_or_continuing_rate=79,
+            verification_pause_rate=0,
+        )
+
+        self.assertEqual(quality, 84)
+
+    def test_summary_harness_lab_reports_completed_or_continuing_live_missions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            completed = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Completed Hermes proof",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            completed.state.status = "completed"
+            completed.current_plan_revision_id = "plan_completed"
+            completed.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_completed",
+                    runtime_id="hermes",
+                    launch_command="hermes",
+                    status="completed",
+                )
+            ]
+            store.update_mission(completed)
+            running = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Ongoing Hermes proof",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            running.state.status = "running"
+            running.state.planner_loop_status = "running"
+            running.current_plan_revision_id = "plan_running"
+            running.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_running",
+                    runtime_id="hermes",
+                    launch_command="hermes",
+                    status="running",
+                )
+            ]
+            store.update_mission(running)
+
+            summary = build_summary_harness_lab_snapshot(root, missions=store.load_missions())
+            efficiency = summary["efficiency"]
+
+            self.assertEqual(efficiency["completionRate"], 50)
+            self.assertEqual(efficiency["completedOrContinuingRate"], 100)
+            self.assertEqual(efficiency["resumeCompletionRate"], 50)
+            self.assertEqual(efficiency["resumeCompletedOrContinuingRate"], 100)
 
     def test_release_readiness_reports_release_proof_ci_signal(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4527,6 +5783,220 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertTrue(proofs["approval_wait_evidence"])
             self.assertTrue(proofs["delegated_active_evidence"])
 
+    @mock.patch("grant_agent.mission_control._runtime_pid_alive", side_effect=lambda pid: pid == 43210)
+    def test_release_readiness_uses_runtime_session_file_for_delegated_active_evidence(
+        self,
+        _pid_alive: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "src-tauri").mkdir(parents=True, exist_ok=True)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True, exist_ok=True)
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export default function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text(
+                'export default { root: "web" };\n',
+                encoding="utf-8",
+            )
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            runtime_dir = control_dir / "runtime_sessions"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "runtime_id": "hermes",
+                            "state": {"status": "completed", "continuity_state": "terminal"},
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "escalation_policy": {"pending_count": 1},
+                            "state": {"status": "running", "continuity_state": "fresh_only"},
+                        },
+                    ],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (runtime_dir / "delegate_live.json").write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_live",
+                        "runtime_id": "hermes",
+                        "status": "running",
+                        "pid": 43210,
+                        "heartbeat_status": "healthy",
+                        "heartbeat_interval_seconds": 10,
+                        "updated_at": utc_now_iso(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self._write_clear_watchdog_release_evidence(root)
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {"serviceManagementSummary": {"totalItems": 4, "healthyCount": 4}}
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+
+            proofs = {
+                item["proofId"]: item.get("passed", False)
+                for item in readiness["proofReadiness"]["proofs"]
+            }
+            self.assertTrue(proofs["delegated_active_evidence"])
+            self.assertEqual(readiness["proofReadiness"]["missingProofs"], [])
+
+    def test_release_readiness_uses_running_hermes_planner_loop_as_continuity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            (root / "src-tauri").mkdir(parents=True, exist_ok=True)
+            (root / "web" / "src" / "fluxio").mkdir(parents=True, exist_ok=True)
+            (root / "web" / "src" / "fluxio" / "FluxioApp.tsx").write_text(
+                "export default function FluxioApp() { return null; }\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "src" / "fluxio" / "fluxioBridge.ts").write_text(
+                "export const bridge = {};\n",
+                encoding="utf-8",
+            )
+            (root / "vite.config.mjs").write_text(
+                'export default { root: "web" };\n',
+                encoding="utf-8",
+            )
+            (root / "src-tauri" / "tauri.conf.json").write_text(
+                '{"build":{"frontendDist":"../web/dist"}}\n',
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "scripts": {
+                            "verify:desktop": (
+                                "python -m pytest tests -q && "
+                                "npm run frontend:build && "
+                                "npm run tauri build -- --debug"
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "runtime_id": "hermes",
+                            "state": {"status": "completed", "continuity_state": "terminal"},
+                        },
+                        {
+                            "runtime_id": "hermes",
+                            "escalation_policy": {"pending_count": 1},
+                            "state": {
+                                "status": "running",
+                                "continuity_state": "resume_available",
+                                "planner_loop_status": "running",
+                                "current_runtime_lane": "hermes delegated lane completed",
+                                "delegated_runtime_sessions": [
+                                    {
+                                        "runtime_id": "hermes",
+                                        "status": "completed",
+                                        "target_provider": "minimax",
+                                        "target_model": "MiniMax-M3",
+                                    }
+                                ],
+                            },
+                        },
+                    ],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            self._write_clear_watchdog_release_evidence(root)
+            onboarding = {
+                "checks": {
+                    "uv": {"installed": True, "details": "ok"},
+                    "openclaw": {"installed": True, "details": "ok"},
+                    "hermes": {"installed": True, "details": "ok"},
+                },
+                "nextActions": [],
+            }
+            setup_health = {"serviceManagementSummary": {"totalItems": 4, "healthyCount": 4}}
+            harness_lab = {
+                "efficiency": {
+                    "completionRate": 75,
+                    "delegatedRunRate": 40,
+                    "resumeRunRate": 25,
+                    "resumeCompletionRate": 70,
+                    "verificationPauseRate": 10,
+                },
+                "sessionHealth": {"staleHeartbeatCount": 0},
+            }
+
+            readiness = build_release_readiness_snapshot(
+                root,
+                onboarding=onboarding,
+                setup_health=setup_health,
+                harness_lab=harness_lab,
+            )
+
+            proofs = {
+                item["proofId"]: item.get("passed", False)
+                for item in readiness["proofReadiness"]["proofs"]
+            }
+            self.assertTrue(proofs["delegated_active_evidence"])
+            self.assertEqual(readiness["proofReadiness"]["missingProofs"], [])
+
     @mock.patch("grant_agent.runtime_supervisor._pid_alive", side_effect=lambda pid: pid == 43210)
     def test_snapshot_surfaces_delegated_runtime_activity_across_restart(
         self,
@@ -4590,6 +6060,234 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertEqual(
                 mission_payload["state"]["current_runtime_lane"],
                 "hermes delegated lane running",
+            )
+
+    def test_snapshot_does_not_report_completed_delegated_lane_as_active(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Reconcile delegated completion truth",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=7200,
+                run_until_behavior="continue_until_blocked",
+            )
+            runtime_dir = root / ".agent_control" / "runtime_sessions"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            session_path = runtime_dir / "delegate_completed.json"
+            session = DelegatedRuntimeSession(
+                delegated_id="delegate_completed",
+                runtime_id="hermes",
+                launch_command="hermes --mission delegated",
+                status="completed",
+                detail="Delegated runtime completed on NAS-backed storage.",
+                session_path=str(session_path),
+                events_path=str(runtime_dir / "delegate_completed.events.jsonl"),
+                decision_path=str(runtime_dir / "delegate_completed.approval.json"),
+                acknowledged=False,
+            )
+            session_path.write_text(json.dumps(asdict(session), indent=2), encoding="utf-8")
+            mission.delegated_runtime_sessions = [session]
+            mission.state.status = "running"
+            mission.state.stop_reason = "delegated_runtime_running"
+            mission.proof.summary = (
+                "Delegated runtime lane is active. Fluxio will continue when it finishes."
+            )
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+
+            self.assertEqual(mission_payload["missionLoop"]["continuityState"], "resume_available")
+            self.assertEqual(
+                mission_payload["missionLoop"]["pauseReason"],
+                "Delegated runtime lane completed and needs one reconciliation resume.",
+            )
+            self.assertEqual(
+                mission_payload["missionLoop"]["timeBudget"]["status"],
+                "reconcile_pending",
+            )
+            self.assertEqual(
+                mission_payload["missionLoop"]["currentRuntimeLane"],
+                "hermes delegated lane completed",
+            )
+            self.assertEqual(
+                mission_payload["proof"]["summary"],
+                "Delegated runtime lane completed. Resume once to reconcile proof and planning state.",
+            )
+            self.assertNotIn("active", mission_payload["proof"]["summary"].lower())
+
+    @mock.patch("grant_agent.runtime_supervisor._pid_alive", return_value=True)
+    def test_snapshot_sorts_delegated_sessions_before_selecting_current_lane(
+        self,
+        _pid_alive: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Prefer the newest recovery delegate over stale failed delegates",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=7200,
+            )
+            runtime_dir = root / ".agent_control" / "runtime_sessions"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            old_path = runtime_dir / "delegate_old_failed.json"
+            new_path = runtime_dir / "delegate_new_running.json"
+            old_failed = DelegatedRuntimeSession(
+                delegated_id="delegate_old_failed",
+                runtime_id="hermes",
+                launch_command="hermes chat old",
+                status="failed",
+                detail="Old failed delegate.",
+                created_at="2026-06-01T10:00:00+00:00",
+                updated_at="2026-06-01T18:33:00+00:00",
+                session_path=str(old_path),
+                exit_code=-1,
+            )
+            new_running = DelegatedRuntimeSession(
+                delegated_id="delegate_new_running",
+                runtime_id="hermes",
+                launch_command="hermes chat recovery",
+                status="running",
+                detail="Fresh recovery delegate.",
+                created_at="2026-06-01T18:42:00+00:00",
+                updated_at="2026-06-01T18:42:00+00:00",
+                session_path=str(new_path),
+                pid=24680,
+                heartbeat_status="healthy",
+                heartbeat_at="2026-06-01T18:42:00+00:00",
+            )
+            old_path.write_text(json.dumps(asdict(old_failed), indent=2), encoding="utf-8")
+            new_path.write_text(json.dumps(asdict(new_running), indent=2), encoding="utf-8")
+            mission.delegated_runtime_sessions = [new_running, old_failed]
+            mission.state.delegated_runtime_sessions = [asdict(new_running), asdict(old_failed)]
+            mission.state.status = "running"
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+
+            self.assertEqual(
+                [item["delegated_id"] for item in mission_payload["delegated_runtime_sessions"]],
+                ["delegate_old_failed", "delegate_new_running"],
+            )
+            self.assertEqual(
+                mission_payload["missionLoop"]["currentRuntimeLane"],
+                "hermes delegated lane running",
+            )
+            self.assertEqual(
+                mission_payload["missionLoop"]["continuityState"],
+                "delegated_active",
+            )
+
+    @mock.patch("grant_agent.runtime_supervisor._pid_alive", return_value=True)
+    def test_snapshot_discovers_unlisted_runtime_session_by_plan_step(
+        self,
+        _pid_alive: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Keep live runtime sessions attached to mission rows",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=7200,
+            )
+            mission.plan_revisions = [
+                {
+                    "revision_id": "rev_live",
+                    "trigger": "mission_start",
+                    "summary": "Plan",
+                    "active_step_id": "step_live",
+                    "steps": [
+                        {
+                            "step_id": "step_live",
+                            "title": "Implement vertical slice",
+                            "status": "in_progress",
+                        }
+                    ],
+                }
+            ]
+            mission.state.active_step_id = "step_live"
+            mission.state.status = "running"
+            store.update_mission(mission)
+
+            runtime_dir = root / ".agent_control" / "runtime_sessions"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            stopped_path = runtime_dir / "delegate_stopped.json"
+            stopped_session = DelegatedRuntimeSession(
+                delegated_id="delegate_stopped",
+                runtime_id="hermes",
+                launch_command="hermes chat",
+                status="stopped",
+                detail="Delegated runtime session was stopped by Fluxio.",
+                session_path=str(stopped_path),
+                source_step_id="step_live",
+                pid=13579,
+                supervisor_pid=13579,
+            )
+            stopped_path.write_text(
+                json.dumps(asdict(stopped_session), indent=2),
+                encoding="utf-8",
+            )
+            session_path = runtime_dir / "delegate_live.json"
+            session = DelegatedRuntimeSession(
+                delegated_id="delegate_live",
+                runtime_id="hermes",
+                launch_command="hermes chat",
+                status="running",
+                detail="Delegated runtime process is running.",
+                session_path=str(session_path),
+                source_step_id="step_live",
+                source_delegated_id="delegate_stopped",
+                pid=24680,
+                supervisor_pid=24680,
+            )
+            session_path.write_text(json.dumps(asdict(session), indent=2), encoding="utf-8")
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+
+            self.assertEqual(
+                mission_payload["missionLoop"]["currentRuntimeLane"],
+                "hermes delegated lane running",
+            )
+            self.assertEqual(mission_payload["missionLoop"]["continuityState"], "delegated_active")
+            self.assertEqual(
+                [item["delegated_id"] for item in mission_payload["delegated_runtime_sessions"]],
+                ["delegate_live"],
+            )
+            persisted = ControlRoomStore(root).get_mission(mission.mission_id)
+            self.assertEqual(
+                [item.delegated_id for item in persisted.delegated_runtime_sessions],
+                ["delegate_live"],
             )
 
     def test_snapshot_normalizes_execution_target_truth_for_network_sessions(self) -> None:
@@ -4837,8 +6535,8 @@ Run available tests/build/smoke checks and record proof artifacts.
             self.assertTrue(
                 any(
                     item["label"] == "Runtime transcript integrity"
-                    and item["traceOnly"] is False
-                    and item["chatPreferred"] is True
+                    and item["traceOnly"] is True
+                    and item["chatPreferred"] is False
                     for item in detail["agentMessages"]
                 )
             )
@@ -4847,6 +6545,61 @@ Run available tests/build/smoke checks and record proof artifacts.
                     item["label"] == "Control-room planner"
                     and item["traceOnly"] is True
                     and item["chatPreferred"] is False
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_mission_detail_surfaces_real_runtime_evidence_when_transcript_directory_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show real mission evidence even if .agent_runs was not copied",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            artifact_path = root / ".agent_control" / "mission_artifacts" / "builder-progress.md"
+            artifact_path.parent.mkdir(parents=True)
+            artifact_path.write_text("# Builder progress\nLive tablet progress view proof.", encoding="utf-8")
+            mission.state.status = "running"
+            mission.state.latest_session_id = "session_missing"
+            mission.proof.artifacts.append(str(artifact_path))
+            mission.action_history = [
+                {
+                    "action_id": "action_runtime_report",
+                    "proposal": {
+                        "kind": "file_write",
+                        "title": "Write Builder progress proof",
+                        "target_path": str(artifact_path),
+                    },
+                    "gate": {"status": "not_required"},
+                    "result": {
+                        "result_summary": "Built a tablet progress screen with live mission slice summaries.",
+                    },
+                    "executed_at": "2026-06-01T08:21:28Z",
+                }
+            ]
+            store.update_mission(mission)
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "missing_transcript")
+            self.assertTrue(detail["artifactGate"]["passed"])
+            self.assertTrue(
+                any(
+                    item["label"] == "Hermes runtime evidence"
+                    and item["traceOnly"] is False
+                    and item["chatPreferred"] is True
+                    and (
+                        "Built a tablet progress screen" in item["detail"]
+                        or "builder-progress.md" in item["detail"]
+                    )
                     for item in detail["agentMessages"]
                 )
             )
@@ -4932,6 +6685,131 @@ Run available tests/build/smoke checks and record proof artifacts.
                 )
             )
 
+    def test_mission_detail_rejects_read_only_transcript_as_live_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Do not show read-only planning rows as current output",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            session_dir = root / ".agent_runs" / "session_read_only"
+            session_dir.mkdir(parents=True)
+            (session_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "action.proposed",
+                        "message": "Read context for Draft implementation plan with milestones",
+                        "timestamp": "2026-06-01T08:05:00Z",
+                        "metadata": {
+                            "kind": "file_read",
+                            "target_path": str(root / "MISSION_NOTES.md"),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            mission.state.latest_session_id = "session_read_only"
+            store.update_mission(mission)
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "missing_runtime_output")
+            self.assertEqual(detail["runtimeTranscript"]["messageCount"], 0)
+            self.assertIn("session_read_only", detail["runtimeTranscript"]["nonConcreteSessionIds"])
+            self.assertFalse(
+                any(item["label"] == "Hermes session transcript" for item in detail["agentMessages"])
+            )
+            self.assertTrue(
+                any(
+                    item["label"] == "Runtime transcript integrity"
+                    and item["traceOnly"] is True
+                    and "no runtime output body" in item["detail"]
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_mission_detail_attaches_runtime_output_artifact_when_sessions_are_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show concrete runtime artifact proof",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            session_dir = root / ".agent_runs" / "session_read_only"
+            session_dir.mkdir(parents=True)
+            (session_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "action.proposed",
+                        "message": "Read context for Draft implementation plan with milestones",
+                        "timestamp": "2026-06-01T08:05:00Z",
+                        "metadata": {
+                            "kind": "file_read",
+                            "target_path": str(root / "MISSION_NOTES.md"),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            artifact_root = (
+                root
+                / ".agent_control"
+                / "mission_artifacts"
+                / mission.mission_id
+            )
+            proof_root = artifact_root / "proof"
+            proof_root.mkdir(parents=True)
+            (artifact_root / "index.html").write_text(
+                "<main>Mission proof artifact</main>",
+                encoding="utf-8",
+            )
+            (proof_root / "runtime_output.txt").write_text(
+                "Mission live runtime output\n\n"
+                "What changed:\n"
+                "- Hermes produced an operator-facing report body.\n"
+                "- Builder proof rows are backed by mission artifacts.\n",
+                encoding="utf-8",
+            )
+            mission.state.latest_session_id = "session_read_only"
+            store.update_mission(mission)
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "attached")
+            self.assertEqual(detail["runtimeTranscript"]["sessionId"], "runtime_artifact")
+            self.assertGreaterEqual(detail["runtimeTranscript"]["messageCount"], 2)
+            self.assertIn("session_read_only", detail["runtimeTranscript"]["nonConcreteSessionIds"])
+            self.assertTrue(detail["artifactGate"]["passed"])
+            self.assertGreaterEqual(detail["artifactGate"]["runtimeOutputCount"], 1)
+            self.assertTrue(
+                any(
+                    item["label"] == "Runtime output artifact"
+                    and item["processMessage"] is True
+                    and item["traceOnly"] is False
+                    and "Runtime output:" in item["detail"]
+                    and "Hermes produced an operator-facing report body" in item["detail"]
+                    for item in detail["agentMessages"]
+                )
+            )
+
     def test_mission_detail_keeps_latest_session_ahead_of_stale_event_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -4998,6 +6876,82 @@ Run available tests/build/smoke checks and record proof artifacts.
                 any(
                     item["label"] == "Hermes session transcript"
                     and item["title"] == "Current Hermes report is the selected transcript."
+                    for item in detail["agentMessages"]
+                )
+            )
+
+    def test_mission_detail_prefers_concrete_artifact_session_over_latest_read_only_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Show the real F1 deliverable instead of read-only bookkeeping",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.latest_session_id = "session_read_only"
+            store.update_mission(mission)
+            concrete_dir = root / ".agent_runs" / "session_concrete"
+            concrete_dir.mkdir(parents=True)
+            artifact_path = root / ".agent_control" / "mission_artifacts" / "f1-report.md"
+            (concrete_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "action.proposed",
+                        "message": "Hermes wrote the F1 telemetry report.",
+                        "timestamp": "2026-06-01T08:00:00Z",
+                        "metadata": {
+                            "kind": "file_write",
+                            "target_path": str(artifact_path),
+                            "args": {"content": "# F1 report\nTelemetry analytics prototype."},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            read_only_dir = root / ".agent_runs" / "session_read_only"
+            read_only_dir.mkdir(parents=True)
+            (read_only_dir / "timeline.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "action.proposed",
+                        "message": "Read context for Draft implementation plan with milestones",
+                        "timestamp": "2026-06-01T08:05:00Z",
+                        "metadata": {
+                            "kind": "file_read",
+                            "target_path": str(root / "MISSION_NOTES.md"),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.runtime_cycle",
+                    message="Concrete Hermes cycle completed.",
+                    metadata={"sessionId": "session_concrete"},
+                )
+            )
+
+            detail = store.build_mission_detail_snapshot(mission.mission_id, event_limit=12)
+
+            self.assertEqual(detail["runtimeTranscript"]["status"], "attached")
+            self.assertEqual(detail["runtimeTranscript"]["sessionId"], "session_concrete")
+            self.assertTrue(detail["artifactGate"]["passed"])
+            self.assertTrue(
+                any(
+                    item["label"] == "Hermes session transcript"
+                    and item["title"] == "Hermes wrote the F1 telemetry report."
+                    and "Telemetry analytics prototype" in item["detail"]
                     for item in detail["agentMessages"]
                 )
             )
@@ -5183,6 +7137,89 @@ Run available tests/build/smoke checks and record proof artifacts.
                 workspace_history[-1]["proposal"]["args"]["workspaceActionId"],
                 "validate_workspace",
             )
+
+    def test_integration_readiness_scores_live_evidence_without_fake_100(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            connected_apps = {
+                "connectedSessions": [
+                    {
+                        "app_id": "oratio-viva",
+                        "status": "connected",
+                        "bridge_health": "healthy",
+                        "latest_task_result": {
+                            "status": "completed",
+                            "resultSummary": "Oratio bridge action receipt completed.",
+                            "payload": {"bridgeOnline": True, "healthUrl": "http://127.0.0.1:8000/health"},
+                        },
+                        "ui_hints": {"startCommand": "python -m uvicorn backend.main:app"},
+                    },
+                    {
+                        "app_id": "jbheaven",
+                        "status": "connected",
+                        "bridge_health": "healthy",
+                        "latest_task_result": {
+                            "status": "completed",
+                            "resultSummary": "JBHABCN skill inspection receipt completed.",
+                            "payload": {"bridgeOnline": True, "apiOnline": True},
+                        },
+                        "ui_hints": {"startCommand": "python api_server.py"},
+                    },
+                    {
+                        "app_id": "mind-tower",
+                        "status": "available",
+                        "bridge_health": "offline",
+                        "latest_task_result": {
+                            "status": "blocked",
+                            "resultSummary": "Mind Tower bridge endpoint is offline.",
+                            "payload": {"bridgeOnline": False},
+                        },
+                        "ui_hints": {"startCommand": "pnpm --filter @mindtower/admin dev"},
+                    },
+                ]
+            }
+            runtime_compartments = {
+                "items": [
+                    {
+                        "sessionId": "mission-chat-real-openruntime",
+                        "runtime": "hermes",
+                        "turnReceipt": {
+                            "runtime": "hermes",
+                            "provider": "minimax",
+                            "model": "MiniMax-M3",
+                            "assistantMessage": "OpenRuntime returned a real result for this mission.",
+                        },
+                    }
+                ]
+            }
+
+            snapshot = build_integration_readiness_snapshot(
+                root,
+                connected_apps_snapshot=connected_apps,
+                runtime_compartments=runtime_compartments,
+                provider_auth_presence={
+                    "opencode-go": True,
+                    "minimax": True,
+                    "openai-codex": True,
+                },
+                nas_deploy_readiness={"ready": True},
+                hermes_mission_evidence={"items": []},
+            )
+
+            self.assertEqual(snapshot["schema"], "fluxio.integration_readiness.v1")
+            self.assertEqual(snapshot["score"], 75)
+            self.assertEqual(snapshot["maxScore"], 100)
+            self.assertEqual(snapshot["percent"], 75)
+            self.assertNotEqual(snapshot["status"], "ready")
+            states = {item["id"]: item["state"] for item in snapshot["categories"]}
+            self.assertEqual(states["nas_live_data"], "ready")
+            self.assertEqual(states["hermes_openruntime_turn"], "ready")
+            self.assertEqual(states["oratio_viva_action"], "ready")
+            self.assertEqual(states["jbheaven_action"], "ready")
+            self.assertEqual(states["mind_tower_action"], "blocked")
+            self.assertEqual(states["provider_routes"], "ready")
+            self.assertIn("authenticated_phone_agent", states)
+            self.assertGreater(len(snapshot["blockers"]), 0)
 
 
 if __name__ == "__main__":

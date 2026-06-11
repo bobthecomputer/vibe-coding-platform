@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-T3_CODE_RELEASES_API = "https://api.github.com/repos/pingdotgg/t3code/releases"
+T3_CODE_RELEASES_API = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=50"
 T3_CODE_PRODUCT_PAGE = "https://t3.codes/"
 
 T3_CODE_PRODUCT_CLAIMS = {
@@ -135,6 +135,9 @@ def fetch_t3_code_release_benchmark(*, timeout_seconds: int = 20) -> dict[str, A
         "latestPrerelease": prerelease_summary,
         "latestObservedRelease": "; ".join(observed_parts),
         "productPageEvidence": fetch_t3_code_product_page_evidence(timeout_seconds=timeout_seconds),
+        "notes": [
+            "GitHub's latest-release endpoint reports the newest stable release; Fluxio also tracks the newest prerelease/nightly from the releases feed.",
+        ],
     }
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,9 @@ ARTIFACT_SKIP_DIRS = {
     "node_modules",
 }
 PROBLEM_REGISTRY_LIMIT = 200
+GENERATED_RUN_RETENTION_MINUTES = 60
+GENERATED_RUN_RETENTION_MIN_BYTES = 20 * 1024 * 1024 * 1024
+GENERATED_RUN_RETENTION_MAX_DELETE_PER_PASS = 6000
 
 
 def _parse_time(value: object) -> datetime | None:
@@ -60,6 +64,177 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _session_id_from_path(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return Path(text.replace("\\", "/")).name
+
+
+def _protected_generated_session_ids(missions: list[Mission]) -> set[str]:
+    protected: set[str] = set()
+    for mission in missions:
+        session_id = str(getattr(mission.state, "latest_session_id", "") or "").strip()
+        if session_id:
+            protected.add(session_id)
+        for session in getattr(mission, "delegated_runtime_sessions", []) or []:
+            for value in (
+                _field(session, "delegated_id", ""),
+                _field(session, "session_id", ""),
+                _field(session, "session_path", ""),
+            ):
+                candidate = _session_id_from_path(value)
+                if candidate:
+                    protected.add(candidate)
+    return protected
+
+
+def _workspace_roots_for_generated_retention(root: Path, workspaces: list[WorkspaceProfile]) -> list[Path]:
+    candidates: list[Path] = [root]
+    for workspace in workspaces:
+        for value in (
+            getattr(workspace, "root_path", ""),
+            getattr(workspace, "local_project_path", ""),
+            getattr(workspace, "nas_project_path", ""),
+        ):
+            text = str(value or "").strip()
+            if not text:
+                continue
+            candidates.append(Path(text).expanduser())
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def prune_stale_generated_agent_runs(
+    *,
+    root: Path,
+    missions: list[Mission],
+    workspaces: list[WorkspaceProfile],
+    now: datetime | None = None,
+    retention_minutes: int = GENERATED_RUN_RETENTION_MINUTES,
+    min_bytes: int = GENERATED_RUN_RETENTION_MIN_BYTES,
+    max_delete_per_pass: int = GENERATED_RUN_RETENTION_MAX_DELETE_PER_PASS,
+) -> dict[str, Any]:
+    current = now or datetime.now(timezone.utc)
+    cutoff = current - timedelta(minutes=max(1, retention_minutes))
+    protected = _protected_generated_session_ids(missions)
+    runs_roots: list[Path] = []
+    seen: set[str] = set()
+    for workspace_root in _workspace_roots_for_generated_retention(root, workspaces):
+        runs_root = workspace_root / ".agent_runs"
+        if runs_root.name != ".agent_runs":
+            continue
+        try:
+            resolved = runs_root.resolve()
+        except OSError:
+            resolved = runs_root
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        runs_roots.append(resolved)
+
+    summaries: list[dict[str, Any]] = []
+    total_before = 0
+    total_after = 0
+    total_deleted = 0
+    total_deleted_bytes_estimate = 0
+    for runs_root in runs_roots:
+        if not runs_root.exists() or not runs_root.is_dir() or runs_root.is_symlink():
+            continue
+        session_dirs = [
+            item
+            for item in runs_root.iterdir()
+            if item.is_dir() and not item.is_symlink() and item.name.startswith("session_")
+        ]
+        before_bytes = 0
+        for item in session_dirs:
+            try:
+                before_bytes += sum(
+                    child.stat().st_size for child in item.rglob("*") if child.is_file()
+                )
+            except OSError:
+                continue
+        total_before += before_bytes
+        eligible: list[tuple[float, Path]] = []
+        for item in session_dirs:
+            if item.name in protected:
+                continue
+            try:
+                mtime = datetime.fromtimestamp(item.stat().st_mtime, timezone.utc)
+            except OSError:
+                continue
+            if mtime < cutoff:
+                eligible.append((mtime.timestamp(), item))
+        eligible.sort(key=lambda pair: pair[0])
+        deleted = 0
+        deleted_estimate = 0
+        if before_bytes >= min_bytes:
+            for _, item in eligible[: max(0, max_delete_per_pass)]:
+                try:
+                    deleted_estimate += sum(
+                        child.stat().st_size for child in item.rglob("*") if child.is_file()
+                    )
+                    shutil.rmtree(item)
+                    deleted += 1
+                except OSError:
+                    continue
+        remaining_dirs = [
+            item
+            for item in runs_root.iterdir()
+            if item.is_dir() and not item.is_symlink() and item.name.startswith("session_")
+        ]
+        after_bytes = 0
+        for item in remaining_dirs:
+            try:
+                after_bytes += sum(
+                    child.stat().st_size for child in item.rglob("*") if child.is_file()
+                )
+            except OSError:
+                continue
+        total_after += after_bytes
+        total_deleted += deleted
+        total_deleted_bytes_estimate += deleted_estimate
+        summaries.append(
+            {
+                "path": str(runs_root),
+                "beforeBytes": before_bytes,
+                "afterBytes": after_bytes,
+                "sessionCountBefore": len(session_dirs),
+                "sessionCountAfter": len(remaining_dirs),
+                "eligibleStaleCount": len(eligible),
+                "deletedCount": deleted,
+                "deletedBytesEstimate": deleted_estimate,
+                "protectedCount": len(protected),
+                "retentionMinutes": retention_minutes,
+                "minBytes": min_bytes,
+            }
+        )
+
+    return {
+        "schema": "fluxio.generated_agent_runs_retention.v1",
+        "checkedAt": current.isoformat(),
+        "status": "pruned" if total_deleted else "clear",
+        "retentionMinutes": retention_minutes,
+        "minBytes": min_bytes,
+        "maxDeletePerPass": max_delete_per_pass,
+        "rootCount": len(summaries),
+        "beforeBytes": total_before,
+        "afterBytes": total_after,
+        "deletedCount": total_deleted,
+        "deletedBytesEstimate": total_deleted_bytes_estimate,
+        "protectedSessionCount": len(protected),
+        "roots": summaries,
+    }
 
 
 def _age_minutes(value: object, now: datetime) -> int | None:
@@ -163,6 +338,35 @@ def _field(value: object, name: str, default: object = "") -> object:
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _session_file_payload(session: object) -> dict[str, Any]:
+    path_text = str(_field(session, "session_path", "") or "").strip()
+    if not path_text:
+        return {}
+    try:
+        path = Path(path_text).expanduser()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    expected_id = str(_field(session, "delegated_id", "") or "").strip()
+    actual_id = str(payload.get("delegated_id") or "").strip()
+    if expected_id and actual_id and expected_id != actual_id:
+        return {}
+    return payload
+
+
+def _session_effective_field(session: object, name: str, default: object = "") -> object:
+    payload = _session_file_payload(session)
+    if name in payload:
+        return payload.get(name, default)
+    return _field(session, name, default)
+
+
+def _session_effective_status(session: object) -> str:
+    return str(_session_effective_field(session, "status", "") or "").strip().lower()
 
 
 def _mission_file_scope(mission: Mission) -> set[str]:
@@ -441,6 +645,13 @@ def _parallel_lane_first_step(
 ) -> str:
     workspace_label = workspace.workspace_id if workspace else mission.workspace_id
     safety = scope_relation.get("safety")
+    needs_artifact_repair = (
+        str(mission.state.stop_reason or "").strip().lower() == "artifact_gate_failed"
+        or any(
+            "artifact gate" in str(item or "").strip().lower()
+            for item in (mission.proof.blocked_by or [])
+        )
+    )
     if safety == SCOPE_SAFE:
         return (
             "Scope evidence is disjoint, so move the queued mission to a dedicated "
@@ -451,6 +662,17 @@ def _parallel_lane_first_step(
         )
     if safety == SCOPE_OVERLAP:
         overlap = ", ".join(scope_relation.get("overlapFiles") or []) or "overlap evidence present"
+        if needs_artifact_repair:
+            return (
+                "Do not parallelize automatically yet. The queued mission overlaps the active file scope "
+                f"({overlap}) and previously failed the hard artifact gate. Keep it queued until the "
+                "active blocker finishes, or split the repair into a non-overlapping artifact path; then "
+                f"regenerate the repair plan with `python scripts/plan_mission_artifact_repairs.py --root {root} "
+                "--write` and resume the mission with the hard artifact gate: "
+                f"`python -m grant_agent.cli mission-action --root {root} --mission-id {mission.mission_id} "
+                "--action resume --launch-async`."
+                f" Workspace: {workspace_label}."
+            )
         return (
             "Do not parallelize automatically yet. The queued mission overlaps the active file scope "
             f"({overlap}); keep it queued or split the objective into a non-overlapping lane."
@@ -498,11 +720,45 @@ def _latest_delegated_session(mission: Mission) -> Any | None:
     return max(
         sessions,
         key=lambda session: (
-            str(_field(session, "updated_at", "") or ""),
-            str(_field(session, "created_at", "") or ""),
-            str(_field(session, "delegated_id", "") or ""),
+            str(_session_effective_field(session, "updated_at", "") or ""),
+            str(_session_effective_field(session, "created_at", "") or ""),
+            str(_session_effective_field(session, "delegated_id", "") or ""),
         ),
     )
+
+
+def _active_delegated_sessions(mission: Mission) -> list[Any]:
+    active_statuses = {"queued", "launching", "running", "waiting_for_approval"}
+    return [
+        session
+        for session in getattr(mission, "delegated_runtime_sessions", []) or []
+        if _session_effective_status(session) in active_statuses
+    ]
+
+
+def _session_pid(session: Any) -> int:
+    try:
+        return int(_session_effective_field(session, "pid", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _session_pid_alive(session: Any) -> bool:
+    return _pid_alive(_session_pid(session))
+
+
+def _latest_session_from(sessions: list[Any]) -> Any | None:
+    if not sessions:
+        return None
+    return max(
+        sessions,
+        key=lambda session: (
+            str(_session_effective_field(session, "updated_at", "") or ""),
+            str(_session_effective_field(session, "created_at", "") or ""),
+            str(_session_effective_field(session, "delegated_id", "") or ""),
+        ),
+    )
+
 
 
 def _blocked_or_failed_first_step(root: Path, mission: Mission, stop_reason: str) -> str:
@@ -893,6 +1149,10 @@ def build_mission_watchdog_report(
                 )
             else:
                 blocker_age = _age_minutes(blocker.created_at, current)
+                blocker_movement_age = _age_minutes(
+                    blocker.updated_at or blocker.created_at,
+                    current,
+                )
                 queued_count = sum(
                     1
                     for item in missions
@@ -902,8 +1162,8 @@ def build_mission_watchdog_report(
                 )
                 if (
                     blocker_status in {"running", "launching"}
-                    and blocker_age is not None
-                    and blocker_age >= stale_minutes
+                    and blocker_movement_age is not None
+                    and blocker_movement_age >= stale_minutes
                     and queued_count > 0
                 ):
                     relation = _scope_relation(blocker, mission)
@@ -915,12 +1175,14 @@ def build_mission_watchdog_report(
                             title="Queued mission is waiting behind a long-running workspace slot",
                             detail=(
                                 f"Blocking mission {blocker.mission_id} has held the active workspace slot "
-                                f"for about {blocker_age} minutes while {queued_count} mission(s) wait."
+                                f"for about {blocker_age or 0} minutes and has had no mission-row movement "
+                                f"for about {blocker_movement_age} minutes while {queued_count} mission(s) wait."
                             ),
                             first_step=_parallel_lane_first_step(root, mission, workspace, relation),
                             evidence=[
                                 f"blockingMissionId={mission.state.blocking_mission_id}",
-                                f"blockingAgeMinutes={blocker_age}",
+                                f"blockingAgeMinutes={blocker_age or 0}",
+                                f"blockingMovementAgeMinutes={blocker_movement_age}",
                                 f"queuedMissionsInWorkspace={queued_count}",
                                 f"workspaceExecutionTargetPreference={_execution_target_preference(workspace)}",
                                 f"scopeSafety={relation['safety']}",
@@ -993,7 +1255,86 @@ def build_mission_watchdog_report(
                 )
             )
 
+        active_delegated_sessions = _active_delegated_sessions(mission)
+        latest_active_delegated_session = _latest_session_from(active_delegated_sessions)
+        if (
+            status in {"running", "launching"}
+            and latest_active_delegated_session is not None
+            and _session_pid(latest_active_delegated_session) > 0
+            and not _session_pid_alive(latest_active_delegated_session)
+        ):
+            session = latest_active_delegated_session
+            issues.append(
+                _issue(
+                    mission=mission,
+                    severity="bad",
+                    kind="delegated_runtime_process_gone",
+                    title="Mission row is running but delegated runtime process is gone",
+                    detail=(
+                        "The mission is still marked active, but at least one delegated runtime lane "
+                        "has a recorded PID that is no longer alive."
+                    ),
+                    first_step=(
+                        f"Inspect the delegated log, then run `python -m grant_agent.cli mission-action "
+                        f"--root {root} --mission-id {mission.mission_id} --action resume --launch-async` "
+                        "to reconcile or relaunch the lane."
+                    ),
+                    evidence=[
+                        f"delegatedSession={_field(session, 'delegated_id', '') or 'unknown'}",
+                        f"delegatedStatus={_field(session, 'status', '') or 'unknown'}",
+                        f"pid={_field(session, 'pid', 0) or 0}",
+                        f"heartbeatStatus={_field(session, 'heartbeat_status', '') or 'unknown'}",
+                    ],
+                )
+            )
+
+        live_active_delegates = [
+            session
+            for session in active_delegated_sessions
+            if _session_pid(session) > 0 and _session_pid_alive(session)
+        ]
+        latest_delegated_session = _latest_delegated_session(mission)
+        latest_delegated_status = str(
+            _session_effective_field(latest_delegated_session, "status", "") or ""
+        ).strip().lower()
+        latest_delegated_acknowledged = bool(
+            _session_effective_field(latest_delegated_session, "acknowledged", False)
+        )
+        if (
+            status in {"running", "launching"}
+            and latest_delegated_session is not None
+            and latest_delegated_status in TERMINAL_STATUSES
+            and not latest_delegated_acknowledged
+            and not live_active_delegates
+        ):
+            issues.append(
+                _issue(
+                    mission=mission,
+                    severity="bad",
+                    kind="delegated_runtime_completed_unreconciled",
+                    title="Delegated runtime finished but mission row still says running",
+                    detail=(
+                        "The latest delegated runtime lane is terminal and unacknowledged, while the mission "
+                        "row still appears active. The operator surface should reconcile this before claiming "
+                        "ongoing work."
+                    ),
+                    first_step=(
+                        f"Run `python -m grant_agent.cli mission-action --root {root} "
+                        f"--mission-id {mission.mission_id} --action resume --launch-async` to reconcile "
+                        "the completed lane and advance verification or closeout."
+                    ),
+                    evidence=[
+                        f"delegatedSession={_field(latest_delegated_session, 'delegated_id', '') or 'unknown'}",
+                        f"delegatedStatus={latest_delegated_status or 'unknown'}",
+                        f"exitCode={_field(latest_delegated_session, 'exit_code', '')}",
+                        f"acknowledged={latest_delegated_acknowledged}",
+                    ],
+                )
+            )
+
         for session in mission.delegated_runtime_sessions or []:
+            if latest_delegated_session is not None and session is not latest_delegated_session:
+                continue
             status_text = str(getattr(session, "status", "") or "").lower()
             heartbeat_status = str(getattr(session, "heartbeat_status", "") or "").lower()
             heartbeat_age = int(getattr(session, "heartbeat_age_seconds", 0) or 0)
@@ -1079,6 +1420,12 @@ def build_mission_watchdog_report(
             else "No watchdog issues found. Keep the scheduled watchdog active."
         ),
     }
+    report["generatedRunRetention"] = prune_stale_generated_agent_runs(
+        root=root,
+        missions=missions,
+        workspaces=workspaces,
+        now=current,
+    )
     report["problemReport"] = build_watchdog_problem_report(report)
     report["problemRegistry"] = build_watchdog_problem_registry(root=root, report=report)
     return report
@@ -1125,6 +1472,34 @@ def build_watchdog_supervisor_state(
         _parse_time(checked_at) or datetime.now(timezone.utc)
     ) + timedelta(seconds=max(0, interval_seconds))
     problem_report = report.get("problemReport", {})
+    notification_channels = {
+        "schema": "fluxio.watchdog_notification_channels.v1",
+        "inAppStack": {
+            "status": "available",
+            "channel": "in_app_stack",
+            "nextAction": "Keep the control-room page open to receive live mission updates.",
+        },
+        "browserNotification": {
+            "status": "available",
+            "channel": "browser_notification",
+            "nextAction": "Enable browser notification permission from the Fluxio notification stack.",
+        },
+        "webPush": {
+            "status": "setup_required",
+            "channel": "web_push",
+            "nextAction": "Provision VAPID keys and register this browser before closed-tab push can send.",
+        },
+        "telegram": {
+            "status": "not_requested",
+            "channel": "telegram",
+            "nextAction": "Run the watchdog with --notify-telegram when Telegram receipts should be sent.",
+        },
+        "ntfy": {
+            "status": "not_requested",
+            "channel": "ntfy",
+            "nextAction": "Run the watchdog with --notify-ntfy when ntfy phone receipts should be sent.",
+        },
+    }
     return {
         "schema": "fluxio.mission_watchdog_supervisor.v1",
         "root": str(root),
@@ -1164,6 +1539,7 @@ def build_watchdog_supervisor_state(
         ),
         "problemReportPath": str(root / ".agent_control" / "mission_watchdog_problems.json"),
         "watchdogReportPath": str(root / ".agent_control" / "mission_watchdog.json"),
+        "notificationChannels": notification_channels,
     }
 
 
@@ -1349,6 +1725,31 @@ def load_watchdog_supervisor_state(
             or root / ".agent_control" / "mission_watchdog.json"
         ),
         "notificationStatus": str(state.get("notificationStatus") or ""),
+        "notificationChannels": state.get("notificationChannels")
+        if isinstance(state.get("notificationChannels"), dict)
+        else {
+            "schema": "fluxio.watchdog_notification_channels.v1",
+            "inAppStack": {
+                "status": "available",
+                "channel": "in_app_stack",
+                "nextAction": "Keep the control-room page open to receive live mission updates.",
+            },
+            "browserNotification": {
+                "status": "available",
+                "channel": "browser_notification",
+                "nextAction": "Enable browser notification permission from the Fluxio notification stack.",
+            },
+            "webPush": {
+                "status": "unknown",
+                "channel": "web_push",
+                "nextAction": "Open the notification stack to inspect closed-tab Web Push setup.",
+            },
+            "telegram": {
+                "status": str(state.get("notificationStatus") or "unknown"),
+                "channel": "telegram",
+                "nextAction": "Run the watchdog with --notify-telegram when Telegram receipts should be sent.",
+            },
+        },
     }
     if ongoing and not process_alive:
         normalized["status"] = "stale"
@@ -1379,6 +1780,7 @@ def ensure_watchdog_supervisor_loop(
     stale_minutes: int = 60,
     interval_seconds: int = 1200,
     notify_telegram: bool = True,
+    notify_ntfy: bool = True,
 ) -> dict[str, Any]:
     root = Path(root).resolve()
     current = load_watchdog_supervisor_state(root)
@@ -1417,6 +1819,8 @@ def ensure_watchdog_supervisor_loop(
     ]
     if notify_telegram:
         command.append("--notify-telegram")
+    if notify_ntfy:
+        command.append("--notify-ntfy")
 
     stdout_handle = stdout_path.open("a", encoding="utf-8")
     stderr_handle = stderr_path.open("a", encoding="utf-8")

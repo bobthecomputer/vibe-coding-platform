@@ -32,7 +32,7 @@ from .demo_runner import (
     top_findings,
     utc_stamp,
 )
-from .delivery_receipt import send_watchdog_delivery_receipt
+from .delivery_receipt import send_watchdog_delivery_receipt, send_watchdog_ntfy_delivery_receipt
 from .engine import AutonomousEngine
 from .eval import summarize_runs
 from .feature_suggester import suggest_features_from_text
@@ -63,6 +63,7 @@ from .mission_control import (
     minimax_auth_label,
     mission_time_budget_window,
     mission_mode_to_engine_mode,
+    mission_hard_artifact_gate,
     hermes_auth_store_candidates,
     normalize_action_history,
     normalize_minimax_auth_mode,
@@ -70,6 +71,7 @@ from .mission_control import (
     resolve_workspace_sync_conflict,
     resolve_workspace_sync_conflict_batch,
     sync_mission_state_snapshot,
+    _discover_related_delegated_runtime_sessions,
     _runtime_lane_rows_for_mission,
 )
 from .mission_watchdog import (
@@ -104,7 +106,7 @@ from .proof_digest import (
 )
 from .replay import build_lineage_timeline
 from .runtimes import runtime_adapter_map
-from .runtimes.base import runtime_subprocess_env
+from .runtimes.base import build_mission_resume_objective, runtime_subprocess_env
 from .research import search_workspace
 from .runtime_supervisor import DelegatedRuntimeSupervisor
 from .session_store import SessionStore
@@ -990,17 +992,27 @@ def build_parser() -> argparse.ArgumentParser:
     mission_watchdog_cmd.add_argument(
         "--notify-clear",
         action="store_true",
-        help="Also send a Telegram receipt when the watchdog is clear.",
+        help="Also send an out-of-band receipt when the watchdog is clear.",
     )
     mission_watchdog_cmd.add_argument(
         "--notification-dry-run",
         action="store_true",
-        help="Record a delivered Telegram receipt without calling Telegram.",
+        help="Record a delivered out-of-band receipt without calling the external provider.",
     )
     mission_watchdog_cmd.add_argument(
         "--telegram-destination",
         default="",
         help="Optional Telegram destination override for watchdog notifications.",
+    )
+    mission_watchdog_cmd.add_argument(
+        "--notify-ntfy",
+        action="store_true",
+        help="Send a watchdog receipt through the configured ntfy topic.",
+    )
+    mission_watchdog_cmd.add_argument(
+        "--ntfy-topic",
+        default="",
+        help="Optional ntfy topic override for watchdog notifications.",
     )
     mission_watchdog_cmd.add_argument(
         "--loop",
@@ -1045,7 +1057,7 @@ def build_parser() -> argparse.ArgumentParser:
     workspace_cmd.add_argument("--path", required=True, help="Workspace root path")
     workspace_cmd.add_argument(
         "--default-runtime",
-        default="openclaw",
+        default="hermes",
         choices=["openclaw", "hermes"],
         help="Default runtime for the workspace",
     )
@@ -1543,14 +1555,14 @@ def _parse_bool_flag(value: object, default: bool = False) -> bool:
     return default
 
 
-def _parse_route_overrides_json(value: str | None) -> list[dict]:
+def _parse_route_overrides_json(value: str | None, *, canonicalize_models: bool = True) -> list[dict]:
     if not value:
         return []
     try:
         payload = json.loads(value)
     except json.JSONDecodeError:
         return []
-    return normalize_route_overrides(payload)
+    return normalize_route_overrides(payload, canonicalize_models=canonicalize_models)
 
 
 def _route_uses_minimax(route_overrides: list[dict]) -> bool:
@@ -1696,7 +1708,7 @@ def _invoke_engine(
     max_runtime_override: int | None = None,
     parallel_agents_override: int | None = None,
     merge_policy_override: str | None = None,
-    runtime_id: str = "openclaw",
+    runtime_id: str = "hermes",
     mission_id: str | None = None,
     harness_preference: str = "fluxio_hybrid",
     routing_strategy_override: str | None = None,
@@ -2988,6 +3000,8 @@ def _parse_objective_relative_runtime_seconds(objective: str) -> int | None:
 
 
 def _mission_resume_dispatch_message(dispatch: dict) -> str:
+    if dispatch.get("blocked"):
+        return "Mission resume blocked by NAS storage pressure."
     if dispatch.get("skipped"):
         return (
             f"Mission resume already running (pid {dispatch['pid']}); "
@@ -2997,12 +3011,16 @@ def _mission_resume_dispatch_message(dispatch: dict) -> str:
 
 
 def _mission_resume_dispatch_summary(dispatch: dict) -> str:
+    if dispatch.get("blocked"):
+        return "Mission resume blocked until NAS storage pressure is cleared."
     if dispatch.get("skipped"):
         return "Mission resume already running; duplicate dispatch skipped."
     return "Mission resume dispatched asynchronously."
 
 
 def _mission_resume_event_message(dispatch: dict) -> str:
+    if dispatch.get("blocked"):
+        return "Mission resume dispatch blocked by NAS storage pressure."
     if dispatch.get("skipped"):
         return "Mission resume dispatch skipped because one is already running."
     return "Mission resume was dispatched asynchronously."
@@ -3018,7 +3036,116 @@ def _mission_has_failed_delegated_runtime(mission: Mission) -> bool:
     )
 
 
+def _load_nas_storage_pressure_for_preflight(root: Path) -> dict:
+    path = root / ".agent_control" / "nas_storage_pressure_latest.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema") != "fluxio.nas_storage_pressure.v1":
+        return {}
+    checked_at = str(payload.get("checkedAt") or "")
+    try:
+        checked_ts = datetime.fromisoformat(checked_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return {}
+    max_age_seconds = int(payload.get("maxAgeSeconds") or 48 * 60 * 60)
+    if datetime.now(timezone.utc).timestamp() - checked_ts > max_age_seconds:
+        return {}
+    payload["sourcePath"] = str(path.resolve())
+    return payload
+
+
+def _path_looks_under_mount(value: str, mount: str) -> bool:
+    normalized = str(value or "").replace("\\", "/").rstrip("/")
+    normalized_mount = str(mount or "").replace("\\", "/").rstrip("/")
+    if not normalized or not normalized_mount:
+        return False
+    return normalized == normalized_mount or normalized.startswith(normalized_mount + "/")
+
+
+def _workspace_targets_storage_mount(root: Path, workspace, pressure: dict) -> bool:
+    mount = str(pressure.get("mount") or "").strip()
+    if not mount:
+        return False
+    candidates = [
+        str(root),
+        str(getattr(workspace, "root_path", "") or ""),
+        str(getattr(workspace, "nas_project_path", "") or ""),
+        str(getattr(workspace, "local_project_path", "") or ""),
+    ]
+    if any(_path_looks_under_mount(candidate, mount) for candidate in candidates):
+        return True
+    return any(str(candidate or "").replace("\\", "/").startswith("/volume") for candidate in candidates)
+
+
+def _mission_storage_pressure_blocker(root: Path, workspace=None) -> dict:
+    pressure = _load_nas_storage_pressure_for_preflight(root)
+    if not pressure:
+        return {}
+    status = str(pressure.get("status") or "").lower()
+    critical = (
+        status in {"critical", "full"}
+        or bool(pressure.get("probeTimedOut"))
+        or bool(pressure.get("probeConnectFailed"))
+        or int(pressure.get("availableBytes") or 0) <= 0
+        or int(pressure.get("usedPercent") or 0) >= 99
+    )
+    if not critical:
+        return {}
+    if workspace is not None and not _workspace_targets_storage_mount(root, workspace, pressure):
+        return {}
+    return {
+        "error": "NAS storage pressure blocks mission launch/resume.",
+        "code": "nas_storage_pressure_block",
+        "storage": {
+            "host": pressure.get("host", ""),
+            "mount": pressure.get("mount", "/volume1/Saclay"),
+            "status": pressure.get("status", "critical"),
+            "probeTimedOut": bool(pressure.get("probeTimedOut")),
+            "probeConnectFailed": bool(pressure.get("probeConnectFailed")),
+            "measuredUsageAvailable": bool(pressure.get("measuredUsageAvailable", True)),
+            "usedPercent": int(pressure.get("usedPercent") or 0),
+            "availableBytes": int(pressure.get("availableBytes") or 0),
+            "sourcePath": pressure.get("sourcePath", ""),
+            "cleanupPlanPath": pressure.get("cleanupPlanPath", ""),
+            "largestSuspectedExternalPath": pressure.get("largestSuspectedExternalPath", ""),
+            "suspectedExternalGB": pressure.get("suspectedExternalGB", 0),
+        },
+        "nextAction": (
+            pressure.get("nextAction")
+            or "Free NAS or Synology/Btrfs snapshot space, rerun plan:nas-storage-cleanup, then resume the mission."
+        ),
+    }
+
+
+def _mission_storage_pressure_block_response(root: Path, workspace, mission=None) -> dict:
+    blocker = _mission_storage_pressure_blocker(root, workspace)
+    if not blocker:
+        return {}
+    payload = {
+        **blocker,
+        "snapshot": ControlRoomStore(root).build_snapshot(),
+    }
+    if mission is not None:
+        payload["mission"] = asdict(mission)
+    if workspace is not None:
+        payload["workspace"] = asdict(workspace)
+    return payload
+
+
 def _mark_mission_resume_dispatched(mission, dispatch: dict) -> None:
+    if dispatch.get("blocked"):
+        mission.state.status = "blocked"
+        mission.state.last_error = "nas_storage_pressure_block"
+        mission.state.stop_reason = "nas_storage_pressure"
+        mission.state.last_runtime_event = _mission_resume_dispatch_message(dispatch)
+        mission.state.planner_loop_status = "blocked"
+        mission.proof.summary = _mission_resume_dispatch_summary(dispatch)
+        mission.proof.blocked_by = ["nas_storage_pressure"]
+        return
     mission.state.status = "running"
     mission.state.last_error = None
     mission.state.stop_reason = None
@@ -3026,6 +3153,106 @@ def _mark_mission_resume_dispatched(mission, dispatch: dict) -> None:
     mission.state.planner_loop_status = "running" if dispatch.get("skipped") else "launching"
     mission.proof.summary = _mission_resume_dispatch_summary(dispatch)
     mission.proof.blocked_by = []
+
+
+def _reload_mission_before_dispatch_write(
+    store: ControlRoomStore,
+    mission: Mission,
+) -> Mission:
+    latest = store.get_mission(mission.mission_id)
+    return latest or mission
+
+
+def _persist_delegated_session_acknowledged(session: DelegatedRuntimeSession) -> None:
+    if not session.session_path:
+        return
+    path = Path(session.session_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    payload["acknowledged"] = bool(session.acknowledged)
+    payload["updated_at"] = session.updated_at
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _mission_action_compact_output_enabled() -> bool:
+    return str(os.environ.get("FLUXIO_MISSION_ACTION_COMPACT", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _compact_mission_action_payload(
+    mission,
+    *,
+    result: dict | None = None,
+    runtime_status: dict | None = None,
+    dispatch: dict | None = None,
+) -> dict:
+    state = mission.state
+    proof = mission.proof
+    payload: dict = {
+        "schema": "fluxio.mission_action_compact_receipt.v1",
+        "mission": {
+            "mission_id": mission.mission_id,
+            "title": mission.title,
+            "workspace_id": mission.workspace_id,
+            "runtime_id": mission.runtime_id,
+            "harness_id": mission.harness_id,
+            "updated_at": mission.updated_at,
+            "state": {
+                "status": state.status,
+                "planner_loop_status": state.planner_loop_status,
+                "current_cycle_phase": state.current_cycle_phase,
+                "current_runtime_lane": state.current_runtime_lane,
+                "continuity_state": state.continuity_state,
+                "latest_session_id": state.latest_session_id,
+                "last_runtime_event": state.last_runtime_event,
+                "last_error": state.last_error,
+                "stop_reason": state.stop_reason,
+            },
+            "proof": {
+                "summary": proof.summary,
+                "artifactCount": len(proof.artifacts or []),
+                "changedFileCount": len(proof.changed_files or []),
+                "failedCheckCount": len(proof.failed_checks or []),
+                "passedCheckCount": len(proof.passed_checks or []),
+                "blockedBy": list(proof.blocked_by or []),
+            },
+        },
+    }
+    if result:
+        payload["result"] = {
+            key: result.get(key)
+            for key in [
+                "status",
+                "autopilot_status",
+                "autopilot_pause_reason",
+                "session_id",
+                "session_path",
+                "latest_blocker",
+            ]
+            if key in result
+        }
+    if runtime_status:
+        payload["runtimeStatus"] = {
+            key: runtime_status.get(key)
+            for key in ["runtime_id", "detected", "doctor_summary", "issues"]
+            if key in runtime_status
+        }
+    if dispatch:
+        payload["dispatch"] = dispatch
+    return payload
 
 
 def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
@@ -3036,6 +3263,14 @@ def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
         dispatch["reason"] = "mission_resume_already_running"
         dispatch["activePids"] = [item["pid"] for item in active]
         return dispatch
+    storage_blocker = _mission_storage_pressure_blocker(root)
+    if storage_blocker:
+        return {
+            "blocked": True,
+            "skipped": True,
+            "reason": "nas_storage_pressure_block",
+            **storage_blocker,
+        }
 
     logs_dir = root / ".agent_control" / "mission_async"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -3075,6 +3310,8 @@ def _launch_async_mission_resume(root: Path, mission_id: str) -> dict:
         env["PATH"] = os.pathsep.join([*runtime_bin_entries, env.get("PATH", "")])
         env.setdefault("FLUXIO_RUNTIME_BIN_DIR", runtime_bin_entries[0])
         env.setdefault("SYNTELOS_RUNTIME_BIN_DIR", runtime_bin_entries[0])
+    env["FLUXIO_MISSION_ACTION_COMPACT"] = "1"
+    env.setdefault("PYTHONUNBUFFERED", "1")
     with log_path.open("a", encoding="utf-8") as handle:
         process = subprocess.Popen(  # noqa: S603
             command,
@@ -3342,24 +3579,17 @@ def _auto_resume_ready_delegated_missions(
     runtime_supervisor = DelegatedRuntimeSupervisor(root)
     dispatched: list[dict] = []
     missions = store.load_missions()
-    changed = False
     for mission in missions:
         if mission.run_budget.run_until_behavior != "continue_until_blocked":
             continue
         if mission.state.status in {"completed", "failed", "stopped"}:
             continue
-        if mission.state.planner_loop_status == "launching":
+        if (
+            mission.state.planner_loop_status == "launching"
+            and _active_mission_async_dispatches(root, mission.mission_id)
+        ):
             continue
         if not mission.delegated_runtime_sessions:
-            continue
-        has_terminal_unacknowledged_session = any(
-            session.status in {"completed", "failed", "stopped"} and not session.acknowledged
-            for session in mission.delegated_runtime_sessions
-        )
-        if (
-            mission.state.stop_reason != "delegated_runtime_running"
-            and not has_terminal_unacknowledged_session
-        ):
             continue
 
         refreshed = []
@@ -3387,7 +3617,19 @@ def _auto_resume_ready_delegated_missions(
                     metadata={"delegatedSessionIds": missing_sessions},
                 )
             )
-            changed = True
+        has_terminal_unacknowledged_session = any(
+            session.status in {"completed", "failed", "stopped"} and not session.acknowledged
+            for session in refreshed
+        )
+        if (
+            mission.state.stop_reason != "delegated_runtime_running"
+            and not has_terminal_unacknowledged_session
+        ):
+            if refreshed != mission.delegated_runtime_sessions:
+                mission.delegated_runtime_sessions = refreshed
+                mission.state.delegated_runtime_sessions = [asdict(item) for item in refreshed]
+                store.update_mission(mission)
+            continue
         active_delegated_session = any(
             session.status in {"launching", "running", "waiting_for_approval"}
             for session in refreshed
@@ -3403,7 +3645,7 @@ def _auto_resume_ready_delegated_missions(
             mission.proof.summary = "Delegated runtime lane is active. Fluxio will continue when it finishes."
             mission.proof.blocked_by = []
             sync_mission_state_snapshot(mission)
-            changed = True
+            store.update_mission(mission)
             continue
         if not any(
             session.status in {"completed", "failed", "stopped"} and not session.acknowledged
@@ -3412,19 +3654,29 @@ def _auto_resume_ready_delegated_missions(
             continue
 
         dispatch = _launch_async_mission_resume(root, mission.mission_id)
+        if not dispatch.get("blocked"):
+            for session in refreshed:
+                if session.status in {"completed", "failed", "stopped"} and not session.acknowledged:
+                    session.acknowledged = True
+                    session.updated_at = utc_now_iso()
+                    _persist_delegated_session_acknowledged(session)
         mission.delegated_runtime_sessions = refreshed
         mission.state.delegated_runtime_sessions = [asdict(item) for item in refreshed]
-        mission.state.status = "running"
-        mission.state.stop_reason = None
-        mission.state.last_error = None
-        mission.state.planner_loop_status = "launching"
+        mission.state.status = "blocked" if dispatch.get("blocked") else "running"
+        mission.state.stop_reason = "nas_storage_pressure" if dispatch.get("blocked") else None
+        mission.state.last_error = "nas_storage_pressure_block" if dispatch.get("blocked") else None
+        mission.state.planner_loop_status = "blocked" if dispatch.get("blocked") else "launching"
         mission.planner_loop_status = mission.state.planner_loop_status
         mission.state.last_runtime_event = _mission_resume_dispatch_message(dispatch)
         mission.proof.summary = (
+            "Delegated lane finished; automatic reconciliation is blocked by NAS storage pressure."
+            if dispatch.get("blocked")
+            else
             "Delegated lane finished; Fluxio skipped duplicate reconciliation."
             if dispatch.get("skipped")
             else "Delegated lane finished; Fluxio dispatched automatic reconciliation."
         )
+        mission.proof.blocked_by = ["nas_storage_pressure"] if dispatch.get("blocked") else mission.proof.blocked_by
         sync_mission_state_snapshot(mission)
         store.append_event(
             MissionEvent(
@@ -3437,13 +3689,13 @@ def _auto_resume_ready_delegated_missions(
         dispatched.append(
             {
                 "missionId": mission.mission_id,
-                "pid": dispatch["pid"],
-                "logPath": dispatch["logPath"],
+                "pid": dispatch.get("pid", 0),
+                "logPath": dispatch.get("logPath", ""),
+                "blocked": bool(dispatch.get("blocked")),
+                "reason": dispatch.get("reason", ""),
             }
         )
-        changed = True
-    if changed:
-        store.save_missions(missions)
+        store.update_mission(mission)
     return dispatched
 
 
@@ -3586,7 +3838,7 @@ def _run_mission_engine_cycles(
 
         result = _invoke_engine(
             root=root,
-            objective=mission.objective,
+            objective=build_mission_resume_objective(mission),
             docs=default_docs_for_workspace(root),
             mode_name=mission_mode_to_engine_mode(mission.run_budget.mode),
             profile_name=mission.selected_profile or workspace.user_profile,
@@ -3630,8 +3882,7 @@ def _run_mission_engine_cycles(
 
         resume_from = mission.state.latest_session_id
         resume_checkpoint = _latest_checkpoint_for_session(root, resume_from)
-        if str(result.get("autopilot_pause_reason") or "") == "delegated_runtime_running":
-            _sleep_for_mission_poll(_mission_poll_interval_seconds(mission))
+        _sleep_for_mission_poll(_mission_poll_interval_seconds(mission))
 
 
 def _effective_route_contract_from_result(result: dict) -> dict:
@@ -3771,6 +4022,47 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         else DelegatedRuntimeSession(**item)
         for item in result.get("delegated_runtime_sessions", [])
     ]
+    if delegated_runtime_active and not mission.delegated_runtime_sessions:
+        discovery_roots: list[Path | None] = []
+        if session_path_value:
+            try:
+                discovery_roots.append(Path(session_path_value).parent.parent)
+            except (TypeError, ValueError):
+                pass
+        scope_for_discovery = mission.execution_scope
+        for candidate in [
+            getattr(scope_for_discovery, "workspace_root", ""),
+            getattr(scope_for_discovery, "execution_root", ""),
+            getattr(scope_for_discovery, "worktree_path", ""),
+        ]:
+            if str(candidate or "").strip():
+                discovery_roots.append(Path(str(candidate)))
+        discovered = _discover_related_delegated_runtime_sessions(
+            mission,
+            roots=discovery_roots,
+            runtime_supervisor=DelegatedRuntimeSupervisor(
+                next((item for item in discovery_roots if item is not None), Path("."))
+            ),
+        )
+        if discovered:
+            mission.delegated_runtime_sessions = [
+                *mission.delegated_runtime_sessions,
+                *discovered,
+            ]
+    has_active_delegated = any(
+        item.status in {"launching", "running", "waiting_for_approval"}
+        for item in mission.delegated_runtime_sessions
+    )
+    if delegated_runtime_active and has_active_delegated:
+        for item in mission.delegated_runtime_sessions:
+            if (
+                item.status in {"completed", "failed", "stopped"}
+                and not item.pending_approval
+                and not item.acknowledged
+            ):
+                item.acknowledged = True
+                item.updated_at = utc_now_iso()
+                _persist_delegated_session_acknowledged(item)
     waiting_delegated = next(
         (
             item
@@ -4003,6 +4295,7 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
         mission.proof.blocked_by.append(mission.state.blocker_classification["summary"])
 
     sync_mission_state_snapshot(mission)
+    artifact_gate = mission_hard_artifact_gate(mission)
 
     store.update_mission(mission)
     if mission.state.status == "completed":
@@ -4016,6 +4309,8 @@ def _sync_mission_from_result(store: ControlRoomStore, mission_id: str, result: 
                 "sessionId": latest_session_id,
                 "autopilotStatus": result.get("autopilot_status"),
                 "pauseReason": result.get("autopilot_pause_reason"),
+                "artifactGateStatus": artifact_gate.get("status", ""),
+                "artifactGatePassed": bool(artifact_gate.get("passed")),
                 "blockerClass": mission.state.blocker_classification.get("class", ""),
                 "provider": (
                     mission.state.provider_runtime_truth.get("activeRoute", {}).get("provider", "")
@@ -4239,38 +4534,89 @@ def cmd_release_readiness(args: argparse.Namespace) -> int:
 
 def cmd_system_audit(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
-    audit = build_system_audit(root)
-    output = Path(args.output).resolve() if args.output else root / "docs" / "SYSTEM_GAP_ANALYSIS.md"
-    report_path = write_system_audit_markdown(audit, output)
-    if getattr(args, "json", False):
-        print(json.dumps({**audit, "reportPath": str(report_path)}, indent=2))
-    else:
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "reportPath": str(report_path),
-                    "summary": audit["summary"],
-                    "badFirst": audit["badFirst"],
-                    "t3Deficits": audit.get("t3Deficits", []),
-                    "t3DeficitCount": len(audit.get("t3Deficits", [])),
-                    "systemLossBreakdown": audit.get("systemLossBreakdown", {}),
-                    "improvementQueue": audit.get("improvementQueue", []),
-                    "activeGapMissions": audit.get("activeGapMissions", []),
-                    "routeTrustMaturity": audit.get("routeTrustMaturity", {}),
-                    "redTeamEscalationEvidence": audit.get("redTeamEscalationEvidence", {}),
-                    "releaseReadiness": {
-                        "status": audit["releaseReadiness"].get("status"),
-                        "score": audit["releaseReadiness"].get("score"),
-                        "requiredGateSummary": audit["releaseReadiness"].get(
-                            "requiredGateSummary", {}
-                        ),
+    lock_fd, lock_path = _acquire_system_audit_lock(root)
+    try:
+        audit = build_system_audit(root)
+        output = Path(args.output).resolve() if args.output else root / "docs" / "SYSTEM_GAP_ANALYSIS.md"
+        report_path = write_system_audit_markdown(audit, output)
+        if getattr(args, "json", False):
+            print(json.dumps({**audit, "reportPath": str(report_path)}, indent=2))
+        else:
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "reportPath": str(report_path),
+                        "summary": audit["summary"],
+                        "badFirst": audit["badFirst"],
+                        "t3Deficits": audit.get("t3Deficits", []),
+                        "t3DeficitCount": len(audit.get("t3Deficits", [])),
+                        "systemLossBreakdown": audit.get("systemLossBreakdown", {}),
+                        "nasStoragePressureEvidence": audit.get("nasStoragePressureEvidence", {}),
+                        "liveMissionOutputQualityEvidence": audit.get("liveMissionOutputQualityEvidence", {}),
+                        "improvementQueue": audit.get("improvementQueue", []),
+                        "activeGapMissions": audit.get("activeGapMissions", []),
+                        "routeTrustMaturity": audit.get("routeTrustMaturity", {}),
+                        "redTeamEscalationEvidence": audit.get("redTeamEscalationEvidence", {}),
+                        "releaseReadiness": {
+                            "status": audit["releaseReadiness"].get("status"),
+                            "score": audit["releaseReadiness"].get("score"),
+                            "requiredGateSummary": audit["releaseReadiness"].get(
+                                "requiredGateSummary", {}
+                            ),
+                        },
                     },
-                },
-                indent=2,
+                    indent=2,
+                )
             )
-        )
+    finally:
+        _release_system_audit_lock(lock_fd, lock_path)
     return 0
+
+
+def _acquire_system_audit_lock(root: Path, *, timeout_seconds: float = 120.0) -> tuple[int, Path]:
+    control = root / ".agent_control"
+    control.mkdir(parents=True, exist_ok=True)
+    lock_path = control / "system_audit.lock"
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(
+                fd,
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "createdAt": datetime.now(timezone.utc).isoformat(),
+                        "purpose": "system-audit report generation",
+                    }
+                ).encode("utf-8"),
+            )
+            return fd, lock_path
+        except FileExistsError:
+            try:
+                stale_seconds = time.time() - lock_path.stat().st_mtime
+            except OSError:
+                stale_seconds = 0
+            if stale_seconds > 600:
+                try:
+                    lock_path.unlink()
+                    continue
+                except OSError:
+                    pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for system audit lock at {lock_path}")
+            time.sleep(0.25)
+
+
+def _release_system_audit_lock(fd: int, lock_path: Path) -> None:
+    try:
+        os.close(fd)
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _watchdog_self_improvement_path(root: Path) -> Path:
@@ -4473,6 +4819,7 @@ def _run_mission_watchdog_pass(
         except (OSError, json.JSONDecodeError):
             previous_supervisor = {}
     store = ControlRoomStore(root)
+    auto_resume_dispatches = _auto_resume_ready_delegated_missions(root, store)
     missions = store.load_missions()
     workspaces = store.load_workspaces()
     stale_minutes = max(1, int(getattr(args, "stale_minutes", 60) or 60))
@@ -4482,6 +4829,20 @@ def _run_mission_watchdog_pass(
         workspaces=workspaces,
         stale_minutes=stale_minutes,
     )
+    post_report_dispatches = _auto_resume_ready_delegated_missions(root, ControlRoomStore(root))
+    if post_report_dispatches:
+        auto_resume_dispatches.extend(post_report_dispatches)
+        store = ControlRoomStore(root)
+        missions = store.load_missions()
+        workspaces = store.load_workspaces()
+        report = build_mission_watchdog_report(
+            root=root,
+            missions=missions,
+            workspaces=workspaces,
+            stale_minutes=stale_minutes,
+        )
+    if auto_resume_dispatches:
+        report["autoResumeDispatches"] = auto_resume_dispatches
     self_improvement_cadence = _run_watchdog_self_improvement_cadence(root, args=args)
     report["selfImprovementCadence"] = self_improvement_cadence
     report_path = None
@@ -4498,6 +4859,8 @@ def _run_mission_watchdog_pass(
         loop_mode=loop_mode,
     )
     supervisor_state["selfImprovement"] = self_improvement_cadence
+    if auto_resume_dispatches:
+        supervisor_state["autoResumeDispatches"] = auto_resume_dispatches[-8:]
     active_loop = load_watchdog_supervisor_state(root)
     if (
         loop_mode == "one_shot"
@@ -4518,6 +4881,7 @@ def _run_mission_watchdog_pass(
             }
         )
     notification_receipt = None
+    ntfy_notification_receipt = None
     problem_report = report.get("problemReport", {})
     first_problem = problem_report.get("firstProblem", {})
     notification_fingerprint = "|".join(
@@ -4545,14 +4909,129 @@ def _run_mission_watchdog_pass(
             supervisor_state["notificationStatus"] = (
                 notification_receipt.status if notification_receipt else "not_sent"
             )
+            notification_channels = supervisor_state.get("notificationChannels")
+            if isinstance(notification_channels, dict):
+                telegram_channel = notification_channels.get("telegram")
+                if isinstance(telegram_channel, dict):
+                    telegram_channel.update(
+                        {
+                            "status": supervisor_state["notificationStatus"],
+                            "destinationConfigured": bool(
+                                getattr(args, "telegram_destination", "") or getattr(notification_receipt, "destination", "")
+                            ),
+                            "nextAction": (
+                                "Telegram watchdog receipt was recorded."
+                                if supervisor_state["notificationStatus"] == "delivered"
+                                else "Check Telegram bot token and destination configuration."
+                            ),
+                        }
+                    )
         else:
             supervisor_state["lastNotificationFingerprint"] = notification_fingerprint
             supervisor_state["notificationStatus"] = "duplicate_suppressed"
+            notification_channels = supervisor_state.get("notificationChannels")
+            if isinstance(notification_channels, dict):
+                telegram_channel = notification_channels.get("telegram")
+                if isinstance(telegram_channel, dict):
+                    telegram_channel.update(
+                        {
+                            "status": "duplicate_suppressed",
+                            "destinationConfigured": bool(
+                                getattr(args, "telegram_destination", "")
+                                or (previous_supervisor.get("notificationChannels", {}).get("telegram", {}).get("destinationConfigured") if isinstance(previous_supervisor.get("notificationChannels"), dict) else False)
+                                or previous_supervisor.get("notificationStatus") in {"delivered", "duplicate_suppressed"}
+                            ),
+                            "nextAction": "No Telegram receipt sent because this watchdog state was already delivered.",
+                        }
+                )
     else:
         supervisor_state["lastNotificationFingerprint"] = previous_supervisor.get(
             "lastNotificationFingerprint", ""
         )
-        supervisor_state["notificationStatus"] = "disabled"
+        supervisor_state["notificationStatus"] = "telegram_not_requested"
+        notification_channels = supervisor_state.get("notificationChannels")
+        if isinstance(notification_channels, dict):
+            telegram_channel = notification_channels.get("telegram")
+            if isinstance(telegram_channel, dict):
+                telegram_channel.update(
+                    {
+                        "status": "not_requested",
+                        "destinationConfigured": False,
+                        "nextAction": "Telegram is off for this pass; in-app and browser notification channels remain separate.",
+                    }
+                )
+    if getattr(args, "notify_ntfy", False):
+        if should_notify:
+            ntfy_notification_receipt = send_watchdog_ntfy_delivery_receipt(
+                root=root,
+                report=report,
+                topic=str(getattr(args, "ntfy_topic", "") or ""),
+                dry_run=bool(getattr(args, "notification_dry_run", False)),
+                include_clear=bool(getattr(args, "notify_clear", False)),
+            )
+            if notification_receipt is None:
+                notification_receipt = ntfy_notification_receipt
+            supervisor_state["lastNotificationFingerprint"] = notification_fingerprint
+            supervisor_state["ntfyNotificationStatus"] = (
+                ntfy_notification_receipt.status if ntfy_notification_receipt else "not_sent"
+            )
+            if not getattr(args, "notify_telegram", False):
+                supervisor_state["notificationStatus"] = supervisor_state["ntfyNotificationStatus"]
+            notification_channels = supervisor_state.get("notificationChannels")
+            if isinstance(notification_channels, dict):
+                ntfy_channel = notification_channels.get("ntfy")
+                if isinstance(ntfy_channel, dict):
+                    ntfy_channel.update(
+                        {
+                            "status": supervisor_state["ntfyNotificationStatus"],
+                            "destinationConfigured": bool(
+                                getattr(args, "ntfy_topic", "")
+                                or getattr(ntfy_notification_receipt, "destination", "")
+                            ),
+                            "nextAction": (
+                                "ntfy watchdog receipt was recorded."
+                                if supervisor_state["ntfyNotificationStatus"] == "delivered"
+                                else "Check ntfy topic/server configuration."
+                            ),
+                        }
+                    )
+        else:
+            supervisor_state["lastNotificationFingerprint"] = notification_fingerprint
+            supervisor_state["ntfyNotificationStatus"] = "duplicate_suppressed"
+            if not getattr(args, "notify_telegram", False):
+                supervisor_state["notificationStatus"] = "duplicate_suppressed"
+            notification_channels = supervisor_state.get("notificationChannels")
+            if isinstance(notification_channels, dict):
+                ntfy_channel = notification_channels.get("ntfy")
+                if isinstance(ntfy_channel, dict):
+                    ntfy_channel.update(
+                        {
+                            "status": "duplicate_suppressed",
+                            "destinationConfigured": bool(
+                                getattr(args, "ntfy_topic", "")
+                                or (
+                                    previous_supervisor.get("notificationChannels", {}).get("ntfy", {}).get("destinationConfigured")
+                                    if isinstance(previous_supervisor.get("notificationChannels"), dict)
+                                    else False
+                                )
+                                or previous_supervisor.get("ntfyNotificationStatus") in {"delivered", "duplicate_suppressed"}
+                            ),
+                            "nextAction": "No ntfy receipt sent because this watchdog state was already delivered.",
+                        }
+                    )
+    else:
+        supervisor_state["ntfyNotificationStatus"] = "ntfy_not_requested"
+        notification_channels = supervisor_state.get("notificationChannels")
+        if isinstance(notification_channels, dict):
+            ntfy_channel = notification_channels.get("ntfy")
+            if isinstance(ntfy_channel, dict):
+                ntfy_channel.update(
+                    {
+                        "status": "not_requested",
+                        "destinationConfigured": False,
+                        "nextAction": "ntfy is off for this pass; enable --notify-ntfy for phone push watchdog receipts.",
+                    }
+                )
     supervisor_path = write_watchdog_supervisor_state(root, supervisor_state)
     payload = {
         "ok": True,
@@ -4560,7 +5039,9 @@ def _run_mission_watchdog_pass(
         "supervisorPath": str(supervisor_path),
         "supervisor": supervisor_state,
         "watchdog": report,
+        "autoResumeDispatches": auto_resume_dispatches,
         "notificationReceipt": asdict(notification_receipt) if notification_receipt else {},
+        "ntfyNotificationReceipt": asdict(ntfy_notification_receipt) if ntfy_notification_receipt else {},
     }
     return payload
 
@@ -4615,7 +5096,8 @@ def cmd_workspace_save(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
     route_overrides = _parse_route_overrides_json(
-        getattr(args, "route_overrides_json", "[]")
+        getattr(args, "route_overrides_json", "[]"),
+        canonicalize_models=False,
     )
     auto_optimize_routing = _parse_bool_flag(
         getattr(args, "auto_optimize_routing", "false")
@@ -4720,6 +5202,19 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
         print(
             json.dumps(
                 {"error": f"Unknown workspace id: {args.workspace_id}"}, indent=2
+            )
+        )
+        return 1
+    storage_blocker = _mission_storage_pressure_blocker(root, workspace)
+    if storage_blocker:
+        print(
+            json.dumps(
+                {
+                    **storage_blocker,
+                    "workspace": asdict(workspace),
+                    "snapshot": store.build_snapshot(),
+                },
+                indent=2,
             )
         )
         return 1
@@ -4871,6 +5366,7 @@ def cmd_mission_start(args: argparse.Namespace) -> int:
 
     if bool(getattr(args, "launch_async", False)):
         dispatch = _launch_async_mission_resume(root, mission.mission_id)
+        mission = _reload_mission_before_dispatch_write(store, mission)
         _mark_mission_resume_dispatched(mission, dispatch)
         sync_mission_state_snapshot(mission)
         store.update_mission(mission)
@@ -4931,11 +5427,19 @@ def _select_quickstart_workspace(
         for item in workspaces
         if str(Path(item.root_path).expanduser().resolve()) == resolved_root
     ]
-    if rooted:
-        return rooted[0]
     if not workspaces:
         raise ValueError("No enabled workspace profile is available.")
-    return workspaces[0]
+    ordered: list = []
+    seen_workspace_ids: set[str] = set()
+    for item in [*rooted, *workspaces]:
+        if item.workspace_id in seen_workspace_ids:
+            continue
+        seen_workspace_ids.add(item.workspace_id)
+        ordered.append(item)
+    for item in ordered:
+        if not _mission_storage_pressure_blocker(root, item):
+            return item
+    return ordered[0]
 
 
 def cmd_mission_quickstart(args: argparse.Namespace) -> int:
@@ -5067,6 +5571,25 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
             )
         )
         return 1
+    should_launch_or_resume = args.action == "resume" or (
+        bool(getattr(args, "launch_async", False))
+        and args.action in {"parallelize-worktree", "extend-budget"}
+    )
+    if should_launch_or_resume:
+        storage_blocker = _mission_storage_pressure_blocker(root, workspace)
+        if storage_blocker:
+            print(
+                json.dumps(
+                    {
+                        **storage_blocker,
+                        "mission": asdict(mission),
+                        "workspace": asdict(workspace),
+                        "snapshot": store.build_snapshot(),
+                    },
+                    indent=2,
+                )
+            )
+            return 1
     runtime_supervisor = DelegatedRuntimeSupervisor(root)
 
     if args.action == "parallelize-worktree":
@@ -5202,6 +5725,7 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         dispatch = None
         if bool(getattr(args, "launch_async", False)):
             dispatch = _launch_async_mission_resume(root, mission.mission_id)
+            mission = _reload_mission_before_dispatch_write(store, mission)
             _mark_mission_resume_dispatched(mission, dispatch)
             sync_mission_state_snapshot(mission)
             store.update_mission(mission)
@@ -5285,6 +5809,7 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
                 return 0
             if bool(getattr(args, "launch_async", False)):
                 dispatch = _launch_async_mission_resume(root, mission.mission_id)
+                mission = _reload_mission_before_dispatch_write(store, mission)
                 _mark_mission_resume_dispatched(mission, dispatch)
                 sync_mission_state_snapshot(mission)
                 store.update_mission(mission)
@@ -5319,13 +5844,28 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
                 resume_from=None,
                 resume_checkpoint=None,
             )
-            payload["runtimeStatus"] = asdict(runtime_status)
-            payload["snapshot"] = store.build_snapshot()
-            print(json.dumps(payload, indent=2))
+            runtime_status_payload = asdict(runtime_status)
+            payload["runtimeStatus"] = runtime_status_payload
+            if _mission_action_compact_output_enabled():
+                synced_mission = store.get_mission(mission.mission_id) or mission
+                print(
+                    json.dumps(
+                        _compact_mission_action_payload(
+                            synced_mission,
+                            result=payload.get("result", {}),
+                            runtime_status=runtime_status_payload,
+                        ),
+                        indent=2,
+                    )
+                )
+            else:
+                payload["snapshot"] = store.build_snapshot()
+                print(json.dumps(payload, indent=2))
             result = payload.get("result", {})
             return 0 if not result or result.get("status") == "ok" else 2
         if bool(getattr(args, "launch_async", False)):
             dispatch = _launch_async_mission_resume(root, mission.mission_id)
+            mission = _reload_mission_before_dispatch_write(store, mission)
             _mark_mission_resume_dispatched(mission, dispatch)
             sync_mission_state_snapshot(mission)
             store.update_mission(mission)
@@ -5362,8 +5902,20 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
                 mission.state.latest_session_id,
             ),
         )
-        payload["snapshot"] = store.build_snapshot()
-        print(json.dumps(payload, indent=2))
+        if _mission_action_compact_output_enabled():
+            synced_mission = store.get_mission(mission.mission_id) or mission
+            print(
+                json.dumps(
+                    _compact_mission_action_payload(
+                        synced_mission,
+                        result=payload.get("result", {}),
+                    ),
+                    indent=2,
+                )
+            )
+        else:
+            payload["snapshot"] = store.build_snapshot()
+            print(json.dumps(payload, indent=2))
         result = payload.get("result", {})
         return 0 if not result or result.get("status") == "ok" else 2
 
@@ -5373,11 +5925,15 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
             int(mission.run_budget.max_runtime_seconds or 0) + added_seconds,
             added_seconds,
         )
+        mission.run_budget.deadline_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=added_seconds)
+        ).isoformat()
         mission.state.remaining_runtime_seconds = added_seconds
         mission.state.time_budget_status = "running"
         mission.state.stop_reason = None
         mission.state.last_error = None
-        if _mission_has_failed_delegated_runtime(mission):
+        artifact_gate = mission_hard_artifact_gate(mission)
+        if _mission_has_failed_delegated_runtime(mission) or not bool(artifact_gate.get("passed")):
             mission.state.latest_session_id = None
         mission.state.status = "queued"
         mission.state.planner_loop_status = "idle"
@@ -5403,6 +5959,7 @@ def cmd_mission_action(args: argparse.Namespace) -> int:
         dispatch = None
         if bool(getattr(args, "launch_async", False)):
             dispatch = _launch_async_mission_resume(root, mission.mission_id)
+            mission = _reload_mission_before_dispatch_write(store, mission)
             _mark_mission_resume_dispatched(mission, dispatch)
             sync_mission_state_snapshot(mission)
             store.update_mission(mission)
@@ -5872,10 +6429,20 @@ def cmd_mission_route(args: argparse.Namespace) -> int:
         return 1
 
     role = str(args.role or "").strip().lower()
+    provider = str(args.provider or "").strip().lower()
+    model = str(args.model or "").strip()
+    if provider in {"minimax", "minimax-cn", "minimax-portal", "minimax-oauth"} and model.lower() in {
+        "minimax-m2.7",
+        "minimax-m2.7-highspeed",
+        "minimax/m2.7",
+        "minimax/minimax-m2.7",
+        "minimax/minimax-m2.7-highspeed",
+    }:
+        model = "MiniMax-M3"
     new_route = {
         "role": role,
-        "provider": str(args.provider or "").strip().lower(),
-        "model": str(args.model or "").strip(),
+        "provider": provider,
+        "model": model,
         "effort": str(args.effort or "high").strip().lower(),
         "budgetClass": str(args.budget_class or "balanced").strip(),
         "fallbackPolicy": "operator_reroute_with_receipt",

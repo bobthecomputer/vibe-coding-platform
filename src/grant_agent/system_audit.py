@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,20 +12,22 @@ from .mission_control import (
     build_red_team_escalation_snapshot,
     build_harness_lab_snapshot,
     build_release_readiness_snapshot,
+    build_summary_harness_lab_snapshot,
 )
+from .delivery_receipt import ntfy_status, web_push_status
 from .demo_runner import build_red_team_escalation_audit, build_red_team_escalation_trend, normalize_red_team_pressure
 from .onboarding import detect_onboarding_status, invalidate_onboarding_status_cache
 
 
 T3_CODE_BENCHMARK = {
     "name": "T3 Code",
-    "referenceDate": "2026-05-29",
+    "referenceDate": "2026-06-02",
     "sources": [
         "https://t3.codes/",
         "https://github.com/pingdotgg/t3code",
         "https://github.com/pingdotgg/t3code/releases",
     ],
-    "latestObservedRelease": "v0.0.24 stable on 2026-05-15; v0.0.25-nightly.20260515.295 pre-release observed on 2026-05-29",
+    "latestObservedRelease": "v0.0.24 stable published 2026-05-15T06:39:44Z; v0.0.25-nightly.20260602.439 pre-release published 2026-06-02T08:05:20Z",
     "observedStrengths": [
         "web GUI for coding agents",
         "officially positions itself around Claude Code, Codex CLI, OpenCode, and Cursor from one surface",
@@ -136,6 +139,24 @@ class AuditCategory:
     next_moves: list[str]
 
 
+def _score_aware_t3_verdict(item: AuditCategory) -> str:
+    delta = item.score_out_of_20 - item.t3_reference_score_out_of_20
+    if delta > 0:
+        return item.verdict
+    gap = item.gaps[0] if item.gaps else item.verdict
+    if delta == 0:
+        return f"At T3 parity but not above it yet: {gap}"
+    return f"Behind T3 by {abs(delta)} point(s): {gap}"
+
+
+def _audit_category_payload(item: AuditCategory) -> dict[str, Any]:
+    payload = asdict(item)
+    payload["rawVerdict"] = item.verdict
+    payload["verdict"] = _score_aware_t3_verdict(item)
+    payload["t3Delta"] = item.score_out_of_20 - item.t3_reference_score_out_of_20
+    return payload
+
+
 def _release_readiness_gate(release: dict[str, Any], gate_id: str) -> dict[str, Any]:
     gates = release.get("gates", []) if isinstance(release.get("gates"), list) else []
     for gate in gates:
@@ -195,12 +216,72 @@ def _release_watchdog_needs_local_refresh(
     return local_watchdog_ts > synced_watchdog_ts
 
 
+def _required_release_gates_all_passed(release: dict[str, Any]) -> bool:
+    summary = release.get("requiredGateSummary") if isinstance(release.get("requiredGateSummary"), dict) else {}
+    total = int(summary.get("total") or 0)
+    if total > 0:
+        return int(summary.get("passed") or 0) == total
+    required_gates = [
+        gate
+        for gate in release.get("gates", [])
+        if isinstance(gate, dict) and bool(gate.get("required"))
+    ]
+    return bool(required_gates) and all(bool(gate.get("passed")) for gate in required_gates)
+
+
+def _release_failed_required_gate_ids(release: dict[str, Any]) -> list[str]:
+    return [
+        str(gate.get("gateId") or "")
+        for gate in release.get("gates", [])
+        if isinstance(gate, dict)
+        and bool(gate.get("required"))
+        and not bool(gate.get("passed"))
+    ]
+
+
+def _live_nas_release_overrides_blocked_local_watchdog(
+    *,
+    local_release: dict[str, Any],
+    synced_release: dict[str, Any],
+    live_nas_system_audit: dict[str, Any],
+) -> bool:
+    if live_nas_system_audit.get("status") != "passed":
+        return False
+    if not isinstance(synced_release, dict) or not synced_release.get("status"):
+        return False
+    if int(synced_release.get("score") or 0) < max(85, int(local_release.get("score") or 0)):
+        return False
+    if not _required_release_gates_all_passed(synced_release):
+        return False
+    failed_required = [item for item in _release_failed_required_gate_ids(local_release) if item]
+    if failed_required != ["mission_watchdog_clear"]:
+        return False
+    local_gate = _release_readiness_gate(local_release, "mission_watchdog_clear")
+    synced_gate = _release_readiness_gate(synced_release, "mission_watchdog_clear")
+    if bool(local_gate.get("passed")) or not bool(synced_gate.get("passed")):
+        return False
+    return bool(live_nas_system_audit.get("checkedAt") or synced_release.get("calculatedAt"))
+
+
 def _select_system_audit_release_readiness(
     *,
     local_release: dict[str, Any],
     synced_release: dict[str, Any],
     live_nas_system_audit: dict[str, Any],
 ) -> dict[str, Any]:
+    if _live_nas_release_overrides_blocked_local_watchdog(
+        local_release=local_release,
+        synced_release=synced_release,
+        live_nas_system_audit=live_nas_system_audit,
+    ):
+        return {
+            **synced_release,
+            "source": "live_nas_system_audit",
+            "sourcePath": str(live_nas_system_audit.get("sourcePath") or ""),
+            "sourceCheckedAt": str(live_nas_system_audit.get("checkedAt") or ""),
+            "localReleaseReadinessSuperseded": local_release,
+            "localWatchdogDriftSuperseded": True,
+        }
     if (
         live_nas_system_audit.get("status") == "passed"
         and isinstance(synced_release, dict)
@@ -237,15 +318,36 @@ def build_system_audit(root: Path) -> dict[str, Any]:
     root = root.resolve()
     invalidate_onboarding_status_cache(root)
     snapshot: dict[str, Any]
+    mission_store_rows: list[Any] = []
     try:
         store = ControlRoomStore(root)
+        mission_store_rows = store.load_missions()
         snapshot = store.build_snapshot()
     except Exception as exc:  # pragma: no cover - defensive report path
         snapshot = {"error": f"{type(exc).__name__}: {exc}"}
 
     onboarding = detect_onboarding_status(root, force=True)
     setup_health = onboarding.get("setupHealth", {})
-    harness_lab = snapshot.get("harnessLab") or build_harness_lab_snapshot(root)
+    raw_harness_lab = snapshot.get("harnessLab") or build_harness_lab_snapshot(root)
+    harness_lab = raw_harness_lab
+    try:
+        summary_harness_lab = build_summary_harness_lab_snapshot(
+            root,
+            missions=mission_store_rows,
+        )
+    except Exception:  # pragma: no cover - audit must still render if mission rows fail
+        summary_harness_lab = {}
+    summary_efficiency = (
+        summary_harness_lab.get("efficiency", {})
+        if isinstance(summary_harness_lab, dict)
+        else {}
+    )
+    if int(summary_efficiency.get("totalRuns") or 0) > 0:
+        harness_lab = {
+            **summary_harness_lab,
+            "source": "mission_store_delegated_sessions_summary_for_release_audit",
+            "rawAgentRunHarnessLab": raw_harness_lab,
+        }
     release = build_release_readiness_snapshot(
         root,
         onboarding=onboarding,
@@ -269,6 +371,18 @@ def build_system_audit(root: Path) -> dict[str, Any]:
             system_audit_checked_at=str(live_nas_system_audit.get("checkedAt") or ""),
         )
     live_detail_performance = _load_live_mission_detail_performance_evidence(root)
+    nas_storage_pressure = _load_nas_storage_pressure_evidence(root)
+    nas_storage_cleanup_plan = _load_nas_storage_cleanup_plan(root)
+    mission_artifact_repair_plan = _load_mission_artifact_repair_plan(root)
+    live_mission_output_quality = _effective_live_mission_output_quality(
+        _load_live_mission_output_quality_evidence(root),
+        mission_artifact_repair_plan,
+    )
+    live_cross_category_outcome_validation = _live_cross_category_outcome_validation(live_mission_output_quality)
+    self_improvement_evidence = _load_json(
+        root / ".agent_control" / "self_improvement_evidence" / "latest.json",
+        {},
+    )
     public_launch_readiness = _load_public_launch_readiness_evidence(root)
     project_progress = _project_progress(root, snapshot, live_nas_evidence=live_nas_evidence)
     route_trust_sampling = _load_route_trust_sampling_evidence(root)
@@ -308,14 +422,26 @@ def build_system_audit(root: Path) -> dict[str, Any]:
             setup_health,
             harness_lab,
             route_trust_maturity=route_trust_maturity,
+            nas_storage_pressure=nas_storage_pressure,
+            live_mission_output_quality=live_mission_output_quality,
+            mission_artifact_repair_plan=mission_artifact_repair_plan,
         ),
         release=release,
         live_nas_evidence=live_nas_evidence,
         route_trust_maturity=route_trust_maturity,
         live_detail_performance=live_detail_performance,
+        live_mission_output_quality=live_mission_output_quality,
     )
     t3_deficits = _t3_deficits(categories)
-    system_loss_breakdown = _system_loss_breakdown(categories, release, project_progress)
+    system_loss_breakdown = _system_loss_breakdown(
+        categories,
+        release,
+        project_progress,
+        nas_storage_pressure=nas_storage_pressure,
+        nas_storage_cleanup_plan=nas_storage_cleanup_plan,
+        live_mission_output_quality=live_mission_output_quality,
+        mission_artifact_repair_plan=mission_artifact_repair_plan,
+    )
     improvement_queue = _improvement_queue(
         categories,
         release,
@@ -328,6 +454,10 @@ def build_system_audit(root: Path) -> dict[str, Any]:
         project_progress,
         red_team_escalation,
         route_trust_maturity=route_trust_maturity,
+        nas_storage_pressure=nas_storage_pressure,
+        nas_storage_cleanup_plan=nas_storage_cleanup_plan,
+        live_mission_output_quality=live_mission_output_quality,
+        mission_artifact_repair_plan=mission_artifact_repair_plan,
     )
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -337,15 +467,22 @@ def build_system_audit(root: Path) -> dict[str, Any]:
             "t3Chat": T3_CHAT_BENCHMARK,
         },
         "releaseReadiness": release,
+        "harnessLab": harness_lab,
         "badFirst": bad_first,
         "t3Deficits": t3_deficits,
         "systemLossBreakdown": system_loss_breakdown,
         "improvementQueue": improvement_queue,
         "activeGapMissions": active_gap_missions,
-        "categories": [asdict(item) for item in categories],
+        "categories": [_audit_category_payload(item) for item in categories],
         "projectProgress": project_progress,
         "liveNasEvidence": live_nas_evidence,
         "liveMissionDetailPerformanceEvidence": live_detail_performance,
+        "nasStoragePressureEvidence": nas_storage_pressure,
+        "nasStorageCleanupPlan": nas_storage_cleanup_plan,
+        "liveMissionOutputQualityEvidence": live_mission_output_quality,
+        "liveCrossCategoryOutcomeValidation": live_cross_category_outcome_validation,
+        "missionArtifactRepairPlan": mission_artifact_repair_plan,
+        "selfImprovementEvidence": self_improvement_evidence if isinstance(self_improvement_evidence, dict) else {},
         "publicLaunchReadinessEvidence": public_launch_readiness,
         "liveNasSystemAuditEvidence": live_nas_system_audit,
         "routeTrustSamplingEvidence": route_trust_sampling,
@@ -360,6 +497,9 @@ def build_system_audit(root: Path) -> dict[str, Any]:
             route_trust_maturity,
             red_team_escalation,
             public_launch_readiness=public_launch_readiness,
+            nas_storage_pressure=nas_storage_pressure,
+            live_mission_output_quality=live_mission_output_quality,
+            mission_artifact_repair_plan=mission_artifact_repair_plan,
         ),
     }
 
@@ -460,6 +600,239 @@ def render_system_audit_markdown(audit: dict[str, Any]) -> str:
                 "",
             ]
         )
+    nas_storage_pressure = audit.get("nasStoragePressureEvidence") or {}
+    if nas_storage_pressure:
+        storage_status = str(nas_storage_pressure.get("status") or "").lower()
+        storage_is_critical = (
+            storage_status in {"critical", "full"}
+            or bool(nas_storage_pressure.get("probeTimedOut"))
+            or bool(nas_storage_pressure.get("probeConnectFailed"))
+            or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
+            or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
+        )
+        storage_probe_failed = _nas_storage_probe_failed(nas_storage_pressure)
+        storage_next_action = str(
+            nas_storage_pressure.get("nextAction")
+            or (
+                "Free NAS volume space before trusting unattended mission writes."
+                if storage_is_critical
+                else "Storage is not currently blocking mission writes; keep the bounded cleanup plan as operator-reviewed evidence only."
+            )
+        )
+        lines.extend(
+            [
+                "## NAS Storage Pressure",
+                "",
+                f"- Source report: `{nas_storage_pressure.get('sourcePath', '')}`",
+                f"- Checked at: `{nas_storage_pressure.get('checkedAt', '')}`",
+                f"- Mount: `{nas_storage_pressure.get('mount', '/volume1/Saclay')}`",
+                f"- Status: `{nas_storage_pressure.get('status', 'unknown')}`"
+                f"{' (bounded SSH probe failed)' if storage_probe_failed else ''}",
+                (
+                    f"- Measured usage: unavailable; {_nas_storage_pressure_sentence(nas_storage_pressure)}"
+                    if storage_probe_failed
+                    else f"- Used: `{nas_storage_pressure.get('usedPercent', 0)}%`."
+                ),
+                (
+                    "- Available bytes: unavailable until a bounded df probe succeeds."
+                    if storage_probe_failed
+                    else f"- Available bytes: `{nas_storage_pressure.get('availableBytes', 0)}`."
+                ),
+                f"- Generated cleanup already freed: `{nas_storage_pressure.get('generatedCleanupBytesFreed', 0)}` bytes.",
+                "- Launch preflight: NAS mission start/resume is blocked while this storage evidence remains critical."
+                if storage_is_critical
+                else "- Launch preflight: clear; NAS storage is not currently blocking mission start/resume.",
+                f"- Next: {storage_next_action}",
+                "",
+            ]
+        )
+    nas_storage_cleanup_plan = audit.get("nasStorageCleanupPlan") or {}
+    if nas_storage_cleanup_plan:
+        cleanup_candidates = (
+            nas_storage_cleanup_plan.get("cleanupCandidates", [])
+            if isinstance(nas_storage_cleanup_plan.get("cleanupCandidates"), list)
+            else []
+        )
+        suspected_external = (
+            nas_storage_cleanup_plan.get("suspectedExternalUsage", [])
+            if isinstance(nas_storage_cleanup_plan.get("suspectedExternalUsage"), list)
+            else []
+        )
+        volume_accounting = (
+            nas_storage_cleanup_plan.get("volumeAccountingUsage", [])
+            if isinstance(nas_storage_cleanup_plan.get("volumeAccountingUsage"), list)
+            else []
+        )
+        timed_out_external = [
+            str(item)
+            for item in nas_storage_cleanup_plan.get("timedOutExternalProbePaths", [])
+            if str(item or "").strip()
+        ]
+        timed_out_volume = [
+            str(item)
+            for item in nas_storage_cleanup_plan.get("timedOutVolumeAccountingPaths", [])
+            if str(item or "").strip()
+        ]
+        lines.extend(
+            [
+                "## NAS Storage Cleanup Plan",
+                "",
+                f"- Source report: `{nas_storage_cleanup_plan.get('sourcePath', '')}`",
+                f"- Checked at: `{nas_storage_cleanup_plan.get('checkedAt', '')}`",
+                f"- Status: `{nas_storage_cleanup_plan.get('status', 'unknown')}`",
+                f"- Safe mode: `{nas_storage_cleanup_plan.get('safeMode', True)}`; destructive actions executed: `{nas_storage_cleanup_plan.get('destructiveActionsExecuted', False)}`.",
+                f"- Cleanup candidates: `{len(cleanup_candidates)}`.",
+                f"- Estimated generated reclaimable: `{nas_storage_cleanup_plan.get('estimatedReclaimableMB', 0)} MB`.",
+                f"- Suspected non-generated usage: `{nas_storage_cleanup_plan.get('suspectedExternalGB', 0)} GB` across `{len(suspected_external)}` bounded probe path(s).",
+                f"- Volume-accounting usage: `{nas_storage_cleanup_plan.get('volumeAccountingGB', 0)} GB` across `{len(volume_accounting)}` Synology/ContainerManager probe path(s).",
+                f"- Timed-out non-generated probes: `{len(timed_out_external)}`.",
+                f"- Timed-out volume probes: `{len(timed_out_volume)}`.",
+                f"- Next: {nas_storage_cleanup_plan.get('nextAction', 'Review generated cleanup candidates before deleting anything.')}",
+            ]
+        )
+        for row in cleanup_candidates[:8]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- `{row.get('path', '')}`: `{row.get('sizeMB', 0)} MB` - "
+                f"{row.get('destructiveAction', 'operator_review_required')}"
+            )
+        if suspected_external:
+            lines.append("")
+            lines.append("Suspected non-generated usage:")
+            for row in suspected_external[:5]:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"- `{row.get('path', '')}`: `{row.get('sizeGB', 0)} GB` - "
+                    f"{row.get('destructiveAction', 'operator_review_required')}"
+                )
+        if volume_accounting:
+            lines.append("")
+            lines.append("Volume-accounting probes:")
+            for row in volume_accounting[:6]:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"- `{row.get('path', '')}`: `{row.get('sizeGB', 0)} GB` - "
+                    f"{row.get('reason', 'Synology/ContainerManager accounting evidence only.')}"
+                )
+        if timed_out_external:
+            lines.append("")
+            lines.append("Timed-out non-generated probes:")
+            for path in timed_out_external[:8]:
+                lines.append(f"- `{path}`")
+        if timed_out_volume:
+            lines.append("")
+            lines.append("Timed-out volume probes:")
+            for path in timed_out_volume[:8]:
+                lines.append(f"- `{path}`")
+        lines.append("")
+    live_mission_output_quality = audit.get("liveMissionOutputQualityEvidence") or {}
+    if live_mission_output_quality:
+        weak_rows = (
+            live_mission_output_quality.get("weakMissionRows", [])
+            if isinstance(live_mission_output_quality.get("weakMissionRows"), list)
+            else []
+        )
+        repair_rows = (
+            live_mission_output_quality.get("repairMissionRows", [])
+            if isinstance(live_mission_output_quality.get("repairMissionRows"), list)
+            else []
+        )
+        lines.extend(
+            [
+                "## Live Mission Output Quality",
+                "",
+                f"- Source report count: `{live_mission_output_quality.get('reportCount', 0)}`",
+                f"- Weak completed mission outputs: `{len(weak_rows)}`.",
+                f"- Hard artifact-gate repairs needed: `{len(repair_rows)}`.",
+                f"- Status: `{live_mission_output_quality.get('status', 'unknown')}`",
+                f"- Next: {live_mission_output_quality.get('nextAction', 'Require served artifacts or concrete runtime-output bodies before scoring a completed mission as useful.')}",
+            ]
+        )
+        for row in (repair_rows or weak_rows)[:6]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- `{row.get('missionId', '')}`: {row.get('title', 'Untitled mission')} "
+                f"({row.get('runtime', 'runtime unknown')}, {row.get('status', 'status unknown')}) - "
+                f"{row.get('detail', 'No reviewable artifact evidence returned.')}"
+            )
+        lines.append("")
+    live_cross_category_outcome = audit.get("liveCrossCategoryOutcomeValidation") or {}
+    if live_cross_category_outcome:
+        categories = (
+            live_cross_category_outcome.get("categories", [])
+            if isinstance(live_cross_category_outcome.get("categories"), list)
+            else []
+        )
+        lines.extend(
+            [
+                "## Live Cross-Category Hermes Outcome Validation",
+                "",
+                f"- Status: `{live_cross_category_outcome.get('status', 'unknown')}`",
+                (
+                    f"- Validated task families: `{live_cross_category_outcome.get('validatedCategoryCount', 0)}`/"
+                    f"`{live_cross_category_outcome.get('requiredCategoryCount', 0)}`."
+                ),
+                f"- Next: {live_cross_category_outcome.get('nextAction', 'Keep live Hermes category validation current.')}",
+            ]
+        )
+        for row in categories[:8]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- `{row.get('taskFamily', '')}`: `{row.get('missionId', '')}` "
+                f"{row.get('title', '')} - runtime outputs `{row.get('runtimeOutputCount', 0)}`, "
+                f"artifact gate `{row.get('artifactGateStatus', '')}`."
+            )
+        lines.append("")
+    mission_artifact_repair_plan = audit.get("missionArtifactRepairPlan") or {}
+    if mission_artifact_repair_plan:
+        repair_rows = (
+            mission_artifact_repair_plan.get("repairs", [])
+            if isinstance(mission_artifact_repair_plan.get("repairs"), list)
+            else []
+        )
+        lines.extend(
+            [
+                "## Mission Artifact Repair Plan",
+                "",
+                f"- Source report: `{mission_artifact_repair_plan.get('sourcePath', '')}`",
+                f"- Generated at: `{mission_artifact_repair_plan.get('generatedAt', '')}`",
+                f"- Status: `{mission_artifact_repair_plan.get('status', 'unknown')}`",
+                f"- Weak mission repairs: `{len(repair_rows)}`.",
+                f"- Next: {mission_artifact_repair_plan.get('nextAction', 'Resume weak missions with a hard artifact gate.')}",
+            ]
+        )
+        repair_storage = (
+            mission_artifact_repair_plan.get("storagePreflight", {})
+            if isinstance(mission_artifact_repair_plan.get("storagePreflight"), dict)
+            else {}
+        )
+        if repair_storage:
+            storage_source = (
+                repair_storage.get("storage", {})
+                if isinstance(repair_storage.get("storage"), dict)
+                else {}
+            )
+            lines.extend(
+                [
+                    f"- Repair storage preflight: `{repair_storage.get('status', 'unknown')}`; can resume `{bool(repair_storage.get('canResume'))}`.",
+                    f"- Repair storage source: `{storage_source.get('sourcePath', '')}`.",
+                ]
+            )
+        for row in repair_rows[:6]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- `{row.get('missionId', '')}` priority `{row.get('priority', 0)}`: "
+                f"{row.get('action', 'resume_with_hard_artifact_gate')} "
+                f"(can resume `{bool(row.get('canResumeNow', True))}`) - "
+                f"{row.get('resumePrompt', '')}"
+            )
+        lines.append("")
     lines.extend(
         [
             "## Bad Parts First",
@@ -473,8 +846,8 @@ def render_system_audit_markdown(audit: dict[str, Any]) -> str:
             "",
             "## System Loss Review",
             "",
-            "- Loss is no longer only a score: mission-slice feedback, system-loss routing, and repair proposals are present.",
-            "- The weak point is enforcement. High-loss skills can propose repairs, but approved patches are not yet applied automatically and validated before reuse.",
+            "- Gap is no longer only a score: mission-slice feedback, system-gap routing, and repair proposals are present.",
+            "- The weak point is enforcement. High-gap skills can propose repairs, but approved patches are not yet applied automatically and validated before reuse.",
             "- The red-team path can escalate difficulty after clean passes, but live trend history still needs to prove that offensive test difficulty grows with defensive improvement.",
             "- The watchdog now reports stale, blocked, misqueued, incomplete-route, and queue-pressure missions with a first repair step; it is also a required release-readiness gate whenever active missions exist.",
         ]
@@ -484,22 +857,32 @@ def render_system_audit_markdown(audit: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "System-loss breakdown:",
+                "System-gap breakdown:",
                 f"- Average score: `{loss_breakdown.get('averageScoreOutOf20', 0)}/20`.",
-                f"- System loss: `{loss_breakdown.get('averageLossOutOf20', 0)}/20`.",
+                f"- Remaining system gap: `{loss_breakdown.get('averageLossOutOf20', 0)}/20`.",
                 f"- T3 reference average: `{loss_breakdown.get('t3ReferenceAverageOutOf20', 0)}/20`.",
                 f"- Must-beat status: `{(loss_breakdown.get('mustBeatStatus') or {}).get('ahead', 0)}/{(loss_breakdown.get('mustBeatStatus') or {}).get('total', 0)}` categories ahead.",
             ]
         )
         drivers = loss_breakdown.get("drivers", []) if isinstance(loss_breakdown.get("drivers"), list) else []
-        if drivers:
-            lines.append("- Largest loss drivers:")
-            for item in drivers[:5]:
-                if isinstance(item, dict):
-                    lines.append(
-                        f"  - `{item.get('category', '')}`: loss `{item.get('lossOutOf20', 0)}`; "
-                        f"next: {item.get('nextAction', '')}"
-                    )
+        loss_drivers = [
+            item
+            for item in drivers
+            if isinstance(item, dict)
+            and (
+                int(item.get("lossOutOf20") or 0) > 0
+                or int(item.get("t3Margin") or 0) <= 0
+            )
+        ]
+        if loss_drivers:
+            lines.append("- Largest gap drivers:")
+            for item in loss_drivers[:5]:
+                lines.append(
+                    f"  - `{item.get('category', '')}`: gap `{item.get('lossOutOf20', 0)}`; "
+                    f"next: {item.get('nextAction', '')}"
+                )
+        else:
+            lines.append("- Largest gap drivers: none in the current scorecard; maintain freshness gates.")
     if audit.get("improvementQueue"):
         lines.extend(["", "Improvement queue:"])
         for item in audit.get("improvementQueue", [])[:6]:
@@ -581,6 +964,25 @@ def render_system_audit_markdown(audit: dict[str, Any]) -> str:
                 f"- Launched sampling missions: `{launched_count}`.",
             ]
         )
+        storage_preflight = (
+            route_sampling.get("storagePreflight", {})
+            if isinstance(route_sampling.get("storagePreflight"), dict)
+            else {}
+        )
+        if storage_preflight:
+            storage = (
+                storage_preflight.get("storage", {})
+                if isinstance(storage_preflight.get("storage"), dict)
+                else {}
+            )
+            lines.extend(
+                [
+                    f"- Storage preflight: `{storage_preflight.get('status', 'unknown')}`; "
+                    f"can launch `{bool(storage_preflight.get('canLaunch'))}`; dry run `{bool(storage_preflight.get('dryRun'))}`.",
+                    f"- Storage source: `{storage.get('sourcePath', '')}`.",
+                    f"- Storage next: {storage_preflight.get('nextAction', '')}",
+                ]
+            )
         if isinstance(launched, list) and launched:
             for item in launched[:5]:
                 if isinstance(item, dict):
@@ -629,43 +1031,84 @@ def render_system_audit_markdown(audit: dict[str, Any]) -> str:
                 f"- Next: {route_maturity.get('nextAction', '')}",
             ]
         )
-        repair_plan = (
-            route_maturity.get("repairPlan", [])
-            if isinstance(route_maturity.get("repairPlan"), list)
-            else []
-        )
-        if repair_plan:
-            lines.extend(
-                [
-                    "",
-                    "Route repair plan:",
-                    f"- Status: `{route_maturity.get('repairPlanStatus', 'required')}`.",
-                    f"- Next repair step: {route_maturity.get('nextRepairStep', '')}",
-                ]
-            )
-            for item in repair_plan[:5]:
-                if not isinstance(item, dict):
-                    continue
-                lines.append(
-                    f"- `{item.get('taskType', 'unknown')}` / `{item.get('missionId', '')}`: "
-                    f"{item.get('repairAction', '')} Model policy: {item.get('modelPolicy', '')}"
-                )
-        conflict = (
-            route_maturity.get("evidenceConflict", {})
-            if isinstance(route_maturity.get("evidenceConflict"), dict)
+    self_improvement = (
+        audit.get("selfImprovementEvidence", {})
+        if isinstance(audit.get("selfImprovementEvidence"), dict)
+        else {}
+    )
+    sampling_plan = (
+        self_improvement.get("operatorValueSamplingPlan", {})
+        if isinstance(self_improvement.get("operatorValueSamplingPlan"), dict)
+        else {}
+    )
+    if sampling_plan:
+        sample_rows = sampling_plan.get("sampleRows", [])
+        dry_run_command = (
+            sampling_plan.get("dryRunCommand", {})
+            if isinstance(sampling_plan.get("dryRunCommand"), dict)
             else {}
         )
-        if conflict:
-            lines.extend(
-                [
-                    "",
-                    "Route-trust evidence conflict:",
-                    f"- Status: `{conflict.get('status', 'unknown')}`.",
-                    f"- Local closeout evidence: `{conflict.get('sourcePath', '')}`.",
-                    f"- Synced NAS evidence: `{conflict.get('syncedSourcePath', '')}`.",
-                    f"- Detail: {conflict.get('detail', '')}",
-                ]
+        launch_command = (
+            sampling_plan.get("launchCommand", {})
+            if isinstance(sampling_plan.get("launchCommand"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "",
+                "Operator-value sampling plan:",
+                f"- Status: `{sampling_plan.get('status', 'unknown')}`.",
+                f"- Can launch now: `{bool(sampling_plan.get('canLaunch'))}`.",
+                f"- Missing task categories: `{', '.join(sampling_plan.get('missingTaskCategories', []) or [])}`.",
+                f"- Dry-run command: `{dry_run_command.get('shell', '')}`.",
+                f"- Launch command: `{launch_command.get('shell', '')}`.",
+                f"- Next: {sampling_plan.get('nextAction', '')}",
+            ]
+        )
+        if isinstance(sample_rows, list) and sample_rows:
+            for item in sample_rows[:6]:
+                if isinstance(item, dict):
+                    lines.append(
+                        f"- `{item.get('taskType', 'unknown')}`: "
+                        f"{item.get('missingUsefulSamples', 0)} useful sample(s) still missing."
+                    )
+    repair_plan = (
+        route_maturity.get("repairPlan", [])
+        if isinstance(route_maturity.get("repairPlan"), list)
+        else []
+    )
+    if repair_plan:
+        lines.extend(
+            [
+                "",
+                "Route repair plan:",
+                f"- Status: `{route_maturity.get('repairPlanStatus', 'required')}`.",
+                f"- Next repair step: {route_maturity.get('nextRepairStep', '')}",
+            ]
+        )
+        for item in repair_plan[:5]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- `{item.get('taskType', 'unknown')}` / `{item.get('missionId', '')}`: "
+                f"{item.get('repairAction', '')} Model policy: {item.get('modelPolicy', '')}"
             )
+    conflict = (
+        route_maturity.get("evidenceConflict", {})
+        if isinstance(route_maturity.get("evidenceConflict"), dict)
+        else {}
+    )
+    if conflict:
+        lines.extend(
+            [
+                "",
+                "Route-trust evidence conflict:",
+                f"- Status: `{conflict.get('status', 'unknown')}`.",
+                f"- Local closeout evidence: `{conflict.get('sourcePath', '')}`.",
+                f"- Synced NAS evidence: `{conflict.get('syncedSourcePath', '')}`.",
+                f"- Detail: {conflict.get('detail', '')}",
+            ]
+        )
     red_team = audit.get("redTeamEscalationEvidence") or {}
     if red_team:
         summary = red_team.get("summary", {}) if isinstance(red_team.get("summary"), dict) else {}
@@ -852,21 +1295,25 @@ def _route_trust_maturity_snapshot(
         if isinstance(harness_lab.get("routeTrustCoverage"), dict)
         else {}
     )
-    rows = coverage.get("taskCoverage", []) if isinstance(coverage.get("taskCoverage"), list) else []
+    raw_rows = coverage.get("taskCoverage", []) if isinstance(coverage.get("taskCoverage"), list) else []
+    rows = [dict(row) for row in raw_rows if isinstance(row, dict)]
     task_count = len(rows)
-    proven_task_count = int(coverage.get("provenTaskCount") or 0)
-    if proven_task_count == 0 and rows:
-        proven_task_count = sum(1 for row in rows if isinstance(row, dict) and row.get("status") == "proven")
-    sampling_task_count = int(coverage.get("samplingTaskCount") or 0)
-    if sampling_task_count == 0 and rows:
-        sampling_task_count = sum(1 for row in rows if isinstance(row, dict) and row.get("status") != "proven")
-    missing_samples = sum(
-        max(0, int(row.get("missingOperatorValueSamples") or 0))
-        for row in rows
-        if isinstance(row, dict)
-    )
     proposals = closeout.get("proposals", []) if isinstance(closeout.get("proposals"), list) else []
     applied = closeout.get("appliedCloseouts", []) if isinstance(closeout.get("appliedCloseouts"), list) else []
+    promoted_closeouts = _route_trust_useful_closeout_tasks([*proposals, *applied])
+    for row in rows:
+        task_type = str(row.get("taskType") or "").strip()
+        if not task_type or task_type not in promoted_closeouts:
+            continue
+        row["status"] = "proven"
+        row["missingOperatorValueSamples"] = 0
+        row["closeoutPromoted"] = True
+        row["closeoutMissionIds"] = promoted_closeouts[task_type]
+    proven_task_count = sum(1 for row in rows if row.get("status") == "proven")
+    coverage_proven_count = int(coverage.get("provenTaskCount") or 0)
+    proven_task_count = max(proven_task_count, coverage_proven_count)
+    sampling_task_count = sum(1 for row in rows if row.get("status") != "proven")
+    missing_samples = sum(max(0, int(row.get("missingOperatorValueSamples") or 0)) for row in rows)
     active_statuses = {"running", "queued", "launching", "needs_approval", "verification_pending"}
     mission_statuses = _snapshot_mission_statuses(snapshot)
     mission_statuses.update(_live_nas_mission_statuses(live_nas_evidence))
@@ -940,6 +1387,8 @@ def _route_trust_maturity_snapshot(
         else "Launch the next Hermes route-trust sample and close it with operator value feedback."
     )
     next_action = str(coverage.get("nextAction") or sampling.get("nextAction") or loop.get("nextAction") or "")
+    if status == "operator_proven" and repair_plan_status == "clear":
+        next_action = "Maintain periodic Hermes route-trust sampling; all tracked task categories are currently value-scored."
     return {
         "schema": "fluxio.operator_confidence_calibration.v1",
         "status": status,
@@ -952,6 +1401,8 @@ def _route_trust_maturity_snapshot(
         "activeSamplingMissionIds": sorted(active_sampling_ids),
         "unknownSamplingMissionCount": unknown_sampling,
         "lowValueCloseoutCount": low_value,
+        "closeoutPromotedTaskCount": len(promoted_closeouts),
+        "closeoutPromotedTasks": sorted(promoted_closeouts),
         "repairPlanStatus": repair_plan_status,
         "repairPlanCount": len(repair_plan),
         "repairPlan": repair_plan,
@@ -1160,6 +1611,45 @@ def _route_trust_sampling_mission_is_active(
     return False
 
 
+def _route_trust_useful_closeout_tasks(items: list[dict[str, Any]]) -> dict[str, list[str]]:
+    promoted: dict[str, list[str]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        feedback = item.get("operatorValueFeedback") if isinstance(item.get("operatorValueFeedback"), dict) else {}
+        task_type = str(item.get("taskType") or item.get("routeTrustTaskType") or feedback.get("routeTrustTaskType") or "").strip()
+        if not task_type:
+            continue
+        status = str(item.get("status") or "").strip()
+        applied_ok = item.get("ok") is True
+        scored_status = status in {"already_scored", "applied", "value_closeout_applied"}
+        try:
+            score = int(item.get("score") or item.get("operatorValueScore") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        if score == 0:
+            try:
+                score = int(feedback.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+        outcome = str(item.get("outcome") or item.get("operatorOutcome") or feedback.get("outcome") or "").lower()
+        trust_signal = str(
+            item.get("trustSignal")
+            or item.get("trust_signal")
+            or feedback.get("trustSignal")
+            or feedback.get("trust_signal")
+            or ""
+        ).lower()
+        useful = score >= 80 and outcome in {"useful", "recorded"} and trust_signal in {"promote", "recorded"}
+        if not useful or not (scored_status or applied_ok):
+            continue
+        mission_id = str(item.get("missionId") or item.get("mission_id") or "").strip()
+        promoted.setdefault(task_type, [])
+        if mission_id and mission_id not in promoted[task_type]:
+            promoted[task_type].append(mission_id)
+    return promoted
+
+
 def _route_trust_repair_plan(
     low_value_items: list[dict[str, Any]],
     coverage_rows: list[dict[str, Any]],
@@ -1182,7 +1672,7 @@ def _route_trust_repair_plan(
         label = str(row.get("label") or task_type.replace("_", " ").title())
         executor = "task-aware executor"
         if task_type == "frontend_design":
-            executor = "MiniMax-M2.7 only when authenticated and actually available; otherwise Codex gpt-5.5 high with explicit provider-unavailable evidence"
+            executor = "MiniMax-M3 only when authenticated and actually available; otherwise Codex gpt-5.5 high with explicit provider-unavailable evidence"
         elif task_type in {"data_f1_analytics", "data_journalism", "geoint_mapping", "rf_mapping"}:
             executor = "Codex gpt-5.5 high with dataset, artifact, and browser-preview verification gates"
         plan.append(
@@ -1221,6 +1711,7 @@ def _calibrate_category_scores(
     live_nas_evidence: dict[str, Any],
     route_trust_maturity: dict[str, Any],
     live_detail_performance: dict[str, Any] | None = None,
+    live_mission_output_quality: dict[str, Any] | None = None,
 ) -> list[AuditCategory]:
     """Cap optimistic feature scores until live operation proves them."""
     live_detail_performance = live_detail_performance or {}
@@ -1234,15 +1725,22 @@ def _calibrate_category_scores(
     route_trust_status = str(route_trust_maturity.get("status") or "unknown")
     route_trust_proven = route_trust_status == "operator_proven"
     if status == "ready_for_1_0_validation" and all_required_clear and live_ok and route_trust_proven:
-        return _apply_live_performance_caps(
-            _apply_operator_proven_route_trust_lift(
-                categories,
-                route_trust_maturity=route_trust_maturity,
-                live_nas_evidence=live_nas_evidence,
+        return _apply_operator_reality_caps(
+            _apply_live_performance_caps(
+                _apply_operator_proven_route_trust_lift(
+                    categories,
+                    route_trust_maturity=route_trust_maturity,
+                    live_nas_evidence=live_nas_evidence,
+                ),
+                live_detail_performance=live_detail_performance,
             ),
+            release=release,
+            live_nas_evidence=live_nas_evidence,
             live_detail_performance=live_detail_performance,
+            live_mission_output_quality=live_mission_output_quality,
         )
 
+    calibrated: list[AuditCategory] = []
     blocked_caps: dict[str, int] = {
         "Launch friction and beginner experience": 16,
         "Multi-project Builder operations": 15,
@@ -1274,7 +1772,6 @@ def _calibrate_category_scores(
             }
         )
 
-    calibrated: list[AuditCategory] = []
     for item in categories:
         cap = blocked_caps.get(item.category)
         cap_note = (
@@ -1328,10 +1825,147 @@ def _calibrate_category_scores(
                 ],
             )
         )
-    return _apply_live_performance_caps(
-        calibrated,
+    return _apply_operator_reality_caps(
+        _apply_live_performance_caps(
+            calibrated,
+            live_detail_performance=live_detail_performance,
+        ),
+        release=release,
+        live_nas_evidence=live_nas_evidence,
         live_detail_performance=live_detail_performance,
+        live_mission_output_quality=live_mission_output_quality,
     )
+
+
+def _apply_operator_reality_caps(
+    categories: list[AuditCategory],
+    *,
+    release: dict[str, Any],
+    live_nas_evidence: dict[str, Any],
+    live_detail_performance: dict[str, Any] | None = None,
+    live_mission_output_quality: dict[str, Any] | None = None,
+) -> list[AuditCategory]:
+    """Prevent a perfect score when live operator evidence still has real gaps."""
+
+    live_detail_performance = live_detail_performance or {}
+    live_mission_output_quality = live_mission_output_quality or {}
+    quality_score = int(release.get("qualityScore") or 0)
+    counts = live_nas_evidence.get("counts") if isinstance(live_nas_evidence.get("counts"), dict) else {}
+    blocked_missions = int(counts.get("blockedMissions") or 0)
+    checked_rows = (
+        live_mission_output_quality.get("checkedMissionRows", [])
+        if isinstance(live_mission_output_quality.get("checkedMissionRows"), list)
+        else []
+    )
+    missing_transcript_rows = [
+        row
+        for row in checked_rows
+        if isinstance(row, dict)
+        and str(row.get("runtimeTranscriptStatus") or "").lower() in {"missing", "missing_transcript"}
+    ]
+    live_detail_missing = not (
+        isinstance(live_detail_performance, dict)
+        and live_detail_performance.get("schema") == "fluxio.live_mission_detail_performance.v1"
+        and int(live_detail_performance.get("measurementCount") or 0) > 0
+    )
+
+    caps: dict[str, tuple[int, str]] = {}
+
+    def add_cap(category: str, cap: int, reason: str) -> None:
+        previous = caps.get(category)
+        if previous is None or cap < previous[0]:
+            caps[category] = (cap, reason)
+
+    if quality_score and quality_score < 80:
+        reason = (
+            f"Reality cap: release required gates pass, but release quality score is {quality_score}/100; "
+            "a perfect product score requires quality score >= 80."
+        )
+        for category, cap in {
+            "Launch friction and beginner experience": 18,
+            "Multi-project Builder operations": 18,
+            "Proof, verification, and trust": 18,
+            "Web availability and distribution": 18,
+            "Speed and long-history performance": 18,
+            "Roadmap clarity and self-improvement": 18,
+            "Interface clarity and operator ergonomics": 17,
+        }.items():
+            add_cap(category, cap, reason)
+    if blocked_missions > 0:
+        reason = (
+            f"Reality cap: authenticated live NAS evidence still reports {blocked_missions} blocked mission(s); "
+            "operator flow is not perfect until blocked rows are cleared or explicitly dismissed as non-actionable."
+        )
+        add_cap("Launch friction and beginner experience", 18, reason)
+        add_cap("Multi-project Builder operations", 18, reason)
+        add_cap("Interface clarity and operator ergonomics", 17, reason)
+    if missing_transcript_rows:
+        reason = (
+            f"Reality cap: {len(missing_transcript_rows)} checked live mission row(s) still have missing runtime transcripts; "
+            "the Agent thread cannot be scored perfect until real messages, artifacts, and transcripts line up."
+        )
+        add_cap("Proof, verification, and trust", 18, reason)
+        add_cap("Interface clarity and operator ergonomics", 17, reason)
+        add_cap("Harness and sub-agent capability", 19, reason)
+    if live_detail_missing:
+        add_cap(
+            "Speed and long-history performance",
+            18,
+            "Reality cap: no fresh live mission-detail performance measurement is attached, so speed cannot score 20/20.",
+        )
+
+    capped: list[AuditCategory] = []
+    for item in categories:
+        cap_entry = caps.get(item.category)
+        has_vapid_gap = item.category == "Web availability and distribution" and any(
+            "production VAPID" in str(gap_text) for gap_text in item.gaps
+        )
+        if cap_entry is None and has_vapid_gap:
+            cap_entry = (
+                18,
+                "Reality cap: browser/PWA notifications still mention production VAPID provisioning; "
+                "closed-tab phone delivery is not a perfect web-distribution story until that proof is current.",
+            )
+        if cap_entry is None:
+            capped.append(item)
+            continue
+        cap, reason = cap_entry
+        gap = reason
+        if has_vapid_gap:
+            cap = min(cap, 18)
+            gap = (
+                "Reality cap: browser/PWA notifications still mention production VAPID provisioning; "
+                "closed-tab phone delivery is not a perfect web-distribution story until that proof is current."
+        )
+        capped.append(
+            replace(
+                item,
+                score_out_of_20=min(item.score_out_of_20, cap),
+                evidence=[*item.evidence, reason],
+                gaps=[gap, *item.gaps] if gap not in item.gaps else item.gaps,
+                next_moves=[
+                    *_reality_next_moves_for_category(item.category),
+                    *item.next_moves,
+                ],
+            )
+        )
+    return capped
+
+
+def _reality_next_moves_for_category(category: str) -> list[str]:
+    if category == "Interface clarity and operator ergonomics":
+        return ["Make Agent show the real live message thread, transcript status, artifacts, and next repair step as the first view."]
+    if category == "Proof, verification, and trust":
+        return ["Restore or attach missing runtime transcripts for checked live missions, then rerun live mission detail verification."]
+    if category == "Speed and long-history performance":
+        return ["Run and archive live mission-detail performance measurements before claiming 20/20 speed."]
+    if category == "Multi-project Builder operations":
+        return ["Clear or explicitly resolve current blocked live mission rows in Builder."]
+    if category == "Launch friction and beginner experience":
+        return ["Keep beginner launch proof current after blocked live mission rows are resolved."]
+    if category == "Web availability and distribution":
+        return ["Keep Web Push, browser, and Telegram receipts current for phone/tablet runs."]
+    return []
 
 
 def _apply_live_performance_caps(
@@ -1517,9 +2151,29 @@ def _score_categories(
     setup_health: dict[str, Any],
     harness_lab: dict[str, Any],
     route_trust_maturity: dict[str, Any] | None = None,
+    nas_storage_pressure: dict[str, Any] | None = None,
+    live_mission_output_quality: dict[str, Any] | None = None,
+    mission_artifact_repair_plan: dict[str, Any] | None = None,
 ) -> list[AuditCategory]:
     workspaces = snapshot.get("workspaces", [])
     missions = snapshot.get("missions", [])
+
+    def _mission_runtime_budget_exhausted(mission: Any) -> bool:
+        if not isinstance(mission, dict):
+            return False
+        if str(mission.get("status") or "").lower() not in {"running", "delegated_active", "approval_waiting"}:
+            return False
+        live_progress = mission.get("liveProgress") if isinstance(mission.get("liveProgress"), dict) else {}
+        explicit_exhausted = str(mission.get("timeBudgetStatus") or "").lower() in {
+            "running",
+            "exhausted",
+            "runtime_budget_exhausted",
+        } and int(mission.get("remainingRuntimeSeconds") or 0) <= 0
+        progress_exhausted = str(live_progress.get("progressKind") or "").lower() == "runtime_budget_exhausted"
+        source_exhausted = str(live_progress.get("source") or "").lower() == "mission_runtime_budget_exhausted"
+        return explicit_exhausted or progress_exhausted or source_exhausted
+
+    has_active_runtime_budget_exhausted = any(_mission_runtime_budget_exhausted(mission) for mission in missions)
     required = release.get("requiredGateSummary", {})
     quality = release.get("qualitySignals", {})
     setup_summary = setup_health.get("serviceManagementSummary", {})
@@ -1541,6 +2195,14 @@ def _score_categories(
     tutorial_text = _safe_read(root / "docs" / "FLUXIO_OPERATOR_TUTORIAL.md")
     has_quickstart = "mission-quickstart" in cli_text
     has_builder_quickstart = "quickstart_control_room_mission_command" in shell_text
+    has_storage_aware_quickstart_fallback = (
+        "_mission_storage_pressure_blocker(root, item)" in cli_text
+        and "missionLaunchStorageBlockReason" in shell_text
+        and 'data-launch-local-fallback="true"' in shell_text
+        and "Use local workspace" in shell_text
+        and "test_mission_quickstart_prefers_local_workspace_when_nas_storage_is_blocked"
+        in _safe_read(root / "tests" / "test_cli_preferences.py")
+    )
     has_launch_shortcuts = "missionLaunchShortcuts" in mission_control_text and "launchPrefillAppliedRef" in shell_text
     has_contextual_launch_recommendation = (
         "fluxio.launch_runtime_recommendation.v1" in _safe_read(root / "src" / "grant_agent" / "launch_recommendation.py")
@@ -1972,6 +2634,96 @@ def _score_categories(
         and "fluxio-public-web-release-candidate" in web_pages_workflow_text
         and ".agent_control/release_candidates/public-web/release-candidate.json" in web_pages_workflow_text
     )
+    try:
+        web_push_sender_status = web_push_status(root)
+    except Exception:
+        web_push_sender_status = {}
+    has_web_push_sender_configured = bool(web_push_sender_status.get("senderConfigured"))
+    has_web_push_subscription = int(web_push_sender_status.get("subscriptionCount") or 0) > 0
+    try:
+        ntfy_sender_status = ntfy_status(root)
+    except Exception:
+        ntfy_sender_status = {}
+    delivery_receipt_rows = [
+        row
+        for row in _load_jsonl(root / ".agent_control" / "delivery_receipts.jsonl")
+        if isinstance(row, dict)
+    ]
+    has_ntfy_sender_configured = bool(ntfy_sender_status.get("senderConfigured"))
+    has_ntfy_delivered_receipt = any(
+        str(row.get("channel") or "").lower() == "ntfy"
+        and str(row.get("status") or "").lower() == "delivered"
+        for row in delivery_receipt_rows
+    )
+    has_mobile_push_delivery_proof = has_web_push_subscription or (
+        has_ntfy_sender_configured and has_ntfy_delivered_receipt
+    )
+    web_push_distribution_gap = (
+        "Open-source ntfy phone push is configured and has a delivered broker receipt; Web Push browser subscription remains optional secondary proof."
+        if has_ntfy_sender_configured and has_ntfy_delivered_receipt
+        else
+        "Closed-tab Web Push has configured sender keys and browser subscriptions; the remaining gap is an archived real closed-tab delivery receipt from a phone/tablet browser."
+        if has_web_push_sender_configured and has_web_push_subscription
+        else
+        "Closed-tab Web Push sender keys and dependency are configured; the remaining gap is registering a real phone/tablet browser subscription and archiving a delivery receipt."
+        if has_web_push_sender_configured
+        else
+        "GitHub Pages deployment receipt, release-candidate attachment, external release proof, and closed-tab Web Push sender path exist; the remaining web gap is production VAPID key configuration."
+        if has_public_web_distribution_contract and has_public_web_release_candidate_attachment and has_closed_tab_web_push_sender and has_external_publication_proof
+        else
+        "GitHub Pages deployment receipt, release-candidate attachment, and closed-tab Web Push sender path exist; the remaining gap is public release publication and production VAPID key configuration."
+        if has_public_web_distribution_contract and has_public_web_release_candidate_attachment and has_closed_tab_web_push_sender
+        else
+        "GitHub Pages deployment receipt now attaches to the release candidate; the remaining gap is real closed-tab push and public release publication."
+        if has_public_web_distribution_contract and has_public_web_release_candidate_attachment
+        else
+        "GitHub Pages deployment and PWA distribution are now verified by a release contract that records the published URL after deploy; the remaining gap is attaching the generated receipt to a release candidate."
+        if has_public_web_distribution_contract
+        else
+        "One-command private web launch exists now; no public hosted demo or signed installer-grade onboarding is proven from this audit."
+        if has_one_command_launcher
+        else "Private web launch shortcuts are present; no public hosted demo or one-click installer-grade web onboarding is proven from this audit."
+        if has_launch_shortcuts
+        else "No public hosted demo or one-click installer-grade web onboarding is proven from this audit."
+    )
+    web_push_notification_gap = (
+        "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, and ntfy phone push with a delivered broker receipt exist now; the next gap is moving ntfy from public random topic to self-hosted or token-protected production settings."
+        if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract and has_ntfy_sender_configured and has_ntfy_delivered_receipt
+        else
+        "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, deployed-URL receipt capture, and configured Web Push sender keys exist now; the next gap is a real browser subscription plus delivery receipt."
+        if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract and has_closed_tab_web_push_sender and has_web_push_sender_configured and not has_web_push_subscription
+        else
+        "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, deployed-URL receipt capture, and Web Push sender/subscription evidence exist now; the next gap is real closed-tab delivery proof."
+        if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract and has_closed_tab_web_push_sender and has_web_push_sender_configured
+        else
+        "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, deployed-URL receipt capture, and Web Push send receipts exist now; the next gap is production VAPID provisioning."
+        if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract and has_closed_tab_web_push_sender
+        else
+        "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, and deployed-URL receipt capture exist now; the next gap is real closed-tab push."
+        if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract
+        else
+        "Out-of-band Telegram watchdog receipts and installable app shell exist now; the next gap is public/signed packaging and real closed-tab push."
+        if has_out_of_band_watchdog_notifications and has_installable_pwa_shell
+        else
+        "Out-of-band Telegram watchdog receipts exist now; the next gap is installable app shell, public/signed packaging, and optional service-worker push."
+        if has_out_of_band_watchdog_notifications
+        else
+        "Receipt-backed overnight delivery exists now; the next gap is closed-tab service-worker push and public/signed packaging."
+        if has_notification_delivery_receipts
+        else
+        "App-like overnight digest exists now; the next gap is closed-tab mobile push or Telegram delivery receipts."
+        if has_overnight_digest
+        else
+        "Responsive visual smoke exists; the next gap is closed-tab mobile push and install-grade packaging."
+        if has_responsive_smoke
+        else
+        "Browser alerts are permission-gated now; the next gap is service-worker push for closed-tab phone notifications and phone/tablet visual QA."
+        if has_browser_notifications
+        else
+        "Notification feed is now available, but it still needs real push/browser permission support and phone/tablet visual QA."
+        if has_web_notifications
+        else "NAS availability depends on private network health and does not degrade gracefully in the local UI."
+    )
     has_skill_feedback_loop = (
         "record_slice_feedback" in _safe_read(root / "src" / "grant_agent" / "skill_library.py")
         and "Mission-slice feedback loop" in shell_text
@@ -1980,7 +2732,7 @@ def _score_categories(
         "systemLossRouting" in _safe_read(root / "src" / "grant_agent" / "skill_library.py")
         and "fluxio.skill_system_loss_hold.v1" in _safe_read(root / "src" / "grant_agent" / "skill_library.py")
         and "systemLossHold" in _safe_read(root / "src" / "grant_agent" / "skill_library.py")
-        and "System loss routing" in shell_text
+        and "System gap routing" in shell_text
     )
     has_skill_repair_proposals = (
         "repairProposals" in _safe_read(root / "src" / "grant_agent" / "skill_library.py")
@@ -2101,6 +2853,19 @@ def _score_categories(
         and int(archived_route_trust.get("provenTaskCount") or 0) >= archived_task_count
         and not archived_route_trust.get("missingTaskCategories")
     )
+    live_cross_category_outcome_validation = _live_cross_category_outcome_validation(
+        live_mission_output_quality or {}
+    )
+    has_live_cross_category_outcome_validation = (
+        live_cross_category_outcome_validation.get("status") == "passed"
+    )
+    has_live_mission_output_quality_cleared = (
+        isinstance(live_mission_output_quality, dict)
+        and live_mission_output_quality.get("status") == "passed"
+        and bool(live_mission_output_quality.get("checkedMissionRows"))
+        and not live_mission_output_quality.get("weakMissionRows")
+        and not live_mission_output_quality.get("repairMissionRows")
+    )
     has_proof_digest = "proofDigest" in mission_control_text and "Mission proof digest" in shell_text
     has_proof_digest_export = (
         "export_mission_proof_digest_command" in shell_text
@@ -2140,6 +2905,7 @@ def _score_categories(
                 f"required setup health: {setup_summary.get('healthyCount')}/{setup_summary.get('totalItems')}",
                 f"mission quickstart command present: {has_quickstart}",
                 f"Builder quickstart control present: {has_builder_quickstart}",
+                f"storage-aware local quickstart fallback present: {has_storage_aware_quickstart_fallback}",
                 f"copyable launch URL/command shortcuts present: {has_launch_shortcuts}",
                 f"one-command web launcher present: {has_one_command_launcher}",
                 f"npx-style package launcher present: {has_npx_style_launcher_package}",
@@ -2181,6 +2947,17 @@ def _score_categories(
                     else "Beginner mode is described in docs but not proven as a materially simpler end-to-end launch path."
                 ),
                 (
+                    "NAS-backed missions are blocked by storage pressure, but quickstart can fall back to a local workspace; remaining gap is clearing NAS write headroom for unattended remote missions."
+                    if has_storage_aware_quickstart_fallback
+                    and isinstance(nas_storage_pressure, dict)
+                    and (
+                        str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
+                        or bool(nas_storage_pressure.get("probeTimedOut"))
+                        or bool(nas_storage_pressure.get("probeConnectFailed"))
+                        or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
+                        or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
+                    )
+                    else
                     str(public_launch_readiness.get("nextAction") or "Public launch readiness needs rerun.")
                     if has_public_launch_readiness_report and not has_public_launch_ready
                     else "Public GitHub release/tag proof is attached; remaining launch work is optional registry or signed-installer distribution."
@@ -2221,6 +2998,17 @@ def _score_categories(
                     else "Mirror `mission-quickstart` in Builder as a single 'Start from goal' control."
                 ),
                 (
+                    "Keep the local fallback path active, but clear NAS storage before claiming unattended NAS mission launch reliability."
+                    if has_storage_aware_quickstart_fallback
+                    and isinstance(nas_storage_pressure, dict)
+                    and (
+                        str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
+                        or bool(nas_storage_pressure.get("probeTimedOut"))
+                        or bool(nas_storage_pressure.get("probeConnectFailed"))
+                        or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
+                        or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
+                    )
+                    else
                     "Keep `verify:beginner-launch` in release validation and archive the generated reports."
                     if has_beginner_launch_interaction_gate
                     else "Add interaction assertions for launch shortcut prefill and quickstart submit."
@@ -2502,9 +3290,12 @@ def _score_categories(
         ),
         AuditCategory(
             category="Harness and sub-agent capability",
-            score_out_of_20=20 if has_runtime_supervisor and has_subagent_lanes and has_harness_parity and has_subagent_lane_controls and has_route_mutation_receipts and has_route_rollback_receipts else (19 if has_runtime_supervisor and has_subagent_lanes and has_harness_parity and has_subagent_lane_controls else (18 if has_runtime_supervisor and has_subagent_lanes and has_harness_parity else (17 if has_runtime_supervisor and has_subagent_lanes else (16 if has_runtime_supervisor else 11)))),
+            score_out_of_20=20 if has_runtime_supervisor and has_subagent_lanes and has_harness_parity and has_subagent_lane_controls and has_route_mutation_receipts and has_route_rollback_receipts and has_live_cross_category_outcome_validation else (19 if has_runtime_supervisor and has_subagent_lanes and has_harness_parity and has_subagent_lane_controls else (18 if has_runtime_supervisor and has_subagent_lanes and has_harness_parity else (17 if has_runtime_supervisor and has_subagent_lanes else (16 if has_runtime_supervisor else 11)))),
             t3_reference_score_out_of_20=18,
             verdict=(
+                "Ahead of T3 Code on harness/sub-agent operation: Hermes-first lanes, route mutation and rollback receipts, outcome-trend routing, value-scored route trust, and live cross-category Hermes outcome validation are all present."
+                if has_subagent_lanes and has_harness_parity and has_subagent_lane_controls and has_route_mutation_receipts and has_route_rollback_receipts and has_live_cross_category_outcome_validation
+                else
                 "Better mission supervision than T3 Code, with explicit sub-agent lanes, proof drill-down, route-mutation receipts, failed-route rollback receipts, and a Hermes/OpenClaw/legacy parity matrix visible in Builder."
                 if has_subagent_lanes and has_harness_parity and has_subagent_lane_controls and has_route_mutation_receipts and has_route_rollback_receipts
                 else
@@ -2534,9 +3325,18 @@ def _score_categories(
                 f"failed-route rollback receipts present: {has_route_rollback_receipts}",
                 f"outcome-trend routing present: {has_outcome_trend_routing}",
                 f"launch route-trust confidence present: {has_launch_route_trust_confidence}",
+                (
+                    "live cross-category Hermes outcome validation: "
+                    f"{live_cross_category_outcome_validation.get('status', 'missing')} "
+                    f"({live_cross_category_outcome_validation.get('validatedCategoryCount', 0)}/"
+                    f"{live_cross_category_outcome_validation.get('requiredCategoryCount', 0)} categories)"
+                ),
             ],
             gaps=[
                 (
+                    "Live cross-category Hermes outcome validation is passed; keep expanding the trend across fresh task families."
+                    if has_live_cross_category_outcome_validation
+                    else
                     "Outcome-trend routing exists now; the next gap is proving it on live model-backed missions over time."
                     if has_outcome_trend_routing
                     else "Failed-route rollback receipts exist now; the next gap is outcome-trend routing from mission history."
@@ -2560,6 +3360,9 @@ def _score_categories(
                     else "The product cannot yet explain when to use OpenClaw versus Hermes in beginner language."
                 ),
                 (
+                    "Route-change receipts, task-fit proof, rollback, outcome trends, launch confidence, and live cross-category validation are visible; the next check is keeping the trend fresh."
+                    if has_route_mutation_receipts and has_task_fit_lane_proof and has_route_rollback_receipts and has_outcome_trend_routing and has_launch_route_trust_confidence and has_live_cross_category_outcome_validation
+                    else
                     "Route-change receipts, task-fit proof, rollback, outcome trends, and launch confidence are visible; the next gap is live trend validation across more task categories."
                     if has_route_mutation_receipts and has_task_fit_lane_proof and has_route_rollback_receipts and has_outcome_trend_routing and has_launch_route_trust_confidence
                     else
@@ -2580,6 +3383,9 @@ def _score_categories(
             ],
             next_moves=[
                 (
+                    "Keep rerunning live Hermes validation across new categories so the outcome trend stays current."
+                    if has_live_cross_category_outcome_validation
+                    else
                     "Run repeated live missions per task category so outcome trends can become stronger than static defaults."
                     if has_outcome_trend_routing
                     else "Persist outcome trends per task type so route recommendations improve after successes and rollbacks."
@@ -2653,6 +3459,11 @@ def _score_categories(
                 f"notification delivery receipts present: {has_notification_delivery_receipts}",
                 f"out-of-band watchdog Telegram notifications present: {has_out_of_band_watchdog_notifications}",
                 f"closed-tab Web Push sender path present: {has_closed_tab_web_push_sender}",
+                f"closed-tab Web Push sender configured: {has_web_push_sender_configured}",
+                f"closed-tab Web Push browser subscriptions: {int(web_push_sender_status.get('subscriptionCount') or 0)}",
+                f"ntfy phone push configured: {has_ntfy_sender_configured}",
+                f"ntfy delivered receipt present: {has_ntfy_delivered_receipt}",
+                f"mobile push delivery proof present: {has_mobile_push_delivery_proof}",
                 f"installable PWA shell and offline fallback present: {has_installable_pwa_shell}",
                 f"public web distribution contract present: {has_public_web_distribution_contract}",
                 f"public web release-candidate attachment present: {has_public_web_release_candidate_attachment}",
@@ -2666,54 +3477,8 @@ def _score_categories(
                 "package scripts expose frontend build, backend, Tauri dev/build, and NAS setup",
             ],
             gaps=[
-                (
-                    "GitHub Pages deployment receipt, release-candidate attachment, external release proof, and closed-tab Web Push sender path exist; the remaining web gap is production VAPID key configuration."
-                    if has_public_web_distribution_contract and has_public_web_release_candidate_attachment and has_closed_tab_web_push_sender and has_external_publication_proof
-                    else
-                    "GitHub Pages deployment receipt, release-candidate attachment, and closed-tab Web Push sender path exist; the remaining gap is public release publication and production VAPID key configuration."
-                    if has_public_web_distribution_contract and has_public_web_release_candidate_attachment and has_closed_tab_web_push_sender
-                    else
-                    "GitHub Pages deployment receipt now attaches to the release candidate; the remaining gap is real closed-tab push and public release publication."
-                    if has_public_web_distribution_contract and has_public_web_release_candidate_attachment
-                    else
-                    "GitHub Pages deployment and PWA distribution are now verified by a release contract that records the published URL after deploy; the remaining gap is attaching the generated receipt to a release candidate."
-                    if has_public_web_distribution_contract
-                    else
-                    "One-command private web launch exists now; no public hosted demo or signed installer-grade onboarding is proven from this audit."
-                    if has_one_command_launcher
-                    else "Private web launch shortcuts are present; no public hosted demo or one-click installer-grade web onboarding is proven from this audit."
-                    if has_launch_shortcuts
-                    else "No public hosted demo or one-click installer-grade web onboarding is proven from this audit."
-                ),
-                (
-                    "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, deployed-URL receipt capture, and Web Push send receipts exist now; the next gap is production VAPID provisioning."
-                    if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract and has_closed_tab_web_push_sender
-                    else
-                    "Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, and deployed-URL receipt capture exist now; the next gap is real closed-tab push."
-                    if has_out_of_band_watchdog_notifications and has_installable_pwa_shell and has_public_web_distribution_contract
-                    else
-                    "Out-of-band Telegram watchdog receipts and installable app shell exist now; the next gap is public/signed packaging and real closed-tab push."
-                    if has_out_of_band_watchdog_notifications and has_installable_pwa_shell
-                    else
-                    "Out-of-band Telegram watchdog receipts exist now; the next gap is installable app shell, public/signed packaging, and optional service-worker push."
-                    if has_out_of_band_watchdog_notifications
-                    else
-                    "Receipt-backed overnight delivery exists now; the next gap is closed-tab service-worker push and public/signed packaging."
-                    if has_notification_delivery_receipts
-                    else
-                    "App-like overnight digest exists now; the next gap is closed-tab mobile push or Telegram delivery receipts."
-                    if has_overnight_digest
-                    else
-                    "Responsive visual smoke exists; the next gap is closed-tab mobile push and install-grade packaging."
-                    if has_responsive_smoke
-                    else
-                    "Browser alerts are permission-gated now; the next gap is service-worker push for closed-tab phone notifications and phone/tablet visual QA."
-                    if has_browser_notifications
-                    else
-                    "Notification feed is now available, but it still needs real push/browser permission support and phone/tablet visual QA."
-                    if has_web_notifications
-                    else "NAS availability depends on private network health and does not degrade gracefully in the local UI."
-                ),
+                web_push_distribution_gap,
+                web_push_notification_gap,
                 "Tauri build is still a heavier validation path than a fast web-only smoke.",
             ],
             next_moves=[
@@ -2729,6 +3494,15 @@ def _score_categories(
                     else "Maintain a web-only validation path for NAS/headless contexts."
                 ),
                 (
+                    "Move ntfy from public random-topic proof to self-hosted or token-protected production settings."
+                    if has_ntfy_sender_configured and has_ntfy_delivered_receipt
+                    else
+                    "Register a real phone/tablet browser subscription and archive a Web Push delivery receipt."
+                    if has_web_push_sender_configured and not has_web_push_subscription
+                    else
+                    "Send and archive a real closed-tab Web Push delivery receipt from a subscribed phone/tablet browser."
+                    if has_web_push_sender_configured and has_web_push_subscription
+                    else
                     "Provision production VAPID keys and keep Web Push/Telegram receipts enabled for unattended NAS runs."
                     if has_closed_tab_web_push_sender and has_out_of_band_watchdog_notifications and has_external_watchdog_supervisor_loop and has_external_watchdog_autostart
                     else
@@ -3076,28 +3850,28 @@ def _score_categories(
             score_out_of_20=20 if has_workflow_docs and has_skill_library and has_red_team_escalation and has_red_team_escalation_history and has_red_team_escalation_builder_trend and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application and has_operator_value_closeout and has_operator_value_route_trust and has_operator_value_skill_trust and has_self_improvement_evidence_contract else (19 if has_workflow_docs and has_skill_library and has_red_team_escalation and has_red_team_escalation_history and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_self_improvement_evidence_contract else (18 if has_workflow_docs and has_skill_library and has_red_team_escalation and has_skill_feedback_loop else (17 if has_workflow_docs and has_skill_library and has_red_team_escalation else (16 if has_workflow_docs and has_skill_library else 12)))),
             t3_reference_score_out_of_20=14,
             verdict=(
-                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-loss learned skills have approval-gated repair receipts, and operator-value closeouts feed future route and skill trust."
+                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-gap learned skills have approval-gated repair receipts, and operator-value closeouts feed future route and skill trust."
                 if has_red_team_escalation and has_red_team_escalation_history and has_red_team_escalation_builder_trend and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application and has_operator_value_closeout and has_operator_value_route_trust and has_operator_value_skill_trust
                 else
-                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-loss learned skills have approval-gated repair receipts, and operator-value closeouts feed future route trust."
+                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-gap learned skills have approval-gated repair receipts, and operator-value closeouts feed future route trust."
                 if has_red_team_escalation and has_red_team_escalation_history and has_red_team_escalation_builder_trend and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application and has_operator_value_closeout and has_operator_value_route_trust
                 else
-                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-loss learned skills have approval-gated repair receipts, and mission closeout records operator value."
+                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-gap learned skills have approval-gated repair receipts, and mission closeout records operator value."
                 if has_red_team_escalation and has_red_team_escalation_history and has_red_team_escalation_builder_trend and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application and has_operator_value_closeout
                 else
-                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, and high-loss learned skills have approval-gated repair application receipts plus validation gates."
+                "Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, and high-gap learned skills have approval-gated repair application receipts plus validation gates."
                 if has_red_team_escalation and has_red_team_escalation_history and has_red_team_escalation_builder_trend and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application
                 else
-                "Roadmap is unusually strong, red-team proof now persists escalation history, and high-loss learned skills have approval-gated repair application receipts plus validation gates."
+                "Roadmap is unusually strong, red-team proof now persists escalation history, and high-gap learned skills have approval-gated repair application receipts plus validation gates."
                 if has_red_team_escalation and has_red_team_escalation_history and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application
                 else
-                "Roadmap is unusually strong, red-team proof escalates difficulty, and high-loss learned skills now have approval-gated repair application receipts plus validation gates."
+                "Roadmap is unusually strong, red-team proof escalates difficulty, and high-gap learned skills now have approval-gated repair application receipts plus validation gates."
                 if has_red_team_escalation and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals and has_approved_skill_repair_application
                 else
-                "Roadmap is unusually strong, red-team proof escalates difficulty, and high-loss skills now generate repair proposals with before/after validation gates."
+                "Roadmap is unusually strong, red-team proof escalates difficulty, and high-gap skills now generate repair proposals with before/after validation gates."
                 if has_red_team_escalation and has_skill_feedback_loop and has_system_loss_skill_routing and has_skill_repair_proposals
                 else
-                "Roadmap is unusually strong, red-team proof escalates difficulty, and mission-slice loss now changes skill routing instead of only reporting scores."
+                "Roadmap is unusually strong, red-team proof escalates difficulty, and mission-slice gap now changes skill routing instead of only reporting scores."
                 if has_red_team_escalation and has_skill_feedback_loop and has_system_loss_skill_routing
                 else
                 "Roadmap is unusually strong, red-team proof escalates difficulty, and mission slices now feed skill loss/improvement scores back into Skill Studio."
@@ -3116,7 +3890,7 @@ def _score_categories(
                 f"adaptive red-team benchmark consumes prior escalation targets: {has_adaptive_red_team_benchmark}",
                 f"Builder-visible red-team escalation trend present: {has_red_team_escalation_builder_trend}",
                 f"mission-slice skill feedback loop present: {has_skill_feedback_loop}",
-                f"system-loss skill routing present: {has_system_loss_skill_routing}",
+                f"system-gap skill routing present: {has_system_loss_skill_routing}",
                 f"automatic skill repair proposals present: {has_skill_repair_proposals}",
                 f"approved skill repair application present: {has_approved_skill_repair_application}",
                 f"operator-value mission closeout present: {has_operator_value_closeout}",
@@ -3249,10 +4023,10 @@ def _score_categories(
                     "Apply approved repair proposals to editable learned skills, then require a clean validation slice before reuse."
                     if has_skill_repair_proposals
                     else
-                    "Generate repair diffs for high-loss skills and require a clean validation slice before reuse."
+                    "Generate repair diffs for high-gap skills and require a clean validation slice before reuse."
                     if has_system_loss_skill_routing
                     else
-                    "Gate skill promotion on multiple low-loss slices plus human review."
+                    "Gate skill promotion on multiple low-gap slices plus human review."
                     if has_skill_feedback_loop
                     else "Promote repeated mission wins into reviewed skills automatically after review."
                 ),
@@ -3276,8 +4050,170 @@ def _score_categories(
             ],
         ),
     ]
+    has_queue_first_builder = (
+        "Queue-first Builder" in reference_shell_text
+        and 'data-live-builder-command-band="true"' in reference_shell_text
+    )
+    has_thread_first_agent = (
+        "Thread-first Agent" in reference_shell_text
+        and 'data-live-agent-thread-first-band="true"' in reference_shell_text
+    )
+    has_selected_report_reader = (
+        "Selected live report" in reference_shell_text
+        and 'data-live-selected-report-reader="true"' in reference_shell_text
+    )
+    has_agent_advanced_drawers = (
+        'data-agent-advanced-drawer="true"' in reference_shell_text
+        and 'data-agent-advanced-drawer-kind="runtime"' in reference_shell_text
+        and 'data-agent-advanced-drawer-kind="plan"' in reference_shell_text
+    )
+    has_agent_clarity_mode = (
+        'data-agent-clarity-mode={normalizedAgentClarityMode}' in reference_shell_text
+        and 'data-agent-clarity-switch="true"' in reference_shell_text
+        and "fluxio.agent.clarityMode" in reference_shell_text
+    )
+    has_builder_clarity_mode = (
+        'data-builder-clarity-mode={normalizedBuilderClarityMode}' in reference_shell_text
+        and 'data-builder-clarity-switch="true"' in reference_shell_text
+        and 'data-builder-operator-priority="true"' in reference_shell_text
+        and 'fluxio.builder.clarityMode' in reference_shell_text
+    )
+    has_workbench_clarity_mode = (
+        'data-workbench-clarity-mode={normalizedWorkbenchClarityMode}' in reference_shell_text
+        and 'data-live-workbench-clarity-switch="true"' in reference_shell_text
+        and "fluxio.workbench.clarityMode" in reference_shell_text
+    )
+    has_skills_clarity_mode = (
+        'data-skills-clarity-mode={normalizedSkillsClarityMode}' in reference_shell_text
+        and 'data-live-skills-clarity-switch="true"' in reference_shell_text
+        and "fluxio.skills.clarityMode" in reference_shell_text
+    )
+    has_cross_surface_clarity_mode = (
+        has_agent_clarity_mode
+        and has_builder_clarity_mode
+        and has_workbench_clarity_mode
+        and has_skills_clarity_mode
+    )
+    has_live_workbench_proof_band = 'data-live-workbench-proof-band="true"' in reference_shell_text
+    has_live_workbench_execution_surface = (
+        'data-live-workbench-execution="true"' in reference_shell_text
+        and 'data-live-workbench-execution-receipts="true"' in reference_shell_text
+        and 'data-live-workbench-execution-missing="true"' in reference_shell_text
+        and "workbench:run-artifact-check" in reference_shell_text
+    )
+    has_system_loss_builder_surface = (
+        "System gap breakdown" in reference_shell_text
+        and 'data-system-loss-current="true"' in reference_shell_text
+    )
+    has_phone_progress_surface = (
+        'value: "phone"' in reference_shell_text
+        or "Phone" in reference_shell_text and "data-live-phone-progress" in reference_shell_text
+    )
+    has_phone_notification_compact_tray = (
+        "shouldStartNotificationStackCollapsed" in shell_text
+        and 'window.matchMedia("(max-width: 760px)")' in shell_text
+        and "collapsedHeadline" in shell_text
+        and "collapsedBody" in shell_text
+        and "data-notification-stack-expanded" in shell_text
+        and "notification-stack-collapsed-mode" in styles_text
+    )
+    ui_score = 10 + sum(
+        1
+        for flag in (
+            has_queue_first_builder,
+            has_thread_first_agent,
+            has_selected_report_reader,
+            has_agent_advanced_drawers,
+            has_builder_clarity_mode,
+            has_cross_surface_clarity_mode,
+            has_live_workbench_proof_band,
+            has_live_workbench_execution_surface,
+            has_system_loss_builder_surface,
+            has_phone_progress_surface,
+            has_phone_notification_compact_tray,
+        )
+        if flag
+    )
+    categories.append(
+        AuditCategory(
+            category="Interface clarity and operator ergonomics",
+            score_out_of_20=min(
+                ui_score + (1 if has_live_mission_output_quality_cleared else 0),
+                20
+                if has_live_workbench_execution_surface and has_live_mission_output_quality_cleared
+                else 19
+                if has_live_workbench_execution_surface
+                else 18
+                if has_builder_clarity_mode
+                else 17,
+            ),
+            t3_reference_score_out_of_20=17,
+            verdict=(
+                "Fluxio now has live-first Builder, Agent, Workbench, system-gap, phone surfaces, Agent advanced drawers, Builder focus/full clarity mode, Workbench artifact execution receipts, and current live mission output proof."
+                if has_live_mission_output_quality_cleared
+                else "Fluxio now has live-first Builder, Agent, Workbench, system-gap, phone surfaces, Agent advanced drawers, a Builder focus/full clarity mode, and a primary Workbench artifact execution receipt surface; the remaining gap is proving real served artifacts from weak completed missions."
+            ),
+            evidence=[
+                f"queue-first Builder band present: {has_queue_first_builder}",
+                f"thread-first Agent band present: {has_thread_first_agent}",
+                f"selected live report reader present: {has_selected_report_reader}",
+                f"Agent advanced diagnostics drawers present: {has_agent_advanced_drawers}",
+                f"Builder focus/full clarity mode present: {has_builder_clarity_mode}",
+                f"cross-surface focus/full clarity mode present: {has_cross_surface_clarity_mode}",
+                f"Agent focus/full clarity mode present: {has_agent_clarity_mode}",
+                f"Workbench focus/full clarity mode present: {has_workbench_clarity_mode}",
+                f"Skills focus/full clarity mode present: {has_skills_clarity_mode}",
+                f"live Workbench proof band present: {has_live_workbench_proof_band}",
+                f"live Workbench artifact execution surface present: {has_live_workbench_execution_surface}",
+                f"system-gap Builder surface present: {has_system_loss_builder_surface}",
+                f"phone progress surface present: {has_phone_progress_surface}",
+                f"phone compact notification tray present: {has_phone_notification_compact_tray}",
+                f"live mission output quality cleared: {has_live_mission_output_quality_cleared}",
+                f"responsive smoke present: {has_responsive_smoke}",
+                f"authenticated beginner-launch gate present: {has_beginner_launch_interaction_gate}",
+            ],
+            gaps=[
+                (
+                    "Completed weak-mission proof is clear in the current live evidence; keep the proof fresh as new missions complete."
+                    if has_live_mission_output_quality_cleared
+                    else "Workbench now exposes a primary artifact execution receipt surface, but completed weak missions still need real served artifacts or runtime-output bodies to prove the flow end to end."
+                ),
+                (
+                    "Builder, Agent, Workbench, and Skills now share the same focus/full contract; keep responsive proof fresh."
+                    if has_cross_surface_clarity_mode
+                    else "Agent diagnostics, lanes, trace, and plan steps are in drawers now; remaining clarity work is making all surfaces follow the same focus/full contract."
+                ),
+                (
+                    "Workbench proof is currently grounded in live runtime output and artifact evidence."
+                    if has_live_mission_output_quality_cleared
+                    else "Workbench is now safe from stale live iframes and will not invent missing artifacts, but artifact repair still depends on mission runtime output quality."
+                ),
+            ],
+            next_moves=[
+                (
+                    "Keep the cross-surface focus/full contract covered by authenticated visual checks."
+                    if has_cross_surface_clarity_mode
+                    else "Carry the Builder focus/full contract into Agent, Workbench, and Skills."
+                ),
+                (
+                    "Keep checking new completed missions from the Workbench execution surface before treating them as useful."
+                    if has_live_mission_output_quality_cleared
+                    else "Relaunch or resume transcript-only completed missions with a hard served-artifact gate, then verify them from the Workbench execution surface."
+                ),
+                "Move Builder route-trust and publication proof into the same kind of progressive disclosure.",
+            ],
+        )
+    )
     strict_evidence = {
         "has_one_command_launcher": has_one_command_launcher,
+        "has_agent_advanced_drawers": has_agent_advanced_drawers,
+        "has_agent_clarity_mode": has_agent_clarity_mode,
+        "has_builder_clarity_mode": has_builder_clarity_mode,
+        "has_workbench_clarity_mode": has_workbench_clarity_mode,
+        "has_skills_clarity_mode": has_skills_clarity_mode,
+        "has_cross_surface_clarity_mode": has_cross_surface_clarity_mode,
+        "has_live_workbench_execution_surface": has_live_workbench_execution_surface,
+        "has_live_mission_output_quality_cleared": has_live_mission_output_quality_cleared,
         "has_receipt_backed_sync_conflicts": has_receipt_backed_sync_conflicts,
         "has_interactive_sync_conflict_resolution": has_interactive_sync_conflict_resolution,
         "has_batch_sync_conflict_resolution": has_batch_sync_conflict_resolution,
@@ -3295,6 +4231,7 @@ def _score_categories(
         "has_route_rollback_receipts": has_route_rollback_receipts,
         "has_outcome_trend_routing": has_outcome_trend_routing,
         "has_launch_route_trust_confidence": has_launch_route_trust_confidence,
+        "has_live_cross_category_outcome_validation": has_live_cross_category_outcome_validation,
         "has_long_history_release_gate": has_long_history_release_gate,
         "has_release_proof_archive": has_release_proof_archive,
         "has_release_proof_ci": has_release_proof_ci,
@@ -3323,14 +4260,44 @@ def _score_categories(
         "has_installable_pwa_shell": has_installable_pwa_shell,
         "has_public_web_distribution_contract": has_public_web_distribution_contract,
         "has_public_web_release_candidate_attachment": has_public_web_release_candidate_attachment,
+        "has_web_push_subscription": has_web_push_subscription,
+        "has_ntfy_sender_configured": has_ntfy_sender_configured,
+        "has_ntfy_delivered_receipt": has_ntfy_delivered_receipt,
+        "has_mobile_push_delivery_proof": has_mobile_push_delivery_proof,
+        "has_active_runtime_budget_exhausted": has_active_runtime_budget_exhausted,
         "has_npx_style_launcher_package": has_npx_style_launcher_package,
         "has_launcher_package_release_receipt": has_launcher_package_release_receipt,
         "has_public_launch_readiness_report": has_public_launch_readiness_report,
         "has_public_launch_internal_packet_ready": has_public_launch_internal_packet_ready,
         "has_public_launch_ready": has_public_launch_ready,
         "has_external_publication_proof": has_external_publication_proof,
+        "has_beginner_launch_interaction_gate": has_beginner_launch_interaction_gate,
+        "has_storage_aware_quickstart_fallback": has_storage_aware_quickstart_fallback,
         "has_in_process_summary_endpoint": has_in_process_summary_endpoint,
         "has_bootstrap_summary_cache": has_bootstrap_summary_cache,
+        "has_live_mission_artifact_repairs": bool(
+            (
+                isinstance(live_mission_output_quality, dict)
+                and
+                isinstance(live_mission_output_quality.get("weakMissionRows"), list)
+                and live_mission_output_quality.get("weakMissionRows")
+            )
+            or (
+                isinstance(mission_artifact_repair_plan, dict)
+                and
+                isinstance(mission_artifact_repair_plan.get("repairs"), list)
+                and mission_artifact_repair_plan.get("repairs")
+            )
+        ),
+        "has_nas_storage_pressure_critical": (
+            str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
+            or bool(nas_storage_pressure.get("probeTimedOut"))
+            or bool(nas_storage_pressure.get("probeConnectFailed"))
+            or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
+            or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
+        )
+        if isinstance(nas_storage_pressure, dict) and nas_storage_pressure
+        else False,
     }
     return _apply_strict_score_caps(categories, strict_evidence)
 
@@ -3620,14 +4587,19 @@ def _apply_strict_score_caps(
         "Launch friction and beginner experience": (
             20
             if evidence.get("has_public_launch_ready")
+            and evidence.get("has_external_publication_proof")
+            and evidence.get("has_beginner_launch_interaction_gate")
+            else 19
+            if evidence.get("has_public_launch_ready")
+            and evidence.get("has_beginner_launch_interaction_gate")
             else 18
             if evidence.get("has_launcher_package_release_receipt")
             and evidence.get("has_public_web_release_candidate_attachment")
-            else 18
-            if evidence.get("has_npx_style_launcher_package")
             else 17
-            if evidence.get("has_one_command_launcher")
+            if evidence.get("has_npx_style_launcher_package")
             else 16
+            if evidence.get("has_one_command_launcher")
+            else 15
         ),
         "Multi-project Builder operations": (
             20
@@ -3642,7 +4614,12 @@ def _apply_strict_score_caps(
             else 16
         ),
         "Harness and sub-agent capability": (
-            18
+            20
+            if evidence.get("has_live_cross_category_outcome_validation")
+            and evidence.get("has_operator_value_route_trust_proven")
+            else 19
+            if evidence.get("has_live_cross_category_outcome_validation")
+            else 18
             if evidence.get("has_outcome_trend_routing")
             else 17
             if evidence.get("has_route_rollback_receipts")
@@ -3650,12 +4627,13 @@ def _apply_strict_score_caps(
             if evidence.get("has_route_mutation_receipts")
             else 16
         ),
-        "Web availability and distribution": (
+    "Web availability and distribution": (
             20
             if evidence.get("has_public_launch_ready")
-            else 19
-            if evidence.get("has_public_web_release_candidate_attachment")
-            and evidence.get("has_public_launch_internal_packet_ready")
+            and evidence.get("has_external_publication_proof")
+            and evidence.get("has_mobile_push_delivery_proof")
+            else 18
+            if evidence.get("has_public_launch_ready")
             else 18
             if evidence.get("has_public_web_distribution_contract")
             else 17
@@ -3690,10 +4668,57 @@ def _apply_strict_score_caps(
             if evidence.get("has_skill_repair_proposals")
             else 16
         ),
+        "Interface clarity and operator ergonomics": (
+            20
+            if evidence.get("has_live_workbench_execution_surface")
+            and evidence.get("has_live_mission_output_quality_cleared")
+            else 19
+            if evidence.get("has_live_workbench_execution_surface")
+            else
+            18
+            if evidence.get("has_builder_clarity_mode")
+            else 17
+            if evidence.get("has_agent_advanced_drawers")
+            else 16
+        ),
     }
+    if evidence.get("has_nas_storage_pressure_critical"):
+        caps["Launch friction and beginner experience"] = min(
+            caps["Launch friction and beginner experience"],
+            17 if evidence.get("has_storage_aware_quickstart_fallback") else 16,
+        )
+        caps["Multi-project Builder operations"] = min(caps["Multi-project Builder operations"], 15)
+        caps["Harness and sub-agent capability"] = min(caps["Harness and sub-agent capability"], 16)
+        caps["Speed and long-history performance"] = min(caps["Speed and long-history performance"], 16)
+        caps["Web availability and distribution"] = min(caps["Web availability and distribution"], 17)
+        caps["Interface clarity and operator ergonomics"] = min(
+            caps["Interface clarity and operator ergonomics"],
+            16,
+        )
+    if evidence.get("has_live_mission_artifact_repairs"):
+        caps["Proof, verification, and trust"] = 12
+        caps["Harness and sub-agent capability"] = min(caps["Harness and sub-agent capability"], 16)
+        caps["Interface clarity and operator ergonomics"] = min(
+            caps["Interface clarity and operator ergonomics"],
+            15,
+        )
+    if not evidence.get("has_mobile_push_delivery_proof"):
+        caps["Web availability and distribution"] = min(caps["Web availability and distribution"], 18)
+    if evidence.get("has_active_runtime_budget_exhausted"):
+        caps["Launch friction and beginner experience"] = min(caps["Launch friction and beginner experience"], 18)
+        caps["Multi-project Builder operations"] = min(caps["Multi-project Builder operations"], 19)
+        caps["Interface clarity and operator ergonomics"] = min(caps["Interface clarity and operator ergonomics"], 18)
     notes = {
         "Launch friction and beginner experience": (
-            "Strict cap cleared: public web/source parity, release packet attachments, and external publication proof are present."
+            "Strict cap cleared: public web/source parity, release packet attachments, external publication proof, and beginner first-run interaction proof are present."
+            if evidence.get("has_public_launch_ready")
+            and evidence.get("has_external_publication_proof")
+            and evidence.get("has_beginner_launch_interaction_gate")
+            else
+            "Strict cap: public launch checks and external publication proof are green, but beginner launch is not treated as 20/20 until first-run interaction proof stays current with the release."
+            if evidence.get("has_public_launch_ready") and evidence.get("has_external_publication_proof")
+            else
+            "Strict cap: public launch checks are green, but external publication and first-run proof must stay current together before Fluxio can beat T3 on launch."
             if evidence.get("has_public_launch_ready")
             else
             "Strict cap: launcher package and public-web release-candidate receipts exist, but external public registry, tag/release, or signed-installer publication proof remains unproven."
@@ -3738,12 +4763,25 @@ def _apply_strict_score_caps(
             else "Strict cap: conflict receipts exist, but interactive conflict resolution is not yet a complete workflow."
         ),
         "Harness and sub-agent capability": (
+            "Strict cap cleared: Hermes-first routing is backed by live cross-category outcome validation and operator-proven route trust."
+            if evidence.get("has_live_cross_category_outcome_validation")
+            and evidence.get("has_operator_value_route_trust_proven")
+            else
+            "Strict cap: live cross-category outcome validation is present, but operator-proven route trust must stay current before this is 20/20."
+            if evidence.get("has_live_cross_category_outcome_validation")
+            else
             "Strict cap: Hermes-first sub-agent routing exists, but live cross-category outcome validation is still pending."
             if evidence.get("has_outcome_trend_routing")
             else "Strict cap: failed-route rollback exists, but outcome-trend routing is not complete."
         ),
         "Web availability and distribution": (
+            "Strict cap: public web release proof is present, but phone/tablet mobile push has no delivered ntfy receipt or Web Push browser subscription yet."
+            if not evidence.get("has_mobile_push_delivery_proof")
+            else
             "Strict cap cleared for public web release proof: public launch readiness, source parity, and external publication proof are present."
+            if evidence.get("has_public_launch_ready") and evidence.get("has_external_publication_proof")
+            else
+            "Strict cap: public web readiness is green, but external publication/tag or signed installer proof is required before Fluxio can beat T3 on distribution."
             if evidence.get("has_public_launch_ready")
             else
             "Strict cap: GitHub Pages deployment receipts are attached to release-candidate artifacts, but the current public launch verifier still requires external publication proof before a 20/20 web score."
@@ -3783,6 +4821,30 @@ def _apply_strict_score_caps(
             if evidence.get("has_approved_skill_repair_application")
             else "Strict cap: repair proposals exist, but approved skill patches are not applied automatically yet."
         ),
+        "Interface clarity and operator ergonomics": (
+            "Strict cap: one live Hermes mission is still runtime-budget exhausted, so the control room cannot be scored as a frictionless operator experience yet."
+            if evidence.get("has_active_runtime_budget_exhausted")
+            else
+            "Strict cap cleared: Workbench execution receipts and current live mission runtime-output/artifact evidence are present."
+            if evidence.get("has_live_workbench_execution_surface")
+            and evidence.get("has_live_mission_output_quality_cleared")
+            else
+            "Strict cap: live Agent/Workbench still have missions with missing runtime output, missing transcript, or missing artifact proof, so the UI cannot be scored as clear even if the components exist."
+            if evidence.get("has_live_mission_artifact_repairs")
+            else
+            "Strict cap: NAS storage or bounded storage probes are critical, so launch/proof surfaces cannot be treated as reliable operator ergonomics yet."
+            if evidence.get("has_nas_storage_pressure_critical")
+            else
+            "Strict cap: Builder focus/full and Workbench artifact execution are now primary surfaces, but weak completed missions still need served-artifact proof before clarity can be treated as fully solved."
+            if evidence.get("has_live_workbench_execution_surface")
+            else
+            "Strict cap: Builder now has a focus/full operator mode, but Workbench still needs primary artifact execution before clarity can be treated as fully solved."
+            if evidence.get("has_builder_clarity_mode")
+            else
+            "Strict cap: Agent diagnostics are behind progressive disclosure now; the control room still cannot beat T3 on clarity until Builder and Workbench have the same beginner/operator simplification."
+            if evidence.get("has_agent_advanced_drawers")
+            else "Strict cap: live-first surfaces are present, but the control room remains too dense to rate above T3 until secondary diagnostics move behind clearer progressive disclosure."
+        ),
     }
     capped: list[AuditCategory] = []
     for item in categories:
@@ -3790,12 +4852,48 @@ def _apply_strict_score_caps(
         if cap is None or item.score_out_of_20 <= cap:
             capped.append(item)
             continue
-        evidence_lines = [*item.evidence, notes[item.category]]
+        note = notes.get(item.category)
+        if evidence.get("has_nas_storage_pressure_critical") and item.category in {
+            "Launch friction and beginner experience",
+            "Multi-project Builder operations",
+            "Harness and sub-agent capability",
+            "Speed and long-history performance",
+            "Web availability and distribution",
+        }:
+            note = (
+                "Strict cap: NAS storage pressure is critical, but storage-aware quickstart can route new work to a local workspace; NAS-backed unattended launches, proof writes, and live mission loops remain unreliable until storage is cleared."
+                if item.category == "Launch friction and beginner experience"
+                and evidence.get("has_storage_aware_quickstart_fallback")
+                else (
+                    "Strict cap: NAS storage pressure is critical or storage probes timed out, "
+                    "so unattended launches, proof writes, and live mission loops cannot be treated as reliable yet."
+                )
+            )
+        if evidence.get("has_live_mission_artifact_repairs") and item.category == "Proof, verification, and trust":
+            note = (
+                "Strict cap: live mission rows still need hard artifact-gate repair, so proof/trust cannot score higher until "
+                "runtime output, transcript, or served artifact evidence is restored."
+            )
+        if item.category == "Web availability and distribution" and not evidence.get("has_mobile_push_delivery_proof"):
+            note = (
+                "Strict cap: public web release proof is present, but phone/tablet mobile push has no delivered ntfy receipt or Web Push browser subscription yet."
+            )
+        if item.category in {
+            "Launch friction and beginner experience",
+            "Multi-project Builder operations",
+            "Interface clarity and operator ergonomics",
+        } and evidence.get("has_active_runtime_budget_exhausted"):
+            note = (
+                "Strict cap: one live Hermes mission is still runtime-budget exhausted, so the operator flow is not complete or frictionless yet."
+            )
+        evidence_lines = [*item.evidence, note] if note else [*item.evidence]
+        gap_lines = [note, *item.gaps] if note else [*item.gaps]
         capped.append(
             replace(
                 item,
                 score_out_of_20=cap,
                 evidence=evidence_lines,
+                gaps=gap_lines,
             )
         )
     return capped
@@ -3967,10 +5065,91 @@ def _t3_deficits(categories: list[AuditCategory]) -> list[dict[str, Any]]:
     return deficits
 
 
+def _repair_plan_supersedes_output_quality(
+    output_quality: dict[str, Any],
+    repair_plan: dict[str, Any],
+) -> bool:
+    if not output_quality or not repair_plan:
+        return False
+    if repair_plan.get("schema") != "fluxio.mission_artifact_repair_plan.v1":
+        return False
+    if str(repair_plan.get("status") or "").lower() != "passed":
+        return False
+    if int(repair_plan.get("repairMissionCount") or repair_plan.get("weakMissionCount") or 0) != 0:
+        return False
+    if repair_plan.get("repairs"):
+        return False
+    issue_rows = [
+        item
+        for item in [
+            *(
+                output_quality.get("weakMissionRows", [])
+                if isinstance(output_quality.get("weakMissionRows"), list)
+                else []
+            ),
+            *(
+                output_quality.get("repairMissionRows", [])
+                if isinstance(output_quality.get("repairMissionRows"), list)
+                else []
+            ),
+        ]
+        if isinstance(item, dict)
+    ]
+    issue_ts = max(
+        [_parse_iso_timestamp(str(item.get("checkedAt") or "")) for item in issue_rows],
+        default=0,
+    )
+    plan_ts = max(
+        _parse_iso_timestamp(str(repair_plan.get("sourceCheckedAt") or "")),
+        _parse_iso_timestamp(str(repair_plan.get("liveDetailCheckedAt") or "")),
+        _parse_iso_timestamp(str(repair_plan.get("generatedAt") or "")),
+    )
+    return plan_ts > 0 and (issue_ts <= 0 or plan_ts >= issue_ts)
+
+
+def _effective_live_mission_output_quality(
+    output_quality: dict[str, Any] | None,
+    repair_plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    quality = dict(output_quality or {})
+    plan = dict(repair_plan or {})
+    if not _repair_plan_supersedes_output_quality(quality, plan):
+        return quality
+    return {
+        **quality,
+        "status": "passed",
+        "weakMissionRows": [],
+        "repairMissionRows": [],
+        "supersededWeakMissionRows": (
+            quality.get("weakMissionRows", [])
+            if isinstance(quality.get("weakMissionRows"), list)
+            else []
+        ),
+        "supersededRepairMissionRows": (
+            quality.get("repairMissionRows", [])
+            if isinstance(quality.get("repairMissionRows"), list)
+            else []
+        ),
+        "supersededByRepairPlan": True,
+        "supersededByRepairPlanGeneratedAt": plan.get("generatedAt") or "",
+        "supersededByRepairPlanSourceCheckedAt": plan.get("sourceCheckedAt") or "",
+        "nextAction": str(
+            plan.get("nextAction")
+            or quality.get("nextAction")
+            or "No transcript-only completed missions are present in current authenticated verifier evidence."
+        ),
+    }
+
+
 def _system_loss_breakdown(
     categories: list[AuditCategory],
     release: dict[str, Any],
     project_progress: list[dict[str, Any]],
+    *,
+    nas_storage_pressure: dict[str, Any] | None = None,
+    nas_storage_cleanup_plan: dict[str, Any] | None = None,
+    live_mission_output_quality: dict[str, Any] | None = None,
+    mission_artifact_repair_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not categories:
         return {
@@ -4008,11 +5187,141 @@ def _system_loss_breakdown(
             str(item["category"]),
         )
     )
+    storage = nas_storage_pressure or {}
+    storage_status = str(storage.get("status") or "").lower()
+    storage_probe_timed_out = bool(storage.get("probeTimedOut"))
+    storage_probe_connect_failed = bool(storage.get("probeConnectFailed"))
+    if storage and (
+        storage_status in {"critical", "full"}
+        or storage_probe_timed_out
+        or storage_probe_connect_failed
+        or int(storage.get("availableBytes") or 0) <= 0
+        or int(storage.get("usedPercent") or 0) >= 99
+    ):
+        cleanup = nas_storage_cleanup_plan or {}
+        candidate_count = int(cleanup.get("candidateCount") or 0)
+        estimated_reclaimable_mb = float(cleanup.get("estimatedReclaimableMB") or 0)
+        volume_accounting_gb = float(cleanup.get("volumeAccountingGB") or 0)
+        largest_volume_path = str(cleanup.get("largestVolumeAccountingPath") or "")
+        timed_out_external = [
+            str(item)
+            for item in cleanup.get("timedOutExternalProbePaths", [])
+            if str(item or "").strip()
+        ]
+        timed_out_volume = [
+            str(item)
+            for item in cleanup.get("timedOutVolumeAccountingPaths", [])
+            if str(item or "").strip()
+        ]
+        largest_volume_detail = f" with largest {largest_volume_path}" if largest_volume_path else ""
+        timed_out_external_detail = (
+            f" ({', '.join(timed_out_external[:3])})" if timed_out_external else ""
+        )
+        timed_out_volume_detail = (
+            f" ({', '.join(timed_out_volume[:3])})" if timed_out_volume else ""
+        )
+        drivers.insert(
+            0,
+            {
+                "category": "NAS storage and mission-write headroom",
+                "scoreOutOf20": 4,
+                "lossOutOf20": 16,
+                "t3ReferenceScoreOutOf20": 18,
+                "t3Margin": -14,
+                "severity": "critical",
+                "primaryGap": (
+                    "The current bounded NAS storage probe failed before df data returned, "
+                    "so mission logs, proof artifacts, and self-improvement receipts cannot be trusted."
+                    if _nas_storage_probe_failed(storage)
+                    else "The NAS volume reports no writable headroom, so mission logs, proof artifacts, and self-improvement receipts can silently fail."
+                ),
+                "nextAction": str(
+                    cleanup.get("nextAction")
+                    or storage.get("nextAction")
+                    or "Free non-Syntelos NAS volume space or Synology snapshot space, then rerun storage pressure verification."
+                ),
+                "evidence": (
+                    (
+                        f"{storage.get('mount', '/volume1/Saclay')} bounded storage probe could not connect before current df data returned. "
+                        if storage.get("probeConnectFailed")
+                        else (
+                        f"{storage.get('mount', '/volume1/Saclay')} bounded storage probe timed out before current df data returned. "
+                        if storage_probe_timed_out
+                        else (
+                            f"{storage.get('mount', '/volume1/Saclay')} is "
+                            f"{int(storage.get('usedPercent') or 0)}% used with "
+                            f"{int(storage.get('availableBytes') or 0)} available bytes. "
+                        )
+                        )
+                    )
+                    + f"Bounded cleanup candidates: {candidate_count}, estimated {estimated_reclaimable_mb} MB. "
+                    f"Volume-accounting probes total {volume_accounting_gb} GB"
+                    f"{largest_volume_detail}. "
+                    f"Timed-out non-generated probes: {len(timed_out_external)}"
+                    f"{timed_out_external_detail}; "
+                    f"timed-out volume probes: {len(timed_out_volume)}"
+                    f"{timed_out_volume_detail}."
+                ),
+            },
+        )
+    output_quality = _effective_live_mission_output_quality(
+        live_mission_output_quality or {},
+        mission_artifact_repair_plan or {},
+    )
+    weak_rows = (
+        output_quality.get("weakMissionRows", [])
+        if isinstance(output_quality.get("weakMissionRows"), list)
+        else []
+    )
+    repair_plan = mission_artifact_repair_plan or {}
+    repair_rows = repair_plan.get("repairs", []) if isinstance(repair_plan.get("repairs"), list) else []
+    if weak_rows or repair_rows:
+        first = (
+            weak_rows[0]
+            if weak_rows and isinstance(weak_rows[0], dict)
+            else repair_rows[0]
+            if repair_rows and isinstance(repair_rows[0], dict)
+            else {}
+        )
+        repair_count = int(repair_plan.get("repairMissionCount") or repair_plan.get("weakMissionCount") or len(repair_rows))
+        output_count = len(weak_rows) or repair_count
+        drivers.insert(
+            0,
+            {
+                "category": "Mission outputs and artifact proof",
+                "scoreOutOf20": 10,
+                "lossOutOf20": 10,
+                "t3ReferenceScoreOutOf20": 18,
+                "t3Margin": -8,
+                "severity": "high",
+                "primaryGap": (
+                    "At least one live Hermes mission lacks a concrete runtime-output body, served artifact, "
+                    "or readable transcript needed for review."
+                ),
+                "nextAction": str(
+                    repair_plan.get("nextAction")
+                    or output_quality.get("nextAction")
+                    or "Relaunch the weak mission with a hard artifact gate and verify the served artifact from Agent and Workbench."
+                ),
+                "evidence": (
+                    f"{output_count} mission artifact repair(s); first: "
+                    f"{first.get('missionId', '')} {first.get('title', '')}. "
+                    f"Repair contracts ready: {repair_count}."
+                ),
+            },
+        )
     required_gates = release.get("requiredGateSummary", {}) if isinstance(release.get("requiredGateSummary"), dict) else {}
     managed_workspace_count = sum(int(project.get("workspaceCount") or 0) for project in project_progress)
     project_count = max(len(project_progress), managed_workspace_count)
     active_mission_count = sum(int(project.get("activeMissionCount") or 0) for project in project_progress)
     blocked_mission_count = sum(int(project.get("blockedMissionCount") or 0) for project in project_progress)
+    drivers.sort(
+        key=lambda item: (
+            -float(item.get("lossOutOf20") or 0),
+            int(item.get("t3Margin") or 0),
+            str(item.get("category") or ""),
+        )
+    )
     return {
         "schema": "fluxio.system_loss_breakdown.v1",
         "status": "current",
@@ -4226,8 +5535,24 @@ def _bad_first(
     project_progress: list[dict[str, Any]],
     red_team_escalation: dict[str, Any] | None = None,
     route_trust_maturity: dict[str, Any] | None = None,
+    nas_storage_pressure: dict[str, Any] | None = None,
+    nas_storage_cleanup_plan: dict[str, Any] | None = None,
+    live_mission_output_quality: dict[str, Any] | None = None,
+    mission_artifact_repair_plan: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
-    weakest = sorted(categories, key=lambda item: item.score_out_of_20)[:4]
+    weakest = [
+        item
+        for item in sorted(
+            categories,
+            key=lambda item: (
+                int(item.score_out_of_20),
+                int(item.score_out_of_20) - int(item.t3_reference_score_out_of_20),
+                item.category,
+            ),
+        )
+        if int(item.score_out_of_20) < 20
+        or int(item.score_out_of_20) <= int(item.t3_reference_score_out_of_20)
+    ][:4]
     bad = [
         {
             "title": item.category,
@@ -4248,6 +5573,68 @@ def _bad_first(
             {
                 "title": "Mission evidence",
                 "detail": "No current local mission history was found under .agent_control.",
+            }
+        )
+    storage = nas_storage_pressure or {}
+    if storage and (
+        str(storage.get("status") or "").lower() in {"critical", "full"}
+        or bool(storage.get("probeTimedOut"))
+        or bool(storage.get("probeConnectFailed"))
+        or int(storage.get("availableBytes") or 0) <= 0
+        or int(storage.get("usedPercent") or 0) >= 99
+    ):
+        cleanup = nas_storage_cleanup_plan or {}
+        timed_out_external = [
+            str(item)
+            for item in cleanup.get("timedOutExternalProbePaths", [])
+            if str(item or "").strip()
+        ]
+        timed_out_volume = [
+            str(item)
+            for item in cleanup.get("timedOutVolumeAccountingPaths", [])
+            if str(item or "").strip()
+        ]
+        bad.append(
+            {
+                "title": "NAS storage pressure",
+                "detail": (
+                    f"{_nas_storage_pressure_sentence(storage)} "
+                    "mission writes and proof artifacts are at risk. "
+                    f"Bounded cleanup planner found {int(cleanup.get('candidateCount') or 0)} generated candidate(s) "
+                    f"for about {float(cleanup.get('estimatedReclaimableMB') or 0)} MB; "
+                    f"{len(timed_out_external)} non-generated probe(s) and {len(timed_out_volume)} volume probe(s) timed out."
+                ),
+            }
+        )
+    output_quality = _effective_live_mission_output_quality(
+        live_mission_output_quality or {},
+        mission_artifact_repair_plan or {},
+    )
+    weak_rows = (
+        output_quality.get("weakMissionRows", [])
+        if isinstance(output_quality.get("weakMissionRows"), list)
+        else []
+    )
+    repair_plan = mission_artifact_repair_plan or {}
+    repair_rows = repair_plan.get("repairs", []) if isinstance(repair_plan.get("repairs"), list) else []
+    if weak_rows or repair_rows:
+        first = (
+            weak_rows[0]
+            if weak_rows and isinstance(weak_rows[0], dict)
+            else repair_rows[0]
+            if repair_rows and isinstance(repair_rows[0], dict)
+            else {}
+        )
+        repair_count = int(repair_plan.get("repairMissionCount") or repair_plan.get("weakMissionCount") or len(repair_rows))
+        output_count = len(weak_rows) or repair_count
+        bad.append(
+            {
+                "title": "Mission output proof",
+                "detail": (
+                    f"{output_count} live mission(s) need hard artifact-gate repair; "
+                    f"first repair row `{first.get('missionId', '')}` needs a served artifact, concrete runtime-output body, or restored transcript; "
+                    f"{repair_count} hard artifact-gate repair contract(s) are ready."
+                ),
             }
         )
     route_conflict = (
@@ -4311,6 +5698,9 @@ def _summary(
     route_trust_maturity: dict[str, Any] | None = None,
     red_team_escalation: dict[str, Any] | None = None,
     public_launch_readiness: dict[str, Any] | None = None,
+    nas_storage_pressure: dict[str, Any] | None = None,
+    live_mission_output_quality: dict[str, Any] | None = None,
+    mission_artifact_repair_plan: dict[str, Any] | None = None,
 ) -> str:
     average = round(sum(item.score_out_of_20 for item in categories) / len(categories), 1)
     t3_average = round(
@@ -4321,6 +5711,7 @@ def _summary(
         1 for item in categories if item.score_out_of_20 <= item.t3_reference_score_out_of_20
     )
     t3_ahead_count = len(categories) - t3_deficit_count
+    t3_position_clause = _t3_position_clause(categories, t3_deficit_count=t3_deficit_count)
     mission_count = sum(project.get("missionCount", 0) for project in project_progress)
     route = route_trust_maturity or {}
     operator_confidence = int(route.get("operatorConfidenceScore") or 0)
@@ -4378,12 +5769,49 @@ def _summary(
         )
     else:
         public_clause = "Public launch readiness evidence is missing."
+    storage = nas_storage_pressure or {}
+    if storage and (
+        str(storage.get("status") or "").lower() in {"critical", "full"}
+        or bool(storage.get("probeTimedOut"))
+        or bool(storage.get("probeConnectFailed"))
+        or int(storage.get("availableBytes") or 0) <= 0
+        or int(storage.get("usedPercent") or 0) >= 99
+    ):
+        storage_clause = (
+            "NAS storage is critical for launch gating: "
+            + _nas_storage_pressure_sentence(storage)
+        )
+    else:
+        storage_clause = "NAS storage pressure is not currently critical in the latest evidence."
+    output_quality = _effective_live_mission_output_quality(
+        live_mission_output_quality or {},
+        mission_artifact_repair_plan or {},
+    )
+    weak_rows = (
+        output_quality.get("weakMissionRows", [])
+        if isinstance(output_quality.get("weakMissionRows"), list)
+        else []
+    )
+    repair_rows = (
+        output_quality.get("repairMissionRows", [])
+        if isinstance(output_quality.get("repairMissionRows"), list)
+        else []
+    )
+    if weak_rows:
+        output_clause = (
+            f"Mission output quality is not fully proven: `{len(weak_rows)}` completed live mission(s) "
+            "are transcript-only or missing served artifacts."
+        )
+    elif repair_rows:
+        output_clause = (
+            f"Mission output quality needs repair: `{len(repair_rows)}` live mission(s) have "
+            "failed hard artifact gates, missing runtime output, or missing transcripts."
+        )
+    else:
+        output_clause = "Latest checked live missions have no completed transcript-only output warning."
     return (
         f"Fluxio scores {average}/20 across this audit versus a T3-style reference "
-        f"average of {t3_average}/20. It is stronger than T3-style tools on durable "
-        f"mission proof, runtime supervision, and multi-project intent, but weaker on "
-        f"first-run simplicity, perceived speed, web distribution, and beginner-safe "
-        f"launch ergonomics. Current release readiness is `{release.get('status')}` "
+        f"average of {t3_average}/20. {t3_position_clause} Current release readiness is `{release.get('status')}` "
         f"with {release.get('requiredGateSummary', {}).get('passed')}/"
         f"{release.get('requiredGateSummary', {}).get('total')} required gates passing. "
         f"It is above the current T3 Code reference in {t3_ahead_count}/{len(categories)} "
@@ -4391,7 +5819,42 @@ def _summary(
         f"{route_clause} "
         f"{red_team_clause} "
         f"{public_clause} "
+        f"{storage_clause} "
+        f"{output_clause} "
         f"The audit saw {mission_count} {mission_source_label}."
+    )
+
+
+def _t3_position_clause(categories: list[AuditCategory], *, t3_deficit_count: int) -> str:
+    if not categories:
+        return "No T3 comparison categories were available."
+    if t3_deficit_count <= 0:
+        top_margins = sorted(
+            categories,
+            key=lambda item: (item.score_out_of_20 - item.t3_reference_score_out_of_20, item.category),
+            reverse=True,
+        )[:3]
+        margin_text = ", ".join(
+            f"{item.category} +{item.score_out_of_20 - item.t3_reference_score_out_of_20}"
+            for item in top_margins
+            if item.score_out_of_20 > item.t3_reference_score_out_of_20
+        )
+        return (
+            "It is currently ahead of the T3-style reference in every scored category"
+            + (f", led by {margin_text}." if margin_text else ".")
+        )
+    weakest = sorted(
+        categories,
+        key=lambda item: (item.score_out_of_20 - item.t3_reference_score_out_of_20, item.score_out_of_20),
+    )[:3]
+    weak_text = ", ".join(
+        f"{item.category} {item.score_out_of_20}/{item.t3_reference_score_out_of_20}"
+        for item in weakest
+    )
+    return (
+        "It is stronger than T3-style tools on durable mission proof, runtime supervision, "
+        "and multi-project intent, but still needs work on "
+        f"{weak_text}."
     )
 
 
@@ -4404,6 +5867,15 @@ def _load_live_nas_evidence(root: Path) -> dict[str, Any]:
     )
     control_candidates.extend(
         sorted((root / ".agent_control").glob("*control*check.json"), reverse=True)
+    )
+    control_candidates.extend(
+        sorted((root / ".agent_control" / "screenshots").glob("*live-control*check.json"), reverse=True)
+    )
+    control_candidates.extend(
+        sorted((root / ".agent_control" / "screenshots").glob("*control*check.json"), reverse=True)
+    )
+    control_candidates.extend(
+        sorted((root / ".agent_control" / "screenshots").glob("*-check.json"), reverse=True)
     )
     control_candidates.extend(
         sorted((root / "tmp-ui-checks").glob("**/*live-control*check.json"), reverse=True)
@@ -4430,6 +5902,15 @@ def _load_live_nas_evidence(root: Path) -> dict[str, Any]:
     )
     agent_candidates.extend(
         sorted((root / ".agent_control").glob("*agent*check.json"), reverse=True)
+    )
+    agent_candidates.extend(
+        sorted((root / ".agent_control" / "screenshots").glob("*live-agent*check.json"), reverse=True)
+    )
+    agent_candidates.extend(
+        sorted((root / ".agent_control" / "screenshots").glob("*agent*check.json"), reverse=True)
+    )
+    agent_candidates.extend(
+        sorted((root / ".agent_control" / "screenshots").glob("*-check.json"), reverse=True)
     )
     agent_candidates.extend(
         sorted((root / "tmp-ui-checks").glob("**/*live-agent*check.json"), reverse=True)
@@ -4630,6 +6111,11 @@ def _load_live_nas_system_audit_evidence(root: Path) -> dict[str, Any]:
         if age_seconds > max_age_seconds:
             continue
         audit = report.get("audit") if isinstance(report.get("audit"), dict) else {}
+        source_root = str(report.get("sourceRoot") or audit.get("workspaceRoot") or "").strip()
+        normalized_source_root = source_root.replace("\\", "/").rstrip("/")
+        normalized_current_root = str(root).replace("\\", "/").rstrip("/")
+        if normalized_source_root and normalized_source_root == normalized_current_root:
+            continue
         route_trust = (
             audit.get("routeTrustMaturity", {})
             if isinstance(audit.get("routeTrustMaturity"), dict)
@@ -4660,7 +6146,7 @@ def _load_live_nas_system_audit_evidence(root: Path) -> dict[str, Any]:
             "sourcePath": str(path.resolve()),
             "checkedAt": checked_at,
             "status": "passed" if report.get("ok") else "failed",
-            "sourceRoot": str(report.get("sourceRoot") or audit.get("workspaceRoot") or ""),
+            "sourceRoot": source_root,
             "sourceHost": str(report.get("sourceHost") or ""),
             "auditGeneratedAt": str(audit.get("generatedAt") or ""),
             "summary": str(audit.get("summary") or ""),
@@ -4670,6 +6156,516 @@ def _load_live_nas_system_audit_evidence(root: Path) -> dict[str, Any]:
             "releaseReadiness": release_readiness,
             "projectProgress": project_progress,
             "t3Deficits": audit.get("t3Deficits", []) if isinstance(audit.get("t3Deficits"), list) else [],
+        }
+    return {}
+
+
+def _load_nas_storage_pressure_evidence(root: Path) -> dict[str, Any]:
+    candidates = [
+        root / ".agent_control" / "nas_storage_pressure_latest.json",
+    ]
+    candidates.extend(
+        sorted((root / ".agent_control").glob("*nas-storage-pressure*.json"), reverse=True)
+    )
+    for path in _sort_report_candidates(candidates, timestamp_field="checkedAt"):
+        report = _load_json(path, {})
+        if not isinstance(report, dict):
+            continue
+        if report.get("schema") != "fluxio.nas_storage_pressure.v1":
+            continue
+        checked_at = str(report.get("checkedAt") or "")
+        checked_ts = _parse_iso_timestamp(checked_at)
+        if checked_ts <= 0:
+            continue
+        age_seconds = datetime.now(timezone.utc).timestamp() - checked_ts
+        max_age_seconds = int(report.get("maxAgeSeconds") or 48 * 60 * 60)
+        if age_seconds > max_age_seconds:
+            continue
+        available = int(report.get("availableBytes") or 0)
+        used_percent = int(report.get("usedPercent") or 0)
+        status = str(report.get("status") or "").lower()
+        if not status:
+            status = "critical" if available <= 0 or used_percent >= 99 else "warning" if used_percent >= 95 else "ok"
+        return {
+            **report,
+            "sourcePath": str(path.resolve()),
+            "checkedAt": checked_at,
+            "status": status,
+            "availableBytes": available,
+            "usedPercent": used_percent,
+        }
+    return {}
+
+
+def _load_nas_storage_cleanup_plan(root: Path) -> dict[str, Any]:
+    candidates = [
+        root / ".agent_control" / "nas_storage_cleanup_plan_latest.json",
+    ]
+    candidates.extend(
+        sorted((root / ".agent_control").glob("*nas-storage-cleanup*.json"), reverse=True)
+    )
+    for path in _sort_report_candidates(candidates, timestamp_field="checkedAt"):
+        report = _load_json(path, {})
+        if not isinstance(report, dict):
+            continue
+        if report.get("schema") != "fluxio.nas_storage_cleanup_plan.v1":
+            continue
+        checked_at = str(report.get("checkedAt") or "")
+        checked_ts = _parse_iso_timestamp(checked_at)
+        if checked_ts <= 0:
+            continue
+        age_seconds = datetime.now(timezone.utc).timestamp() - checked_ts
+        max_age_seconds = int(report.get("maxAgeSeconds") or 48 * 60 * 60)
+        if age_seconds > max_age_seconds:
+            continue
+        cleanup_candidates = (
+            report.get("cleanupCandidates", [])
+            if isinstance(report.get("cleanupCandidates"), list)
+            else []
+        )
+        return {
+            **report,
+            "sourcePath": str(path.resolve()),
+            "checkedAt": checked_at,
+            "candidateCount": int(report.get("candidateCount") or len(cleanup_candidates)),
+            "cleanupCandidates": cleanup_candidates,
+            "estimatedReclaimableBytes": int(report.get("estimatedReclaimableBytes") or 0),
+            "estimatedReclaimableMB": float(report.get("estimatedReclaimableMB") or 0),
+        }
+    return {}
+
+
+def _agent_check(report: dict[str, Any], check_id: str) -> dict[str, Any]:
+    for item in report.get("checks", []) if isinstance(report.get("checks"), list) else []:
+        if isinstance(item, dict) and item.get("checkId") == check_id:
+            return item
+    return {}
+
+
+def _mission_output_quality_row(report: dict[str, Any], path: Path) -> dict[str, Any] | None:
+    if report.get("schema") != "fluxio.authenticated_live_agent.v1":
+        return None
+    checked_at = str(report.get("checkedAt") or "")
+    selected = (
+        report.get("summary", {}).get("selectedMission", {})
+        if isinstance(report.get("summary"), dict)
+        and isinstance(report.get("summary", {}).get("selectedMission"), dict)
+        else {}
+    )
+    selected_check = _agent_check(report, "selected-live-mission")
+    detail_check = _agent_check(report, "selected-mission-detail-api")
+    runtime_check = _agent_check(report, "runtime-output-visible-in-thread")
+    proof_check = _agent_check(report, "live-workbench-proof-band-visible")
+    mission_id = str(
+        selected.get("mission_id")
+        or selected_check.get("missionId")
+        or detail_check.get("missionId")
+        or ""
+    )
+    if not mission_id:
+        return None
+    title = str(selected.get("title") or selected_check.get("title") or mission_id)
+    status = str(selected.get("status") or selected_check.get("status") or "").lower()
+    runtime = str(selected.get("runtime_id") or "unknown")
+    runtime_output_count = int(runtime_check.get("runtimeOutputCount") or 0)
+    agent_message_count = int(detail_check.get("agentMessageCount") or 0)
+    proof_text = str(proof_check.get("proofBandText") or "")
+    no_artifacts = "artifacts\nnone returned" in proof_text.lower() or "artifacts none returned" in proof_text.lower()
+    weak = status == "completed" and agent_message_count > 0 and runtime_output_count == 0 and no_artifacts
+    return {
+        "missionId": mission_id,
+        "title": title,
+        "runtime": runtime,
+        "status": status or "unknown",
+        "checkedAt": checked_at,
+        "reportPath": str(path.resolve()),
+        "screenshotPath": str((report.get("artifacts") or {}).get("screenshotPath") or ""),
+        "agentMessageCount": agent_message_count,
+        "runtimeOutputCount": runtime_output_count,
+        "artifactStatus": "none_returned" if no_artifacts else "reported",
+        "weakOutput": weak,
+        "detail": (
+            "Completed mission has Hermes transcript rows, but no runtime-output body and no served artifact in the live Workbench proof band."
+            if weak
+            else "Mission output quality evidence did not trigger the completed transcript-only warning."
+        ),
+    }
+
+
+def _load_live_mission_output_quality_evidence(root: Path) -> dict[str, Any]:
+    rows: dict[str, dict[str, Any]] = {}
+    detail_status = _load_live_mission_detail_status_evidence(root)
+
+    # A current NAS mission-detail snapshot is the authoritative live source. Older
+    # browser-verifier JSON can be useful when the NAS snapshot is absent, but it
+    # must not resurrect stale missions or screenshots after live data is present.
+    detail_rows = (
+        detail_status.get("missionRows", [])
+        if isinstance(detail_status.get("missionRows"), list)
+        else []
+    )
+    if detail_rows:
+        for row in detail_rows:
+            if not isinstance(row, dict):
+                continue
+            mission_id = str(row.get("missionId") or "").strip()
+            if not mission_id:
+                continue
+            rows[mission_id] = row
+    else:
+        candidates: list[Path] = []
+        candidates.extend(sorted((root / "tmp-ui-checks" / "authenticated-live-agent").glob("*-check.json"), reverse=True))
+        candidates.extend(sorted((root / ".agent_control").glob("*live-agent*check.json"), reverse=True))
+        for path in _sort_report_candidates(candidates, timestamp_field="checkedAt"):
+            report = _load_json(path, {})
+            if not isinstance(report, dict):
+                continue
+            checked_ts = _parse_iso_timestamp(str(report.get("checkedAt") or ""))
+            if checked_ts <= 0:
+                continue
+            age_seconds = datetime.now(timezone.utc).timestamp() - checked_ts
+            max_age_seconds = int(report.get("maxAgeSeconds") or 7 * 24 * 60 * 60)
+            if age_seconds > max_age_seconds:
+                continue
+            row = _mission_output_quality_row(report, path)
+            if not row:
+                continue
+            mission_id = str(row.get("missionId") or "")
+            if mission_id and mission_id not in rows:
+                rows[mission_id] = row
+    if not rows:
+        return {}
+    all_rows = sorted(
+        rows.values(),
+        key=lambda item: _parse_iso_timestamp(str(item.get("checkedAt") or "")),
+        reverse=True,
+    )
+    weak_rows = [item for item in all_rows if item.get("weakOutput")]
+    repair_rows = [item for item in all_rows if _mission_output_row_needs_hard_artifact_repair(item)]
+    needs_repair = bool(weak_rows or repair_rows)
+    return {
+        "schema": "fluxio.live_mission_output_quality.v1",
+        "checkedAt": all_rows[0].get("checkedAt") or datetime.now(timezone.utc).isoformat(),
+        "status": "needs_artifact_repair" if needs_repair else "passed",
+        "reportCount": len(all_rows),
+        "liveDetailStatusPath": str(detail_status.get("sourcePath") or ""),
+        "weakMissionRows": weak_rows[:8],
+        "repairMissionRows": repair_rows[:8],
+        "checkedMissionRows": all_rows[:12],
+        "nextAction": (
+            "Relaunch or repair missions with missing runtime-output, transcript, or artifact proof using a hard served-artifact gate."
+            if needs_repair
+            else "Keep checking selected live missions for served artifacts and concrete runtime-output bodies."
+        ),
+    }
+
+
+def _mission_output_row_needs_hard_artifact_repair(row: dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").lower()
+    artifact_gate = row.get("artifactGate") if isinstance(row.get("artifactGate"), dict) else {}
+    runtime_transcript = row.get("runtimeTranscript") if isinstance(row.get("runtimeTranscript"), dict) else {}
+    artifact_gate_status = str(row.get("artifactGateStatus") or artifact_gate.get("status") or "").lower()
+    transcript_status = str(row.get("runtimeTranscriptStatus") or runtime_transcript.get("status") or "").lower()
+    runtime_output_count = int(row.get("runtimeOutputCount") or artifact_gate.get("runtimeOutputCount") or 0)
+    artifact_count = int(row.get("artifactCount") or artifact_gate.get("artifactCount") or 0)
+    artifact_status = str(row.get("artifactStatus") or ("returned" if artifact_count > 0 else "")).lower()
+    missing_runtime_output = runtime_output_count <= 0
+    missing_artifact = artifact_status in {"none_returned", "missing", ""}
+    explicit_transcript_missing_runtime_output = transcript_status in {
+        "missing_runtime_output",
+        "missing_required_output",
+        "missing_transcript",
+        "missing",
+    }
+    transcript_missing_runtime_output = explicit_transcript_missing_runtime_output or (
+        not transcript_status and runtime_output_count <= 0
+    )
+    passed_with_runtime_output = (
+        artifact_gate_status in {"passed", "ok", "clear"}
+        and runtime_output_count > 0
+        and not transcript_missing_runtime_output
+    )
+    return bool(
+        row.get("weakOutput")
+        or artifact_gate_status in {"missing_required_output", "failed", "blocked"}
+        or (
+            status == "completed"
+            and not passed_with_runtime_output
+            and (
+                missing_runtime_output
+                or missing_artifact
+                or transcript_status in {"missing_transcript", "missing"}
+            )
+        )
+        or (
+            status in {"running", "delegated", "active"}
+            and transcript_missing_runtime_output
+            and missing_artifact
+        )
+        or (
+            status in {"verification_failed", "failed", "blocked", "paused"}
+            and (
+                missing_runtime_output
+                or missing_artifact
+                or transcript_missing_runtime_output
+            )
+        )
+    )
+
+
+def _live_cross_category_outcome_validation(
+    live_mission_output_quality: dict[str, Any],
+    *,
+    required_categories: int = 4,
+) -> dict[str, Any]:
+    """Summarize whether Hermes has live, useful outcomes across task families."""
+
+    if not isinstance(live_mission_output_quality, dict):
+        return {
+            "schema": "fluxio.live_cross_category_outcome_validation.v1",
+            "status": "missing",
+            "validatedCategoryCount": 0,
+            "requiredCategoryCount": required_categories,
+            "categories": [],
+            "nextAction": "Collect live mission-detail rows with Hermes runtime output and artifact proof.",
+        }
+    rows = (
+        live_mission_output_quality.get("checkedMissionRows", [])
+        if isinstance(live_mission_output_quality.get("checkedMissionRows"), list)
+        else []
+    )
+    categories: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        runtime = str(row.get("runtime") or "").lower()
+        if runtime != "hermes":
+            continue
+        category = _mission_task_family(row)
+        if not category:
+            continue
+        output_count = int(row.get("runtimeOutputCount") or 0)
+        artifact_status = str(row.get("artifactStatus") or "").lower()
+        gate_status = str(row.get("artifactGateStatus") or "").lower()
+        transcript_status = str(row.get("runtimeTranscriptStatus") or "").lower()
+        if output_count <= 0:
+            continue
+        if gate_status not in {"passed", "ok", "clear"} and artifact_status not in {"reported", "served", "path"}:
+            continue
+        if (
+            transcript_status in {"missing_runtime_output", "missing_required_output", "missing_transcript", "missing", "failed", "blocked"}
+            and artifact_status not in {"reported", "served", "path"}
+        ):
+            continue
+        current = categories.get(category, {})
+        if output_count > int(current.get("runtimeOutputCount") or 0):
+            categories[category] = {
+                "taskFamily": category,
+                "missionId": str(row.get("missionId") or ""),
+                "title": str(row.get("title") or ""),
+                "status": str(row.get("status") or ""),
+                "runtimeOutputCount": output_count,
+                "artifactStatus": artifact_status,
+                "artifactGateStatus": gate_status,
+                "runtimeTranscriptStatus": transcript_status,
+            }
+    validated = sorted(categories.values(), key=lambda item: str(item.get("taskFamily") or ""))
+    status = "passed" if len(validated) >= required_categories else "needs_more_categories"
+    return {
+        "schema": "fluxio.live_cross_category_outcome_validation.v1",
+        "status": status,
+        "validatedCategoryCount": len(validated),
+        "requiredCategoryCount": required_categories,
+        "categories": validated,
+        "nextAction": (
+            "Keep rerunning live Hermes validation across new task families."
+            if status == "passed"
+            else "Run more Hermes missions with concrete runtime output and artifact proof across distinct task families."
+        ),
+    }
+
+
+def _mission_task_family(row: dict[str, Any]) -> str:
+    explicit_family = str(row.get("taskFamily") or "").strip()
+    if explicit_family in {
+        "rf_wireless",
+        "f1_data_analytics",
+        "public_data_investigation",
+        "frontend_mobile_ui",
+        "hardware_electrical",
+        "security_red_team",
+    }:
+        return explicit_family
+    task_types: list[str] = []
+    route_task_types = row.get("routeTaskTypes")
+    if isinstance(route_task_types, list):
+        task_types.extend(str(item).strip() for item in route_task_types if str(item).strip())
+    for key in ("taskType", "routeTrustTaskType"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            task_types.append(value)
+    feedback = row.get("operatorValueFeedback") if isinstance(row.get("operatorValueFeedback"), dict) else {}
+    feedback_task_type = str(feedback.get("routeTrustTaskType") or "").strip()
+    if feedback_task_type:
+        task_types.append(feedback_task_type)
+    text = " ".join(
+        str(row.get(key) or "").lower()
+        for key in ("title", "detail", "objective", "workspaceId")
+    )
+    if re.search(r"\brf\b|\bwi-?fi\b|\bwireless\b|\bbluetooth\b|\bsdr\b|\bads-b\b|\bais\b", text):
+        return "rf_wireless"
+    if re.search(r"\bhardware\b|\belectrical\b|\bworkbench\b|\bbench\b|\bsensor\b|\bpcb\b|\bcircuit\b", text):
+        return "hardware_electrical"
+    if any(token in text for token in ("f1", "telemetry", "lap", "sector", "tire", "tyre")):
+        return "f1_data_analytics"
+    if any(token in text for token in ("public-data", "public data", "investigation", "geoint", "osint", "maritime", "supply-chain")):
+        return "public_data_investigation"
+    if any(token in text for token in ("red-team", "red team", "security", "defensive hardening")):
+        return "security_red_team"
+    for task_type in task_types:
+        family = {
+            "data_f1_analytics": "f1_data_analytics",
+            "frontend_design": "frontend_mobile_ui",
+            "hardware_electrical": "hardware_electrical",
+            "research_analysis": "public_data_investigation",
+            "security_red_team": "security_red_team",
+        }.get(task_type)
+        if family:
+            return family
+    if any(token in text for token in ("phone", "tablet", "builder progress", "frontend", "ui", "workbench")):
+        return "frontend_mobile_ui"
+    return ""
+
+
+def _load_live_mission_detail_status_evidence(root: Path) -> dict[str, Any]:
+    path = root / ".agent_control" / "live_mission_detail_status_latest.json"
+    report = _load_json(path, {})
+    if not isinstance(report, dict):
+        return {}
+    if report.get("schema") != "fluxio.live_mission_detail_status.v1":
+        return {}
+    checked_at = str(report.get("checkedAt") or "")
+    checked_ts = _parse_iso_timestamp(checked_at)
+    if checked_ts <= 0:
+        return {}
+    age_seconds = datetime.now(timezone.utc).timestamp() - checked_ts
+    if age_seconds > int(report.get("maxAgeSeconds") or 6 * 60 * 60):
+        return {}
+    rows: list[dict[str, Any]] = []
+    for item in report.get("missionRows", []) if isinstance(report.get("missionRows"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        mission_id = str(item.get("missionId") or "").strip()
+        if not mission_id:
+            continue
+        status = str(item.get("status") or "unknown").lower()
+        artifact_gate = item.get("artifactGate") if isinstance(item.get("artifactGate"), dict) else {}
+        runtime_output_count = max(
+            int(artifact_gate.get("runtimeOutputCount") or 0),
+            int(item.get("runtimeOutputCount") or 0),
+            int(item.get("realRuntimeReportCount") or 0),
+        )
+        artifact_count = int(artifact_gate.get("artifactCount") or item.get("artifactCount") or 0)
+        agent_message_count = int(item.get("agentMessages") or 0)
+        real_runtime_report_count_known = (
+            bool(item.get("realRuntimeReportCountKnown"))
+            if "realRuntimeReportCountKnown" in item
+            else ("realRuntimeReportCount" in item or "traceOnlyMessageCount" in item)
+        )
+        real_runtime_report_count = int(item.get("realRuntimeReportCount") or 0)
+        trace_only_message_count = int(item.get("traceOnlyMessageCount") or 0)
+        transcript_status = str((item.get("runtimeTranscript") or {}).get("status") or "")
+        artifact_status = "none_returned" if artifact_count <= 0 else "reported"
+        transcript_missing_runtime_output = transcript_status in {
+            "missing_runtime_output",
+            "missing_required_output",
+            "missing_transcript",
+            "missing",
+            "",
+        }
+        weak = (
+            status == "completed"
+            and (
+                not bool(artifact_gate.get("passed"))
+                or (transcript_missing_runtime_output and artifact_count <= 0)
+            )
+        )
+        live_thread_missing_real_reports = (
+            real_runtime_report_count_known
+            and agent_message_count > 0
+            and real_runtime_report_count <= 0
+            and runtime_output_count <= 0
+        )
+        rows.append(
+            {
+                "missionId": mission_id,
+                "title": str(item.get("title") or mission_id),
+                "runtime": str(item.get("runtime") or "unknown"),
+                "status": status,
+                "objective": str(item.get("objective") or ""),
+                "workspaceId": str(item.get("workspaceId") or ""),
+                "routeTaskTypes": item.get("routeTaskTypes") if isinstance(item.get("routeTaskTypes"), list) else [],
+                "routeTrustTaskType": str(item.get("routeTrustTaskType") or ""),
+                "taskFamily": str(item.get("taskFamily") or ""),
+                "checkedAt": checked_at,
+                "reportPath": str(path.resolve()),
+                "screenshotPath": str(item.get("screenshotPath") or ""),
+                "agentMessageCount": agent_message_count,
+                "realRuntimeReportCount": real_runtime_report_count,
+                "realRuntimeReportCountKnown": real_runtime_report_count_known,
+                "traceOnlyMessageCount": trace_only_message_count,
+                "runtimeOutputCount": runtime_output_count,
+                "artifactStatus": artifact_status,
+                "weakOutput": weak or live_thread_missing_real_reports,
+                "artifactGateStatus": str(artifact_gate.get("status") or ""),
+                "runtimeTranscriptStatus": transcript_status,
+                "detail": (
+                    "Live NAS detail says completed mission is missing the hard artifact/runtime-output gate."
+                    if weak
+                    else "Live NAS detail returned agent messages, but none are real runtime report rows."
+                    if live_thread_missing_real_reports
+                    else "Live NAS detail predates real-runtime-report counting; rerun the mission-detail sync for exact Agent message quality."
+                    if not real_runtime_report_count_known
+                    else "Live NAS detail status overrides stale screenshot output-quality evidence."
+                ),
+            }
+        )
+    if not rows:
+        return {}
+    next_report = dict(report)
+    next_report["missionRows"] = rows
+    next_report["sourcePath"] = str(path.resolve())
+    return next_report
+
+
+def _load_mission_artifact_repair_plan(root: Path) -> dict[str, Any]:
+    candidates = [
+        root / ".agent_control" / "mission_artifact_repair_plan_latest.json",
+    ]
+    candidates.extend(
+        sorted((root / ".agent_control").glob("*mission-artifact-repair*.json"), reverse=True)
+    )
+    for path in _sort_report_candidates(candidates, timestamp_field="generatedAt"):
+        report = _load_json(path, {})
+        if not isinstance(report, dict):
+            continue
+        if report.get("schema") != "fluxio.mission_artifact_repair_plan.v1":
+            continue
+        generated_at = str(report.get("generatedAt") or "")
+        generated_ts = _parse_iso_timestamp(generated_at)
+        if generated_ts <= 0:
+            continue
+        age_seconds = datetime.now(timezone.utc).timestamp() - generated_ts
+        max_age_seconds = int(report.get("maxAgeSeconds") or 7 * 24 * 60 * 60)
+        if age_seconds > max_age_seconds:
+            continue
+        repairs = report.get("repairs", []) if isinstance(report.get("repairs"), list) else []
+        return {
+            **report,
+            "sourcePath": str(path.resolve()),
+            "generatedAt": generated_at,
+            "weakMissionCount": int(report.get("weakMissionCount") or len(repairs)),
+            "repairs": repairs,
         }
     return {}
 
@@ -4829,6 +6825,7 @@ def _parse_iso_timestamp(value: str) -> float:
 def _load_route_trust_sampling_evidence(root: Path) -> dict[str, Any]:
     candidates = [
         root / ".agent_control" / "route_trust_sampling" / "latest.json",
+        root / ".agent_control" / "route_trust_sampling" / "dry_run_latest.json",
     ]
     candidates.extend(
         sorted(
@@ -4838,9 +6835,27 @@ def _load_route_trust_sampling_evidence(root: Path) -> dict[str, Any]:
             reverse=True,
         )
     )
+    reports: list[tuple[float, Path, dict[str, Any]]] = []
     for path in candidates:
         report = _load_json(path, {})
         if not isinstance(report, dict) or report.get("schema") != "fluxio.route_trust_live_sampling_run.v1":
+            continue
+        generated_at = _parse_iso_timestamp(str(report.get("generatedAt") or ""))
+        reports.append((generated_at, path, report))
+    current_storage = _load_nas_storage_pressure_evidence(root)
+    current_storage_blocking = _nas_storage_pressure_is_blocking(current_storage)
+    has_live_sampling_report = any(
+        isinstance(report, dict) and not bool(report.get("dryRun"))
+        for _generated_at, _path, report in reports
+    )
+    for _generated_at, path, report in sorted(reports, key=lambda item: item[0], reverse=True):
+        if (
+            bool(report.get("dryRun"))
+            and has_live_sampling_report
+            and current_storage
+            and not current_storage_blocking
+            and str((report.get("storagePreflight") or {}).get("status") or "") in {"blocked", "dry_run_only"}
+        ):
             continue
         launched = (
             report.get("launchedSamplingMissions", [])
@@ -4857,12 +6872,22 @@ def _load_route_trust_sampling_evidence(root: Path) -> dict[str, Any]:
             report_ok = bool(launched) and all(
                 bool(item.get("ok", True)) for item in launched if isinstance(item, dict)
             )
+        storage_preflight = (
+            report.get("storagePreflight", {})
+            if isinstance(report.get("storagePreflight"), dict)
+            else {}
+        )
+        if storage_preflight and str(storage_preflight.get("status") or "") in {"blocked", "dry_run_only"}:
+            status = str(storage_preflight.get("status") or "")
+        else:
+            status = "passed" if report_ok else "failed"
         return {
             "sourcePath": str(path.resolve()),
             "generatedAt": str(report.get("generatedAt") or ""),
-            "status": "passed" if report_ok else "failed",
+            "status": status,
             "dryRun": bool(report.get("dryRun")),
             "runtime": str(report.get("runtime") or ""),
+            "storagePreflight": storage_preflight,
             "capacity": report.get("capacity", {}) if isinstance(report.get("capacity"), dict) else {},
             "coverageBefore": (
                 report.get("coverageBefore", {})
@@ -4874,6 +6899,45 @@ def _load_route_trust_sampling_evidence(root: Path) -> dict[str, Any]:
             "nextAction": str(report.get("nextAction") or ""),
         }
     return {}
+
+
+def _nas_storage_pressure_is_blocking(storage: dict[str, Any] | None) -> bool:
+    if not isinstance(storage, dict) or not storage:
+        return False
+    status = str(storage.get("status") or "").lower()
+    return bool(
+        status in {"critical", "full"}
+        or bool(storage.get("probeTimedOut"))
+        or bool(storage.get("probeConnectFailed"))
+        or int(storage.get("availableBytes") or 0) <= 0
+        or int(storage.get("usedPercent") or 0) >= 99
+    )
+
+
+def _nas_storage_probe_failed(storage: dict[str, Any] | None) -> bool:
+    if not isinstance(storage, dict) or not storage:
+        return False
+    return bool(storage.get("probeTimedOut")) or bool(storage.get("probeConnectFailed"))
+
+
+def _nas_storage_pressure_sentence(storage: dict[str, Any] | None) -> str:
+    if not isinstance(storage, dict) or not storage:
+        return "NAS storage pressure evidence is missing."
+    mount = storage.get("mount", "/volume1/Saclay")
+    if storage.get("probeConnectFailed"):
+        return (
+            f"{mount} storage is unverified because the bounded SSH probe could not connect "
+            "before df data returned."
+        )
+    if storage.get("probeTimedOut"):
+        return (
+            f"{mount} storage is unverified because the bounded SSH probe timed out "
+            "before current df data returned."
+        )
+    return (
+        f"{mount} is {int(storage.get('usedPercent') or 0)}% used with "
+        f"{int(storage.get('availableBytes') or 0)} available bytes."
+    )
 
 
 def _load_route_trust_sampling_closeout_evidence(root: Path) -> dict[str, Any]:

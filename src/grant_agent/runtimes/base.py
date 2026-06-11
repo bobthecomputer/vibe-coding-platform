@@ -37,6 +37,116 @@ def shell_join(args: list[str]) -> str:
     return shlex.join(args)
 
 
+def _compact_line(value: object, *, limit: int = 420) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _mission_runtime_event_rows(mission: Mission) -> list[dict]:
+    rows: list[dict] = []
+    for session in list(getattr(mission, "delegated_runtime_sessions", []) or []):
+        if isinstance(session, dict):
+            events = session.get("latest_events") or []
+        else:
+            events = getattr(session, "latest_events", []) or []
+        for event in list(events):
+            if hasattr(event, "__dataclass_fields__"):
+                rows.append(asdict(event))
+            elif isinstance(event, dict):
+                rows.append(dict(event))
+    return rows
+
+
+def _latest_operator_followups(mission: Mission, *, limit: int = 4) -> list[str]:
+    followups: list[str] = []
+    for event in _mission_runtime_event_rows(mission):
+        kind = str(event.get("kind") or "").strip().lower()
+        if kind not in {"operator.followup", "operator_followup", "mission.follow_up"}:
+            continue
+        message = _compact_line(event.get("message") or event.get("detail") or "")
+        if message:
+            followups.append(message)
+    return followups[-limit:]
+
+
+def _mission_artifact_rows(mission: Mission, *, limit: int = 6) -> list[str]:
+    rows: list[str] = []
+    proof = getattr(mission, "proof", None)
+    for artifact in list(getattr(proof, "artifacts", []) or []):
+        rows.append(_compact_line(artifact))
+    code_execution = getattr(mission, "code_execution", None)
+    for artifact in list(getattr(code_execution, "artifacts", []) or []):
+        rows.append(_compact_line(artifact))
+    state = getattr(mission, "state", None)
+    state_code_execution = getattr(state, "code_execution", {}) or {}
+    if isinstance(state_code_execution, dict):
+        for artifact in list(state_code_execution.get("artifacts", []) or []):
+            rows.append(_compact_line(artifact))
+    return [row for row in rows if row][-limit:]
+
+
+def build_mission_resume_objective(mission: Mission) -> str:
+    """Build the runtime-facing resume prompt without losing repair context."""
+    mission_id = str(getattr(mission, "mission_id", "") or "").strip()
+    objective = _compact_line(getattr(mission, "objective", ""), limit=900)
+    title = _compact_line(getattr(mission, "title", ""), limit=220)
+    proof = getattr(mission, "proof", None)
+    state = getattr(mission, "state", None)
+    lines = [
+        f"Resume mission {mission_id}: {objective}",
+        "",
+        "Current mission context:",
+    ]
+    if title:
+        lines.append(f"- Title: {title}")
+    status = str(getattr(state, "status", "") or "").strip()
+    stop_reason = str(getattr(state, "stop_reason", "") or "").strip()
+    last_error = str(getattr(state, "last_error", "") or "").strip()
+    if status:
+        lines.append(f"- State: {status}")
+    if stop_reason:
+        lines.append(f"- Stop reason: {stop_reason}")
+    if last_error:
+        lines.append(f"- Last error: {_compact_line(last_error)}")
+
+    summary = _compact_line(getattr(proof, "summary", ""), limit=700)
+    if summary:
+        lines.append(f"- Proof summary: {summary}")
+    for item in list(getattr(proof, "blocked_by", []) or [])[-6:]:
+        blocked = _compact_line(item)
+        if blocked:
+            lines.append(f"- Blocker: {blocked}")
+    for item in list(getattr(proof, "failed_checks", []) or [])[-6:]:
+        failed = _compact_line(item)
+        if failed:
+            lines.append(f"- Failed check: {failed}")
+    for item in _mission_artifact_rows(mission):
+        lines.append(f"- Existing artifact evidence: {item}")
+
+    followups = _latest_operator_followups(mission)
+    if followups:
+        lines.append("")
+        lines.append("Latest operator follow-up requirements:")
+        for item in followups:
+            lines.append(f"- {item}")
+
+    lines.extend(
+        [
+            "",
+            "Hard artifact/runtime-output gate for this resume:",
+            "- Prefer Hermes-native execution and keep the selected provider/model route intact.",
+            "- Produce a concrete runtime-output body that can be shown in the selected Agent thread.",
+            "- Produce or update a reviewable artifact under .agent_control/mission_artifacts for this mission.",
+            "- Record the artifact path, served URL, or preview URL in the mission proof.",
+            "- Add a verifier receipt proving the artifact opened from Workbench or explain the exact blocking failure.",
+            "- Do not mark the mission completed when only bookkeeping, planning text, stale delegated snippets, or trace-only rows exist.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def runtime_bin_candidates(workspace_root: Path) -> list[Path]:
     root = Path(workspace_root).expanduser()
     candidates = [

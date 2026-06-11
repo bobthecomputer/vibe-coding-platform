@@ -18,6 +18,8 @@ if str(SRC) not in sys.path:
 from grant_agent.cli import _select_quickstart_workspace, cmd_mission_start
 from grant_agent.mission_control import ControlRoomStore, TERMINAL_MISSION_STATUSES
 
+NAS_STORAGE_PRESSURE_PATH = Path(".agent_control") / "nas_storage_pressure_latest.json"
+
 
 def _parse_json_output(text: str) -> dict:
     start = text.find("{")
@@ -405,7 +407,7 @@ def _route_contract_for_task(
     if task_type == "frontend_design":
         executor = {
             "provider": "minimax",
-            "model": "minimax-m2.7",
+            "model": "MiniMax-M3",
             "effort": "high",
             "budget_class": "premium",
         }
@@ -466,6 +468,82 @@ def _prelaunch_route_receipts(route_contract: list[dict[str, str]]) -> list[dict
     ]
 
 
+def _load_json_file(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_nas_storage_pressure(root: Path) -> dict:
+    path = root / NAS_STORAGE_PRESSURE_PATH
+    payload = _load_json_file(path)
+    if payload.get("schema") != "fluxio.nas_storage_pressure.v1":
+        return {}
+    checked_at = str(payload.get("checkedAt") or "")
+    try:
+        checked_ts = datetime.fromisoformat(checked_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return {}
+    max_age_seconds = int(payload.get("maxAgeSeconds") or 48 * 60 * 60)
+    if datetime.now(timezone.utc).timestamp() - checked_ts > max_age_seconds:
+        return {}
+    payload["sourcePath"] = str(path.resolve())
+    return payload
+
+
+def _nas_storage_preflight(root: Path, *, dry_run: bool) -> dict:
+    pressure = _load_nas_storage_pressure(root)
+    if not pressure:
+        return {
+            "schema": "fluxio.route_trust_storage_preflight.v1",
+            "status": "unknown",
+            "canLaunch": True,
+            "canDryRun": True,
+            "dryRun": dry_run,
+            "nextAction": "No fresh NAS storage pressure evidence was found for the sampler.",
+        }
+    status = str(pressure.get("status") or "").strip().lower()
+    critical = (
+        status in {"critical", "full"}
+        or bool(pressure.get("probeTimedOut"))
+        or bool(pressure.get("probeConnectFailed"))
+        or ("availableBytes" in pressure and int(pressure.get("availableBytes") or 0) <= 0)
+        or ("usedPercent" in pressure and int(pressure.get("usedPercent") or 0) >= 99)
+    )
+    return {
+        "schema": "fluxio.route_trust_storage_preflight.v1",
+        "status": "blocked" if critical and not dry_run else "dry_run_only" if critical else "passed",
+        "canLaunch": not critical,
+        "canDryRun": True,
+        "dryRun": dry_run,
+        "storage": {
+            "host": pressure.get("host", ""),
+            "mount": pressure.get("mount", "/volume1/Saclay"),
+            "status": pressure.get("status", "critical" if critical else "unknown"),
+            "probeTimedOut": bool(pressure.get("probeTimedOut")),
+            "probeConnectFailed": bool(pressure.get("probeConnectFailed")),
+            "measuredUsageAvailable": bool(pressure.get("measuredUsageAvailable", True)),
+            "usedPercent": int(pressure.get("usedPercent") or 0),
+            "availableBytes": int(pressure.get("availableBytes") or 0),
+            "source": pressure.get("source", ""),
+            "sourcePath": pressure.get("sourcePath", ""),
+            "cleanupPlanPath": pressure.get("cleanupPlanPath", ""),
+        },
+        "nextAction": (
+            "Dry run is allowed, but live route-trust sampling is blocked until NAS storage/I/O pressure clears."
+            if critical and dry_run
+            else (
+                pressure.get("nextAction")
+                or "Free NAS storage and rerun plan:nas-storage-cleanup before launching route-trust sampling."
+            )
+            if critical
+            else "NAS storage preflight passed for route-trust sampling."
+        ),
+    }
+
+
 def run_sampling(args: argparse.Namespace) -> dict:
     root = Path(args.root).resolve()
     store = ControlRoomStore(root)
@@ -497,6 +575,8 @@ def run_sampling(args: argparse.Namespace) -> dict:
     active_objectives = _active_mission_objectives(store)
     launched: list[dict] = []
     skipped: list[dict] = []
+    dry_run = bool(getattr(args, "dry_run", False))
+    storage_preflight = _nas_storage_preflight(root, dry_run=dry_run)
 
     capacity_available = active_count < int(args.max_active) and queued_count <= int(args.max_queued)
     for item in plan:
@@ -526,25 +606,13 @@ def run_sampling(args: argparse.Namespace) -> dict:
         if objective.lower() in active_objectives:
             skipped.append({"taskType": task_type, "reason": "already_active", "objective": objective})
             continue
-        if not capacity_available:
-            skipped.append(
-                {
-                    "taskType": task_type,
-                    "reason": "capacity_guard",
-                    "activeMissions": active_count,
-                    "queuedMissions": queued_count,
-                    "maxActive": int(args.max_active),
-                    "maxQueued": int(args.max_queued),
-                }
-            )
-            break
         objective_for_launch, success_checks_for_launch, difficulty_profile = _apply_task_difficulty(
             task_type=task_type,
             objective=objective,
             success_checks=success_checks,
             closeout=closeout,
         )
-        if args.dry_run:
+        if dry_run:
             launched.append(
                 {
                     "taskType": task_type,
@@ -558,6 +626,29 @@ def run_sampling(args: argparse.Namespace) -> dict:
             )
             active_objectives.add(objective.lower())
             continue
+        if not storage_preflight.get("canLaunch", True):
+            skipped.append(
+                {
+                    "taskType": task_type,
+                    "reason": "nas_storage_pressure_block",
+                    "code": "nas_storage_pressure_block",
+                    "storage": storage_preflight.get("storage", {}),
+                    "nextAction": storage_preflight.get("nextAction", ""),
+                }
+            )
+            break
+        if not capacity_available:
+            skipped.append(
+                {
+                    "taskType": task_type,
+                    "reason": "capacity_guard",
+                    "activeMissions": active_count,
+                    "queuedMissions": queued_count,
+                    "maxActive": int(args.max_active),
+                    "maxQueued": int(args.max_queued),
+                }
+            )
+            break
         route_contract = (
             _route_contract_for_task(task_type, root=root, closeout=closeout)
             if not args.skip_route_contract
@@ -606,9 +697,11 @@ def run_sampling(args: argparse.Namespace) -> dict:
         "schema": "fluxio.route_trust_live_sampling_run.v1",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "root": str(root),
-        "ok": all(item.get("ok", True) for item in launched),
-        "dryRun": bool(args.dry_run),
+        "ok": all(item.get("ok", True) for item in launched)
+        and not any(item.get("reason") == "nas_storage_pressure_block" for item in skipped),
+        "dryRun": dry_run,
         "runtime": args.runtime,
+        "storagePreflight": storage_preflight,
         "capacity": {
             "maxActive": int(args.max_active),
             "maxQueued": int(args.max_queued),
@@ -625,11 +718,13 @@ def run_sampling(args: argparse.Namespace) -> dict:
         "skippedSamplingMissions": skipped,
         "nextAction": (
             "Let the launched Hermes sampling mission run, then close it with operator value feedback."
-            if launched and not args.dry_run
+            if launched and not dry_run
+            else "NAS storage/I/O pressure blocked live route-trust sampling; rerun the dry run and storage cleanup planner after the NAS has write headroom."
+            if skipped and skipped[-1].get("reason") == "nas_storage_pressure_block"
             else "Capacity guard prevented launch; retry after active missions complete."
             if skipped and skipped[-1].get("reason") == "capacity_guard"
             else "Run this without --dry-run to launch the next Hermes value-scored sampling mission."
-            if args.dry_run
+            if dry_run
             else "No new sampling mission was needed or launchable."
         ),
     }

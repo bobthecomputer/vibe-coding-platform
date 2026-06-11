@@ -125,6 +125,7 @@ class MissionVerificationPolicy:
 class MissionProof:
     summary: str = ""
     changed_files: list[str] = field(default_factory=list)
+    artifacts: list[Any] = field(default_factory=list)
     passed_checks: list[str] = field(default_factory=list)
     failed_checks: list[str] = field(default_factory=list)
     pending_approvals: list[str] = field(default_factory=list)
@@ -211,6 +212,15 @@ class DeliveryReceipt:
     error_message: str = ""
     delivery_url: str = ""
     retry_count: int = 0
+    origin_runtime: str = ""
+    origin_provider: str = ""
+    origin_model: str = ""
+    transport_provider: str = ""
+    producer: str = ""
+    mission_title: str = ""
+    source_session_id: str = ""
+    evidence_path: str = ""
+    screenshot_path: str = ""
 
 
 @dataclass
@@ -533,6 +543,10 @@ class AppActionHook:
     mutability: str = "read"
     risk_level: str = "low"
     requires_approval: bool = False
+    execution_kind: str = ""
+    execution_command: str = ""
+    health_url: str = ""
+    app_url: str = ""
 
 
 @dataclass
@@ -589,6 +603,7 @@ class ConnectedAppSession:
     source_kind: str = "connected_app"
     app_root: str = ""
     context_preview: list[dict[str, Any]] = field(default_factory=list)
+    action_hooks: list[dict[str, Any]] = field(default_factory=list)
     task_history: list[dict[str, Any]] = field(default_factory=list)
     latest_task_result: dict[str, Any] = field(default_factory=dict)
     approval_callback: dict[str, Any] = field(default_factory=dict)
