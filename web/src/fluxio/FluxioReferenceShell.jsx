@@ -4989,14 +4989,21 @@ function FluxioAgentSurface(props) {
     workbenchState,
   } = props;
   const isLiveBackend = liveDataStatus?.previewMode === "live";
-  const [agentClarityMode, setAgentClarityMode] = useState("focus");
+  const [agentClarityMode, setAgentClarityMode] = useState(() => {
+    if (typeof window === "undefined") return "focus";
+    return window.localStorage?.getItem("fluxio.agent.clarityMode") || "focus";
+  });
   const [localLaneControlReceipt, setLocalLaneControlReceipt] = useState(null);
   const [agentPreviewWindowOpen, setAgentPreviewWindowOpen] = useState(false);
   const agentPreviewPanelRef = useRef(null);
   const normalizedAgentClarityMode = agentClarityMode === "full" ? "full" : "focus";
   const agentFocusMode = isLiveBackend && normalizedAgentClarityMode === "focus";
   const setLiveAgentClarityMode = mode => {
-    setAgentClarityMode(mode === "full" ? "full" : "focus");
+    const nextMode = mode === "full" ? "full" : "focus";
+    setAgentClarityMode(nextMode);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem("fluxio.agent.clarityMode", nextMode);
+    }
   };
   const persistedMissionChatMessages = useMemo(() => {
     if (typeof window === "undefined") {
@@ -5967,7 +5974,7 @@ function FluxioAgentSurface(props) {
             data-live-agent-thread-first-band="true"
           >
             <div className="fluxos-agent-thread-first-copy">
-              <span>Mission controls</span>
+              <span>Thread-first Agent</span>
               <strong>{workbenchState?.missionTitle || "Live mission thread"}</strong>
               <p>{workbenchState?.progress?.nextAction || "Continue, modify, launch, verify, or summarize this Hermes mission."}</p>
             </div>
@@ -6312,7 +6319,7 @@ function FluxioAgentSurface(props) {
           >
             <div className="fluxos-agent-selected-report-head">
               <div>
-                <span>Evidence reader</span>
+                <span>Selected live report · Evidence reader</span>
                 <strong>{selectedEvidenceMessage ? agentMessageDisplayTitle(selectedEvidenceMessage) : liveMissionReportBlocked ? "No real runtime report returned" : "Waiting for Agent Live evidence"}</strong>
               </div>
               <div className="fluxos-agent-selected-report-meta" aria-label="Selected report source">
@@ -7594,6 +7601,24 @@ function FluxioBuilderSurface(props) {
         <div className="fluxos-section-head">
           <span>Builder</span>
           <strong>{isLiveBackend ? "Live NAS mission readiness" : "Project readiness"}</strong>
+          {isLiveBackend ? (
+            <div className="fluxos-builder-clarity-switch" aria-label="Builder clarity mode" data-builder-clarity-switch="true">
+              <button
+                className={builderFocusMode ? "active" : ""}
+                onClick={() => setLiveBuilderClarityMode("focus")}
+                type="button"
+              >
+                Focus
+              </button>
+              <button
+                className={!builderFocusMode ? "active" : ""}
+                onClick={() => setLiveBuilderClarityMode("full")}
+                type="button"
+              >
+                Full
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="fluxos-live-data-banner" aria-label="Live data source">
           <span>{isLiveBackend ? "Live data" : "Preview data"}</span>
@@ -9921,6 +9946,24 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         <div className="fluxos-section-head">
           <span>Live state</span>
           <strong>{titleizeToken(workbenchState?.missionStatus || workbenchState?.status || (liveDataStatus?.loading ? "Loading" : "Ready"))}</strong>
+          {isLiveBackend ? (
+            <div className="fluxos-builder-clarity-switch" aria-label="Workbench clarity mode" data-live-workbench-clarity-switch="true">
+              <button
+                className={workbenchFocusMode ? "active" : ""}
+                onClick={() => setLiveWorkbenchClarityMode("focus")}
+                type="button"
+              >
+                Focus
+              </button>
+              <button
+                className={!workbenchFocusMode ? "active" : ""}
+                onClick={() => setLiveWorkbenchClarityMode("full")}
+                type="button"
+              >
+                Full
+              </button>
+            </div>
+          ) : null}
         </div>
         {workbenchState?.missionTitle ? <strong className="fluxos-workbench-mission-title">{workbenchState.missionTitle}</strong> : null}
         {progressValue == null ? null : (
