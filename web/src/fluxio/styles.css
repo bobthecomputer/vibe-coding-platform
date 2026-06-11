@@ -33837,3 +33837,423 @@ body::-webkit-scrollbar-thumb {
 ) {
   gap: 0 !important;
 }
+
+/* Skills is a workspace, not a meter board. Keep live NAS proof visible, but
+   make the first view read as a wide capability map instead of mini boxes. */
+.fluxos-shell.surface-skills .fluxos-skills {
+  width: min(1180px, calc(100vw - 128px)) !important;
+  max-width: none !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skills-list {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skills-list > .fluxos-section-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  min-height: 56px;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.fluxos-shell.surface-skills .fluxos-skills-list > .fluxos-section-head > span {
+  grid-column: 1 / -1;
+}
+
+.fluxos-shell.surface-skills .fluxos-skills-list > .fluxos-section-head strong {
+  justify-self: start;
+  font-size: clamp(24px, 2.2vw, 34px);
+  line-height: 0.98;
+  max-width: 720px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-band {
+  display: grid !important;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(360px, 1.2fr) minmax(220px, 0.55fr) !important;
+  align-items: end;
+  column-gap: 32px;
+  padding: 24px 0 22px !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-band > div:first-child strong,
+.fluxos-shell.surface-skills .fluxos-skill-route-proof > div:first-child strong,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source > div:first-child strong,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-lane > div:first-child strong {
+  font-size: 20px;
+  line-height: 1.12;
+}
+
+.fluxos-shell.surface-skills :where(
+  .fluxos-skill-command-band span,
+  .fluxos-skill-command-band small,
+  .fluxos-skill-route-proof span,
+  .fluxos-skill-route-proof small,
+  .fluxos-hermes-skill-source span,
+  .fluxos-hermes-skill-source small,
+  .fluxos-code-mod-skill-lane span,
+  .fluxos-code-mod-skill-lane small,
+  .fluxos-live-skill-summary span,
+  .fluxos-live-skill-summary em
+) {
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+.fluxos-shell.surface-skills :where(
+  .fluxos-skill-command-metrics,
+  .fluxos-skill-route-proof-grid,
+  .fluxos-hermes-skill-source-grid,
+  .fluxos-code-mod-skill-grid
+) {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics article {
+  min-height: 74px;
+  padding: 0 18px 0 0 !important;
+  border-top: 0 !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics article:last-child {
+  border-right: 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics strong,
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article strong,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article strong,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article strong {
+  display: block;
+  font-family: inherit !important;
+  font-size: 17px;
+  line-height: 1.16;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics article span,
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics article small,
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article span,
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article small,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article span,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article small,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article span,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article small {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics article span,
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article span,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article span,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article span {
+  margin-bottom: 8px;
+  color: rgba(214, 225, 238, 0.78);
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-metrics article small,
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article small,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article small,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article small {
+  margin-top: 6px;
+  color: rgba(214, 225, 238, 0.76);
+  line-height: 1.35;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-route-proof,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-lane {
+  display: grid !important;
+  grid-template-columns: minmax(280px, 0.75fr) minmax(440px, 1.25fr) !important;
+  column-gap: 36px;
+  padding: 22px 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article {
+  display: block !important;
+  min-height: 88px;
+  padding: 0 18px 0 0 !important;
+  border-top: 0 !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-route-proof-grid article:last-child,
+.fluxos-shell.surface-skills .fluxos-hermes-skill-source-grid article:last-child,
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid article:last-child {
+  border-right: 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-code-mod-skill-grid {
+  margin-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.095);
+  padding-top: 18px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-actions {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 !important;
+  align-self: stretch;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-actions button,
+.fluxos-shell.surface-skills .fluxos-builder-clarity-switch button,
+.fluxos-shell.surface-skills [data-live-skills-clarity-switch="true"] button {
+  min-height: 38px;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: transparent !important;
+  text-align: left;
+  padding: 8px 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-command-actions button:not(:disabled):hover,
+.fluxos-shell.surface-skills [data-live-skills-clarity-switch="true"] button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-live-skill-summary {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 18px;
+  align-items: baseline;
+  padding: 15px 0 !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-editor.is-diagnostics-hidden {
+  display: none !important;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-workspace {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
+  gap: 34px;
+  padding: 24px 0 10px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-list {
+  min-width: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  padding-right: 20px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-list-head,
+.fluxos-shell.surface-skills .fluxos-skill-editor-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 32px;
+  margin-bottom: 12px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-list-head span,
+.fluxos-shell.surface-skills .fluxos-skill-editor-title span,
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel label > span {
+  color: rgba(214, 225, 238, 0.72);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-list-head strong,
+.fluxos-shell.surface-skills .fluxos-skill-editor-title strong {
+  color: #fff;
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 1.12;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-height: 58px;
+  align-items: center;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: rgba(239, 246, 255, 0.86);
+  padding: 10px 2px;
+  text-align: left;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row:hover,
+.fluxos-shell.surface-skills .fluxos-skill-library-row:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.025) !important;
+  outline: none;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row.active {
+  color: #fff;
+  border-top-color: rgba(255, 255, 255, 0.26);
+  box-shadow: inset 2px 0 0 rgba(255, 255, 255, 0.8);
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row strong,
+.fluxos-shell.surface-skills .fluxos-skill-library-row em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row strong {
+  font-size: 14px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-library-row em {
+  color: rgba(214, 225, 238, 0.68);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-title,
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel .wide,
+.fluxos-shell.surface-skills .fluxos-skill-editor-actions,
+.fluxos-shell.surface-skills .fluxos-skill-editor-status {
+  grid-column: 1 / -1;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel label {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel input,
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel textarea {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  line-height: 1.45;
+  padding: 8px 0;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel textarea {
+  min-height: 156px;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 12px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel input:focus,
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel textarea:focus {
+  border-color: rgba(255, 255, 255, 0.42);
+  outline: none;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel :disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-actions button {
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font-weight: 800;
+  padding: 0 14px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-actions button.primary {
+  border-color: rgba(255, 255, 255, 0.82);
+  background: #fff;
+  color: #050505;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-actions button:not(:disabled):hover {
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-actions button.primary:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-editor-status {
+  margin: 0;
+  color: rgba(214, 225, 238, 0.78);
+  font-size: 13px;
+}
+
+@media (max-width: 980px) {
+  .fluxos-shell.surface-skills .fluxos-skills {
+    width: min(100%, calc(100vw - 56px)) !important;
+  }
+
+  .fluxos-shell.surface-skills .fluxos-skill-command-band,
+  .fluxos-shell.surface-skills .fluxos-skill-route-proof,
+  .fluxos-shell.surface-skills .fluxos-hermes-skill-source,
+  .fluxos-shell.surface-skills .fluxos-code-mod-skill-lane,
+  .fluxos-shell.surface-skills .fluxos-live-skill-summary {
+    grid-template-columns: minmax(0, 1fr) !important;
+    row-gap: 18px;
+  }
+
+  .fluxos-shell.surface-skills :where(
+    .fluxos-skill-command-metrics,
+    .fluxos-skill-route-proof-grid,
+    .fluxos-hermes-skill-source-grid,
+    .fluxos-code-mod-skill-grid
+  ) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .fluxos-shell.surface-skills .fluxos-skill-library-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+  }
+
+  .fluxos-shell.surface-skills .fluxos-skill-library-list {
+    border-right: 0;
+    padding-right: 0;
+  }
+
+  .fluxos-shell.surface-skills .fluxos-skill-editor-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -9164,6 +9164,37 @@ function FluxioBuilderSurface(props) {
   );
 }
 
+const FLUXIO_SKILL_DRAFTS_KEY = "fluxio.skills.drafts";
+
+function loadFluxioSkillDrafts() {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(window.localStorage?.getItem(FLUXIO_SKILL_DRAFTS_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function skillLibraryKey(item, index = 0) {
+  return String(item?.id || item?.skillId || item?.name || item?.label || `skill-${index}`).trim();
+}
+
+function skillLibraryTitle(item) {
+  return String(item?.name || item?.label || item?.id || item?.skillId || "Untitled skill").trim();
+}
+
+function skillLibraryBody(item) {
+  const value = [
+    item?.instructions,
+    item?.body,
+    item?.content,
+    item?.summary,
+    item?.description,
+  ].find(candidate => String(candidate || "").trim());
+  return String(value || "Write or paste this skill's instructions here.").trim();
+}
+
 function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, surface }) {
   const effectiveStudioState = studioState || skillStudioState || {};
   const [skillsClarityMode, setSkillsClarityMode] = useState(() => {
@@ -9269,6 +9300,89 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
     skillStudioState?.redTeamEscalation ||
     {};
   const redTeamHistory = asList(redTeamEscalation.history).slice(-6);
+  const skillLibraryEntries = (isRuleSets ? ruleSets : displayedSkills).map((item, index) => ({
+    item,
+    key: skillLibraryKey(item, index),
+  }));
+  const [selectedSkillKey, setSelectedSkillKey] = useState("");
+  const [skillDrafts, setSkillDrafts] = useState(loadFluxioSkillDrafts);
+  const [skillEditorStatus, setSkillEditorStatus] = useState("");
+  const skillLibrarySignature = skillLibraryEntries.map(entry => entry.key).join("|");
+  useEffect(() => {
+    setSelectedSkillKey(current => {
+      if (!skillLibraryEntries.length) return "";
+      if (current && skillLibraryEntries.some(entry => entry.key === current)) return current;
+      return skillLibraryEntries[0].key;
+    });
+  }, [skillLibrarySignature]);
+  const selectedSkillEntry =
+    skillLibraryEntries.find(entry => entry.key === selectedSkillKey) ||
+    skillLibraryEntries[0] ||
+    null;
+  const selectedSkill = selectedSkillEntry?.item || null;
+  const selectedSkillDraft = selectedSkillEntry
+    ? {
+        name: skillLibraryTitle(selectedSkill),
+        category: String(selectedSkill?.category || selectedSkill?.sourceType || selectedSkill?.scope || "uncategorized"),
+        status: String(selectedSkill?.status || selectedSkill?.promotionState || "live"),
+        instructions: skillLibraryBody(selectedSkill),
+        agentRequest: "",
+        ...(skillDrafts[selectedSkillEntry.key] || {}),
+      }
+    : {
+        name: "",
+        category: "",
+        status: "",
+        instructions: "",
+        agentRequest: "",
+      };
+  const updateSelectedSkillDraft = (field, value) => {
+    if (!selectedSkillEntry) return;
+    setSkillEditorStatus("");
+    setSkillDrafts(current => ({
+      ...current,
+      [selectedSkillEntry.key]: {
+        ...selectedSkillDraft,
+        ...current[selectedSkillEntry.key],
+        [field]: value,
+      },
+    }));
+  };
+  const persistSelectedSkillDraft = action => {
+    if (!selectedSkillEntry) return null;
+    const savedDraft = {
+      ...selectedSkillDraft,
+      id: selectedSkillEntry.key,
+      source: skillSourceMode,
+      updatedAt: new Date().toISOString(),
+    };
+    const nextDrafts = {
+      ...skillDrafts,
+      [selectedSkillEntry.key]: savedDraft,
+    };
+    setSkillDrafts(nextDrafts);
+    if (typeof window !== "undefined") {
+      window.localStorage?.setItem(FLUXIO_SKILL_DRAFTS_KEY, JSON.stringify(nextDrafts));
+    }
+    setSkillEditorStatus(action === "send" ? "Sent to Agent with the current draft." : "Draft saved locally.");
+    return savedDraft;
+  };
+  const saveSelectedSkillDraft = () => {
+    const savedDraft = persistSelectedSkillDraft("save");
+    if (savedDraft) {
+      fluxioAction(onRequestAction, "skills:save-draft", savedDraft);
+    }
+  };
+  const sendSelectedSkillToAgent = () => {
+    const savedDraft = persistSelectedSkillDraft("send");
+    if (savedDraft) {
+      fluxioAction(onRequestAction, "skills:modify-with-agent", {
+        skillId: selectedSkillEntry.key,
+        draft: savedDraft,
+        request: savedDraft.agentRequest || "Review and improve this skill.",
+      });
+    }
+  };
   return (
     <div
       className="fluxos-skills"
@@ -9278,7 +9392,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
       <section className="fluxos-skills-list">
         <div className="fluxos-section-head">
           <span>{isRuleSets ? "Rule Sets" : "Skill library"}</span>
-          <strong>{isRuleSets ? "Core policy and Approval gates" : effectiveStudioState?.liveReady ? "Live measured capabilities" : "Awaiting NAS skill registry"}</strong>
+          <strong>{isRuleSets ? "Core policy and Approval gates" : effectiveStudioState?.liveReady ? "Your skills" : "Awaiting NAS skill registry"}</strong>
           {effectiveStudioState?.liveReady && !isRuleSets ? (
             <div className="fluxos-builder-clarity-switch" aria-label="Skills clarity mode" data-live-skills-clarity-switch="true">
               <button
@@ -9298,7 +9412,107 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             </div>
           ) : null}
         </div>
-        {effectiveStudioState?.liveReady && !isRuleSets ? (
+        {!isRuleSets ? (
+          <section
+            className="fluxos-skill-library-workspace"
+            aria-label="User skill library editor. Live measured capabilities."
+            data-skill-library-editor="true"
+            data-live-skills-feedback="true"
+            data-measured-skill-count={measuredSkillCount}
+            data-repair-skill-count={repairCount}
+            data-reinforce-skill-count={reinforceCount}
+          >
+            <div className="fluxos-skill-library-list" aria-label="Your skills">
+              <div className="fluxos-skill-library-list-head">
+                <span>Your skills</span>
+                <strong>{`${skillLibraryEntries.length} saved`}</strong>
+              </div>
+              {skillLibraryEntries.length > 0 ? skillLibraryEntries.map(entry => {
+                const item = entry.item;
+                const active = entry.key === selectedSkillEntry?.key;
+                return (
+                  <button
+                    className={cx("fluxos-skill-library-row", active && "active")}
+                    data-connected-app-skill-draft={String(item?.sourceType || "").toLowerCase() === "connected_app" ? "true" : "false"}
+                    data-live-skill-row={effectiveStudioState?.liveReady ? "true" : "false"}
+                    data-skill-feedback-state={item?.feedbackSummary?.selectionPolicy?.state || item?.feedbackSummary?.trend || item?.status || "live"}
+                    data-skill-gap={item?.feedbackSummary?.latestSystemLoss ?? ""}
+                    data-skill-id={entry.key}
+                    key={entry.key}
+                    onClick={() => setSelectedSkillKey(entry.key)}
+                    type="button"
+                  >
+                    <BookOpen size={16} strokeWidth={1.8} />
+                    <span>
+                      <strong>{skillLibraryTitle(item)}</strong>
+                      <em>{item?.category || item?.sourceType || asList(item?.tags).slice(0, 2).join(" · ") || "skill"}</em>
+                    </span>
+                  </button>
+                );
+              }) : (
+                <article className="fluxos-flow-empty">
+                  <span>Live data only</span>
+                  <strong>No live skill registry returned yet</strong>
+                  <p>
+                    {effectiveStudioState?.liveReady
+                      ? "The current NAS snapshot did not return user skill rows."
+                      : "Refresh the live control-room snapshot to load your saved skills."}
+                  </p>
+                </article>
+              )}
+            </div>
+            <div className="fluxos-skill-editor-panel" data-skill-editor="true">
+              <div className="fluxos-skill-editor-title">
+                <span>{selectedSkillDraft.status || "draft"}</span>
+                <strong>{selectedSkillDraft.name || "Select a skill"}</strong>
+              </div>
+              <label>
+                <span>Name</span>
+                <input
+                  aria-label="Skill name"
+                  disabled={!selectedSkillEntry}
+                  onChange={event => updateSelectedSkillDraft("name", event.target.value)}
+                  value={selectedSkillDraft.name}
+                />
+              </label>
+              <label>
+                <span>Category</span>
+                <input
+                  aria-label="Skill category"
+                  disabled={!selectedSkillEntry}
+                  onChange={event => updateSelectedSkillDraft("category", event.target.value)}
+                  value={selectedSkillDraft.category}
+                />
+              </label>
+              <label className="wide">
+                <span>Skill instructions</span>
+                <textarea
+                  aria-label="Skill instructions"
+                  disabled={!selectedSkillEntry}
+                  onChange={event => updateSelectedSkillDraft("instructions", event.target.value)}
+                  value={selectedSkillDraft.instructions}
+                />
+              </label>
+              <label className="wide">
+                <span>Ask Agent to modify</span>
+                <textarea
+                  aria-label="Agent skill modification request"
+                  disabled={!selectedSkillEntry}
+                  onChange={event => updateSelectedSkillDraft("agentRequest", event.target.value)}
+                  placeholder="Describe what should change in this skill."
+                  value={selectedSkillDraft.agentRequest}
+                />
+              </label>
+              <div className="fluxos-skill-editor-actions">
+                <button disabled={!selectedSkillEntry} onClick={saveSelectedSkillDraft} type="button">Save draft</button>
+                <button className="primary" disabled={!selectedSkillEntry} onClick={sendSelectedSkillToAgent} type="button">Send to Agent</button>
+                <button disabled={!selectedSkillEntry} onClick={() => fluxioAction(onRequestAction, `skill:open:${selectedSkillEntry?.key || "none"}`)} type="button">Open details</button>
+              </div>
+              {skillEditorStatus ? <p className="fluxos-skill-editor-status">{skillEditorStatus}</p> : null}
+            </div>
+          </section>
+        ) : null}
+        {effectiveStudioState?.liveReady && !isRuleSets && !skillsFocusMode ? (
           <section className="fluxos-skill-command-band" aria-label="Live skills command band" data-live-skills-command-band="true">
             <div>
               <span>Live skills</span>
@@ -9328,7 +9542,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             </div>
           </section>
         ) : null}
-        {effectiveStudioState?.liveReady && !isRuleSets ? (
+        {effectiveStudioState?.liveReady && !isRuleSets && !skillsFocusMode ? (
           <section
             className={cx("fluxos-skill-route-proof", m3RouteVerified && "verified")}
             aria-label="MiniMax M3 frontend skill route"
@@ -9361,7 +9575,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             </div>
           </section>
         ) : null}
-        {effectiveStudioState?.liveReady && !isRuleSets ? (
+        {effectiveStudioState?.liveReady && !isRuleSets && !skillsFocusMode ? (
           <section
             className="fluxos-hermes-skill-source"
             aria-label="Hermes live skill source"
@@ -9388,7 +9602,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             </div>
           </section>
         ) : null}
-        {effectiveStudioState?.liveReady && !isRuleSets ? (
+        {effectiveStudioState?.liveReady && !isRuleSets && !skillsFocusMode ? (
           <section
             className="fluxos-code-mod-skill-lane"
             aria-label="Code mod skill lane"
@@ -9417,7 +9631,7 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             </div>
           </section>
         ) : null}
-        {effectiveStudioState?.liveReady && !isRuleSets ? (
+        {effectiveStudioState?.liveReady && !isRuleSets && !skillsFocusMode ? (
           <div
             className="fluxos-live-skill-summary"
             aria-label="Live skill catalog source"
@@ -9447,42 +9661,15 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
             <span>{item.status || "live"}</span>
             <em>{item.scope || item.badge || "rules"}</em>
           </button>
-        )) : displayedSkills.length > 0 ? displayedSkills.map(item => (
-          <button
-            className="fluxos-skill-card"
-            data-connected-app-skill-draft={String(item?.sourceType || "").toLowerCase() === "connected_app" ? "true" : "false"}
-            data-live-skill-row={effectiveStudioState?.liveReady ? "true" : "false"}
-            data-skill-feedback-state={item?.feedbackSummary?.selectionPolicy?.state || item?.feedbackSummary?.trend || item?.status || "live"}
-            data-skill-id={item.id || item.name || ""}
-            key={item.id || item.name}
-            onClick={() => fluxioAction(onRequestAction, `skill:open:${item.id || item.name}`)}
-            type="button"
-          >
-            <WandSparkles size={20} strokeWidth={1.7} />
-            <div>
-              <strong>{item.name || item.label || item.id || "Skill"}</strong>
-              <p>{item.summary || item.description || "Live skill returned by the NAS snapshot."}</p>
-            </div>
-            <span>{item.status || item.promotionState || "live"}</span>
-            <em>
-              {item?.feedbackSummary?.latestSystemLoss != null
-                ? `gap ${item.feedbackSummary.latestSystemLoss} · ${item.feedbackSummary.selectionPolicy?.state || item.feedbackSummary.trend || "measured"}`
-                : asList(item.tags).slice(0, 2).join(" · ") || item.category || "measured"}
-            </em>
-          </button>
-        )) : (
+        )) : isRuleSets ? (
           <article className="fluxos-flow-empty">
             <span>Live data only</span>
-            <strong>{isRuleSets ? "No live rule sets returned" : "No live skill registry returned yet"}</strong>
-            <p>
-              {effectiveStudioState?.liveReady
-                ? "The NAS snapshot did not include measured skill rows for this surface."
-                : "This surface no longer renders the bundled static skill catalog in live mode. Refresh and wait for the full control-room snapshot."}
-            </p>
+            <strong>No live rule sets returned</strong>
+            <p>The current NAS snapshot did not include rule rows for this surface.</p>
           </article>
-        )}
+        ) : null}
       </section>
-      <section className="fluxos-editor" data-live-skills-secondary-panel="true">
+      <section className={cx("fluxos-editor", skillsFocusMode && "is-diagnostics-hidden")} data-live-skills-secondary-panel="true">
         <div className="fluxos-section-head">
           <span>{isRuleSets ? "Ruleset editor" : "Mission-slice feedback loop"}</span>
           <strong>{isRuleSets ? ruleSets[0]?.name || "Frontend merge policy" : "System gap routing"}</strong>

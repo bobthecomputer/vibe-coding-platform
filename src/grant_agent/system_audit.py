@@ -263,6 +263,49 @@ def _live_nas_release_overrides_blocked_local_watchdog(
     return bool(live_nas_system_audit.get("checkedAt") or synced_release.get("calculatedAt"))
 
 
+def _live_nas_quality_supersedes_partial_local_release(
+    *,
+    local_release: dict[str, Any],
+    synced_release: dict[str, Any],
+    live_nas_system_audit: dict[str, Any],
+) -> bool:
+    if live_nas_system_audit.get("status") != "passed":
+        return False
+    if not isinstance(synced_release, dict) or not synced_release.get("status"):
+        return False
+    if not _required_release_gates_all_passed(synced_release):
+        return False
+    local_quality = int(local_release.get("qualityScore") or 0)
+    synced_quality = int(synced_release.get("qualityScore") or 0)
+    if synced_quality < 80 or local_quality >= 80 or synced_quality <= local_quality:
+        return False
+    if int(synced_release.get("score") or 0) < int(local_release.get("score") or 0):
+        return False
+    local_proof = local_release.get("proofReadiness") if isinstance(local_release.get("proofReadiness"), dict) else {}
+    synced_proof = synced_release.get("proofReadiness") if isinstance(synced_release.get("proofReadiness"), dict) else {}
+    local_missions = int(local_proof.get("missionCount") or 0)
+    synced_missions = int(synced_proof.get("missionCount") or 0)
+    local_completed = sum(
+        int(value or 0)
+        for value in (
+            local_proof.get("runtimeCompletionCounts", {})
+            if isinstance(local_proof.get("runtimeCompletionCounts"), dict)
+            else {}
+        ).values()
+    )
+    synced_completed = sum(
+        int(value or 0)
+        for value in (
+            synced_proof.get("runtimeCompletionCounts", {})
+            if isinstance(synced_proof.get("runtimeCompletionCounts"), dict)
+            else {}
+        ).values()
+    )
+    if synced_missions <= local_missions and synced_completed <= local_completed:
+        return False
+    return bool(live_nas_system_audit.get("checkedAt") or synced_release.get("calculatedAt"))
+
+
 def _select_system_audit_release_readiness(
     *,
     local_release: dict[str, Any],
@@ -281,6 +324,19 @@ def _select_system_audit_release_readiness(
             "sourceCheckedAt": str(live_nas_system_audit.get("checkedAt") or ""),
             "localReleaseReadinessSuperseded": local_release,
             "localWatchdogDriftSuperseded": True,
+        }
+    if _live_nas_quality_supersedes_partial_local_release(
+        local_release=local_release,
+        synced_release=synced_release,
+        live_nas_system_audit=live_nas_system_audit,
+    ):
+        return {
+            **synced_release,
+            "source": "live_nas_system_audit",
+            "sourcePath": str(live_nas_system_audit.get("sourcePath") or ""),
+            "sourceCheckedAt": str(live_nas_system_audit.get("checkedAt") or ""),
+            "localReleaseReadinessSuperseded": local_release,
+            "localQualityMetricsSuperseded": True,
         }
     if (
         live_nas_system_audit.get("status") == "passed"

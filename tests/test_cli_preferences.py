@@ -6462,6 +6462,81 @@ class CliPreferenceTests(unittest.TestCase):
         self.assertEqual(selected["score"], 100)
         self.assertEqual(selected["localReleaseReadinessSuperseded"]["status"], "close_but_blocked")
 
+    def test_system_audit_uses_live_nas_when_local_quality_metrics_are_partial(self) -> None:
+        local = {
+            "status": "ready_for_1_0_validation",
+            "score": 89,
+            "qualityScore": 44,
+            "calculatedAt": "2026-06-11T14:39:09+00:00",
+            "requiredGateSummary": {"passed": 8, "total": 8, "score": 100},
+            "qualitySignals": {
+                "completionRate": 5,
+                "delegatedRunRate": 5,
+                "resumeCompletionRate": 8,
+            },
+            "proofReadiness": {
+                "missionCount": 22,
+                "runtimeCompletionCounts": {"hermes": 1},
+            },
+            "gates": [
+                {
+                    "gateId": "mission_watchdog_clear",
+                    "required": True,
+                    "passed": True,
+                    "activeMissionCount": 7,
+                    "supervisorActive": True,
+                    "supervisorStale": False,
+                    "supervisorProcessAlive": True,
+                    "lastRunAt": "2026-06-11T14:29:13+00:00",
+                    "nextRunAt": "2026-06-11T14:49:13+00:00",
+                },
+            ],
+        }
+        synced = {
+            "status": "ready_for_1_0_validation",
+            "score": 100,
+            "qualityScore": 100,
+            "calculatedAt": "2026-06-11T14:06:27+00:00",
+            "requiredGateSummary": {"passed": 8, "total": 8, "score": 100},
+            "qualitySignals": {
+                "completionRate": 95,
+                "delegatedRunRate": 60,
+                "resumeCompletionRate": 95,
+            },
+            "proofReadiness": {
+                "missionCount": 30,
+                "runtimeCompletionCounts": {"hermes": 27},
+            },
+            "gates": [
+                {
+                    "gateId": "mission_watchdog_clear",
+                    "required": True,
+                    "passed": True,
+                    "activeMissionCount": 1,
+                    "supervisorActive": True,
+                    "supervisorStale": False,
+                    "supervisorProcessAlive": True,
+                    "lastRunAt": "2026-06-11T13:50:56+00:00",
+                    "nextRunAt": "2026-06-11T14:10:56+00:00",
+                },
+            ],
+        }
+
+        selected = _select_system_audit_release_readiness(
+            local_release=local,
+            synced_release=synced,
+            live_nas_system_audit={
+                "status": "passed",
+                "sourcePath": ".agent_control/live_nas_system_audit_latest.json",
+                "checkedAt": "2026-06-11T14:06:31+00:00",
+            },
+        )
+
+        self.assertEqual(selected["source"], "live_nas_system_audit")
+        self.assertTrue(selected["localQualityMetricsSuperseded"])
+        self.assertEqual(selected["qualityScore"], 100)
+        self.assertEqual(selected["localReleaseReadinessSuperseded"]["qualityScore"], 44)
+
     def test_live_nas_freshener_replaces_equal_count_stale_summary_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

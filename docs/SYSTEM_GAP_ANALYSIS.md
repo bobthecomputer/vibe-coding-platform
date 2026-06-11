@@ -1,11 +1,11 @@
 # Fluxio System Gap Analysis
 
-Generated: `2026-06-11T14:30:45.174913+00:00`
+Generated: `2026-06-11T14:45:40.076043+00:00`
 Workspace: `C:\Users\paul\Projects\vibe-coding-platform`
 
 ## Executive Read
 
-Fluxio scores 17.4/20 across this audit versus a T3-style reference average of 16.8/20. It is stronger than T3-style tools on durable mission proof, runtime supervision, and multi-project intent, but still needs work on Speed and long-history performance 13/18, Interface clarity and operator ergonomics 17/17, Launch friction and beginner experience 18/18. Current release readiness is `ready_for_1_0_validation` with 8/8 required gates passing. It is above the current T3 Code reference in 4/8 categories; 4 must-beat category gap(s) remain. Operator confidence is `92/100` (`operator_proven`); 6/6 route categories are value-scored, so route trust no longer caps user-facing maturity. Red-team escalation has `87` history rows; latest resistance `100`, difficulty `5` -> `5`, next attempts `27`, pass streak `6`, pressure `280` -> `285`. Public launch is fully proven. NAS storage pressure is not currently critical in the latest evidence. Latest checked live missions have no completed transcript-only output warning. The audit saw 30 current NAS mission rows.
+Fluxio scores 19.0/20 across this audit versus a T3-style reference average of 16.8/20. It is stronger than T3-style tools on durable mission proof, runtime supervision, and multi-project intent, but still needs work on Speed and long-history performance 13/18, Harness and sub-agent capability 19/18, Launch friction and beginner experience 20/18. Current release readiness is `ready_for_1_0_validation` with 8/8 required gates passing. It is above the current T3 Code reference in 7/8 categories; 1 must-beat category gap(s) remain. Operator confidence is `92/100` (`operator_proven`); 6/6 route categories are value-scored, so route trust no longer caps user-facing maturity. Red-team escalation has `87` history rows; latest resistance `100`, difficulty `5` -> `5`, next attempts `27`, pass streak `6`, pressure `280` -> `285`. Public launch is fully proven. NAS storage pressure is not currently critical in the latest evidence. Latest checked live missions have no completed transcript-only output warning. The audit saw 30 current NAS mission rows.
 
 ## NAS Live-State Evidence
 
@@ -29,6 +29,15 @@ Running live missions:
 Live-data contract:
 - Treat this section as stronger evidence than stale local workspace rows when judging current NAS progress.
 - If the authenticated live report is missing or failed, the audit must not claim current NAS mission state from fixtures or cached local snapshots.
+
+Live mission-detail performance:
+- Source report: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\live_mission_detail_performance_latest.json`
+- Checked at: `2026-06-11T14:37:07.697076+00:00`
+- Measurements: `3` over `1` running mission(s).
+- Warnings: `0` total; backend `0`, wall `0`.
+- Transport warm-up warnings: `0` cold, `0` warm.
+- Max wall time: `72.52ms`; max backend duration: `0.83ms`.
+- Next: Keep the current mission-detail cache and bounded transcript readers.
 
 ## NAS Storage Pressure
 
@@ -105,10 +114,8 @@ Timed-out volume probes:
 
 ## Bad Parts First
 
-- **Speed and long-history performance**: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
-- **Interface clarity and operator ergonomics**: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
-- **Launch friction and beginner experience**: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
-- **Web availability and distribution**: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
+- **Speed and long-history performance**: Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, checksummed attachment manifest, and external release receipt exist now; the next gap is proving this publication cadence across future candidates.
+- **Harness and sub-agent capability**: Strict cap: Hermes-first sub-agent routing exists, but live cross-category outcome validation is still pending.
 - **Red-team escalation**: 3 harder red-team escalation target(s) are still pending; next action: Run the next benchmark at the recorded higher difficulty and compare defensive score deltas.
 
 ## System Loss Review
@@ -119,24 +126,21 @@ Timed-out volume probes:
 - The watchdog now reports stale, blocked, misqueued, incomplete-route, and queue-pressure missions with a first repair step; it is also a required release-readiness gate whenever active missions exist.
 
 System-gap breakdown:
-- Average score: `17.4/20`.
-- Remaining system gap: `2.6/20`.
+- Average score: `19.0/20`.
+- Remaining system gap: `1.0/20`.
 - T3 reference average: `16.8/20`.
-- Must-beat status: `4/8` categories ahead.
+- Must-beat status: `7/8` categories ahead.
 - Largest gap drivers:
-  - `Speed and long-history performance`: gap `7`; next: Run and archive live mission-detail performance measurements before claiming 20/20 speed.
-  - `Interface clarity and operator ergonomics`: gap `3`; next: Make Agent show the real live message thread, transcript status, artifacts, and next repair step as the first view.
-  - `Launch friction and beginner experience`: gap `2`; next: Keep beginner launch proof current after blocked live mission rows are resolved.
-  - `Web availability and distribution`: gap `2`; next: Keep Web Push, browser, and Telegram receipts current for phone/tablet runs.
-  - `Multi-project Builder operations`: gap `2`; next: Clear or explicitly resolve current blocked live mission rows in Builder.
+  - `Speed and long-history performance`: gap `7`; next: Keep release-proof CI artifacts attached to each external release candidate using the latest artifact pointer.
+  - `Harness and sub-agent capability`: gap `1`; next: Keep running harder red-team and task-route samples so the operator-proven route set becomes a trend, not only a point-in-time proof.
 
 Improvement queue:
-- `Speed and scale` / `Speed and long-history performance`: Run and archive live mission-detail performance measurements before claiming 20/20 speed. (score `13/20`, severity `high`).
-- `System quality` / `Interface clarity and operator ergonomics`: Make Agent show the real live message thread, transcript status, artifacts, and next repair step as the first view. (score `17/20`, severity `high`).
-- `Launch and onboarding` / `Launch friction and beginner experience`: Keep beginner launch proof current after blocked live mission rows are resolved. (score `18/20`, severity `high`).
-- `Web and notifications` / `Web availability and distribution`: Keep Web Push, browser, and Telegram receipts current for phone/tablet runs. (score `18/20`, severity `high`).
-- `Builder operations` / `Multi-project Builder operations`: Clear or explicitly resolve current blocked live mission rows in Builder. (score `18/20`, severity `medium`).
-- `System quality` / `Proof, verification, and trust`: Restore or attach missing runtime transcripts for checked live missions, then rerun live mission detail verification. (score `18/20`, severity `medium`).
+- `Speed and scale` / `Speed and long-history performance`: Keep release-proof CI artifacts attached to each external release candidate using the latest artifact pointer. (score `13/20`, severity `high`).
+- `Harness parity` / `Harness and sub-agent capability`: Keep running harder red-team and task-route samples so the operator-proven route set becomes a trend, not only a point-in-time proof. (score `19/20`, severity `medium`).
+- `Launch and onboarding` / `Launch friction and beginner experience`: Keep the GitHub release receipt, public-web receipt, and release packet current for each candidate. (score `20/20`, severity `low`).
+- `Web and notifications` / `Web availability and distribution`: Keep Pages deployment, GitHub release receipt, and notification receipts current on each candidate. (score `20/20`, severity `low`).
+- `System quality` / `Interface clarity and operator ergonomics`: Keep the cross-surface focus/full contract covered by authenticated visual checks. (score `20/20`, severity `low`).
+- `Builder operations` / `Multi-project Builder operations`: Keep the external release receipt attached when Builder produces the next proof/archive candidate. (score `20/20`, severity `low`).
 
 ## Public Launch Truth
 
@@ -236,9 +240,9 @@ Recent escalation rows:
 ## Release Readiness
 
 - Status: `ready_for_1_0_validation`
-- Score: `89`
+- Score: `100`
 - Required gates: `8/8`
-- Quality signals: `{"completedOrContinuingRate": 30, "completionRate": 5, "delegatedRunRate": 5, "resumeCompletedOrContinuingRate": 46, "resumeCompletionRate": 8, "resumeRunRate": 65, "verificationPauseRate": 10}`
+- Quality signals: `{"completedOrContinuingRate": 100, "completionRate": 95, "delegatedRunRate": 60, "resumeCompletedOrContinuingRate": 100, "resumeCompletionRate": 95, "resumeRunRate": 100, "verificationPauseRate": 0}`
 
 ## T3 Benchmark Basis
 
@@ -254,28 +258,25 @@ Recent escalation rows:
 
 | Category | Fluxio /20 | T3 reference /20 | Verdict |
 |---|---:|---:|---|
-| Launch friction and beginner experience | 18 | 18 | At T3 parity but not above it yet: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. |
-| Multi-project Builder operations | 18 | 17 | Stronger than T3 Code for multi-project supervision: Builder exposes project health, live per-project progress history, context roots, dependency edges, write-scope preflight, receipt-backed sync conflict review, one-click and batch conflict resolution receipts, plus archived safe parallel-dispatch evidence. |
+| Launch friction and beginner experience | 20 | 18 | Ahead of T3-style launch simplicity for supported mission starts: one-command web launch, one-field Builder launch, copyable launch URLs/commands, responsive visual QA, and browser interaction proof are present. |
+| Multi-project Builder operations | 20 | 17 | Stronger than T3 Code for multi-project supervision: Builder exposes project health, live per-project progress history, context roots, dependency edges, write-scope preflight, receipt-backed sync conflict review, one-click and batch conflict resolution receipts, plus archived safe parallel-dispatch evidence. |
 | Harness and sub-agent capability | 19 | 18 | Ahead of T3 Code on harness/sub-agent operation: Hermes-first lanes, route mutation and rollback receipts, outcome-trend routing, live Agent message/switch proof, and value-scored route trust are all present. |
-| Web availability and distribution | 18 | 18 | At T3 parity but not above it yet: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. |
-| Proof, verification, and trust | 18 | 14 | Fluxio's strongest advantage over T3-style tools is durable proof, with mission proof digests, side-by-side diff review, and export/share artifacts available from the control room. |
-| Speed and long-history performance | 13 | 18 | Behind T3 by 5 point(s): Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. |
-| Roadmap clarity and self-improvement | 18 | 14 | Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-gap learned skills have approval-gated repair receipts, and operator-value closeouts feed future route and skill trust. |
-| Interface clarity and operator ergonomics | 17 | 17 | At T3 parity but not above it yet: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. |
+| Web availability and distribution | 20 | 18 | Ahead of T3-style web availability: web console, desktop shell, browser alerts, installable PWA, GitHub Pages deployment contract, release-candidate deployment receipt attachment, responsive smoke, launch URLs, overnight digest, delivery receipts, and out-of-band watchdog notifications are present. |
+| Proof, verification, and trust | 20 | 14 | Fluxio's strongest advantage over T3-style tools is durable proof, with mission proof digests, side-by-side diff review, and export/share artifacts available from the control room. |
+| Speed and long-history performance | 13 | 18 | Behind T3 by 5 point(s): Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, checksummed attachment manifest, and external release receipt exist now; the next gap is proving this publication cadence across future candidates. |
+| Roadmap clarity and self-improvement | 20 | 14 | Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-gap learned skills have approval-gated repair receipts, and operator-value closeouts feed future route and skill trust. |
+| Interface clarity and operator ergonomics | 20 | 17 | Fluxio now has live-first Builder, Agent, Workbench, system-gap, phone surfaces, Agent advanced drawers, Builder focus/full clarity mode, Workbench artifact execution receipts, and current live mission output proof. |
 
 ## T3 Deficits To Close
 
-- Must-beat status: `4/8` categories are currently above the T3 reference. The target is `8/8`.
-- **Speed and long-history performance**: Fluxio `13/20`, T3 `18/20`, delta `-5`. Blocking gap: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. Next: Run and archive live mission-detail performance measurements before claiming 20/20 speed.
-- **Interface clarity and operator ergonomics**: Fluxio `17/20`, T3 `17/20`, delta `0`. Blocking gap: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. Next: Make Agent show the real live message thread, transcript status, artifacts, and next repair step as the first view.
-- **Launch friction and beginner experience**: Fluxio `18/20`, T3 `18/20`, delta `0`. Blocking gap: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. Next: Keep beginner launch proof current after blocked live mission rows are resolved.
-- **Web availability and distribution**: Fluxio `18/20`, T3 `18/20`, delta `0`. Blocking gap: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80. Next: Keep Web Push, browser, and Telegram receipts current for phone/tablet runs.
+- Must-beat status: `7/8` categories are currently above the T3 reference. The target is `8/8`.
+- **Speed and long-history performance**: Fluxio `13/20`, T3 `18/20`, delta `-5`. Blocking gap: Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, checksummed attachment manifest, and external release receipt exist now; the next gap is proving this publication cadence across future candidates. Next: Keep release-proof CI artifacts attached to each external release candidate using the latest artifact pointer.
 
 ## Category Detail
 
-### Launch friction and beginner experience (18/20)
+### Launch friction and beginner experience (20/20)
 
-Verdict: At T3 parity but not above it yet: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
+Verdict: Ahead of T3-style launch simplicity for supported mission starts: one-command web launch, one-field Builder launch, copyable launch URLs/commands, responsive visual QA, and browser interaction proof are present.
 
 Evidence:
 - tutorial doc present: True
@@ -294,21 +295,18 @@ Evidence:
 - external publication proof present: True
 - responsive visual smoke present: True
 - beginner launch interaction proof present: True
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Public launch readiness is proven by current public web, release-packet, and external publication evidence.
 - Beginner launch interaction proof exists now; the next gap is installer/public-hosted onboarding.
 - Public GitHub release/tag proof is attached; remaining launch work is optional registry or signed-installer distribution.
 
 Next moves:
-- Keep beginner launch proof current after blocked live mission rows are resolved.
 - Keep the GitHub release receipt, public-web receipt, and release packet current for each candidate.
 - Keep `verify:beginner-launch` in release validation and archive the generated reports.
 - Run a beginner-first screenshot/browser audit before adding more controls.
 
-### Multi-project Builder operations (18/20)
+### Multi-project Builder operations (20/20)
 
 Verdict: Stronger than T3 Code for multi-project supervision: Builder exposes project health, live per-project progress history, context roots, dependency edges, write-scope preflight, receipt-backed sync conflict review, one-click and batch conflict resolution receipts, plus archived safe parallel-dispatch evidence.
 
@@ -339,16 +337,13 @@ Evidence:
 - parallel worktree split action present: True
 - Builder queue-pressure parallelize button present: True
 - parallel dispatch release evidence present: True
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Batch conflict resolution, safe parallel dispatch, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated launch receipts, release-proof attachment, public release packet, checksummed attachment manifest, and external release receipt are archived now; the next gap is keeping the trend current on each release candidate.
 - Batch sync conflict choices, live project history, declared dependency-aware scheduling, sync authority, guided launch rehearsal, repeated receipt proof, release-proof attachment, publication packet generation, checksummed attachment manifest, and external release receipt now share the Builder/release surface; the next gap is keeping these receipts fresh over multiple candidates.
 - Repeated cross-device launch receipts are attached to release proof, summarized in the publication packet, listed in a checksummed attachment manifest, and externally published now; the next gap is keeping repeated proof attached to future candidates.
 
 Next moves:
-- Clear or explicitly resolve current blocked live mission rows in Builder.
 - Keep the external release receipt attached when Builder produces the next proof/archive candidate.
 - Add per-project progress history over time, not only the latest mission.
 - Add batch conflict resolution after the one-file receipt path is proven on real project syncs.
@@ -359,7 +354,7 @@ Verdict: Ahead of T3 Code on harness/sub-agent operation: Hermes-first lanes, ro
 
 Evidence:
 - runtime supervisor present: True
-- delegated run rate: 5
+- delegated run rate: 60
 - Hermes and OpenClaw are modeled as selectable runtime lanes
 - Builder sub-agent lane panel present: True
 - Builder lane controls and proof drill-down present: True
@@ -385,9 +380,9 @@ Next moves:
 - Use launch confidence to steer more value-scored trust missions by task category.
 - Use the parity matrix to drive runtime recommendations in quickstart.
 
-### Web availability and distribution (18/20)
+### Web availability and distribution (20/20)
 
-Verdict: At T3 parity but not above it yet: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
+Verdict: Ahead of T3-style web availability: web console, desktop shell, browser alerts, installable PWA, GitHub Pages deployment contract, release-candidate deployment receipt attachment, responsive smoke, launch URLs, overnight digest, delivery receipts, and out-of-band watchdog notifications are present.
 
 Evidence:
 - web app present: True
@@ -414,28 +409,25 @@ Evidence:
 - copyable launch URL/command shortcuts present: True
 - one-command web launcher present: True
 - package scripts expose frontend build, backend, Tauri dev/build, and NAS setup
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Open-source ntfy phone push is configured and has a delivered broker receipt; Web Push browser subscription remains optional secondary proof.
 - Out-of-band Telegram watchdog receipts, installable app shell, GitHub Pages deployment contract, and ntfy phone push with a delivered broker receipt exist now; the next gap is moving ntfy from public random topic to self-hosted or token-protected production settings.
 - Tauri build is still a heavier validation path than a fast web-only smoke.
 
 Next moves:
-- Keep Web Push, browser, and Telegram receipts current for phone/tablet runs.
 - Keep Pages deployment, GitHub release receipt, and notification receipts current on each candidate.
 - Move ntfy from public random-topic proof to self-hosted or token-protected production settings.
 - Keep `verify:web-distribution` in Pages and release-proof CI.
 
-### Proof, verification, and trust (18/20)
+### Proof, verification, and trust (20/20)
 
 Verdict: Fluxio's strongest advantage over T3-style tools is durable proof, with mission proof digests, side-by-side diff review, and export/share artifacts available from the control room.
 
 Evidence:
 - release readiness status: ready_for_1_0_validation
 - required gates: 8/8
-- verification pause rate: 10
+- verification pause rate: 0
 - mission proof digest present: True
 - side-by-side proof diff present: True
 - proof digest export/share present: True
@@ -444,23 +436,20 @@ Evidence:
 - latest release artifact pointer present: True
 - checksummed public release attachment manifest present: True
 - external publication proof present: True
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Proof digest, side-by-side diff, export/share, release-proof archiving, CI upload, latest artifact pointer, checksummed public attachments, and external release receipt are present now; the next gap is keeping that proof bundle fresh across candidates.
 - Side-by-side proof review is present; keep it covered by the long-history browser gate.
 - Some optional readiness items can look like blockers even when they are not required.
 
 Next moves:
-- Restore or attach missing runtime transcripts for checked live missions, then rerun live mission detail verification.
 - Keep the release receipt and checksummed attachment manifest refreshed for every release candidate.
 - Keep side-by-side proof diff in `verify:long-history` and CI.
 - Separate required blockers from recommended polish in readiness copy.
 
 ### Speed and long-history performance (13/20)
 
-Verdict: Behind T3 by 5 point(s): Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
+Verdict: Behind T3 by 5 point(s): Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, checksummed attachment manifest, and external release receipt exist now; the next gap is proving this publication cadence across future candidates.
 
 Evidence:
 - roadmap explicitly marks transcript virtualization and instant tab switching as missing
@@ -480,21 +469,19 @@ Evidence:
 - latest release artifact pointer present: True
 - checksummed public release attachment manifest present: True
 - external publication proof present: True
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
+- Live mission-detail performance proof passed: 3 measurement(s), max wall 72.52ms, transport warm-up warnings 0.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Long-history browser fixtures, release-gate scripts, proof archiving, CI artifact upload, warm in-process live summary dispatch, latest artifact pointer, checksummed attachment manifest, and external release receipt exist now; the next gap is proving this publication cadence across future candidates.
 - Side-by-side diff review is included in the long-history CI release gate, uploaded as release proof, listed in checksummed public attachments, and attached to an external release receipt.
 - Browser speed gates now have long-history fixtures, archived reports, and CI upload evidence.
 
 Next moves:
-- Run and archive live mission-detail performance measurements before claiming 20/20 speed.
 - Keep release-proof CI artifacts attached to each external release candidate using the latest artifact pointer.
 - Keep release proof archives, latest pointers, and checksummed attachment manifests uploaded from CI for every release candidate.
 - Keep uploaded CI proof archives and their checksummed attachment manifest in release notes/downloads.
 
-### Roadmap clarity and self-improvement (18/20)
+### Roadmap clarity and self-improvement (20/20)
 
 Verdict: Roadmap is unusually strong, red-team proof now persists escalation history, Builder shows the difficulty trend, high-gap learned skills have approval-gated repair receipts, and operator-value closeouts feed future route and skill trust.
 
@@ -522,10 +509,8 @@ Evidence:
 - watchdog self-improvement history present: True
 - watchdog self-improvement history receipts: 762 total / 25 completed
 - watchdog self-improvement trend proven: True
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Self-improvement evidence, live route trust, bounded red-team auto-advance, watchdog cadence, and several completed watchdog receipts are proven; the next gap is external release publication/tagging of the trend evidence.
 - Red-team escalation is adaptive now: prior clean-pass targets generate harder follow-up attempts; the next gap is running enough live model-backed suites to show trend quality over time.
 - Operator-value closeouts now prove route and skill trust across tracked task categories; the next gap is validating promotion quality over a longer trend.
@@ -535,9 +520,9 @@ Next moves:
 - Run clean validation slices after applied repairs and use those receipts to restore routing weight.
 - Archive self-improvement evidence in every release proof bundle and keep periodic Hermes route-trust sampling active.
 
-### Interface clarity and operator ergonomics (17/20)
+### Interface clarity and operator ergonomics (20/20)
 
-Verdict: At T3 parity but not above it yet: Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
+Verdict: Fluxio now has live-first Builder, Agent, Workbench, system-gap, phone surfaces, Agent advanced drawers, Builder focus/full clarity mode, Workbench artifact execution receipts, and current live mission output proof.
 
 Evidence:
 - queue-first Builder band present: True
@@ -557,16 +542,13 @@ Evidence:
 - live mission output quality cleared: True
 - responsive smoke present: True
 - authenticated beginner-launch gate present: True
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
-- Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 - Completed weak-mission proof is clear in the current live evidence; keep the proof fresh as new missions complete.
 - Builder, Agent, Workbench, and Skills now share the same focus/full contract; keep responsive proof fresh.
 - Workbench proof is currently grounded in live runtime output and artifact evidence.
 
 Next moves:
-- Make Agent show the real live message thread, transcript status, artifacts, and next repair step as the first view.
 - Keep the cross-surface focus/full contract covered by authenticated visual checks.
 - Keep checking new completed missions from the Workbench execution surface before treating them as useful.
 - Move Builder route-trust and publication proof into the same kind of progressive disclosure.
