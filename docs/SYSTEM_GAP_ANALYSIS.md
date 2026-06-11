@@ -1,11 +1,11 @@
 # Fluxio System Gap Analysis
 
-Generated: `2026-06-11T14:21:19.305099+00:00`
+Generated: `2026-06-11T14:30:45.174913+00:00`
 Workspace: `C:\Users\paul\Projects\vibe-coding-platform`
 
 ## Executive Read
 
-Fluxio scores 17.4/20 across this audit versus a T3-style reference average of 16.8/20. It is stronger than T3-style tools on durable mission proof, runtime supervision, and multi-project intent, but still needs work on Speed and long-history performance 13/18, Interface clarity and operator ergonomics 17/17, Launch friction and beginner experience 18/18. Current release readiness is `ready_for_1_0_validation` with 8/8 required gates passing. It is above the current T3 Code reference in 4/8 categories; 4 must-beat category gap(s) remain. Operator confidence is `92/100` (`operator_proven`); 6/6 route categories are value-scored, so route trust no longer caps user-facing maturity. Red-team escalation has `87` history rows; latest resistance `100`, difficulty `5` -> `5`, next attempts `27`, pass streak `6`, pressure `280` -> `285`. Public launch is fully proven. NAS storage pressure is not currently critical in the latest evidence. Mission output quality needs repair: `1` live mission(s) have failed hard artifact gates, missing runtime output, or missing transcripts. The audit saw 30 current NAS mission rows.
+Fluxio scores 17.4/20 across this audit versus a T3-style reference average of 16.8/20. It is stronger than T3-style tools on durable mission proof, runtime supervision, and multi-project intent, but still needs work on Speed and long-history performance 13/18, Interface clarity and operator ergonomics 17/17, Launch friction and beginner experience 18/18. Current release readiness is `ready_for_1_0_validation` with 8/8 required gates passing. It is above the current T3 Code reference in 4/8 categories; 4 must-beat category gap(s) remain. Operator confidence is `92/100` (`operator_proven`); 6/6 route categories are value-scored, so route trust no longer caps user-facing maturity. Red-team escalation has `87` history rows; latest resistance `100`, difficulty `5` -> `5`, next attempts `27`, pass streak `6`, pressure `280` -> `285`. Public launch is fully proven. NAS storage pressure is not currently critical in the latest evidence. Latest checked live missions have no completed transcript-only output warning. The audit saw 30 current NAS mission rows.
 
 ## NAS Live-State Evidence
 
@@ -80,18 +80,28 @@ Timed-out volume probes:
 
 ## Live Mission Output Quality
 
-- Source report count: `2`
+- Source report count: `1`
 - Weak completed mission outputs: `0`.
-- Hard artifact-gate repairs needed: `1`.
-- Status: `needs_artifact_repair`
-- Next: Relaunch or repair missions with missing runtime-output, transcript, or artifact proof using a hard served-artifact gate.
-- `mission_98563a84c9`: Build a simple Ringway F1 analysis (hermes, running) - Mission output quality evidence did not trigger the completed transcript-only warning.
+- Hard artifact-gate repairs needed: `0`.
+- Status: `passed`
+- Next: No transcript-only completed missions are present in current authenticated verifier evidence.
 
 ## Live Cross-Category Hermes Outcome Validation
 
 - Status: `needs_more_categories`
-- Validated task families: `0`/`4`.
+- Validated task families: `1`/`4`.
 - Next: Run more Hermes missions with concrete runtime output and artifact proof across distinct task families.
+- `hardware_electrical`: `mission_98563a84c9` Build a simple Ringway F1 analysis - runtime outputs `14`, artifact gate `passed`.
+
+## Mission Artifact Repair Plan
+
+- Source report: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\mission_artifact_repair_plan_latest.json`
+- Generated at: `2026-06-11T14:29:56.977202+00:00`
+- Status: `passed`
+- Weak mission repairs: `0`.
+- Next: No transcript-only completed missions are present in current authenticated verifier evidence.
+- Repair storage preflight: `passed`; can resume `True`.
+- Repair storage source: `C:\Users\paul\Projects\vibe-coding-platform\.agent_control\nas_storage_pressure_latest.json`.
 
 ## Bad Parts First
 
@@ -360,7 +370,7 @@ Evidence:
 - failed-route rollback receipts present: True
 - outcome-trend routing present: True
 - launch route-trust confidence present: True
-- live cross-category Hermes outcome validation: needs_more_categories (0/4 categories)
+- live cross-category Hermes outcome validation: needs_more_categories (1/4 categories)
 - Strict cap: Hermes-first sub-agent routing exists, but live cross-category outcome validation is still pending.
 - operator-proven route trust: 6/6 task categories have useful value-scored closeouts
 - authenticated live Agent switch/message proof present: False
@@ -510,7 +520,7 @@ Evidence:
 - bounded red-team auto-advance loop present: True
 - watchdog self-improvement cadence present: True
 - watchdog self-improvement history present: True
-- watchdog self-improvement history receipts: 761 total / 25 completed
+- watchdog self-improvement history receipts: 762 total / 25 completed
 - watchdog self-improvement trend proven: True
 - Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
@@ -544,21 +554,21 @@ Evidence:
 - system-gap Builder surface present: True
 - phone progress surface present: True
 - phone compact notification tray present: True
-- live mission output quality cleared: False
+- live mission output quality cleared: True
 - responsive smoke present: True
 - authenticated beginner-launch gate present: True
 - Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
 
 Gaps:
 - Reality cap: release required gates pass, but release quality score is 44/100; a perfect product score requires quality score >= 80.
-- Workbench now exposes a primary artifact execution receipt surface, but completed weak missions still need real served artifacts or runtime-output bodies to prove the flow end to end.
+- Completed weak-mission proof is clear in the current live evidence; keep the proof fresh as new missions complete.
 - Builder, Agent, Workbench, and Skills now share the same focus/full contract; keep responsive proof fresh.
-- Workbench is now safe from stale live iframes and will not invent missing artifacts, but artifact repair still depends on mission runtime output quality.
+- Workbench proof is currently grounded in live runtime output and artifact evidence.
 
 Next moves:
 - Make Agent show the real live message thread, transcript status, artifacts, and next repair step as the first view.
 - Keep the cross-surface focus/full contract covered by authenticated visual checks.
-- Relaunch or resume transcript-only completed missions with a hard served-artifact gate, then verify them from the Workbench execution surface.
+- Keep checking new completed missions from the Workbench execution surface before treating them as useful.
 - Move Builder route-trust and publication proof into the same kind of progressive disclosure.
 
 ## Project Progress
