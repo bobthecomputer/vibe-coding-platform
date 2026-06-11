@@ -100,6 +100,23 @@ def _current_git_dirty_rows(root: Path) -> list[str]:
     return [line.rstrip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _current_git_head(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 def _publication_dirty_source_triage(source_state: dict[str, Any], sample: list[str]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     lane_counts: dict[str, int] = {}
@@ -462,6 +479,16 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
     )
 
     source_state = public_web.get("sourceState", {}) if isinstance(public_web.get("sourceState"), dict) else {}
+    current_git_head = _current_git_head(root)
+    receipt_git_head = str(source_state.get("gitHead") or "")
+    deployed_sha = str(source_state.get("deployedSha") or public_web.get("sha") or "")
+    deployed_sha_matches_current_head = bool(current_git_head and deployed_sha and current_git_head == deployed_sha)
+    deployed_sha_matches_claimed_head = bool(source_state.get("deployedShaMatchesLocalHead"))
+    deployed_sha_current = (
+        deployed_sha_matches_current_head
+        if current_git_head
+        else deployed_sha_matches_claimed_head
+    )
     source_dirty_sample = [
         str(item)
         for item in source_state.get("sourceDirtyPathSample", [])
@@ -470,15 +497,26 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
     current_git_dirty_rows = _current_git_dirty_rows(root)
     dirty_source_rows = current_git_dirty_rows or source_dirty_sample
     source_state_for_triage = dict(source_state)
+    source_state_for_triage.update(
+        {
+            "currentGitHead": current_git_head,
+            "receiptGitHead": receipt_git_head,
+            "gitHead": current_git_head or receipt_git_head,
+            "deployedSha": deployed_sha,
+            "deployedShaMatchesCurrentHead": deployed_sha_matches_current_head,
+        }
+    )
     if current_git_dirty_rows:
         source_state_for_triage["sourceDirtyPathCount"] = len(current_git_dirty_rows)
         source_state_for_triage["sourceDirtyPathSample"] = current_git_dirty_rows[:20]
         source_state_for_triage["sourceWorkingTreeClean"] = False
+    elif current_git_head:
+        source_state_for_triage["sourceWorkingTreeClean"] = True
     dirty_source_triage = _publication_dirty_source_triage(source_state_for_triage, dirty_source_rows)
     current_release_blocking_dirty = int(dirty_source_triage.get("releaseBlockingPathCount") or 0) > 0
     public_web_current = bool(
         public_web.get("publicationCurrent")
-        and source_state.get("deployedShaMatchesLocalHead")
+        and deployed_sha_current
         and source_state_for_triage.get("sourceWorkingTreeClean")
         and not current_release_blocking_dirty
     )
@@ -543,6 +581,10 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
         sourceWorkingTreeClean=source_state_for_triage.get("sourceWorkingTreeClean", False),
         receiptSourceWorkingTreeClean=source_state.get("sourceWorkingTreeClean", False),
         deployedShaMatchesLocalHead=source_state.get("deployedShaMatchesLocalHead", False),
+        deployedShaMatchesCurrentHead=deployed_sha_current,
+        currentGitHead=current_git_head,
+        receiptGitHead=receipt_git_head,
+        deployedSha=deployed_sha,
         sourceDirtyPathCount=source_state_for_triage.get("sourceDirtyPathCount", 0),
         sourceDirtyPathSample=source_state_for_triage.get("sourceDirtyPathSample", source_dirty_sample)[:20],
         currentGitDirtyPathCount=len(current_git_dirty_rows),
@@ -688,9 +730,12 @@ def verify_public_launch_readiness(root: Path = ROOT) -> dict[str, Any]:
             "currentGitDirtyPathCount": len(current_git_dirty_rows),
             "currentGitDirtyPathSample": current_git_dirty_rows[:20],
             "dirtySourceTriage": dirty_source_triage,
-            "gitHead": source_state.get("gitHead", ""),
-            "deployedSha": source_state.get("deployedSha", ""),
+            "gitHead": current_git_head or source_state.get("gitHead", ""),
+            "currentGitHead": current_git_head,
+            "receiptGitHead": receipt_git_head,
+            "deployedSha": deployed_sha,
             "deployedShaMatchesLocalHead": source_state.get("deployedShaMatchesLocalHead", False),
+            "deployedShaMatchesCurrentHead": deployed_sha_current,
             "sourceWorkingTreeClean": source_state_for_triage.get("sourceWorkingTreeClean", False),
             "receiptSourceWorkingTreeClean": source_state.get("sourceWorkingTreeClean", False),
         },

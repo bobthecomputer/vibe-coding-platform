@@ -3358,6 +3358,32 @@ class CliPreferenceTests(unittest.TestCase):
             self.assertNotIn("external_publication_proven", report["missing"])
             self.assertTrue(report["publicationProof"]["githubReleaseReceiptPresent"])
 
+            public_web_receipt = json.loads((root / ".agent_control" / "deployment_evidence" / "public-web.json").read_text(encoding="utf-8"))
+            public_web_receipt["sourceState"].update(
+                {
+                    "gitHead": "old-head",
+                    "deployedSha": "old-head",
+                    "deployedShaMatchesLocalHead": True,
+                }
+            )
+            (root / ".agent_control" / "deployment_evidence" / "public-web.json").write_text(
+                json.dumps(public_web_receipt),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch("scripts.verify_public_launch_readiness._current_git_head", return_value="new-head"),
+                mock.patch("scripts.verify_public_launch_readiness._current_git_dirty_rows", return_value=[]),
+            ):
+                stale_report = verify_public_launch_readiness(root)
+
+            self.assertFalse(stale_report["ok"])
+            self.assertEqual(stale_report["status"], "public_packet_ready_but_source_stale")
+            public_web_check = next(item for item in stale_report["checks"] if item["checkId"] == "public_web_current")
+            self.assertFalse(public_web_check["passed"])
+            self.assertFalse(public_web_check["deployedShaMatchesCurrentHead"])
+            self.assertEqual(public_web_check["currentGitHead"], "new-head")
+            self.assertEqual(public_web_check["deployedSha"], "old-head")
+
     def test_public_launch_readiness_rejects_current_dirty_release_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
