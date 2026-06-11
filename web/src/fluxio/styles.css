@@ -33314,3 +33314,526 @@ body::-webkit-scrollbar-thumb {
   border-top: 1px solid rgba(255, 255, 255, 0.105) !important;
   padding-inline: 0 !important;
 }
+
+/* Whole-app no-square pass for the current reference shell. The active app
+   uses these reference-* surfaces, so this keeps Agent/Builder/Workbench/
+   Skills/Phone/Images/Settings on the same clean-border language. */
+.reference-shell {
+  --control-line: rgba(238, 242, 236, 0.085);
+  --control-line-strong: rgba(238, 242, 236, 0.18);
+  background: #050505 !important;
+}
+
+.reference-shell :where(
+  .reference-main,
+  .reference-main-panel,
+  .reference-main-body,
+  .reference-home-surface,
+  .reference-home-hero,
+  .reference-home-card,
+  .reference-live-card,
+  .reference-config-card,
+  .reference-builder-surface,
+  .reference-builder-timeline,
+  .reference-builder-table-shell,
+  .reference-builder-preview-panel,
+  .reference-builder-metric,
+  .reference-report-panel,
+  .reference-feedback-panel,
+  .reference-skill-panel,
+  .reference-settings-surface,
+  .reference-settings-header,
+  .reference-settings-card,
+  .reference-provider-card,
+  .reference-port-card,
+  .reference-route-plan-card,
+  .reference-rule-matrix article,
+  .reference-settings-summary-grid article,
+  .reference-workbench-surface,
+  .reference-runtime-ops-panel,
+  .reference-workbench-state-card,
+  .reference-live-evidence-card,
+  .reference-live-evidence-row,
+  .reference-support-panel,
+  .reference-command-card,
+  .reference-preset-card,
+  .reference-permission-card,
+  .builder-cowork-status-card,
+  .builder-live-proof-impact-card,
+  .builder-live-review-bridge,
+  .builder-live-review-receipt-history,
+  .builder-live-review-receipt-history-row,
+  .agent-compartment-box,
+  .agent-runtime-lane,
+  .agent-compartment-event,
+  .agent-artifact-card,
+  .agent-nas-check,
+  .drawer-card,
+  .image-glass-panel,
+  .image-library-card,
+  .image-queue-row,
+  .image-history-card,
+  .image-design-reference-panel,
+  .image-canvas-wrap,
+  .image-provider-card,
+  .image-skill-card,
+  .image-ops-item,
+  .image-receipt-strip
+) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell :where(
+  .reference-topbar,
+  .reference-sidebar,
+  .reference-flow-sidebar,
+  .reference-settings-tabs,
+  .reference-skill-toolbar,
+  .reference-preview-toolbar,
+  .reference-browser-nav,
+  .agent-compartment-box-head,
+  .agent-runtime-lane-head,
+  .image-library-head,
+  .image-panel-head
+) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell .reference-sidebar,
+.reference-shell .reference-flow-sidebar {
+  border-right: 1px solid var(--control-line) !important;
+}
+
+.reference-shell .reference-topbar,
+.reference-shell :where(
+  .reference-settings-tabs,
+  .reference-skill-toolbar,
+  .reference-preview-toolbar,
+  .reference-browser-nav,
+  .agent-compartment-box-head,
+  .agent-runtime-lane-head,
+  .image-library-head,
+  .image-panel-head
+) {
+  border-bottom: 1px solid var(--control-line) !important;
+}
+
+.reference-shell :where(
+  .reference-home-card,
+  .reference-live-card,
+  .reference-config-card,
+  .reference-builder-metric,
+  .reference-builder-timeline-row,
+  .reference-builder-table-shell tr,
+  .reference-builder-preview-panel,
+  .reference-report-panel.compact,
+  .reference-feedback-panel,
+  .reference-skill-panel,
+  .reference-skill-row,
+  .reference-skill-static-row,
+  .reference-settings-card,
+  .reference-provider-card,
+  .reference-port-card,
+  .reference-route-plan-card,
+  .reference-rule-matrix article,
+  .reference-settings-summary-grid article,
+  .reference-workbench-state-card,
+  .reference-runtime-service-grid article,
+  .reference-live-evidence-row,
+  .reference-command-card,
+  .reference-preset-card,
+  .reference-permission-card,
+  .builder-cowork-status-card,
+  .builder-live-proof-impact-card,
+  .builder-live-review-bridge,
+  .builder-live-review-receipt-history-row,
+  .agent-runtime-lane,
+  .agent-compartment-event,
+  .agent-artifact-card,
+  .agent-nas-check,
+  .drawer-card,
+  .image-library-card,
+  .image-queue-row,
+  .image-history-card,
+  .image-provider-card,
+  .image-skill-card,
+  .image-ops-item,
+  .image-receipt-strip
+) {
+  border: 0 !important;
+  border-top: 1px solid var(--control-line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell :where(
+  .reference-home-card-row,
+  .reference-settings-grid,
+  .reference-provider-grid,
+  .reference-port-grid,
+  .reference-route-plan-grid,
+  .reference-rule-matrix,
+  .reference-settings-summary-grid,
+  .reference-command-grid,
+  .reference-ready-tonight-grid,
+  .reference-preset-grid,
+  .reference-style-dna-grid,
+  .reference-settings-color-grid,
+  .reference-two-column-grid,
+  .reference-live-evidence-grid,
+  .builder-live-review-layout,
+  .builder-live-review-sidepanel,
+  .image-library-grid
+) {
+  gap: 0 !important;
+}
+
+.reference-shell :where(
+  .reference-rail-item,
+  .reference-topbar-pill,
+  .reference-icon-button,
+  .reference-outline-button,
+  .reference-select-button,
+  .reference-reset-button,
+  .reference-page-buttons button,
+  .reference-settings-tabs button,
+  .reference-black-button,
+  .reference-home-open,
+  .image-glass-button,
+  .image-secondary-button,
+  .image-primary-button,
+  .image-manifest-receipt-link,
+  .builder-live-review-receipt-handles span[role="button"],
+  button
+) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.reference-shell :where(
+  .reference-rail-item,
+  .reference-topbar-pill,
+  .reference-icon-button,
+  .reference-outline-button,
+  .reference-select-button,
+  .reference-reset-button,
+  .reference-page-buttons button,
+  .reference-settings-tabs button,
+  .image-glass-button,
+  .image-secondary-button,
+  .image-manifest-receipt-link
+) {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.reference-shell :where(
+  .reference-rail-item.active,
+  .reference-topbar-pill.active,
+  .reference-settings-tabs button.active,
+  .reference-page-buttons button.active,
+  .reference-outline-button:hover,
+  .reference-icon-button:hover,
+  .reference-settings-tabs button:hover
+) {
+  border-color: var(--control-line-strong) !important;
+  background: rgba(238, 242, 236, 0.035) !important;
+}
+
+.reference-shell :where(
+  .reference-black-button,
+  .reference-home-open,
+  .image-primary-button,
+  .reference-main.surface-settings .reference-outline-button,
+  .reference-main.surface-settings .reference-black-button,
+  .reference-main.surface-settings .reference-settings-actions button
+) {
+  border: 1px solid var(--control-line-strong) !important;
+  background: #e7e9e4 !important;
+  color: #080a0a !important;
+}
+
+.reference-shell :where(
+  input,
+  select,
+  textarea,
+  .reference-static-value,
+  .reference-search-field,
+  .reference-search-shell
+) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-agent :where(
+  .reference-live-surface,
+  .reference-preview-stage,
+  .reference-live-sidebar-column,
+  .reference-live-card,
+  .reference-preview-dashboard,
+  .reference-preview-browser,
+  .reference-preview-comment,
+  .reference-preview-stats article,
+  .reference-agent-run,
+  .fluxos-agent-grid,
+  .fluxos-preview-panel,
+  .fluxos-live-preview,
+  .fluxos-tool-grid,
+  .fluxos-runtime-strip
+) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-agent :where(
+  .reference-preview-stage,
+  .reference-preview-browser,
+  .fluxos-preview-panel[data-agent-preview-window="true"],
+  .fluxos-live-preview
+) {
+  border-top: 1px solid var(--control-line) !important;
+}
+
+.reference-shell.surface-workbench :where(
+  .reference-workbench-surface,
+  .reference-runtime-ops-panel,
+  .reference-settings-summary-grid article,
+  .reference-runtime-service-grid article,
+  .fluxos-workbench,
+  .fluxos-browser-pane,
+  .fluxos-live-preview,
+  .fluxos-workbench-live-state,
+  .fluxos-workbench-execution,
+  .fluxos-workbench-proof-band
+) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-settings :where(
+  .reference-settings-card,
+  .reference-provider-card,
+  .reference-port-card,
+  .reference-route-plan-card,
+  .reference-rule-matrix article,
+  .reference-settings-summary-grid article
+) {
+  padding-inline: 0 !important;
+}
+
+.reference-shell.surface-settings :where(.reference-settings-tabs button) {
+  border-top: 0 !important;
+}
+
+.reference-shell :where(
+  [class*="metric"],
+  [class*="summary-grid"] > *,
+  [class*="card"]:not(button):not(.reference-black-button):not(.reference-home-open):not(.image-primary-button),
+  [class*="panel"]:not(.reference-main-panel),
+  [class*="surface"]:not(.reference-main):not(.reference-shell),
+  [class*="grid"] > article,
+  [class*="grid"] > div,
+  [class*="row"]:not(button),
+  [class*="strip"],
+  [class*="rail"]:not(.reference-sidebar):not(.reference-flow-sidebar),
+  [class*="inspector"],
+  [class*="queue"],
+  [class*="library"],
+  [class*="history"],
+  [class*="toolbar"]
+) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.reference-shell :where(
+  [class*="card"]:not(button):not(.reference-black-button):not(.reference-home-open):not(.image-primary-button),
+  [class*="panel"]:not(.reference-main-panel),
+  [class*="surface"]:not(.reference-main):not(.reference-shell),
+  [class*="grid"] > article,
+  [class*="grid"] > div,
+  [class*="row"]:not(button),
+  [class*="strip"],
+  [class*="queue"],
+  [class*="library"],
+  [class*="history"]
+) {
+  background: transparent !important;
+}
+
+.reference-shell.surface-skills :where(
+  [class*="metric"],
+  [class*="card"],
+  [class*="panel"],
+  [class*="grid"] > *,
+  [class*="row"],
+  [class*="summary"]
+),
+.reference-shell.surface-images :where(
+  [class*="card"],
+  [class*="panel"],
+  [class*="grid"] > *,
+  [class*="row"],
+  [class*="queue"],
+  [class*="library"],
+  [class*="history"],
+  [class*="inspector"],
+  [class*="canvas"],
+  [class*="generator"],
+  [class*="receipt"]
+) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-skills :where(
+  [class*="metric"],
+  [class*="card"],
+  [class*="panel"],
+  [class*="grid"] > *,
+  [class*="row"]
+),
+.reference-shell.surface-images :where(
+  [class*="card"],
+  [class*="panel"],
+  [class*="grid"] > *,
+  [class*="row"],
+  [class*="queue"],
+  [class*="library"],
+  [class*="history"],
+  [class*="inspector"],
+  [class*="generator"],
+  [class*="receipt"]
+) {
+  border-top: 1px solid var(--control-line) !important;
+}
+
+.reference-shell.surface-skills :where(.reference-black-button, .reference-outline-button, button),
+.reference-shell.surface-images :where(.image-primary-button, .image-glass-button, .image-secondary-button, button) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-images :where(
+  textarea,
+  input,
+  select,
+  .image-empty-stage,
+  .image-queue-empty
+) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 760px) {
+  .reference-shell .reference-sidebar,
+  .reference-shell .reference-flow-sidebar {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--control-line) !important;
+  }
+}
+
+/* Legacy fluxos surfaces still render Skills and Images. Keep them in the
+   same border-clean product language as Agent, Builder, Workbench, Settings. */
+.fluxos-shell.surface-images :where(
+  .fluxos-images,
+  .fluxos-image-prompt,
+  .fluxos-variant-grid,
+  .fluxos-variant-grid article,
+  .fluxos-empty-minted-session,
+  .fluxos-image-inspector,
+  .fluxos-reference-strip,
+  .fluxos-reference-strip span
+),
+.fluxos-shell.surface-skills :where(
+  .fluxos-skills,
+  .fluxos-skills-list,
+  .fluxos-editor,
+  .fluxos-skill-command-band,
+  .fluxos-skill-command-metrics,
+  .fluxos-skill-command-metrics article,
+  .fluxos-skill-route-proof,
+  .fluxos-hermes-skill-source,
+  .fluxos-code-mod-skill-lane,
+  .fluxos-code-mod-skill-grid,
+  .fluxos-code-mod-skill-grid article,
+  .fluxos-live-skill-summary,
+  .fluxos-loss-routing,
+  .fluxos-loss-routing-head,
+  .fluxos-loss-chip-row,
+  .fluxos-loss-chip-row span,
+  .fluxos-loss-events,
+  .fluxos-loss-events article,
+  .fluxos-red-team-trend,
+  .fluxos-red-team-bars,
+  .fluxos-code-window
+) {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.fluxos-shell.surface-images :where(
+  .fluxos-image-prompt,
+  .fluxos-variant-grid article,
+  .fluxos-image-inspector
+),
+.fluxos-shell.surface-skills :where(
+  .fluxos-skill-command-band,
+  .fluxos-skill-command-metrics article,
+  .fluxos-skill-route-proof,
+  .fluxos-hermes-skill-source,
+  .fluxos-code-mod-skill-lane,
+  .fluxos-code-mod-skill-grid article,
+  .fluxos-live-skill-summary,
+  .fluxos-loss-routing,
+  .fluxos-loss-events article,
+  .fluxos-red-team-trend,
+  .fluxos-code-window
+) {
+  border-top: 1px solid rgba(255, 255, 255, 0.095) !important;
+}
+
+.fluxos-shell.surface-images :where(
+  .fluxos-image-prompt textarea,
+  .fluxos-image-inspector button,
+  .fluxos-review-actions button,
+  .fluxos-reference-strip span
+),
+.fluxos-shell.surface-skills :where(
+  .fluxos-skill-command-actions button,
+  .fluxos-builder-clarity-switch button,
+  .fluxos-skill-card,
+  .fluxos-loss-chip-row span
+) {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.fluxos-shell.surface-images .fluxos-image-prompt textarea {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.095) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.095) !important;
+  background: transparent !important;
+}
+
+.fluxos-shell.surface-images :where(.fluxos-reference-strip, .fluxos-review-actions),
+.fluxos-shell.surface-skills :where(
+  .fluxos-skill-command-metrics,
+  .fluxos-code-mod-skill-grid,
+  .fluxos-loss-chip-row
+) {
+  gap: 0 !important;
+}
