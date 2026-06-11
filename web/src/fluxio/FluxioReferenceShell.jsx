@@ -10129,7 +10129,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
       data-workbench-clarity-mode={normalizedWorkbenchClarityMode}
       data-workbench-focus-contract="proof-execution-first"
     >
-      <section className="fluxos-rail-panel fluxos-workbench-live-state">
+      <section className={cx("fluxos-rail-panel fluxos-workbench-live-state", workbenchFocusMode && "is-focus-secondary")}>
         <div className="fluxos-section-head">
           <span>Live state</span>
           <strong>{titleizeToken(workbenchState?.missionStatus || workbenchState?.status || (liveDataStatus?.loading ? "Loading" : "Ready"))}</strong>
@@ -10224,7 +10224,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         {isLiveBackend ? (
           <section
             aria-label="Live Workbench artifact execution"
-            className={`fluxos-workbench-execution state-${workbenchExecutionState}`}
+            className={cx(`fluxos-workbench-execution state-${workbenchExecutionState}`, workbenchFocusMode && "is-focus-compact")}
             data-hard-artifact-gate={artifactGateStatus}
             data-live-workbench-execution="true"
             data-live-workbench-execution-state={workbenchExecutionState}
@@ -10274,7 +10274,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         {isLiveBackend ? (
           <section
             aria-label="Live Workbench proof controls"
-            className="fluxos-workbench-proof-band"
+            className={cx("fluxos-workbench-proof-band", workbenchFocusMode && "is-focus-compact")}
             data-live-workbench-proof-band="true"
           >
             <div className="fluxos-workbench-proof-copy">
@@ -10301,7 +10301,10 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         <div className="fluxos-browser-chrome">
           <span />
           <strong>{workbenchState?.previewLabel || (isLiveBackend ? "No live preview frame attached" : "local layout preview")}</strong>
-          <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Screenshot</button>
+          <div className="fluxos-workbench-window-actions">
+            <button disabled={!previewActionUrl} onClick={() => previewActionUrl && window.open(previewActionUrl, "_blank", "noopener,noreferrer")} type="button">Open preview</button>
+            <button onClick={() => fluxioAction(onRequestAction, "workbench:screenshot")} type="button">Screenshot</button>
+          </div>
         </div>
         <div
           className="fluxos-live-preview workbench"
@@ -10352,7 +10355,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           )}
         </div>
         {isLiveBackend ? (
-          <div className="fluxos-artifact-list" aria-label="Live mission artifacts" data-live-workbench-secondary-panel="true">
+          <div className={cx("fluxos-artifact-list", workbenchFocusMode && "is-focus-secondary")} aria-label="Live mission artifacts" data-live-workbench-secondary-panel="true">
             {artifacts.length > 0 ? artifacts.map(item => (
               <article key={item.id}>
                 <span>{titleizeToken(item.status || "artifact")}</span>
@@ -10369,7 +10372,7 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           </div>
         ) : null}
       </section>
-      <section className="fluxos-action-timeline" data-live-workbench-secondary-panel="true">
+      <section className={cx("fluxos-action-timeline", workbenchFocusMode && "is-focus-secondary")} data-live-workbench-secondary-panel="true">
         <div className="fluxos-section-head">
           <span>Runtime operations</span>
           <strong>Hermes and browser action timeline</strong>
