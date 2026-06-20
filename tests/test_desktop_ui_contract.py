@@ -180,6 +180,18 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn("device-code", shell)
         self.assertIn("MiniMax OpenClaw auth command copied", shell)
 
+    def test_provider_ecosystem_is_visible_in_runtime_drawer(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+
+        self.assertIn("providerEcosystem", shell)
+        self.assertIn("Provider ecosystem", shell)
+        self.assertIn("Routes, catalogs, and safe updates", shell)
+        self.assertIn("Default route changes require approval", shell)
+        self.assertIn("User-defined models are never overwritten", shell)
+        self.assertIn("provider-ecosystem-panel", styles)
+        self.assertIn("provider-ecosystem-list", styles)
+
     def test_control_room_surfaces_live_agent_artifacts_compartments_and_deploy_readiness(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")

@@ -7182,6 +7182,15 @@ button.builder-review-target:hover {
   gap: 6px;
 }
 
+.provider-ecosystem-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-ecosystem-list {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
 .bridge-context-item p {
   margin: 0;
 }
