@@ -1,0 +1,13 @@
+{
+  "scenario_id": "worker-f-jbheaven-safe-scenario-20260621",
+  "root": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621",
+  "paths": {
+    "readme": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\README.md",
+    "scenario": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\scenario.json",
+    "probes": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\probes.jsonl",
+    "rubric": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\rubric.json",
+    "transcript_schema": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\transcript_schema.json",
+    "sample_transcript": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\sample_transcript.json",
+    "artifact_index": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\artifacts_index.json"
+  }
+}
