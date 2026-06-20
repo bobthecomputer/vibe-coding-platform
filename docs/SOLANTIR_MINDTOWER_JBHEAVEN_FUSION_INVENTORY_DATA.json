@@ -1,0 +1,226 @@
+{
+  "date": "2026-06-21",
+  "worker": "D",
+  "scope": "docs and integration inventory only",
+  "sourceRoots": [
+    {
+      "name": "Solantir local",
+      "path": "C:\\Users\\paul\\projects\\Solantir",
+      "git": {
+        "status": "clean",
+        "head": "a902a91c657500d15479cb109e8e002b0280f484",
+        "headDate": "2026-04-03 19:02:41 +0200",
+        "subject": "Unify Solantir Terminal shell, workspace, and forecasting bridge",
+        "remote": "https://github.com/bobthecomputer/Solantir.git"
+      },
+      "scan": {
+        "files": 885,
+        "dirs": 291,
+        "bytes": 16607377,
+        "topExtensions": [".ts:322", ".png:151", ".json:126", ".proto:93", ".md:34", ".py:30", ".tsx:21", ".yaml:19"]
+      },
+      "sourceOfTruth": true,
+      "role": "canonical Solantir contracts, terminal model, market/intel/forecast schemas, and legacy signal scoring"
+    },
+    {
+      "name": "Mind Tower local",
+      "path": "C:\\Users\\paul\\projects\\mind-tower",
+      "git": {
+        "status": "clean",
+        "head": "21d40c7a058e8573ce987519330b5b5055eca91a",
+        "headDate": "2026-04-12 18:48:49 +0200",
+        "subject": "Redesign operator workbench and improve source collection",
+        "remote": "https://github.com/bobthecomputer/mind-tower.git"
+      },
+      "scan": {
+        "files": 160,
+        "dirs": 84,
+        "bytes": 1657428,
+        "topExtensions": [".ts:38", ".json:28", ".py:26", ".tsx:11", ".md:11", ".yaml:5", ".log:5", "[none]:5"]
+      },
+      "sourceOfTruth": true,
+      "role": "Synology admin model, managed resources, SQLite records/events/runtime_state, monitoring worker"
+    },
+    {
+      "name": "JBH-EAVEN local",
+      "path": "C:\\Users\\paul\\projects\\Jbheaven",
+      "git": {
+        "status": "clean",
+        "head": "0b94dedea6ed153d2a79812cd57c39a4a4346ba6",
+        "headDate": "2026-04-03 19:03:49 +0200",
+        "subject": "Fix script entrypoints and add prompt generation progress",
+        "remote": "https://github.com/bobthecomputer/Jbheaven"
+      },
+      "scan": {
+        "files": 516,
+        "dirs": 54,
+        "bytes": 321063282,
+        "topExtensions": [".js:86", ".mjs:79", ".py:73", ".json:72", ".md:45", ".png:23", ".rs:20", ".jsonl:19"]
+      },
+      "sourceOfTruth": true,
+      "role": "local-first Tauri runtime, signed event log, prompt lab, synthetic defensive red-team harness, release automation"
+    },
+    {
+      "name": "Solantir NAS mirror",
+      "path": "Y:\\projects\\Projects\\Solantír",
+      "git": null,
+      "scan": {
+        "files": 808,
+        "dirs": 245,
+        "bytes": 14647704,
+        "topExtensions": [".ts:319", ".png:151", ".proto:93", ".json:89", ".py:27", ".tsx:21", ".yaml:19", ".md:18"]
+      },
+      "sourceOfTruth": false,
+      "role": "old no-git worldmonitor/osint-platform mirror; archival reference only"
+    },
+    {
+      "name": "Mind Tower NAS mirror",
+      "path": "Y:\\projects\\mind-tower",
+      "git": null,
+      "scan": {
+        "files": 160,
+        "dirs": 75,
+        "bytes": 1370276,
+        "topExtensions": [".ts:40", ".json:28", ".py:26", ".tsx:15", ".md:10", ".yaml:5", "[none]:5", ".html:4"]
+      },
+      "sourceOfTruth": false,
+      "role": "runtime mirror and deployed SQLite/config evidence"
+    },
+    {
+      "name": "JBH-EAVEN NAS mirror",
+      "path": "Y:\\projects\\Jbheaven",
+      "git": null,
+      "scan": {
+        "files": 1830,
+        "dirs": 224,
+        "bytes": 2736229346,
+        "topExtensions": [".json:637", ".md:366", ".mjs:135", ".jsonl:129", ".js:121", ".txt:94", ".py:63", ".log:61"]
+      },
+      "sourceOfTruth": false,
+      "role": "artifact-heavy runtime mirror with proof logs, generated bundles, and divergent package manifest"
+    },
+    {
+      "name": "Prior Solantir/Mind Tower NAS fusion prototype",
+      "path": "Y:\\projects\\solantir-mindtower-fusion",
+      "git": null,
+      "scan": {
+        "files": 731,
+        "dirs": 124,
+        "bytes": 15798130,
+        "topExtensions": [".json:471", ".md:110", ".jsonl:58", ".txt:53", ".log:15", ".pid:7", ".err:4", ".mjs:3"]
+      },
+      "sourceOfTruth": false,
+      "role": "prior Vite prototype and proof ledger; useful reference but includes seeded data and placeholder notes"
+    }
+  ],
+  "mirrorComparisons": [
+    {
+      "left": "C:\\Users\\paul\\projects\\mind-tower\\package.json",
+      "right": "Y:\\projects\\mind-tower\\package.json",
+      "same": true,
+      "leftHashPrefix": "0B4A2C83A076",
+      "rightHashPrefix": "0B4A2C83A076"
+    },
+    {
+      "left": "C:\\Users\\paul\\projects\\Jbheaven\\package.json",
+      "right": "Y:\\projects\\Jbheaven\\package.json",
+      "same": false,
+      "leftHashPrefix": "F00028323EEB",
+      "rightHashPrefix": "B285E9703E54"
+    },
+    {
+      "left": "C:\\Users\\paul\\projects\\Solantir\\README.md",
+      "right": "Y:\\projects\\Projects\\Solantír\\README.md",
+      "same": false,
+      "leftHashPrefix": "08B751D035E4",
+      "rightHashPrefix": "9AA78B9F6686"
+    }
+  ],
+  "keyFiles": [
+    {
+      "path": "C:\\Users\\paul\\projects\\Solantir\\packages\\contracts\\src\\solantir.ts",
+      "lines": 355,
+      "bytes": 10275,
+      "hashPrefix": "77FF86081481",
+      "value": "canonical entity, observation, forecast, provenance, source, harness, and workspace contracts"
+    },
+    {
+      "path": "C:\\Users\\paul\\projects\\Solantir\\legacy\\osint-platform\\backend\\solantir_api\\models.py",
+      "lines": 360,
+      "bytes": 24219,
+      "hashPrefix": "58E38F6629EC",
+      "value": "concrete legacy SQLAlchemy models for assets, signals, events, observations, forecasts, and evaluations"
+    },
+    {
+      "path": "C:\\Users\\paul\\projects\\Solantir\\legacy\\osint-platform\\backend\\solantir_api\\signals.py",
+      "lines": 121,
+      "bytes": 5817,
+      "hashPrefix": "ABECFB5BE82E",
+      "value": "deterministic explainable signal scorer with drivers and confidence"
+    },
+    {
+      "path": "C:\\Users\\paul\\projects\\mind-tower\\packages\\shared\\src\\models.ts",
+      "lines": 384,
+      "bytes": 10661,
+      "hashPrefix": "DE7D0D085B6E",
+      "value": "managed source, credential, operator, connection, summary job, event, digest, and dashboard contracts"
+    },
+    {
+      "path": "C:\\Users\\paul\\projects\\mind-tower\\apps\\admin\\src\\lib\\db.ts",
+      "lines": 114,
+      "bytes": 3607,
+      "hashPrefix": "E2982CAC2982",
+      "value": "SQLite records/events/runtime_state persistence shape"
+    },
+    {
+      "path": "C:\\Users\\paul\\projects\\Jbheaven\\scripts\\red-team-harness.mjs",
+      "lines": 249,
+      "bytes": 9664,
+      "hashPrefix": "0038D908C240",
+      "value": "deterministic synthetic defensive red-team harness"
+    },
+    {
+      "path": "C:\\Users\\paul\\projects\\Jbheaven\\scripts\\safety.mjs",
+      "lines": 52,
+      "bytes": 1333,
+      "hashPrefix": "B5DD73EF3670",
+      "value": "visible safety toggle persistence pattern"
+    },
+    {
+      "path": "Y:\\projects\\solantir-mindtower-fusion\\src\\types.ts",
+      "lines": 51,
+      "bytes": 1194,
+      "hashPrefix": "F0DE532337E0",
+      "value": "prior prototype fixture type model"
+    },
+    {
+      "path": "Y:\\projects\\solantir-mindtower-fusion\\src\\data\\fusionSeed.ts",
+      "lines": 192,
+      "bytes": 7112,
+      "hashPrefix": "BC197960110B",
+      "value": "prior prototype seeded monitor/trading/review/provenance data"
+    }
+  ],
+  "orderedPrSlices": [
+    "PR 1 - Fusion inventory and capability map",
+    "PR 2 - Canonical fusion contract fixture",
+    "PR 3 - Read-only Mind Tower adapter shape",
+    "PR 4 - Solantir explainable signal importer",
+    "PR 5 - Defensive JBH-EAVEN harness proof lane",
+    "PR 6 - Operator fusion workbench UI",
+    "PR 7 - NAS mirror cleanup decision"
+  ],
+  "riskFlags": [
+    "stale no-git NAS mirrors",
+    "seeded prototype data that could be mistaken for live data",
+    "trading-action ambiguity from signal scores",
+    "secret-bearing Mind Tower credential flows",
+    "red-team scripts requiring controlled defensive scope",
+    "large generated NAS artifacts and build outputs",
+    "runtime coupling across Tauri, Synology, and Fluxio",
+    "placeholder image/proof artifacts in prior prototype"
+  ],
+  "validation": {
+    "command": "python -m json.tool docs/SOLANTIR_MINDTOWER_JBHEAVEN_FUSION_INVENTORY_DATA.json > $null"
+  }
+}
