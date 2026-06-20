@@ -26,6 +26,7 @@ import {
   IMAGE_STUDIO_MASK_MODES,
   IMAGE_STUDIO_PROVIDER_ROUTES,
   IMAGE_STUDIO_STORAGE_KEY,
+  buildImageStudioProofReview,
   buildImageStudioRequestDraft,
   createReferenceAssetFromFile,
   formatBytes,
@@ -78,8 +79,9 @@ function fieldId(name) {
 function StatusMark({ status }) {
   const ready = status === "ready";
   const empty = status === "empty";
+  const blocked = status === "blocked";
   return (
-    <span className={`image-studio-status-mark ${ready ? "is-ready" : empty ? "is-empty" : "is-planned"}`}>
+    <span className={`image-studio-status-mark ${ready ? "is-ready" : empty ? "is-empty" : blocked ? "is-blocked" : "is-planned"}`}>
       {ready ? <CheckCircle size={16} weight="fill" /> : <WarningCircle size={16} weight="fill" />}
       <span>{status.replace(/_/g, " ")}</span>
     </span>
@@ -122,6 +124,41 @@ function SelectionOverlay({ selection, canvas, mode }) {
   );
 }
 
+function AnnotationOverlay({ annotations, canvas }) {
+  const width = Number(canvas?.width || 1024);
+  const height = Number(canvas?.height || 1024);
+  const pins = Array.isArray(annotations?.pins) ? annotations.pins : [];
+  const rectangles = Array.isArray(annotations?.rectangles) ? annotations.rectangles : [];
+  return (
+    <>
+      {rectangles.map((rect, index) => {
+        const style = {
+          left: `${(Number(rect.x || 0) / width) * 100}%`,
+          top: `${(Number(rect.y || 0) / height) * 100}%`,
+          width: `${(Number(rect.width || 1) / width) * 100}%`,
+          height: `${(Number(rect.height || 1) / height) * 100}%`,
+        };
+        return (
+          <div className="image-studio-annotation-rect" style={style} key={rect.id || `rect-${index}`}>
+            <span>{rect.label || rect.title || `Review ${index + 1}`}</span>
+          </div>
+        );
+      })}
+      {pins.map((pin, index) => {
+        const style = {
+          left: `${(Number(pin.x || 0) / width) * 100}%`,
+          top: `${(Number(pin.y || 0) / height) * 100}%`,
+        };
+        return (
+          <span className="image-studio-annotation-pin" style={style} key={pin.id || `pin-${index}`}>
+            {index + 1}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 function ReferencePreview({ asset, onRemove }) {
   return (
     <li className="image-studio-reference-row">
@@ -151,6 +188,32 @@ function HistoryRow({ item }) {
   );
 }
 
+function ProofReviewSummary({ review }) {
+  if (!review) return null;
+  return (
+    <div className="image-studio-proof-review" aria-label="Preview and annotation proof review">
+      <div>
+        <span>Preview</span>
+        <strong>
+          {review.preview.visibleLayerCount}/{review.preview.layerCount} layers
+        </strong>
+      </div>
+      <div>
+        <span>Annotations</span>
+        <strong>{review.annotations.total}</strong>
+      </div>
+      <div>
+        <span>References</span>
+        <strong>{review.references.count}</strong>
+      </div>
+      <div>
+        <span>Provider handoff</span>
+        <strong>{review.readyForProviderHandoff ? "Ready" : "Needs review"}</strong>
+      </div>
+    </div>
+  );
+}
+
 export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
@@ -161,6 +224,10 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
 
   const route = useMemo(() => getProviderRoute(session.routeId), [session.routeId]);
   const draftValidation = useMemo(() => (draft ? validateImageStudioRequestDraft(draft) : null), [draft]);
+  const proofReview = useMemo(
+    () => buildImageStudioProofReview(project, draft, { referenceAssets: session.referenceAssets, route }),
+    [draft, project, route, session.referenceAssets],
+  );
 
   useEffect(() => {
     saveImageProject(project);
@@ -425,6 +492,7 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
                 <ProjectLayer key={layer.id} layer={layer} canvas={project.canvas} />
               ))}
               <SelectionOverlay selection={project.selection} canvas={project.canvas} mode={session.maskMode} />
+              <AnnotationOverlay annotations={project.annotationReadiness} canvas={project.canvas} />
             </div>
           </div>
 
@@ -549,6 +617,16 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
             Copy JSON
           </button>
         </div>
+        <ProofReviewSummary review={proofReview} />
+        <div className="image-studio-proof-grid">
+          {proofReview.checks.map(check => (
+            <div className="image-studio-proof-item" key={check.id}>
+              <StatusMark status={check.status} />
+              <strong>{check.label}</strong>
+              <span>{check.detail}</span>
+            </div>
+          ))}
+        </div>
         {draft ? (
           <>
             <div className="image-studio-proof-grid">
@@ -561,7 +639,7 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
               ))}
             </div>
             <div className="image-studio-draft-status">
-              <span>{draft.noGenerationReason}</span>
+              <span>{draft.proofReview?.noGenerationClaim || draft.noGenerationReason}</span>
               <b>{draftValidation?.ok ? "Draft valid" : draftValidation?.issues.join("; ")}</b>
             </div>
             <pre className="image-studio-json-preview" tabIndex="0">

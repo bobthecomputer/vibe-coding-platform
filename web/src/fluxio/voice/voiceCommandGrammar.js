@@ -1,4 +1,10 @@
 const DEFAULT_MIN_CONFIDENCE = 0.72;
+const GUARDED_ACTIONS = new Set([
+  "approval.resolve",
+  "composer.send",
+  "mission.pause",
+  "mission.resume",
+]);
 
 const SURFACE_ALIASES = {
   home: ["home", "start", "dashboard", "overview"],
@@ -125,6 +131,8 @@ function parseComposerCommand(text) {
       parameters: {},
       requiresConfirmation: true,
       confirmationPrompt: "Send the current message?",
+      riskLevel: "high",
+      guardKind: "accidental_send",
     };
   }
   const noteMatch = text.match(/^(?:add note|note|operator note)\s+(.+)$/);
@@ -162,6 +170,8 @@ function parseMissionCommand(text) {
       parameters: {},
       requiresConfirmation: true,
       confirmationPrompt: "Pause the active mission?",
+      riskLevel: "medium",
+      guardKind: "mission_control",
     };
   }
   if (/^(?:resume|continue)\s+(?:agent|mission|run)$/.test(text)) {
@@ -173,6 +183,8 @@ function parseMissionCommand(text) {
       parameters: {},
       requiresConfirmation: true,
       confirmationPrompt: "Resume the active mission?",
+      riskLevel: "medium",
+      guardKind: "mission_control",
     };
   }
   if (/^(?:approve)\s+(?:request|approval|action|command)$/.test(text)) {
@@ -184,6 +196,8 @@ function parseMissionCommand(text) {
       parameters: { decision: "approved" },
       requiresConfirmation: true,
       confirmationPrompt: "Approve the currently selected request?",
+      riskLevel: "high",
+      guardKind: "approval",
     };
   }
   if (/^(?:deny|reject)\s+(?:request|approval|action|command)$/.test(text)) {
@@ -195,6 +209,8 @@ function parseMissionCommand(text) {
       parameters: { decision: "denied" },
       requiresConfirmation: true,
       confirmationPrompt: "Deny the currently selected request?",
+      riskLevel: "high",
+      guardKind: "approval",
     };
   }
   return null;
@@ -297,6 +313,80 @@ export function describeVoiceCommandResult(result) {
     return result.confirmationPrompt || `${result.label || "Voice command"} needs confirmation.`;
   }
   return `${result.label || "Voice command"} is ready.`;
+}
+
+export function getVoiceCommandRisk(command = {}) {
+  const action = command?.action || "";
+  const guarded = GUARDED_ACTIONS.has(action) || Boolean(command?.requiresConfirmation);
+  return {
+    guarded,
+    riskLevel: command?.riskLevel || (guarded ? "medium" : "low"),
+    guardKind: command?.guardKind || (guarded ? "confirmation" : "none"),
+  };
+}
+
+export function buildAccidentalSendGuard({ command, transcript } = {}) {
+  if (!command?.matched) {
+    return {
+      status: "blocked",
+      reason: command?.blockedReason || "unmatched_command",
+      label: "Command blocked",
+      detail: command?.recovery || "The voice command did not match a runnable action.",
+    };
+  }
+
+  const risk = getVoiceCommandRisk(command);
+  if (!risk.guarded) {
+    return {
+      status: "ready",
+      reason: "low_risk_command",
+      label: "Ready",
+      detail: "This command does not perform a risky send, approval, or mission action.",
+      risk,
+    };
+  }
+
+  if (transcript?.interimText || transcript?.interim?.text) {
+    return {
+      status: "review_required",
+      reason: "interim_transcript",
+      label: "Review first",
+      detail: "The dictated command is still changing. Wait for final text before running it.",
+      risk,
+    };
+  }
+
+  if (
+    transcript?.reviewRequired ||
+    transcript?.lowConfidenceSegments?.length > 0 ||
+    transcript?.ambiguousSegments?.length > 0
+  ) {
+    return {
+      status: "review_required",
+      reason: "transcript_quality",
+      label: "Review first",
+      detail: "The transcript has low-confidence or ambiguous text. Correct it before this guarded action can run.",
+      risk,
+    };
+  }
+
+  if (command.requiresConfirmation) {
+    return {
+      status: "confirmation_required",
+      reason: "guarded_action",
+      label: "Confirm",
+      detail: command.confirmationPrompt || "Confirm this guarded voice command before it runs.",
+      risk,
+    };
+  }
+
+  return {
+    status: "ready",
+    reason: "guard_passed",
+    label: "Ready",
+    detail: "The guarded command passed transcript review.",
+    risk,
+  };
 }
 
 export { SURFACE_ALIASES };

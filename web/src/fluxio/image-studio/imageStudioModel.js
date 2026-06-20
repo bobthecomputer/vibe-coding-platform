@@ -1,5 +1,7 @@
 import {
+  isRealImageSession,
   makeId,
+  normalizeProject,
   nowIso,
   projectToProviderPayload,
 } from "../imagePlaygroundState.js";
@@ -89,6 +91,11 @@ export function buildProofArtifactPlan(project, route, referenceAssets = [], opt
   const operation = options.operation || project?.prompt?.mode || "edit";
   const hasMask = Boolean(project?.selection?.visible);
   const hasHistory = Array.isArray(project?.history) && project.history.length > 0;
+  const annotations = project?.annotationReadiness || {};
+  const annotationCount =
+    (Array.isArray(annotations.pins) ? annotations.pins.length : 0) +
+    (Array.isArray(annotations.rectangles) ? annotations.rectangles.length : 0) +
+    (Array.isArray(annotations.comments) ? annotations.comments.length : 0);
   const routeArtifacts = Array.isArray(route?.proofArtifacts) ? route.proofArtifacts : [];
 
   return [
@@ -116,6 +123,15 @@ export function buildProofArtifactPlan(project, route, referenceAssets = [], opt
       status: hasHistory ? "ready" : "empty",
       detail: hasHistory ? "Existing artifact history is available for comparison" : "No generated artifact history yet",
     },
+    {
+      id: "annotation-review",
+      label: "Annotation review",
+      status: annotationCount > 0 ? "ready" : "empty",
+      detail:
+        annotationCount > 0
+          ? `${annotationCount} annotation marker${annotationCount === 1 ? "" : "s"} captured for review`
+          : "No annotation pins, rectangles, or comments are attached",
+    },
     ...routeArtifacts.map((label, index) => ({
       id: `route-artifact-${index + 1}`,
       label,
@@ -123,6 +139,108 @@ export function buildProofArtifactPlan(project, route, referenceAssets = [], opt
       detail: "Created after a real provider run or artifact import",
     })),
   ];
+}
+
+export function countImageAnnotations(annotationReadiness = {}) {
+  const pins = Array.isArray(annotationReadiness.pins) ? annotationReadiness.pins : [];
+  const rectangles = Array.isArray(annotationReadiness.rectangles) ? annotationReadiness.rectangles : [];
+  const layers = Array.isArray(annotationReadiness.layers) ? annotationReadiness.layers : [];
+  const comments = Array.isArray(annotationReadiness.comments) ? annotationReadiness.comments : [];
+  return {
+    pins: pins.length,
+    rectangles: rectangles.length,
+    layers: layers.length,
+    comments: comments.length,
+    total: pins.length + rectangles.length + comments.length,
+  };
+}
+
+export function buildImageStudioProofReview(project, draft = null, options = {}) {
+  const normalized = normalizeProject(project);
+  const route = options.route || getProviderRoute(options.routeId || draft?.route?.id || normalized.provider?.routeId);
+  const references = Array.isArray(options.referenceAssets)
+    ? options.referenceAssets
+    : Array.isArray(draft?.references)
+      ? draft.references
+      : [];
+  const annotationCounts = countImageAnnotations(normalized.annotationReadiness);
+  const realHistory = normalized.history.filter(isRealImageSession);
+  const validation = draft ? validateImageStudioRequestDraft(draft) : { ok: false, issues: ["No request draft prepared"] };
+  const focusedHistoryId = normalized.focusedHistoryId || realHistory[0]?.id || "";
+
+  const checks = [
+    {
+      id: "draft-validity",
+      label: "Draft validity",
+      status: validation.ok ? "ready" : "blocked",
+      detail: validation.ok ? "Provider payload validates locally." : validation.issues.join("; "),
+    },
+    {
+      id: "preview-model",
+      label: "Preview model",
+      status: normalized.layers.length > 0 ? "ready" : "blocked",
+      detail: `${normalized.layers.length} layer${normalized.layers.length === 1 ? "" : "s"} on ${normalized.canvas.width}x${normalized.canvas.height} canvas.`,
+    },
+    {
+      id: "mask-coverage",
+      label: "Mask coverage",
+      status: normalized.selection?.visible ? "ready" : "empty",
+      detail: normalized.selection?.visible
+        ? `${Math.round(normalized.selection.width || 0)}x${Math.round(normalized.selection.height || 0)} selection, ${Math.round(normalized.selection.feather || 0)}px feather.`
+        : "No visible mask region.",
+    },
+    {
+      id: "annotation-coverage",
+      label: "Annotation coverage",
+      status: annotationCounts.total > 0 ? "ready" : "empty",
+      detail: `${annotationCounts.pins} pins, ${annotationCounts.rectangles} rectangles, ${annotationCounts.comments} comments.`,
+    },
+    {
+      id: "artifact-history",
+      label: "Artifact history",
+      status: realHistory.length > 0 ? "ready" : "empty",
+      detail:
+        realHistory.length > 0
+          ? `${realHistory.length} real image artifact${realHistory.length === 1 ? "" : "s"} available for comparison.`
+          : "No real provider artifact is available for comparison.",
+    },
+  ];
+
+  return {
+    generatedAt: nowIso(),
+    route: {
+      id: route.id,
+      label: route.label,
+      status: route.status,
+      model: route.model,
+    },
+    preview: {
+      canvas: {
+        width: normalized.canvas.width,
+        height: normalized.canvas.height,
+      },
+      layerCount: normalized.layers.length,
+      visibleLayerCount: normalized.layers.filter(layer => layer.visible !== false).length,
+      maskVisible: Boolean(normalized.selection?.visible),
+      focusedHistoryId,
+      hasRealArtifact: realHistory.length > 0,
+    },
+    references: {
+      count: references.length,
+      persistedCount: references.filter(asset => asset.persisted).length,
+    },
+    annotations: annotationCounts,
+    draft: {
+      id: draft?.id || "",
+      status: draft?.status || "not_prepared",
+      valid: validation.ok,
+      issues: validation.issues,
+    },
+    checks,
+    readyForProviderHandoff: validation.ok && checks.every(check => check.status !== "blocked"),
+    noGenerationClaim:
+      "This proof review describes local preview, annotation, and request readiness only. It is not a provider completion receipt.",
+  };
 }
 
 export function buildImageStudioRequestDraft(project, options = {}) {
@@ -168,6 +286,7 @@ export function buildImageStudioRequestDraft(project, options = {}) {
     noGenerationReason:
       "This surface prepares a provider request and proof plan. It does not call an image provider until a real connector is wired.",
   };
+  draft.proofReview = buildImageStudioProofReview(project, draft, { referenceAssets: references, route });
   return draft;
 }
 

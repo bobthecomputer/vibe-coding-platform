@@ -9387,17 +9387,25 @@ body::-webkit-scrollbar-thumb {
   .fluxio-main,
   .builder-shell,
   .builder-panel,
+  .builder-head,
   .builder-command-deck,
   .builder-command-head,
   .builder-workbench-grid {
-    max-width: 100vw;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: calc(100vw - 32px);
     min-width: 0;
     overflow-x: hidden;
   }
 
   .builder-head h1,
+  .builder-head p,
   .builder-panel h2,
   .builder-panel h3,
+  .builder-command-copy h2,
+  .builder-command-copy p,
+  .ambient-companion,
+  .mini-pill,
   .thread-head h1,
   .builder-summary-card strong,
   .builder-conversation-card h3 {
@@ -9405,6 +9413,37 @@ body::-webkit-scrollbar-thumb {
     min-width: 0;
     overflow-wrap: anywhere;
     white-space: normal;
+  }
+
+  .builder-head h1,
+  .builder-head p,
+  .builder-command-copy h2,
+  .builder-command-copy p {
+    max-inline-size: calc(100vw - 76px);
+  }
+
+  .thread-chip-row {
+    flex-wrap: wrap;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .builder-head,
+  .builder-command-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .builder-head > *,
+  .builder-command-head > *,
+  .builder-command-copy,
+  .builder-primary-summary,
+  .builder-board-metrics {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .builder-head-actions {
+    justify-content: start;
   }
 
   .fluxio-main h1 {
@@ -9419,3 +9458,551 @@ body::-webkit-scrollbar-thumb {
 /* Agent live is commonly reviewed inside the narrow Codex browser pane.
    Keep runtime status, preview, and recovery controls visible without forcing
    users through two stacked sidebars before the actual workbench appears. */
+
+/* Worker A premium control-shell motion pass.
+   CSS-only polish for Builder and Runtime surfaces: tactile controls, quieter
+   empty states, and white-line motion without changing runtime truth. */
+
+:root {
+  --control-bg: #090b0b;
+  --control-bg-soft: #0d1010;
+  --control-panel: #121515;
+  --control-panel-raised: #171a19;
+  --control-line: rgba(238, 242, 236, 0.105);
+  --control-line-strong: rgba(238, 242, 236, 0.24);
+  --control-text: #eef2ec;
+  --control-muted: rgba(238, 242, 236, 0.58);
+  --control-success: #9adf8a;
+  --control-warn: #e1b965;
+  --control-danger: #ee8b82;
+  --line-soft: rgba(238, 242, 236, 0.095);
+  --surface-soft: #101313;
+  --motion-ease-premium: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fluxio-shell {
+  background:
+    radial-gradient(circle at 55% -18%, rgba(238, 242, 236, 0.045), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 18%),
+    var(--control-bg);
+}
+
+.fluxio-shell[data-mode="builder"] .fluxio-main,
+.fluxio-shell[data-mode="agent"] .fluxio-main {
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.018), transparent 24%),
+    linear-gradient(90deg, rgba(238, 242, 236, 0.018), transparent 16%, transparent 84%, rgba(238, 242, 236, 0.012)),
+    #111313;
+}
+
+.fluxio-topbar,
+.fluxio-sidebar,
+.fluxio-drawer {
+  border-color: var(--control-line);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.036), rgba(238, 242, 236, 0.012)),
+    #0f1111;
+}
+
+.builder-panel,
+.builder-head,
+.agent-compartment-box,
+.agent-compartment-lane,
+.agent-chat-composer,
+.runtime-account-card,
+.drawer-block {
+  position: relative;
+  isolation: isolate;
+  border-color: var(--control-line);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.046), rgba(238, 242, 236, 0.014)),
+    var(--control-panel);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 18px 42px rgba(0, 0, 0, 0.24);
+}
+
+.builder-panel::after,
+.builder-head::after,
+.agent-compartment-box::after,
+.agent-compartment-lane::after,
+.runtime-account-card::after,
+.drawer-block::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, transparent, rgba(238, 242, 236, 0.22), transparent) 0 0 / 42% 1px no-repeat,
+    linear-gradient(180deg, rgba(238, 242, 236, 0.08), transparent 46%) 0 0 / 1px 100% no-repeat;
+  opacity: 0.72;
+}
+
+.builder-panel-hero,
+.builder-studio-head,
+.agent-compartment-box {
+  border-color: rgba(238, 242, 236, 0.16);
+}
+
+.builder-panel-focus {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.builder-metric-card,
+.builder-summary-card,
+.builder-conversation-card,
+.builder-digest-item,
+.builder-thread-item,
+.builder-step-card,
+.builder-review-target,
+.builder-inline-action,
+.builder-inline-pill,
+.builder-cowork-status-card,
+.agent-runtime-lane,
+.agent-compartment-event,
+.agent-artifact-card,
+.agent-nas-check,
+.fluxio-nav-item,
+.global-rail-button {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--control-line);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.036), rgba(238, 242, 236, 0.01)),
+    #0f1212;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.builder-metric-card::after,
+.builder-summary-card::after,
+.builder-conversation-card::after,
+.builder-digest-item::after,
+.builder-thread-item::after,
+.builder-step-card::after,
+.builder-review-target::after,
+.builder-inline-action::after,
+.agent-runtime-lane::after,
+.agent-compartment-event::after,
+.agent-nas-check::after,
+.fluxio-nav-item::after,
+.global-rail-button::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 38%;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(238, 242, 236, 0.52), transparent);
+  opacity: 0;
+  transform: translateX(-22%);
+}
+
+.builder-step-card.current,
+.builder-review-target.active,
+.builder-conversation-card.active,
+.builder-digest-item.active,
+.global-rail-button.active,
+.fluxio-nav-item.active,
+.agent-runtime-lane.active {
+  border-color: rgba(238, 242, 236, 0.24);
+  background:
+    linear-gradient(180deg, rgba(154, 223, 138, 0.08), rgba(238, 242, 236, 0.012)),
+    #111611;
+}
+
+.agent-runtime-lane.active,
+.agent-nas-check.passed {
+  border-left-color: var(--control-success);
+}
+
+.agent-nas-check.warn,
+.state-running {
+  border-left-color: var(--control-warn);
+}
+
+.agent-nas-check.blocked,
+.state-failed {
+  border-left-color: var(--control-danger);
+}
+
+.action-btn,
+.topbar-shortcut,
+.fluxio-mode button,
+.app-menu-glyph,
+.app-menu-button,
+.builder-browser-toolbar select,
+button.builder-thread-item,
+button.builder-step-card,
+button.builder-review-target,
+button.builder-inline-action,
+button.builder-conversation-card,
+button.builder-digest-item,
+button.builder-sidebar-nexus,
+.builder-live-review-event,
+.builder-live-review-frame-thumb,
+.builder-live-review-marker-pill,
+.builder-live-proof-chip,
+.builder-review-target,
+.global-rail-button,
+.fluxio-nav-item {
+  transition:
+    background-color 180ms var(--motion-ease-premium),
+    border-color 180ms var(--motion-ease-premium),
+    color 180ms var(--motion-ease-premium),
+    opacity 180ms var(--motion-ease-premium),
+    transform 180ms var(--motion-ease-premium),
+    box-shadow 180ms var(--motion-ease-premium);
+}
+
+.action-btn {
+  border-color: var(--control-line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.065), rgba(238, 242, 236, 0.018)),
+    #101313;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.action-btn:hover:enabled,
+.topbar-shortcut:hover,
+.fluxio-mode button:hover,
+.app-menu-glyph:hover,
+.app-menu-button:hover,
+.global-rail-button:hover,
+.fluxio-nav-item:hover,
+button.builder-thread-item:hover,
+button.builder-step-card:hover,
+button.builder-review-target:hover,
+button.builder-inline-action:hover,
+button.builder-conversation-card:hover,
+button.builder-digest-item:hover,
+button.builder-sidebar-nexus:hover {
+  border-color: var(--control-line-strong);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.092), rgba(238, 242, 236, 0.026)),
+    #141717;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 26px rgba(0, 0, 0, 0.22);
+  transform: translateY(-1px);
+}
+
+.action-btn.primary {
+  border-color: rgba(238, 242, 236, 0.34);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.94), rgba(209, 214, 205, 0.88));
+  color: #090b0b;
+}
+
+.action-btn.primary:hover:enabled {
+  background:
+    linear-gradient(180deg, #f7faf5, #dfe4da);
+  color: #050707;
+}
+
+.action-btn.secondary {
+  border-color: rgba(154, 223, 138, 0.28);
+  background:
+    linear-gradient(180deg, rgba(154, 223, 138, 0.12), rgba(154, 223, 138, 0.04)),
+    #101510;
+  color: #dff6d9;
+}
+
+.action-btn:active:enabled,
+.topbar-shortcut:active,
+.fluxio-mode button:active,
+.global-rail-button:active,
+.fluxio-nav-item:active,
+button.builder-thread-item:active,
+button.builder-step-card:active,
+button.builder-review-target:active,
+button.builder-inline-action:active,
+button.builder-conversation-card:active,
+button.builder-digest-item:active {
+  transform: translateY(0) scale(0.985);
+  box-shadow: inset 0 1px 6px rgba(0, 0, 0, 0.32);
+}
+
+.builder-head-actions,
+.drawer-actions,
+.thread-composer-actions {
+  gap: 8px;
+}
+
+.fluxio-empty-copy,
+.agent-compartment-empty,
+.workspace-browser-empty,
+.builder-live-review-image-missing,
+.agent-conversation-empty {
+  border: 1px dashed rgba(238, 242, 236, 0.13);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(238, 242, 236, 0.036), rgba(238, 242, 236, 0.012));
+  color: var(--control-muted);
+  padding: 10px 12px;
+}
+
+.agent-conversation-empty {
+  border-style: solid;
+  padding: 20px;
+}
+
+.grand-login-loading,
+.toast {
+  border-color: var(--control-line);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.058), rgba(238, 242, 236, 0.018)),
+    var(--control-panel);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 14px 32px rgba(0, 0, 0, 0.24);
+}
+
+.grand-login-loading span,
+.agent-live-dot,
+.ambient-dot {
+  box-shadow: 0 0 0 4px rgba(238, 242, 236, 0.08);
+}
+
+.runtime-auth-dot,
+.status-pill,
+.mini-pill,
+.fluxio-nav-stat,
+.slice-badge {
+  border-color: rgba(238, 242, 236, 0.13);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.048), rgba(238, 242, 236, 0.016));
+}
+
+.runtime-auth-dot.good,
+.tone-good,
+.agent-nas-check.good {
+  color: var(--control-success);
+}
+
+.runtime-auth-dot.warn,
+.tone-warn {
+  color: var(--control-warn);
+}
+
+.tone-bad {
+  color: var(--control-danger);
+}
+
+.agent-runtime-lane p,
+.agent-compartment-event p {
+  color: var(--control-warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .builder-panel,
+  .builder-head,
+  .agent-compartment-box,
+  .agent-compartment-lane,
+  .agent-chat-composer,
+  .runtime-account-card {
+    animation: control-surface-rise 420ms var(--motion-ease-premium) both;
+  }
+
+  .builder-primary-column > *,
+  .builder-secondary-column > *,
+  .agent-compartment-lane,
+  .agent-runtime-lane,
+  .agent-compartment-event {
+    animation: control-row-rise 360ms var(--motion-ease-premium) both;
+  }
+
+  .builder-primary-column > *:nth-child(2),
+  .builder-secondary-column > *:nth-child(2),
+  .agent-runtime-lane:nth-child(2),
+  .agent-compartment-event:nth-child(2) {
+    animation-delay: 45ms;
+  }
+
+  .builder-primary-column > *:nth-child(3),
+  .builder-secondary-column > *:nth-child(3),
+  .agent-runtime-lane:nth-child(3),
+  .agent-compartment-event:nth-child(3) {
+    animation-delay: 90ms;
+  }
+
+  .builder-primary-column > *:nth-child(4),
+  .builder-secondary-column > *:nth-child(4),
+  .agent-runtime-lane:nth-child(4),
+  .agent-compartment-event:nth-child(4) {
+    animation-delay: 135ms;
+  }
+
+  .builder-panel::after,
+  .builder-head::after,
+  .agent-compartment-box::after,
+  .agent-compartment-lane::after,
+  .runtime-account-card::after,
+  .drawer-block::after {
+    animation: control-line-draw 4.8s var(--motion-ease-premium) infinite;
+  }
+
+  .builder-metric-card::after,
+  .builder-summary-card::after,
+  .builder-conversation-card::after,
+  .builder-digest-item::after,
+  .builder-thread-item::after,
+  .builder-step-card::after,
+  .builder-review-target::after,
+  .builder-inline-action::after,
+  .agent-runtime-lane::after,
+  .agent-compartment-event::after,
+  .agent-nas-check::after,
+  .fluxio-nav-item::after,
+  .global-rail-button::after {
+    animation: control-micro-line 3.6s var(--motion-ease-premium) infinite;
+  }
+
+  .agent-runtime-lane.active,
+  .runtime-auth-dot.good,
+  .agent-live-dot.live {
+    animation: control-breathe 2.8s var(--motion-ease-premium) infinite;
+  }
+
+  .grand-login-loading span,
+  .builder-live-review-image-missing,
+  .agent-compartment-empty {
+    animation: control-soft-pulse 2.4s var(--motion-ease-premium) infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes control-surface-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes control-row-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes control-line-draw {
+  0%,
+  100% {
+    background-position: -42% 0, 0 0;
+    opacity: 0.42;
+  }
+  46%,
+  58% {
+    background-position: 116% 0, 0 0;
+    opacity: 0.86;
+  }
+}
+
+@keyframes control-micro-line {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translateX(-26%);
+  }
+  38%,
+  54% {
+    opacity: 0.72;
+    transform: translateX(34%);
+  }
+}
+
+@keyframes control-breathe {
+  0%,
+  100% {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+  50% {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 0 0 1px rgba(154, 223, 138, 0.08);
+  }
+}
+
+@keyframes control-soft-pulse {
+  0%,
+  100% {
+    border-color: rgba(238, 242, 236, 0.12);
+    opacity: 0.82;
+  }
+  50% {
+    border-color: rgba(238, 242, 236, 0.22);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 860px) {
+  .builder-head,
+  .builder-command-deck,
+  .builder-command-head,
+  .builder-command-copy,
+  .builder-panel {
+    box-sizing: border-box;
+    max-width: calc(100vw - 32px);
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .builder-head,
+  .builder-command-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .builder-head > *,
+  .builder-command-head > *,
+  .builder-command-copy {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .builder-head h1,
+  .builder-head p,
+  .builder-command-copy h2,
+  .builder-command-copy p,
+  .thread-chip-row,
+  .ambient-companion,
+  .mini-pill {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .builder-head p {
+    max-inline-size: 32ch;
+  }
+
+  .ambient-companion {
+    justify-content: start;
+    max-inline-size: 34ch;
+  }
+
+  .thread-chip-row {
+    flex-wrap: wrap;
+  }
+}

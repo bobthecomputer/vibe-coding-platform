@@ -7,7 +7,11 @@ import {
   createVoiceTranscriptState,
   finalizeInterimTranscript,
 } from "./voiceTranscriptBuffer.js";
-import { describeVoiceCommandResult, parseVoiceCommand } from "./voiceCommandGrammar.js";
+import {
+  buildAccidentalSendGuard,
+  describeVoiceCommandResult,
+  parseVoiceCommand,
+} from "./voiceCommandGrammar.js";
 import {
   buildVoiceErrorRecovery,
   detectVoiceInputSupport,
@@ -24,6 +28,12 @@ function createInitialState(options = {}) {
     transcript,
     listening: false,
     error: "",
+    sendGuard: {
+      status: "idle",
+      reason: "no_command",
+      label: "No command",
+      detail: "Dictate or type a command before running it.",
+    },
     pendingCommand: null,
     lastCommand: null,
     status: getVoiceStatusCopy({ support, transcript }),
@@ -55,6 +65,15 @@ function reducer(state, action) {
       transcriptState,
       transcript,
       error: "",
+      pendingCommand: null,
+      sendGuard: {
+        status: transcript.reviewRequired ? "review_required" : "idle",
+        reason: transcript.reviewRequired ? "transcript_quality" : "transcript_updated",
+        label: transcript.reviewRequired ? "Review first" : "Transcript updated",
+        detail: transcript.reviewRequired
+          ? "The transcript has quality warnings that should be resolved before guarded actions run."
+          : "Transcript is ready for command parsing.",
+      },
       status: getVoiceStatusCopy({ ...state, transcript, error: "" }),
     };
   }
@@ -65,6 +84,15 @@ function reducer(state, action) {
       ...state,
       transcriptState,
       transcript,
+      pendingCommand: null,
+      sendGuard: {
+        status: transcript.reviewRequired ? "review_required" : "idle",
+        reason: transcript.reviewRequired ? "transcript_quality" : "transcript_finalized",
+        label: transcript.reviewRequired ? "Review first" : "Transcript finalized",
+        detail: transcript.reviewRequired
+          ? "The finalized transcript still needs review before guarded actions run."
+          : "Final transcript is ready for command parsing.",
+      },
       status: getVoiceStatusCopy({ ...state, transcript }),
     };
   }
@@ -76,6 +104,12 @@ function reducer(state, action) {
       transcriptState,
       transcript,
       pendingCommand: null,
+      sendGuard: {
+        status: "idle",
+        reason: "transcript_cleared",
+        label: "No command",
+        detail: "The transcript was cleared.",
+      },
       status: getVoiceStatusCopy({ ...state, transcript, pendingCommand: null }),
     };
   }
@@ -83,14 +117,30 @@ function reducer(state, action) {
     return {
       ...state,
       pendingCommand: action.command,
+      sendGuard: action.guard || state.sendGuard,
       lastCommand: action.command,
       status: describeVoiceCommandResult(action.command),
+    };
+  }
+  if (action.type === "command.guardBlocked") {
+    return {
+      ...state,
+      pendingCommand: null,
+      sendGuard: action.guard,
+      lastCommand: action.command || state.lastCommand,
+      status: action.guard?.detail || describeVoiceCommandResult(action.command),
     };
   }
   if (action.type === "command.complete") {
     return {
       ...state,
       pendingCommand: null,
+      sendGuard: action.guard || {
+        status: "ready",
+        reason: "command_complete",
+        label: "Complete",
+        detail: describeVoiceCommandResult(action.command || state.pendingCommand || state.lastCommand),
+      },
       lastCommand: action.command || state.pendingCommand || state.lastCommand,
       status: describeVoiceCommandResult(action.command || state.pendingCommand || state.lastCommand),
     };
@@ -101,6 +151,12 @@ function reducer(state, action) {
       ...state,
       error,
       listening: false,
+      sendGuard: {
+        status: "blocked",
+        reason: action.code || "error",
+        label: "Blocked",
+        detail: error,
+      },
       status: getVoiceStatusCopy({ ...state, error, listening: false }),
     };
   }
@@ -175,12 +231,24 @@ export function useVoiceInteractionController({
         dispatch({ type: "error", message: command.recovery });
         return command;
       }
+      const guard = buildAccidentalSendGuard({ command, transcript: state.transcript });
+      if (guard.status === "review_required" || guard.status === "blocked") {
+        const blockedCommand = {
+          ...command,
+          matched: false,
+          blockedReason: guard.reason,
+          recovery: guard.detail,
+          guard,
+        };
+        dispatch({ type: "command.guardBlocked", command: blockedCommand, guard });
+        return blockedCommand;
+      }
       if (command.requiresConfirmation) {
-        dispatch({ type: "command.pending", command });
+        dispatch({ type: "command.pending", command: { ...command, guard }, guard });
         return command;
       }
       await onVoiceCommand?.(command);
-      dispatch({ type: "command.complete", command });
+      dispatch({ type: "command.complete", command, guard });
       return command;
     },
     [minConfidence, onVoiceCommand, state.transcript.averageConfidence, state.transcript.combinedText],
@@ -191,7 +259,16 @@ export function useVoiceInteractionController({
       return null;
     }
     await onVoiceCommand?.(state.pendingCommand);
-    dispatch({ type: "command.complete", command: state.pendingCommand });
+    dispatch({
+      type: "command.complete",
+      command: state.pendingCommand,
+      guard: {
+        status: "ready",
+        reason: "confirmed",
+        label: "Confirmed",
+        detail: "The guarded voice command was confirmed and sent to the existing handler.",
+      },
+    });
     return state.pendingCommand;
   }, [onVoiceCommand, state.pendingCommand]);
 
@@ -220,4 +297,3 @@ export function useVoiceInteractionController({
     ],
   );
 }
-

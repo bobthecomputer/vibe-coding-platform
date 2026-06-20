@@ -63,13 +63,29 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
     def test_command_grammar_requires_recovery_for_unclear_or_risky_commands(self) -> None:
         payload = run_node(
             """
-            import { parseVoiceCommand } from './web/src/fluxio/voice/voiceCommandGrammar.js';
+            import {
+              buildAccidentalSendGuard,
+              parseVoiceCommand,
+            } from './web/src/fluxio/voice/voiceCommandGrammar.js';
 
             const navigation = parseVoiceCommand('open settings', { confidence: 0.95 });
             const lowConfidence = parseVoiceCommand('send message', { confidence: 0.41 });
             const approval = parseVoiceCommand('approve request', { confidence: 0.96 });
             const unknown = parseVoiceCommand('open nebula', { confidence: 0.96 });
-            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown }));
+            const send = parseVoiceCommand('send message', { confidence: 0.96 });
+            const guarded = buildAccidentalSendGuard({
+              command: send,
+              transcript: {
+                reviewRequired: true,
+                lowConfidenceSegments: [{ id: 'unclear' }],
+                ambiguousSegments: [],
+              },
+            });
+            const confirmationGuard = buildAccidentalSendGuard({
+              command: send,
+              transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [] },
+            });
+            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, guarded, confirmationGuard }));
             """
         )
 
@@ -81,6 +97,53 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertTrue(payload["approval"]["requiresConfirmation"])
         self.assertEqual(payload["approval"]["parameters"]["decision"], "approved")
         self.assertEqual(payload["unknown"]["blockedReason"], "unknown_surface")
+        self.assertEqual(payload["guarded"]["status"], "review_required")
+        self.assertEqual(payload["guarded"]["reason"], "transcript_quality")
+        self.assertEqual(payload["confirmationGuard"]["status"], "confirmation_required")
+
+    def test_transcript_corrections_and_ambiguity_are_visible_metadata(self) -> None:
+        payload = run_node(
+            """
+            import {
+              appendTranscriptSegment,
+              buildTranscriptSnapshot,
+              createVoiceTranscriptState,
+              replaceTranscriptSegment,
+              transcriptNeedsReview,
+            } from './web/src/fluxio/voice/voiceTranscriptBuffer.js';
+
+            let state = createVoiceTranscriptState({
+              lowConfidenceThreshold: 0.7,
+              ambiguityConfidenceThreshold: 0.86,
+            });
+            state = appendTranscriptSegment(state, {
+              id: 'phrase',
+              text: 'send massage',
+              confidence: 0.81,
+              alternatives: [{ text: 'send message', confidence: 0.8 }],
+              ambiguityReasons: ['message and massage sound similar'],
+            });
+            const before = buildTranscriptSnapshot(state);
+            state = replaceTranscriptSegment(state, 'phrase', {
+              text: 'send message',
+              reason: 'operator correction',
+            });
+            const after = buildTranscriptSnapshot(state);
+            console.log(JSON.stringify({
+              needsReviewBefore: transcriptNeedsReview({ ...state, interim: { text: 'send mess', confidence: 0.9 } }),
+              ambiguousCount: before.ambiguousSegments.length,
+              correctionCount: after.correctionCount,
+              correctedFrom: after.segments[0].correctedFrom,
+              checkIds: after.qualityChecks.map(check => check.id),
+            }));
+            """
+        )
+
+        self.assertTrue(payload["needsReviewBefore"])
+        self.assertEqual(payload["ambiguousCount"], 1)
+        self.assertEqual(payload["correctionCount"], 1)
+        self.assertEqual(payload["correctedFrom"], "send massage")
+        self.assertIn("ambiguity", payload["checkIds"])
 
     def test_accessibility_helpers_do_not_claim_live_voice_without_checked_support(self) -> None:
         payload = run_node(
@@ -121,6 +184,52 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["bridge"]["mode"], "bridge")
         self.assertIn("Keyboard: Ctrl+Enter", payload["label"])
         self.assertEqual(payload["reduced"]["data-motion"], "reduced")
+
+    def test_image_studio_request_draft_reports_preview_and_annotation_proof(self) -> None:
+        payload = run_node(
+            """
+            import { DEFAULT_IMAGE_PROJECT } from './web/src/fluxio/imagePlaygroundState.js';
+            import {
+              buildImageStudioProofReview,
+              buildImageStudioRequestDraft,
+            } from './web/src/fluxio/image-studio/imageStudioModel.js';
+
+            const project = {
+              ...DEFAULT_IMAGE_PROJECT,
+              annotationReadiness: {
+                pins: [{ id: 'pin-a', x: 100, y: 120 }],
+                rectangles: [{ id: 'rect-a', x: 20, y: 30, width: 200, height: 140 }],
+                layers: [],
+                comments: [{ id: 'comment-a', text: 'tighten crop' }],
+              },
+            };
+            const draft = buildImageStudioRequestDraft(project, {
+              routeId: 'local-request-draft',
+              referenceAssets: [{ id: 'ref-a', name: 'reference.png', mime: 'image/png', size: 2000 }],
+            });
+            const review = buildImageStudioProofReview(project, draft, {
+              referenceAssets: draft.references,
+              routeId: 'local-request-draft',
+            });
+            console.log(JSON.stringify({
+              draftHasReview: Boolean(draft.proofReview),
+              annotationTotal: review.annotations.total,
+              referenceCount: review.references.count,
+              hasRealArtifact: review.preview.hasRealArtifact,
+              readyForProviderHandoff: review.readyForProviderHandoff,
+              claim: review.noGenerationClaim,
+              artifactIds: draft.proofArtifacts.map(item => item.id),
+            }));
+            """
+        )
+
+        self.assertTrue(payload["draftHasReview"])
+        self.assertEqual(payload["annotationTotal"], 3)
+        self.assertEqual(payload["referenceCount"], 1)
+        self.assertTrue(payload["hasRealArtifact"])
+        self.assertTrue(payload["readyForProviderHandoff"])
+        self.assertIn("not a provider completion receipt", payload["claim"])
+        self.assertIn("annotation-review", payload["artifactIds"])
 
 
 if __name__ == "__main__":

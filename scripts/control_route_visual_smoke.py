@@ -67,8 +67,9 @@ def browser_family(browser: str) -> str:
 
 
 def run_browser(browser: str, args: list[str], timeout: int = 45) -> subprocess.CompletedProcess[bytes]:
+    headless_arg = "--headless=new" if browser_family(browser) == "chromium" else "--headless"
     return subprocess.run(
-        [browser, "--headless", "--disable-gpu", "--no-sandbox", *args],
+        [browser, headless_arg, "--disable-gpu", "--no-sandbox", *args],
         check=False,
         cwd=ROOT,
         capture_output=True,
@@ -100,7 +101,7 @@ def image_stats(path: Path) -> dict[str, object]:
             "sampleCount": len(samples),
             "uniqueSampleColors": unique,
             "averageLuma": round(average_luma, 2),
-            "nonBlank": unique >= 24 and width >= 1000 and height >= 700,
+            "nonBlank": unique >= 24 and width >= 320 and height >= 600,
         }
 
 
@@ -111,6 +112,8 @@ def main() -> int:
     parser.add_argument("--name", default="runtime-workbench-visual-proof")
     parser.add_argument("--browser", choices=["auto", "chrome", "chromium", "edge", "zen"], default="auto")
     parser.add_argument("--browser-path", default="")
+    parser.add_argument("--width", type=int, default=1440)
+    parser.add_argument("--height", type=int, default=1200)
     parser.add_argument(
         "--expect",
         action="append",
@@ -121,9 +124,9 @@ def main() -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    screenshot_path = out_dir / f"{args.name}.png"
-    dom_path = out_dir / f"{args.name}.html"
-    report_path = out_dir / f"{args.name}-check.json"
+    screenshot_path = (out_dir / f"{args.name}.png").resolve()
+    dom_path = (out_dir / f"{args.name}.html").resolve()
+    report_path = (out_dir / f"{args.name}-check.json").resolve()
 
     browser = find_browser(args.browser, args.browser_path)
     family = browser_family(browser)
@@ -134,7 +137,7 @@ def main() -> int:
             "--no-remote",
             "--profile",
             str(profile_dir),
-            "--window-size=1440,1200",
+            f"--window-size={args.width},{args.height}",
             "--screenshot",
             str(screenshot_path),
             args.url,
@@ -142,7 +145,7 @@ def main() -> int:
     else:
         screenshot_args = [
             "--hide-scrollbars",
-            "--window-size=1440,1200",
+            f"--window-size={args.width},{args.height}",
             "--virtual-time-budget=5000",
             f"--screenshot={screenshot_path}",
             args.url,

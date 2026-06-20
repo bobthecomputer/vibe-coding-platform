@@ -16,5 +16,7 @@ The component persists its image project through `imagePlaygroundState.js` and s
 
 - Builds prompt, provider route, reference asset, mask, layer, history, and proof artifact state.
 - Produces a provider request draft through `buildImageStudioRequestDraft`.
+- Produces `proofReview` metadata that reports draft validity, preview layer counts, mask coverage, annotation counts, reference counts, and real artifact-history coverage.
+- Renders annotation pins and rectangles only when they exist in project state; it does not invent proof marks.
 - Does not call an image provider, create fake generated images, or store secrets.
 - Keeps provider execution blocked until a real connector supplies the run action and artifact receipt.

@@ -1,5 +1,6 @@
 export {
   appendTranscriptSegment,
+  buildTranscriptQualityChecks,
   buildTranscriptSnapshot,
   clearTranscriptBuffer,
   createVoiceTranscriptState,
@@ -9,7 +10,9 @@ export {
 } from "./voiceTranscriptBuffer.js";
 export {
   describeVoiceCommandResult,
+  buildAccidentalSendGuard,
   getVoiceCommandExamples,
+  getVoiceCommandRisk,
   parseVoiceCommand,
   SURFACE_ALIASES,
 } from "./voiceCommandGrammar.js";
@@ -23,4 +26,3 @@ export {
 } from "./voiceAccessibility.js";
 export { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 export { VoiceCommandPanel } from "./VoiceCommandPanel.jsx";
-

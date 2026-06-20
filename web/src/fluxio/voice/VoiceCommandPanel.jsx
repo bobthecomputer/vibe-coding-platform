@@ -1,9 +1,11 @@
 import React from "react";
 import {
   CheckCircle,
+  Info,
   Keyboard,
   Microphone,
   MicrophoneSlash,
+  ShieldCheck,
   WarningCircle,
 } from "@phosphor-icons/react";
 
@@ -18,6 +20,11 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
   const motion = getVoiceMotionAffordance(reducedMotion);
   const examples = getVoiceCommandExamples();
   const MicIcon = voice.listening ? MicrophoneSlash : Microphone;
+  const confidenceLabel =
+    typeof voice.transcript.averageConfidence === "number"
+      ? `${Math.round(voice.transcript.averageConfidence * 100)}%`
+      : "No final text";
+  const segmentList = voice.transcript.segments || [];
 
   return (
     <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
@@ -35,18 +42,68 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
         {voice.status}
       </p>
 
+      <div className="fluxio-voice-quality-grid" aria-label="Transcription quality checks">
+        <div className="fluxio-voice-quality-card">
+          <span>Confidence</span>
+          <strong>{confidenceLabel}</strong>
+        </div>
+        <div className="fluxio-voice-quality-card">
+          <span>Review</span>
+          <strong>{voice.transcript.reviewRequired ? "Needed" : "Clear"}</strong>
+        </div>
+        <div className="fluxio-voice-quality-card">
+          <span>Corrections</span>
+          <strong>{voice.transcript.correctionCount || 0}</strong>
+        </div>
+      </div>
+
       <div className="fluxio-voice-transcript" aria-label="Current voice transcript">
-        {voice.transcript.combinedText ? (
-          <p>{voice.transcript.combinedText}</p>
+        {segmentList.length > 0 ? (
+          <ol className="fluxio-voice-segment-list">
+            {segmentList.map(segment => (
+              <li
+                className={
+                  voice.transcript.lowConfidenceSegments?.some(item => item.id === segment.id) ||
+                  voice.transcript.ambiguousSegments?.some(item => item.id === segment.id)
+                    ? "needs-review"
+                    : ""
+                }
+                key={segment.id}
+              >
+                <p>{segment.text}</p>
+                <span>
+                  {typeof segment.confidence === "number"
+                    ? `${Math.round(segment.confidence * 100)}% confidence`
+                    : "No confidence score"}
+                  {segment.correctedFrom ? ` - corrected from "${segment.correctedFrom}"` : ""}
+                </span>
+                {segment.alternatives?.length ? (
+                  <small>Alternatives: {segment.alternatives.map(item => item.text).join(", ")}</small>
+                ) : null}
+              </li>
+            ))}
+          </ol>
         ) : (
           <p className="fluxio-voice-empty">
             Dictated text will appear here after browser or bridge support is available.
           </p>
         )}
+        {voice.transcript.interimText ? (
+          <p className="fluxio-voice-interim">Still listening: {voice.transcript.interimText}</p>
+        ) : null}
         {voice.transcript.warnings.map(item => (
           <span className="fluxio-voice-warning" key={item}>
             <WarningCircle aria-hidden="true" size={16} weight="duotone" />
             {item}
+          </span>
+        ))}
+      </div>
+
+      <div className="fluxio-voice-checks" aria-label="Voice quality check details">
+        {(voice.transcript.qualityChecks || []).map(check => (
+          <span className="fluxio-voice-check" data-status={check.status} key={check.id} title={check.detail}>
+            <Info aria-hidden="true" size={15} weight="duotone" />
+            {check.label}: {check.status}
           </span>
         ))}
       </div>
@@ -98,6 +155,16 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
           <button onClick={() => voice.confirmPendingCommand()} type="button">
             Confirm
           </button>
+        </div>
+      ) : null}
+
+      {voice.sendGuard?.status && voice.sendGuard.status !== "idle" ? (
+        <div className="fluxio-voice-guard" data-status={voice.sendGuard.status}>
+          <ShieldCheck aria-hidden="true" size={17} weight="duotone" />
+          <div>
+            <strong>{voice.sendGuard.label}</strong>
+            <p>{voice.sendGuard.detail}</p>
+          </div>
         </div>
       ) : null}
 
