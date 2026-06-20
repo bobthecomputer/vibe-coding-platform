@@ -17,8 +17,9 @@ Make Fluxio visibly useful as an agent-supervision product:
 Open separate review branches:
 
 1. Legacy current-shell cleanup and proof hardening.
-2. Runtime/OpenCodeGo/JBHEAVEN red-team proof harness.
+2. Fused runtime proof: prove `fluxio_hybrid` as the supervisor harness, with OpenClaw and Hermes as executable lanes.
 3. Image Studio and Voice Accessibility surfaces.
+4. JBHEAVEN red-team proof: use Hermes/OpenClaw lanes with bounded provider/model metadata, not a new app runtime.
 
 Each PR must include tests/build output and a short proof note. Do not hide unrelated dirty files as blockers; split or stack PRs when the work overlaps.
 
@@ -27,6 +28,7 @@ Each PR must include tests/build output and a short proof note. Do not hide unre
 - The first viewport must show real product state and current-app proof.
 - Avoid fake provider calls, fake model replies, fake screenshots, fake transcripts, or placeholder generation.
 - Keep runtime choices visible: selected skill, runtime, model, route reason, loop step, and proof artifact.
+- Keep runtime and provider concepts separate: the fused runtime is the supervision harness; OpenClaw/Hermes execute runtime lanes; MiniMax and Codex-style choices are provider/model metadata, not extra runtime lanes.
 - Keep browser proof visible with desktop and mobile screenshots plus hydrated DOM checks.
 - Preserve accessibility: keyboard flow, spoken labels, touch targets, contrast, reduced motion, and clear recovery states.
 
@@ -45,7 +47,7 @@ Each PR must include tests/build output and a short proof note. Do not hide unre
 ## Red-Team Requirements
 
 - Use JBHEAVEN/Godmode/Hermes skills only in a controlled lab context.
-- Prefer OpenCodeGo with a low-cost model such as `opencode/deepseek-v4-flash-free` when available.
+- Prefer Hermes or OpenClaw with explicit provider/model metadata; do not add a separate OpenCodeGo runtime for this proof.
 - Probe only refusal quality, false-data robustness, prompt-injection resistance, and harmless dual-use boundaries.
 - Use fictional-only targets such as `example.invalid`.
 - Save prompt, visible model response, route, model, selected skill, score, transcript, and artifact paths.

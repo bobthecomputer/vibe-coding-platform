@@ -578,6 +578,18 @@ class MissionControlTests(unittest.TestCase):
 
             self.assertEqual(snapshot["runtimeCompartments"]["items"], [])
             self.assertIn("emptyState", snapshot["runtimeCompartments"])
+            self.assertEqual(snapshot["harnessLab"]["fusedRuntime"]["status"], "unproven")
+            self.assertEqual(
+                snapshot["harnessLab"]["fusedRuntime"]["proofSignals"]["fusedRuntimeRole"],
+                "supervisor_not_runtime_adapter",
+            )
+            provider_routes = {
+                item["provider"]: item
+                for item in snapshot["harnessLab"]["fusedRuntime"]["modelProviderRoutes"]
+            }
+            self.assertNotIn("opencode", provider_routes)
+            self.assertEqual(provider_routes["openai"]["role"], "provider_model_route")
+            self.assertEqual(provider_routes["minimax"]["role"], "provider_model_route")
             self.assertEqual(snapshot["hermesMissionEvidence"]["items"], [])
             self.assertIn("emptyState", snapshot["hermesMissionEvidence"])
             self.assertIn("checks", snapshot["nasDeployReadiness"])
@@ -1255,7 +1267,24 @@ class MissionControlTests(unittest.TestCase):
                         "autopilot_status": "completed",
                         "autopilot_pause_reason": "",
                         "verification_failures": [],
-                        "delegated_runtime_sessions": [{"delegated_id": "delegate_one"}],
+                        "route_configs": [
+                            {
+                                "role": "executor",
+                                "provider": "openai",
+                                "model": "gpt-5.4-mini",
+                                "effort": "medium",
+                                "budget_class": "efficient",
+                            }
+                        ],
+                        "delegated_runtime_sessions": [
+                            {
+                                "delegated_id": "delegate_one",
+                                "runtime_id": "hermes",
+                                "target_phase": "execute",
+                                "target_provider": "openai",
+                                "target_model": "gpt-5.4-mini",
+                            }
+                        ],
                         "action_history": [{}, {}, {}],
                     },
                     indent=2,
@@ -1289,6 +1318,9 @@ class MissionControlTests(unittest.TestCase):
                         "heartbeat_status": "healthy",
                         "heartbeat_at": utc_now_iso(),
                         "heartbeat_interval_seconds": 10,
+                        "target_phase": "execute",
+                        "target_provider": "openai",
+                        "target_model": "gpt-5.4-mini",
                     },
                     indent=2,
                 ),
@@ -1309,6 +1341,38 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(snapshot["sessionHealth"]["healthyHeartbeatCount"], 1)
             self.assertEqual(snapshot["sessionHealth"]["delegatedHealthyCount"], 1)
             self.assertEqual(snapshot["sessionHealth"]["delegatedStaleCount"], 0)
+            self.assertTrue(
+                any(item["routeContractResolved"] for item in snapshot["recentRuns"])
+            )
+            self.assertTrue(
+                any(item["routeProvider"] == "openai" for item in snapshot["recentRuns"])
+            )
+            fused_runtime = snapshot["fusedRuntime"]
+            self.assertEqual(fused_runtime["status"], "operational")
+            self.assertEqual(fused_runtime["productionHarness"], "fluxio_hybrid")
+            self.assertEqual(
+                fused_runtime["compatibilityHarnesses"],
+                ["legacy_autonomous_engine"],
+            )
+            self.assertIn("route_contracts", fused_runtime["fusionPoints"])
+            self.assertEqual(fused_runtime["proofSignals"]["delegatedRunCount"], 1)
+            self.assertEqual(fused_runtime["proofSignals"]["routeContractRunCount"], 1)
+            self.assertEqual(
+                fused_runtime["proofSignals"]["fusedRuntimeRole"],
+                "supervisor_not_runtime_adapter",
+            )
+            lane_roles = {
+                item["runtimeId"]: item["role"]
+                for item in fused_runtime["runtimeLanes"]
+            }
+            self.assertNotIn("opencode", lane_roles)
+            self.assertEqual(lane_roles["hermes"], "executable_runtime_lane")
+            provider_routes = {
+                item["provider"]: item
+                for item in fused_runtime["modelProviderRoutes"]
+            }
+            self.assertNotIn("opencode", provider_routes)
+            self.assertGreaterEqual(provider_routes["openai"]["observedCount"], 1)
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
 
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:

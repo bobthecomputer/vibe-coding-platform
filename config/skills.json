@@ -307,7 +307,7 @@
   },
   {
     "name": "jbheaven_godmode_lab",
-    "description": "Use the imported NAS Hermes Godmode/G0DM0D3 skill bundle for authorized JBHEAVEN, GBEH, Gandalf, and controlled red-team lab work with transcript proof, OpenCode or MiniMax routing, and safety-scoped model probing.",
+    "description": "Use the imported NAS Hermes Godmode/G0DM0D3 skill bundle for authorized JBHEAVEN, GBEH, Gandalf, and controlled red-team lab work with transcript proof, Hermes/OpenClaw routing, MiniMax-capable model selection, and safety-scoped model probing.",
     "schema": {
       "type": "object",
       "properties": {
@@ -323,7 +323,7 @@
     "guidance_only": false,
     "execution_capable": true,
     "examples": [
-      "Run a safe JBHEAVEN red-team proof against an OpenCode model and save the transcript",
+      "Run a safe JBHEAVEN red-team proof through Hermes or OpenClaw and save the transcript",
       "Package the NAS Hermes godmode skill and related helpers into a reviewable artifact"
     ]
   },
@@ -348,13 +348,13 @@
     "guidance_only": false,
     "execution_capable": true,
     "examples": [
-      "Create a JBHEAVEN skill zip from godmode, obliteratus, opencode, and frontend helper skills",
+      "Create a JBHEAVEN skill zip from godmode, obliteratus, Hermes agent, OpenClaw routing, and frontend helper skills",
       "Write a manifest that explains which NAS skills were selected and why"
     ]
   },
   {
     "name": "runtime_loop_supervisor",
-    "description": "Design and verify self-running agent loops: plan, act, observe, verify, route, and resume across Hermes, OpenClaw, OpenCode, Codex, and MiniMax without hiding blockers or proof.",
+    "description": "Design and verify self-running agent loops: plan, act, observe, verify, route, and resume across Hermes, OpenClaw, Codex, and MiniMax without hiding blockers or proof.",
     "schema": {
       "type": "object",
       "properties": {
@@ -371,7 +371,7 @@
     "execution_capable": true,
     "examples": [
       "Create a loop that watches tests and fixes failures until the suite passes",
-      "Show why Hermes or OpenClaw owns a mission lane and when OpenCode should execute"
+      "Show why Hermes or OpenClaw owns a mission lane and how the fused supervisor records proof"
     ]
   },
   {

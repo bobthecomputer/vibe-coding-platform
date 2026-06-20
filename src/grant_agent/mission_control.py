@@ -5177,6 +5177,209 @@ def _harness_efficiency_recommendation(
     )
 
 
+def _route_contract_present(payload: dict) -> bool:
+    effective_contract = payload.get("effective_route_contract", {})
+    if isinstance(effective_contract, dict) and effective_contract.get("roles"):
+        return True
+    route_configs = payload.get("route_configs", [])
+    if isinstance(route_configs, list) and any(isinstance(item, dict) for item in route_configs):
+        return True
+    delegated_sessions = payload.get("delegated_runtime_sessions", [])
+    if not isinstance(delegated_sessions, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and (
+            str(item.get("target_model", "")).strip()
+            or str(item.get("target_provider", "")).strip()
+            or str(item.get("target_phase", "")).strip()
+        )
+        for item in delegated_sessions
+    )
+
+
+def _route_provider_from_payload(payload: dict) -> str:
+    effective_contract = payload.get("effective_route_contract", {})
+    if isinstance(effective_contract, dict):
+        roles = effective_contract.get("roles", [])
+        if isinstance(roles, list):
+            for item in roles:
+                if isinstance(item, dict) and str(item.get("provider", "")).strip():
+                    return str(item.get("provider", "")).strip().lower()
+    route_configs = payload.get("route_configs", [])
+    if isinstance(route_configs, list):
+        for item in route_configs:
+            if isinstance(item, dict) and str(item.get("provider", "")).strip():
+                return str(item.get("provider", "")).strip().lower()
+    delegated_sessions = payload.get("delegated_runtime_sessions", [])
+    if isinstance(delegated_sessions, list):
+        for item in delegated_sessions:
+            if isinstance(item, dict) and str(item.get("target_provider", "")).strip():
+                return str(item.get("target_provider", "")).strip().lower()
+    return ""
+
+
+def _observed_runtime_lane_counts(root: Path, recent_runs: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for run in recent_runs:
+        runtime_id = str(run.get("runtimeId", "") or "").strip()
+        if runtime_id:
+            counts[runtime_id] = counts.get(runtime_id, 0) + 1
+
+    runtime_root = root / ".agent_control" / "runtime_sessions"
+    if runtime_root.exists():
+        for path in runtime_root.glob("delegate_*.json"):
+            payload = _load_json_file(path)
+            if not isinstance(payload, dict):
+                continue
+            runtime_id = str(payload.get("runtime_id", "") or "").strip()
+            if runtime_id:
+                counts[runtime_id] = counts.get(runtime_id, 0) + 1
+    return counts
+
+
+def _observed_route_provider_counts(root: Path, recent_runs: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for run in recent_runs:
+        provider = str(run.get("routeProvider", "") or "").strip().lower()
+        if provider:
+            counts[provider] = counts.get(provider, 0) + 1
+
+    runtime_root = root / ".agent_control" / "runtime_sessions"
+    if runtime_root.exists():
+        for path in runtime_root.glob("delegate_*.json"):
+            payload = _load_json_file(path)
+            if not isinstance(payload, dict):
+                continue
+            provider = str(payload.get("target_provider", "") or "").strip().lower()
+            if provider:
+                counts[provider] = counts.get(provider, 0) + 1
+    return counts
+
+
+def _fused_runtime_status(
+    *,
+    root: Path,
+    recent_runs: list[dict],
+    harness_counts: dict[str, int],
+    route_contract_run_count: int,
+    delegated_run_count: int,
+    session_health: dict,
+) -> dict:
+    total_runs = len(recent_runs)
+    fluxio_run_count = int(harness_counts.get("fluxio_hybrid", 0) or 0)
+    stale_heartbeat_count = int(session_health.get("staleHeartbeatCount", 0) or 0)
+    active_count = int(session_health.get("activeCount", 0) or 0)
+    waiting_approval_count = int(session_health.get("waitingApprovalCount", 0) or 0)
+
+    if total_runs == 0:
+        status = "unproven"
+        summary = "No local Fluxio harness runs are recorded yet."
+    elif stale_heartbeat_count > 0:
+        status = "attention_needed"
+        summary = "Fused runtime has recent evidence, but delegated heartbeat health needs attention."
+    elif fluxio_run_count == 0:
+        status = "legacy_only"
+        summary = "Recent runs only prove the legacy compatibility harness, not Fluxio hybrid."
+    elif delegated_run_count == 0 or route_contract_run_count == 0:
+        status = "partial"
+        summary = "Fluxio hybrid has local runs, but delegated lane or route-contract proof is incomplete."
+    else:
+        status = "operational"
+        summary = "Fluxio hybrid has local proof across mission loop, route contracts, and delegated lanes."
+
+    lane_counts = _observed_runtime_lane_counts(root, recent_runs)
+    lane_labels = {
+        "openclaw": "OpenClaw",
+        "hermes": "Hermes",
+    }
+    runtime_lanes = []
+    executable_runtime_ids = {
+        runtime_id for runtime_id in lane_counts if runtime_id != "opencode"
+    }
+    for runtime_id in sorted({*lane_labels.keys(), *executable_runtime_ids}):
+        runtime_lanes.append(
+            {
+                "runtimeId": runtime_id,
+                "label": lane_labels.get(runtime_id, runtime_id),
+                "role": "executable_runtime_lane",
+                "observedCount": lane_counts.get(runtime_id, 0),
+                "active": lane_counts.get(runtime_id, 0) > 0,
+            }
+        )
+    provider_counts = _observed_route_provider_counts(root, recent_runs)
+    model_provider_routes = [
+        {
+            "provider": "openai",
+            "label": "OpenAI",
+            "role": "provider_model_route",
+            "suggestedModel": "",
+            "observedCount": provider_counts.get("openai", 0),
+            "active": provider_counts.get("openai", 0) > 0,
+        },
+        {
+            "provider": "minimax",
+            "label": "MiniMax",
+            "role": "provider_model_route",
+            "suggestedModel": "",
+            "observedCount": provider_counts.get("minimax", 0),
+            "active": provider_counts.get("minimax", 0) > 0,
+        },
+    ]
+
+    gaps: list[str] = []
+    if total_runs == 0:
+        gaps.append("Run one Fluxio hybrid mission to create local fused-runtime evidence.")
+    if fluxio_run_count == 0 and total_runs > 0:
+        gaps.append("Recent runs do not include the production fluxio_hybrid harness.")
+    if delegated_run_count == 0:
+        gaps.append("No recent delegated runtime lane is recorded.")
+    if route_contract_run_count == 0:
+        gaps.append("No recent run proves role/provider/model route-contract resolution.")
+    if stale_heartbeat_count > 0:
+        gaps.append(f"{stale_heartbeat_count} delegated runtime heartbeat(s) are stale.")
+
+    return {
+        "schemaVersion": "fused-runtime-status.v1",
+        "status": status,
+        "summary": summary,
+        "productionHarness": "fluxio_hybrid",
+        "compatibilityHarnesses": ["legacy_autonomous_engine"],
+        "supervisor": {
+            "id": "delegated_runtime_supervisor",
+            "activeSessionCount": active_count,
+            "waitingApprovalCount": waiting_approval_count,
+            "healthyHeartbeatCount": int(session_health.get("healthyHeartbeatCount", 0) or 0),
+            "staleHeartbeatCount": stale_heartbeat_count,
+            "latestHeartbeatAgeSeconds": session_health.get("latestHeartbeatAgeSeconds"),
+        },
+        "fusionPoints": [
+            "mission_control_loop",
+            "fluxio_hybrid_harness",
+            "delegated_runtime_supervisor",
+            "route_contracts",
+            "approval_gate",
+            "verification_results",
+            "continuity_checkpoints",
+        ],
+        "runtimeLanes": runtime_lanes,
+        "modelProviderRoutes": model_provider_routes,
+        "proofSignals": {
+            "recentRunCount": total_runs,
+            "fluxioHybridRunCount": fluxio_run_count,
+            "legacyCompatibilityRunCount": int(
+                harness_counts.get("legacy_autonomous_engine", 0) or 0
+            ),
+            "delegatedRunCount": delegated_run_count,
+            "routeContractRunCount": route_contract_run_count,
+            "supervisorSessionCount": int(session_health.get("totalSessions", 0) or 0),
+            "fusedRuntimeRole": "supervisor_not_runtime_adapter",
+            "openCodeGoRole": "route_lane_only",
+        },
+        "gaps": gaps,
+    }
+
+
 def build_harness_lab_snapshot(root: Path) -> dict:
     runs_root = root / ".agent_runs"
     sessions = sorted(
@@ -5196,6 +5399,7 @@ def build_harness_lab_snapshot(root: Path) -> dict:
     resumed_completed_count = 0
     approval_resolved_run_count = 0
     approval_rejected_run_count = 0
+    route_contract_run_count = 0
     verification_failure_total = 0
     action_count_total = 0
     for session in sessions[:HARNESS_RECENT_RUN_LIMIT]:
@@ -5242,6 +5446,10 @@ def build_harness_lab_snapshot(root: Path) -> dict:
                 approval_resolved_run_count += 1
             if "rejected" in approval_decisions:
                 approval_rejected_run_count += 1
+        has_route_contract = _route_contract_present(payload)
+        route_provider = _route_provider_from_payload(payload)
+        if has_route_contract:
+            route_contract_run_count += 1
         if pause_reason == "runtime_budget":
             runtime_budget_pause_count += 1
         if pause_reason == "delegated_runtime_running":
@@ -5261,6 +5469,8 @@ def build_harness_lab_snapshot(root: Path) -> dict:
                 "pauseReason": pause_reason if pause_reason != "none" else "",
                 "verificationFailures": verification_failures,
                 "delegatedSessionCount": delegated_session_count,
+                "routeContractResolved": has_route_contract,
+                "routeProvider": route_provider,
                 "resumedFromSessionId": parent_session_id,
                 "actionCount": action_count,
             }
@@ -5285,9 +5495,18 @@ def build_harness_lab_snapshot(root: Path) -> dict:
         verification_pause_rate=_percent(verification_pauses, total_runs),
         stale_heartbeat_count=int(session_health["staleHeartbeatCount"]),
     )
+    fused_runtime = _fused_runtime_status(
+        root=root,
+        recent_runs=recent_runs,
+        harness_counts=harness_counts,
+        route_contract_run_count=route_contract_run_count,
+        delegated_run_count=delegated_run_count,
+        session_health=session_health,
+    )
     return {
         "productionHarness": "fluxio_hybrid",
         "shadowCandidates": ["legacy_autonomous_engine"],
+        "fusedRuntime": fused_runtime,
         "recentRuns": recent_runs,
         "harnessCounts": harness_counts,
         "statusCounts": status_counts,
