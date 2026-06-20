@@ -36,7 +36,7 @@ import {
 import "./image-studio.css";
 
 const EMPTY_SESSION = {
-  routeId: "local-request-draft",
+  routeId: "openai-gpt-image-2",
   maskMode: "replace",
   referenceAssets: [],
 };
@@ -49,6 +49,10 @@ function loadStudioSession() {
     return {
       ...EMPTY_SESSION,
       ...(parsed && typeof parsed === "object" ? parsed : {}),
+      routeId:
+        new URLSearchParams(window.location.search).get("imageRoute") ||
+        (parsed && typeof parsed === "object" ? parsed.routeId : "") ||
+        EMPTY_SESSION.routeId,
       referenceAssets: Array.isArray(parsed?.referenceAssets) ? parsed.referenceAssets : [],
     };
   } catch {
@@ -228,6 +232,7 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
     () => buildImageStudioProofReview(project, draft, { referenceAssets: session.referenceAssets, route }),
     [draft, project, route, session.referenceAssets],
   );
+  const routeAvailability = proofReview.imageGenerationRouteStatus;
 
   useEffect(() => {
     saveImageProject(project);
@@ -450,7 +455,19 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
                 <dt>Capabilities</dt>
                 <dd>{route.supports.join(", ")}</dd>
               </div>
+              <div>
+                <dt>Availability</dt>
+                <dd>{routeAvailability.localStatus.replace(/_/g, " ")}</dd>
+              </div>
             </dl>
+            <div className="image-studio-route-status" data-status={routeAvailability.localStatus}>
+              <strong>{routeAvailability.readyForRealRun ? "Provider run available" : "Draft handoff only"}</strong>
+              <p>{routeAvailability.claim}</p>
+              <p>{routeAvailability.proofLimit}</p>
+              {routeAvailability.officialSources.length > 0 ? (
+                <small>{routeAvailability.officialSources.length} official source{routeAvailability.officialSources.length === 1 ? "" : "s"} recorded for review.</small>
+              ) : null}
+            </div>
           </section>
         </aside>
 
@@ -618,6 +635,10 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
           </button>
         </div>
         <ProofReviewSummary review={proofReview} />
+        <div className="image-studio-route-proof-note">
+          <strong>{proofReview.imageGenerationRouteStatus.model}</strong>
+          <span>{proofReview.imageGenerationRouteStatus.proofLimit}</span>
+        </div>
         <div className="image-studio-proof-grid">
           {proofReview.checks.map(check => (
             <div className="image-studio-proof-item" key={check.id}>

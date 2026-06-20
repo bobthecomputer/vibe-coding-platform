@@ -223,6 +223,32 @@
   font-size: 12px;
 }
 
+.image-studio-route-status,
+.image-studio-route-proof-note {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 8px;
+  background: rgba(238, 242, 236, 0.04);
+  padding: 9px;
+}
+
+.image-studio-route-status strong,
+.image-studio-route-proof-note strong {
+  color: var(--control-text, #eef2ec);
+  font-size: 13px;
+}
+
+.image-studio-route-status p,
+.image-studio-route-status small,
+.image-studio-route-proof-note span {
+  margin: 0;
+  color: var(--control-muted, #aab0a8);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .image-studio-tool-tabs {
   display: flex;
   flex-wrap: wrap;

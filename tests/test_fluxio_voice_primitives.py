@@ -192,6 +192,8 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             import {
               buildImageStudioProofReview,
               buildImageStudioRequestDraft,
+              getImageGenerationRouteStatus,
+              getProviderRoute,
             } from './web/src/fluxio/image-studio/imageStudioModel.js';
 
             const project = {
@@ -211,6 +213,10 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               referenceAssets: draft.references,
               routeId: 'local-request-draft',
             });
+            const openAiRouteStatus = getImageGenerationRouteStatus(
+              getProviderRoute('openai-gpt-image-2'),
+              { openAIReady: false },
+            );
             console.log(JSON.stringify({
               draftHasReview: Boolean(draft.proofReview),
               annotationTotal: review.annotations.total,
@@ -219,6 +225,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               readyForProviderHandoff: review.readyForProviderHandoff,
               claim: review.noGenerationClaim,
               artifactIds: draft.proofArtifacts.map(item => item.id),
+              openAiRouteStatus,
             }));
             """
         )
@@ -230,6 +237,10 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertTrue(payload["readyForProviderHandoff"])
         self.assertIn("not a provider completion receipt", payload["claim"])
         self.assertIn("annotation-review", payload["artifactIds"])
+        self.assertEqual(payload["openAiRouteStatus"]["model"], "gpt-image-2")
+        self.assertEqual(payload["openAiRouteStatus"]["localStatus"], "connector_required")
+        self.assertFalse(payload["openAiRouteStatus"]["runActionAvailable"])
+        self.assertIn("api/docs/models/gpt-image-2", " ".join(payload["openAiRouteStatus"]["officialSources"]))
 
 
 if __name__ == "__main__":

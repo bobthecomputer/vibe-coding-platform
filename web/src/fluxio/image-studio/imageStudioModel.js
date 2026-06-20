@@ -11,13 +11,23 @@ export const IMAGE_STUDIO_STORAGE_KEY = "fluxio.image_studio.session.v1";
 export const IMAGE_STUDIO_PROVIDER_ROUTES = [
   {
     id: "openai-gpt-image-2",
-    label: "OpenAI image route",
-    providerId: "codex_subscription_gpt_image2",
+    label: "OpenAI GPT Image 2",
+    providerId: "openai",
     model: "gpt-image-2",
     status: "needs_connector",
-    authMode: "external",
+    authMode: "openai_api_or_codex",
     supports: ["generate", "edit", "mask"],
     proofArtifacts: ["request manifest", "provider receipt", "output manifest", "artifact hash"],
+    availability: {
+      claim: "GPT Image 2 is available through the OpenAI API, and OpenAI announced availability in Codex.",
+      localStatus: "connector_required",
+      runActionAvailable: false,
+      officialSources: [
+        "https://developers.openai.com/api/docs/guides/image-generation",
+        "https://developers.openai.com/api/docs/models/gpt-image-2",
+        "https://community.openai.com/t/introducing-gpt-image-2-available-today-in-the-api-and-codex/1379479",
+      ],
+    },
   },
   {
     id: "codex-imagegen-skill",
@@ -28,6 +38,12 @@ export const IMAGE_STUDIO_PROVIDER_ROUTES = [
     authMode: "codex_session",
     supports: ["inspect", "reuse-artifact"],
     proofArtifacts: ["artifact path", "manifest hash", "visual review receipt"],
+    availability: {
+      claim: "Codex can inspect or reuse existing image artifacts in this local session.",
+      localStatus: "existing_artifacts_only",
+      runActionAvailable: false,
+      officialSources: [],
+    },
   },
   {
     id: "local-request-draft",
@@ -38,6 +54,12 @@ export const IMAGE_STUDIO_PROVIDER_ROUTES = [
     authMode: "none",
     supports: ["generate", "edit", "mask", "handoff"],
     proofArtifacts: ["request payload", "mask geometry", "reference inventory"],
+    availability: {
+      claim: "Local draft mode prepares a provider request payload only.",
+      localStatus: "draft_only",
+      runActionAvailable: false,
+      officialSources: [],
+    },
   },
 ];
 
@@ -52,6 +74,34 @@ export function getProviderRoute(routeId) {
     IMAGE_STUDIO_PROVIDER_ROUTES.find(route => route.id === routeId) ||
     IMAGE_STUDIO_PROVIDER_ROUTES[0]
   );
+}
+
+export function getImageGenerationRouteStatus(route, options = {}) {
+  const selected = route || getProviderRoute(options.routeId);
+  const availability = selected.availability || {};
+  const hasAuth = Boolean(options.openAIReady || options.providerAuthReady);
+  const runActionAvailable = Boolean(availability.runActionAvailable && hasAuth);
+  const needsConnector =
+    selected.status === "needs_connector" ||
+    availability.localStatus === "connector_required";
+  return {
+    routeId: selected.id,
+    providerId: selected.providerId,
+    model: selected.model,
+    localStatus: availability.localStatus || selected.status,
+    runActionAvailable,
+    readyForRealRun: runActionAvailable,
+    handoffReady: selected.status !== "blocked",
+    needsConnector,
+    needsAuth: selected.authMode !== "none" && !hasAuth,
+    claim: availability.claim || "",
+    officialSources: Array.isArray(availability.officialSources)
+      ? availability.officialSources
+      : [],
+    proofLimit: runActionAvailable
+      ? "A real provider run must still return a provider receipt, output manifest, and artifact hash."
+      : "This local surface can prepare and validate a request draft, but it has not completed a provider image run.",
+  };
 }
 
 export function formatBytes(value) {
@@ -158,6 +208,7 @@ export function countImageAnnotations(annotationReadiness = {}) {
 export function buildImageStudioProofReview(project, draft = null, options = {}) {
   const normalized = normalizeProject(project);
   const route = options.route || getProviderRoute(options.routeId || draft?.route?.id || normalized.provider?.routeId);
+  const routeStatus = getImageGenerationRouteStatus(route, options);
   const references = Array.isArray(options.referenceAssets)
     ? options.referenceAssets
     : Array.isArray(draft?.references)
@@ -213,6 +264,7 @@ export function buildImageStudioProofReview(project, draft = null, options = {})
       label: route.label,
       status: route.status,
       model: route.model,
+      availability: routeStatus,
     },
     preview: {
       canvas: {
@@ -238,6 +290,7 @@ export function buildImageStudioProofReview(project, draft = null, options = {})
     },
     checks,
     readyForProviderHandoff: validation.ok && checks.every(check => check.status !== "blocked"),
+    imageGenerationRouteStatus: routeStatus,
     noGenerationClaim:
       "This proof review describes local preview, annotation, and request readiness only. It is not a provider completion receipt.",
   };
@@ -274,6 +327,7 @@ export function buildImageStudioRequestDraft(project, options = {}) {
       status: route.status,
       authMode: route.authMode,
       supports: route.supports,
+      availability: getImageGenerationRouteStatus(route, options),
     },
     operation,
     references,
