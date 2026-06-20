@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import tempfile
@@ -51,6 +52,24 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
         self.assertTrue(
             payload["skillVisibility"]["requiredSkills"]["runtime_loop_supervisor"]
         )
+        self.assertEqual(
+            payload["routeScorecard"]["schemaVersion"],
+            "benchmark-board-route-scorecard/v1",
+        )
+        candidates = {
+            item["runtimeLane"]["laneId"]: item
+            for item in payload["routeScorecard"]["candidates"]
+        }
+        self.assertEqual(set(candidates), {"openclaw", "hermes"})
+        self.assertEqual(candidates["openclaw"]["providerRoute"]["provider"], "openai")
+        self.assertEqual(candidates["hermes"]["providerRoute"]["provider"], "minimax")
+        for runtime_id, candidate in candidates.items():
+            self.assertNotEqual(
+                candidate["providerRoute"]["provider"],
+                candidate["runtimeLane"]["laneId"],
+                runtime_id,
+            )
+            self.assertFalse(candidate["runtimeLane"]["runtimeAdapterAdded"])
 
     def test_writes_artifact_index_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -67,6 +86,17 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
             )
             self.assertIn("Hermes/OpenClaw Runtime Lane Proof", markdown)
             self.assertIn("Runtime adapter added: `False`", markdown)
+
+            scorecard = json.loads(
+                pathlib.Path(payload["artifactPaths"]["route_scorecard"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                scorecard["schemaVersion"],
+                "benchmark-board-route-scorecard/v1",
+            )
+            self.assertEqual(len(scorecard["candidates"]), 2)
 
 
 if __name__ == "__main__":

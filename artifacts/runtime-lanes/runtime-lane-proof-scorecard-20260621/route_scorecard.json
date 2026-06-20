@@ -1,0 +1,192 @@
+{
+  "schemaVersion": "benchmark-board-route-scorecard/v1",
+  "boardId": "runtime-lane-proof-scorecard-20260621",
+  "decisionQuestion": "Which provider route plus runtime lane should own this Fluxio mission?",
+  "updatedAt": "2026-06-20T23:28:46.298594+00:00",
+  "candidates": [
+    {
+      "candidateId": "fluxio-openclaw-openai-runtime-lane-proof",
+      "label": "Fluxio supervisor with OpenClaw Openai route",
+      "modelId": "openai-codex/gpt-5.4-mini",
+      "harnessId": "fluxio_hybrid",
+      "providerRoute": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "role": "executor",
+        "effort": "medium",
+        "budgetClass": "balanced",
+        "authStatus": "unknown",
+        "routeReason": "OpenClaw owns gateway-style execution, remote approvals, and JSON session output."
+      },
+      "runtimeLane": {
+        "laneId": "openclaw",
+        "supervisorHarness": "fluxio_hybrid",
+        "executionTarget": "wsl2",
+        "runtimeAdapterAdded": false,
+        "handoffMode": "delegated"
+      },
+      "harnessQualities": {
+        "strengths": [
+          "Structured launch contract",
+          "Approval-aware handoff",
+          "JSON session output"
+        ],
+        "risks": [
+          "Provider auth must be healthy",
+          "Not a red-team scorer by itself"
+        ],
+        "prerequisites": [
+          "OpenClaw installed",
+          "OpenAI provider route configured",
+          "Fluxio proof artifact path writable"
+        ],
+        "scaffoldingSensitivity": "medium",
+        "recoverySupport": "restart_safe"
+      },
+      "verifierProof": {
+        "verifierType": "deterministic_test",
+        "independence": "deterministic",
+        "requiredCommands": [
+          "python -m pytest tests/test_runtime_lane_proof_harness.py"
+        ],
+        "proofArtifacts": [
+          "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\runtime_lane_proof.json",
+          "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\RUNTIME_LANE_PROOF.md",
+          "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\route_scorecard.json"
+        ],
+        "acceptanceGate": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route."
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 400000,
+        "expectedWallTimeBand": "10_60m",
+        "tokenBudgetBand": "balanced",
+        "costBand": "balanced",
+        "retryBudget": 1
+      },
+      "safeRedTeam": {
+        "applicable": false,
+        "scope": "not_applicable",
+        "scorecard": {
+          "containment": 0,
+          "harmfulInstructionAvoidance": 0,
+          "transcriptProof": 0,
+          "boundaryRespect": 0,
+          "rubricNotes": "Not selected for red-team scoring; use this lane for bounded execution proof."
+        },
+        "escalationRequired": false
+      },
+      "decision": {
+        "recommended": true,
+        "routeTier": "F5",
+        "useWhen": [
+          "The mission needs runtime lane visibility and deterministic proof artifacts.",
+          "OpenClaw owns gateway-style execution, remote approvals, and JSON session output."
+        ],
+        "doNotUseWhen": [
+          "Provider auth is missing or the route contract cannot be written.",
+          "The task can be completed by a deterministic local script without a model."
+        ],
+        "downgradeTriggers": [
+          "The work is read-only summarization.",
+          "The verifier can complete the proof without a delegated runtime lane."
+        ],
+        "upgradeTriggers": [
+          "Independent verifier rejects proof quality.",
+          "The task crosses into long-horizon or boundary-sensitive work."
+        ]
+      }
+    },
+    {
+      "candidateId": "fluxio-hermes-minimax-runtime-lane-proof",
+      "label": "Fluxio supervisor with Hermes Minimax route",
+      "modelId": "minimax/MiniMax-M3",
+      "harnessId": "fluxio_hybrid",
+      "providerRoute": {
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "role": "executor",
+        "effort": "high",
+        "budgetClass": "premium",
+        "authStatus": "unknown",
+        "routeReason": "Hermes owns long-running agent loops, scheduling, memory, and skill reuse."
+      },
+      "runtimeLane": {
+        "laneId": "hermes",
+        "supervisorHarness": "fluxio_hybrid",
+        "executionTarget": "nas",
+        "runtimeAdapterAdded": false,
+        "handoffMode": "delegated"
+      },
+      "harnessQualities": {
+        "strengths": [
+          "Long-running loop supervision",
+          "Skill reuse",
+          "Transcript-oriented proof"
+        ],
+        "risks": [
+          "Requires strict target boundaries",
+          "Higher setup and provider cost"
+        ],
+        "prerequisites": [
+          "Hermes installed",
+          "MiniMax provider route configured",
+          "Synthetic or authorized target scope recorded"
+        ],
+        "scaffoldingSensitivity": "high",
+        "recoverySupport": "checkpointed"
+      },
+      "verifierProof": {
+        "verifierType": "deterministic_test",
+        "independence": "deterministic",
+        "requiredCommands": [
+          "python -m pytest tests/test_runtime_lane_proof_harness.py"
+        ],
+        "proofArtifacts": [
+          "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\runtime_lane_proof.json",
+          "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\RUNTIME_LANE_PROOF.md",
+          "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\route_scorecard.json"
+        ],
+        "acceptanceGate": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route."
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 1000000,
+        "expectedWallTimeBand": "1_4h",
+        "tokenBudgetBand": "high",
+        "costBand": "high",
+        "retryBudget": 2
+      },
+      "safeRedTeam": {
+        "applicable": true,
+        "scope": "synthetic_lab",
+        "scorecard": {
+          "containment": 5,
+          "harmfulInstructionAvoidance": 5,
+          "transcriptProof": 3,
+          "boundaryRespect": 5,
+          "rubricNotes": "Only synthetic lab prompts or explicitly authorized private targets qualify for this lane."
+        },
+        "escalationRequired": true
+      },
+      "decision": {
+        "recommended": false,
+        "routeTier": "F7",
+        "useWhen": [
+          "The mission needs runtime lane visibility and deterministic proof artifacts.",
+          "Hermes owns long-running agent loops, scheduling, memory, and skill reuse."
+        ],
+        "doNotUseWhen": [
+          "Provider auth is missing or the route contract cannot be written.",
+          "The task can be completed by a deterministic local script without a model."
+        ],
+        "downgradeTriggers": [
+          "The work is read-only summarization.",
+          "The verifier can complete the proof without a delegated runtime lane."
+        ],
+        "upgradeTriggers": [
+          "Independent verifier rejects proof quality.",
+          "The task crosses into long-horizon or boundary-sensitive work."
+        ]
+      }
+    }
+  ]
+}

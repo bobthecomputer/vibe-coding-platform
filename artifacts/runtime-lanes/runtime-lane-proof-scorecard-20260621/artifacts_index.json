@@ -1,0 +1,10 @@
+{
+  "runId": "runtime-lane-proof-scorecard-20260621",
+  "root": "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621",
+  "paths": {
+    "proof": "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\runtime_lane_proof.json",
+    "markdown": "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\route_scorecard.json",
+    "artifact_index": "artifacts\\runtime-lanes\\runtime-lane-proof-scorecard-20260621\\artifacts_index.json"
+  }
+}
