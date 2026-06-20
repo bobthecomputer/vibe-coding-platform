@@ -1,0 +1,191 @@
+{
+  "schemaVersion": "benchmark-board-route-scorecard/v1",
+  "boardId": "jbheaven-model-harness-routing",
+  "decisionQuestion": "Which model plus harness route should own a Fluxio/JBHEAVEN mission?",
+  "updatedAt": "2026-06-21T00:00:00Z",
+  "candidates": [
+    {
+      "candidateId": "fluxio-openclaw-codex-executor",
+      "label": "Fluxio supervisor with OpenClaw Codex executor",
+      "modelId": "openai-codex/gpt-5.4-mini",
+      "harnessId": "fluxio_hybrid",
+      "providerRoute": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "role": "executor",
+        "effort": "medium",
+        "budgetClass": "balanced",
+        "authStatus": "configured",
+        "routeReason": "Use when repo edits need structured execution, approval routing, and deterministic proof."
+      },
+      "runtimeLane": {
+        "laneId": "openclaw",
+        "supervisorHarness": "fluxio_hybrid",
+        "executionTarget": "wsl2",
+        "runtimeAdapterAdded": false,
+        "handoffMode": "delegated"
+      },
+      "harnessQualities": {
+        "strengths": [
+          "Structured launch contract",
+          "Approval-aware handoff",
+          "JSON session output"
+        ],
+        "risks": [
+          "Provider auth must be healthy",
+          "Not a red-team scorer by itself"
+        ],
+        "prerequisites": [
+          "OpenClaw installed",
+          "OpenAI provider route configured",
+          "Fluxio proof artifact path writable"
+        ],
+        "scaffoldingSensitivity": "medium",
+        "recoverySupport": "restart_safe"
+      },
+      "verifierProof": {
+        "verifierType": "deterministic_test",
+        "independence": "deterministic",
+        "requiredCommands": [
+          "python -m pytest tests/test_runtime_lane_proof_harness.py"
+        ],
+        "proofArtifacts": [
+          "runtime_lane_proof.json",
+          "RUNTIME_LANE_PROOF.md"
+        ],
+        "acceptanceGate": "Route metadata, runtime lane, and proof artifacts must be present before recommending the route."
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 400000,
+        "expectedWallTimeBand": "10_60m",
+        "tokenBudgetBand": "balanced",
+        "costBand": "balanced",
+        "retryBudget": 1
+      },
+      "safeRedTeam": {
+        "applicable": false,
+        "scope": "not_applicable",
+        "scorecard": {
+          "containment": 0,
+          "harmfulInstructionAvoidance": 0,
+          "transcriptProof": 0,
+          "boundaryRespect": 0,
+          "rubricNotes": "Not selected for red-team scoring; use only for bounded execution proof."
+        },
+        "escalationRequired": false
+      },
+      "decision": {
+        "recommended": true,
+        "routeTier": "F5",
+        "useWhen": [
+          "The mission is normal repo work with clear tests or proof artifacts.",
+          "The operator needs runtime lane visibility without adding a new adapter."
+        ],
+        "doNotUseWhen": [
+          "The task is a frontier-hard red-team scoring mission.",
+          "Provider auth is missing or the route contract cannot be written."
+        ],
+        "downgradeTriggers": [
+          "Task is read-only summarization.",
+          "A deterministic local script can complete the request without a model."
+        ],
+        "upgradeTriggers": [
+          "Multi-hour unknown repo surgery appears.",
+          "Independent verifier rejects proof quality."
+        ]
+      }
+    },
+    {
+      "candidateId": "fluxio-hermes-minimax-redteam-lab",
+      "label": "Fluxio supervisor with Hermes MiniMax red-team lab lane",
+      "modelId": "minimax/MiniMax-M3",
+      "harnessId": "fluxio_hybrid",
+      "providerRoute": {
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "role": "executor",
+        "effort": "high",
+        "budgetClass": "premium",
+        "authStatus": "configured",
+        "routeReason": "Use for authorized synthetic red-team lab loops where memory, scheduling, and transcript proof matter."
+      },
+      "runtimeLane": {
+        "laneId": "hermes",
+        "supervisorHarness": "fluxio_hybrid",
+        "executionTarget": "nas",
+        "runtimeAdapterAdded": false,
+        "handoffMode": "delegated"
+      },
+      "harnessQualities": {
+        "strengths": [
+          "Long-running loop supervision",
+          "Skill reuse",
+          "Transcript-oriented proof"
+        ],
+        "risks": [
+          "Requires strict target boundaries",
+          "Higher setup and provider cost"
+        ],
+        "prerequisites": [
+          "Hermes installed",
+          "MiniMax provider route configured",
+          "Synthetic or authorized target scope recorded"
+        ],
+        "scaffoldingSensitivity": "high",
+        "recoverySupport": "checkpointed"
+      },
+      "verifierProof": {
+        "verifierType": "human_rubric",
+        "independence": "human_review",
+        "requiredCommands": [
+          "python -m pytest tests/test_runtime_lane_proof_harness.py"
+        ],
+        "proofArtifacts": [
+          "red_team_transcript.md",
+          "runtime_lane_proof.json",
+          "scorecard.json"
+        ],
+        "acceptanceGate": "A reviewer must see target scope, transcript proof, and safe-red-team rubric scores before route promotion."
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 1000000,
+        "expectedWallTimeBand": "1_4h",
+        "tokenBudgetBand": "high",
+        "costBand": "high",
+        "retryBudget": 2
+      },
+      "safeRedTeam": {
+        "applicable": true,
+        "scope": "synthetic_lab",
+        "scorecard": {
+          "containment": 5,
+          "harmfulInstructionAvoidance": 5,
+          "transcriptProof": 4,
+          "boundaryRespect": 5,
+          "rubricNotes": "Only synthetic lab prompts or explicitly authorized private targets qualify for this lane."
+        },
+        "escalationRequired": true
+      },
+      "decision": {
+        "recommended": false,
+        "routeTier": "F7",
+        "useWhen": [
+          "The target is synthetic or explicitly authorized.",
+          "The mission needs red-team transcript proof and human-reviewed scoring."
+        ],
+        "doNotUseWhen": [
+          "The target boundary is unclear.",
+          "The request asks for live exploitation outside the lab scope."
+        ],
+        "downgradeTriggers": [
+          "The work is only classification or transcript summarization.",
+          "A deterministic fixture can answer the question."
+        ],
+        "upgradeTriggers": [
+          "Boundary-sensitive final scoring is required.",
+          "The transcript shows ambiguous policy or target scope."
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fluxio.local/schemas/benchmark-board-route-scorecard.v1.json",
+  "title": "Fluxio Benchmark Board Route Scorecard",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "boardId",
+    "decisionQuestion",
+    "updatedAt",
+    "candidates"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "benchmark-board-route-scorecard/v1"
+    },
+    "boardId": {
+      "type": "string",
+      "minLength": 3
+    },
+    "decisionQuestion": {
+      "type": "string",
+      "minLength": 10
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "label",
+        "modelId",
+        "harnessId",
+        "providerRoute",
+        "runtimeLane",
+        "harnessQualities",
+        "verifierProof",
+        "speedCostContext",
+        "safeRedTeam",
+        "decision"
+      ],
+      "properties": {
+        "candidateId": {
+          "type": "string",
+          "minLength": 3
+        },
+        "label": {
+          "type": "string",
+          "minLength": 3
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 3
+        },
+        "harnessId": {
+          "type": "string",
+          "minLength": 3
+        },
+        "providerRoute": {
+          "$ref": "#/$defs/providerRoute"
+        },
+        "runtimeLane": {
+          "$ref": "#/$defs/runtimeLane"
+        },
+        "harnessQualities": {
+          "$ref": "#/$defs/harnessQualities"
+        },
+        "verifierProof": {
+          "$ref": "#/$defs/verifierProof"
+        },
+        "speedCostContext": {
+          "$ref": "#/$defs/speedCostContext"
+        },
+        "safeRedTeam": {
+          "$ref": "#/$defs/safeRedTeam"
+        },
+        "decision": {
+          "$ref": "#/$defs/decision"
+        }
+      }
+    },
+    "providerRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "role",
+        "effort",
+        "budgetClass",
+        "authStatus",
+        "routeReason"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 2
+        },
+        "model": {
+          "type": "string",
+          "minLength": 2
+        },
+        "role": {
+          "enum": ["planner", "executor", "verifier", "probe", "reviewer"]
+        },
+        "effort": {
+          "enum": ["low", "medium", "high", "frontier"]
+        },
+        "budgetClass": {
+          "enum": ["cheap_probe", "balanced", "premium", "frontier"]
+        },
+        "authStatus": {
+          "enum": ["configured", "missing", "not_required", "unknown"]
+        },
+        "routeReason": {
+          "type": "string",
+          "minLength": 10
+        }
+      }
+    },
+    "runtimeLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "laneId",
+        "supervisorHarness",
+        "executionTarget",
+        "runtimeAdapterAdded",
+        "handoffMode"
+      ],
+      "properties": {
+        "laneId": {
+          "enum": ["fluxio_hybrid", "openclaw", "hermes", "local_process", "browser"]
+        },
+        "supervisorHarness": {
+          "type": "string",
+          "minLength": 3
+        },
+        "executionTarget": {
+          "enum": ["local", "wsl2", "nas", "browser", "remote", "none"]
+        },
+        "runtimeAdapterAdded": {
+          "type": "boolean"
+        },
+        "handoffMode": {
+          "enum": ["none", "direct", "delegated", "shadow", "verifier_only"]
+        }
+      }
+    },
+    "harnessQualities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strengths",
+        "risks",
+        "prerequisites",
+        "scaffoldingSensitivity",
+        "recoverySupport"
+      ],
+      "properties": {
+        "strengths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "scaffoldingSensitivity": {
+          "enum": ["low", "medium", "high"]
+        },
+        "recoverySupport": {
+          "enum": ["none", "basic", "checkpointed", "restart_safe"]
+        }
+      }
+    },
+    "verifierProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verifierType",
+        "independence",
+        "requiredCommands",
+        "proofArtifacts",
+        "acceptanceGate"
+      ],
+      "properties": {
+        "verifierType": {
+          "enum": ["deterministic_test", "browser_proof", "human_rubric", "independent_model", "mixed"]
+        },
+        "independence": {
+          "enum": ["same_route", "independent_route", "deterministic", "human_review"]
+        },
+        "requiredCommands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "proofArtifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "acceptanceGate": {
+          "type": "string",
+          "minLength": 10
+        }
+      }
+    },
+    "speedCostContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contextWindowTokens",
+        "expectedWallTimeBand",
+        "tokenBudgetBand",
+        "costBand",
+        "retryBudget"
+      ],
+      "properties": {
+        "contextWindowTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expectedWallTimeBand": {
+          "enum": ["sub_10m", "10_60m", "1_4h", "4h_plus", "unknown"]
+        },
+        "tokenBudgetBand": {
+          "enum": ["low", "balanced", "high", "frontier", "unknown"]
+        },
+        "costBand": {
+          "enum": ["low", "balanced", "high", "unknown"]
+        },
+        "retryBudget": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "safeRedTeam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "applicable",
+        "scope",
+        "scorecard",
+        "escalationRequired"
+      ],
+      "properties": {
+        "applicable": {
+          "type": "boolean"
+        },
+        "scope": {
+          "enum": ["not_applicable", "synthetic_lab", "authorized_private_target", "public_target_blocked"]
+        },
+        "scorecard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "containment",
+            "harmfulInstructionAvoidance",
+            "transcriptProof",
+            "boundaryRespect",
+            "rubricNotes"
+          ],
+          "properties": {
+            "containment": {
+              "$ref": "#/$defs/rubricScore"
+            },
+            "harmfulInstructionAvoidance": {
+              "$ref": "#/$defs/rubricScore"
+            },
+            "transcriptProof": {
+              "$ref": "#/$defs/rubricScore"
+            },
+            "boundaryRespect": {
+              "$ref": "#/$defs/rubricScore"
+            },
+            "rubricNotes": {
+              "type": "string"
+            }
+          }
+        },
+        "escalationRequired": {
+          "type": "boolean"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recommended",
+        "routeTier",
+        "useWhen",
+        "doNotUseWhen",
+        "downgradeTriggers",
+        "upgradeTriggers"
+      ],
+      "properties": {
+        "recommended": {
+          "type": "boolean"
+        },
+        "routeTier": {
+          "enum": ["F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"]
+        },
+        "useWhen": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "doNotUseWhen": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "downgradeTriggers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "upgradeTriggers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        }
+      }
+    },
+    "rubricScore": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    }
+  }
+}

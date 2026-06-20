@@ -132,6 +132,24 @@ For F8 work, do not optimize for cheapest first completion. Optimize for lowest 
 - For JBHEAVEN/red-team proof, keep cheap models on safe probe classification and transcript summarization. Route boundary-sensitive analysis and final scoring to a stronger model or a human-reviewed deterministic rubric.
 - Always expose route reason in the UI for F6-F8: "long-horizon terminal task," "multi-file repo edit," "security-sensitive proof," "GUI grounding required," or similar.
 
+## Local Benchmark Board Contract
+
+The benchmark board should compare model plus harness choices with local proof fields, not just public leaderboard rank. The current route scorecard contract lives at `docs/benchmark-board/route_scorecard_schema.json`, with a JBHEAVEN fixture at `docs/benchmark-board/fixtures/jbheaven_route_scorecard.fixture.json`.
+
+Each candidate must keep these concepts separate:
+
+| Field Block | Decision It Answers |
+| --- | --- |
+| `providerRoute` | Which provider/model/effort/budget class is used, and why. |
+| `runtimeLane` | Which lane executes or verifies the work: Fluxio, OpenClaw, Hermes, browser, or local process. |
+| `harnessQualities` | What the harness is good at, what it risks, and what setup it needs. |
+| `verifierProof` | Which independent or deterministic proof gate must pass before trusting the route. |
+| `speedCostContext` | Expected wall-time, cost band, context window, token budget, and retry budget. |
+| `safeRedTeam` | Whether red-team scoring applies, whether scope is synthetic/authorized, and whether escalation is required. |
+| `decision` | When to use the route, when not to use it, and what should downgrade or upgrade the tier. |
+
+This is intentionally fixture-first. Runtime code can later emit the same shape after real missions, but the contract already prevents common mistakes such as treating Hermes/OpenClaw as providers, treating model choice as a runtime lane, or recommending a red-team route without scope and proof.
+
 ## Open Questions For Future Runtime Work
 
 - Define the exact numeric hardness features Fluxio should log for each mission.
