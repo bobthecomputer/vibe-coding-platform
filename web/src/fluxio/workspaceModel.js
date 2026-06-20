@@ -5,6 +5,7 @@ export const WORKSPACE_SURFACES = Object.freeze([
   { id: "skills", label: "Skills", section: "workspace" },
   { id: "rule-sets", label: "Rule Sets", section: "workspace" },
   { id: "images", label: "Images", section: "workspace" },
+  { id: "voice", label: "Voice", section: "workspace" },
   { id: "workbench", label: "Workbench", section: "workspace" },
   { id: "settings", label: "Settings", section: "global" },
 ]);
@@ -30,6 +31,7 @@ export const MODEL_PROVIDER_OPTIONS = Object.freeze([
   { value: "openai", label: "OpenAI" },
   { value: "anthropic", label: "Anthropic" },
   { value: "minimax", label: "MiniMax" },
+  { value: "opencode", label: "OpenCodeGo" },
   { value: "openrouter", label: "OpenRouter" },
 ]);
 

@@ -18,7 +18,8 @@ import {
 } from "../../../desktop-ui/fluxioHelpers.js";
 import { ActionButton, Field, Modal, StatusPill } from "../../../desktop-ui/MissionControlPrimitives.jsx";
 import { buildMissionControlModel } from "../../../desktop-ui/missionControlModel.js";
-import { FluxioReferenceShell } from "./FluxioReferenceShell.jsx";
+import { ImageStudioPlayground } from "./image-studio/ImageStudioPlayground.jsx";
+import { VoiceCommandPanel } from "./voice/index.js";
 import {
   EXECUTION_TARGET_OPTIONS,
   MODEL_EFFORT_OPTIONS,
@@ -197,6 +198,9 @@ const ROUTE_MODEL_OPTIONS = [
   "claude-opus-4.1",
   "MiniMax-M2.7",
   "MiniMax-M2.7-highspeed",
+  "MiniMax-M3",
+  "opencode/deepseek-v4-flash-free",
+  "minimax-coding-plan/MiniMax-M3",
 ];
 const MODEL_QUICK_PRESETS = [
   {
@@ -338,6 +342,13 @@ const OPENCLAW_SLASH_COMMANDS = [
 ];
 const COMMENT_SLASH_COMMANDS = [
   {
+    command: "/cleanup-legacy-ui",
+    harness: "Composer",
+    kind: "comment",
+    label: "Legacy UI cleanup",
+    detail: "Audit and remove stale UI routes, screenshots, skins, and proof paths before recording.",
+  },
+  {
     command: "/comment",
     harness: "Composer",
     kind: "comment",
@@ -411,9 +422,15 @@ function buildDefaultReferenceStudio(routeOverrides) {
   };
   return {
     collectionTab: "skill",
-    selectedSkillId: "ui-refactor-expert",
+    selectedSkillId: "jbheaven-godmode-lab",
     selectedRuleId: "workspace-access-policy",
-    activeSkillIds: ["ui-refactor-expert"],
+    activeSkillIds: [
+      "jbheaven-godmode-lab",
+      "ui-refactor-expert",
+      "frontend-taste-director",
+      "runtime-loop-supervisor",
+      "voice-accessibility-operator",
+    ],
     activeRuleSetId: "workspace-access-policy",
     skills: [
       {
@@ -494,6 +511,159 @@ function buildDefaultReferenceStudio(routeOverrides) {
         ...skillLifecycle,
         category: "design_frontend",
         tags: ["frontend", "taste", "ui-polish", "mobile"],
+      },
+      {
+        id: "jbheaven-godmode-lab",
+        kind: "skill",
+        status: "Active",
+        badge: "Skill",
+        name: "JBHEAVEN Godmode Lab",
+        summary: "Controlled Hermes/G0DM0D3 red-team pack with proof transcripts",
+        description:
+          "Use the imported NAS Hermes Godmode/G0DM0D3 skill bundle for authorized JBHEAVEN, GBEH, Gandalf, and controlled model safety probing with transcript proof and explicit route decisions.",
+        triggerConditions:
+          "Use this skill when the user mentions JBHEAVEN, GBEH, Gandalf, Godmode, G0DM0D3, Hermes red teaming, OpenCode model probes, or asks to package/prove the NAS Godmode skill bundle.",
+        instructions: [
+          "Confirm the target is a controlled, authorized lab or local JBHEAVEN project before running probes.",
+          "Start from the imported Hermes sources: red-teaming/godmode, mlops/inference/obliteratus, autonomous-ai-agents/opencode, and autonomous-ai-agents/hermes-agent.",
+          "Prefer safe canary prompts, prompt-injection resistance checks, refusal-quality checks, and defensive dual-use explanations.",
+          "Route execution through OpenCode, MiniMax, or Codex only when credentials and model availability are verified.",
+          "Save prompt, response, route, scoring, and artifact paths so the operator can review the exact conversation.",
+        ],
+        outputStyle: [
+          "Show a transcript with prompt, model reply, outcome, and short scoring rationale.",
+          "Separate hidden reasoning from user-visible rationale; never claim to expose private chain-of-thought.",
+          "Report which Hermes skills, model route, and proof artifacts were used.",
+        ],
+        guardrails: [
+          "Do not create real phishing, malware, credential theft, persistence, evasion, or unauthorized access instructions.",
+          "Keep outputs scoped to lab-contained testing, detection, hardening, education, and proof collection.",
+          "Mask secrets and credentials in transcripts and generated artifacts.",
+          "Do not fake model replies, run receipts, or uploaded proof.",
+        ],
+        assistant: {
+          model: "gpt-5.5",
+          effort: "High",
+          prompt: "",
+          conversation: [],
+          proposal: null,
+        },
+        ...skillLifecycle,
+        category: "security_red_team",
+        tags: ["jbheaven", "godmode", "g0dm0d3", "hermes", "opencode", "proof"],
+        sourceType: "nas_hermes_import",
+        lastValidationSummary: "NAS Hermes source verified at .hermes/skills/red-teaming/godmode; app catalog row is curated for lab use.",
+        lastTestSummary: "Requires a live model route for each proof run; safe canary transcript should be attached before publishing.",
+      },
+      {
+        id: "hermes-skill-packager",
+        kind: "skill",
+        status: "Active",
+        badge: "Skill",
+        name: "Hermes Skill Packager",
+        summary: "Select and zip the strongest NAS Hermes skills with a manifest",
+        description:
+          "Select, package, and document imported NAS Hermes skills into portable review bundles with provenance, validation notes, and app-catalog mapping.",
+        triggerConditions:
+          "Use this skill when the user asks to download, package, zip, promote, import, or review the best NAS Hermes skills for Fluxio/JBHEAVEN.",
+        instructions: [
+          "Inspect the NAS and local imported Hermes skill roots before selecting files.",
+          "Copy only selected skill folders and preserve their scripts, references, templates, and SKILL.md files.",
+          "Write a manifest with source path, selected skills, selection rationale, validation notes, and app mapping.",
+          "Create a zip artifact and verify it exists with a readable size.",
+        ],
+        outputStyle: [
+          "List the zip path and manifest path.",
+          "Summarize selected skills by domain and why each was included.",
+        ],
+        guardrails: [
+          "Do not package secrets, auth stores, session databases, caches, or unrelated project data.",
+          "Do not rename upstream skill folders inside the archive unless the manifest records the mapping.",
+        ],
+        assistant: {
+          model: "gpt-5.5",
+          effort: "Balanced",
+          prompt: "",
+          conversation: [],
+          proposal: null,
+        },
+        ...skillLifecycle,
+        category: "skill_ops",
+        tags: ["hermes", "skills", "zip", "nas", "manifest"],
+      },
+      {
+        id: "runtime-loop-supervisor",
+        kind: "skill",
+        status: "Active",
+        badge: "Skill",
+        name: "Runtime Loop Supervisor",
+        summary: "Plan-act-observe-verify loops across Hermes, OpenClaw, OpenCodeGo, Codex, and MiniMax",
+        description:
+          "Design and verify self-running agent loops that plan, act, observe, verify, route, and resume without hiding blockers, approvals, model choice, or proof.",
+        triggerConditions:
+          "Use this skill when the user asks for automatic routing, loop systems, runtime integration, OpenClaw/Hermes/OpenCodeGo differentiation, long-running missions, or proof-backed retries.",
+        instructions: [
+          "Show the loop contract: goal, route, checks, stop condition, proof artifacts, and escalation trigger.",
+          "Keep Hermes and OpenClaw differentiated by capability and route truth rather than presenting them as interchangeable names.",
+          "Use OpenCode or MiniMax for bounded execution lanes only after readiness and auth are checked.",
+          "Surface failed checks and stale runtime config as first-class blockers.",
+        ],
+        outputStyle: [
+          "Show planner, executor, verifier, and supervisor lane decisions.",
+          "Explain why the loop should continue, pause, or ask for approval.",
+        ],
+        guardrails: [
+          "Do not run indefinite loops without a visible stop condition and budget.",
+          "Do not hide runtime failures behind generic success copy.",
+          "Do not change production, billing, or secrets without explicit approval.",
+        ],
+        assistant: {
+          model: "gpt-5.5",
+          effort: "High",
+          prompt: "",
+          conversation: [],
+          proposal: null,
+        },
+        ...skillLifecycle,
+        category: "runtime_ops",
+        tags: ["loops", "routing", "hermes", "openclaw", "opencode", "minimax"],
+      },
+      {
+        id: "voice-accessibility-operator",
+        kind: "skill",
+        status: "Active",
+        badge: "Skill",
+        name: "Voice Accessibility Operator",
+        summary: "Voice-first, low-typing, keyboard, and screen-reader operation",
+        description:
+          "Improve Fluxio for users who rely on dictation, keyboard navigation, plain-language confirmations, screen readers, and low-typing workflows.",
+        triggerConditions:
+          "Use this skill when the user asks for vocal control, dictation quality, accessibility, reduced typing, keyboard support, screen-reader labels, or inclusive app operation.",
+        instructions: [
+          "Treat voice input as a first-class command path, not only a text-area shortcut.",
+          "Design correction and confirmation flows for dictation errors before launching expensive or risky actions.",
+          "Audit focus order, labels, hit targets, contrast, reduced-motion behavior, and plain-language state copy.",
+          "Prefer real integration checks over fake microphone or speech-recognition placeholders.",
+        ],
+        outputStyle: [
+          "Report user-visible accessibility improvements and remaining voice bridge blockers.",
+          "Include keyboard and screen-reader verification steps when UI changes ship.",
+        ],
+        guardrails: [
+          "Do not claim speech recognition is implemented unless the bridge or browser API path is actually wired.",
+          "Never make voice-only controls; keep keyboard and pointer alternatives.",
+          "Avoid motion or audio feedback that cannot be reduced or disabled.",
+        ],
+        assistant: {
+          model: "gpt-5.5",
+          effort: "Balanced",
+          prompt: "",
+          conversation: [],
+          proposal: null,
+        },
+        ...skillLifecycle,
+        category: "accessibility",
+        tags: ["voice", "accessibility", "dictation", "keyboard", "screen-reader"],
       },
       {
         id: "api-integration-helper",
@@ -839,6 +1009,59 @@ function findStudioItem(studio, kind, itemId) {
   return asList(studio?.[studioCollectionKey(kind)]).find(item => item.id === itemId) || null;
 }
 
+function mergeReferenceStudioRows(defaultRows, storedRows) {
+  const storedById = new Map(asList(storedRows).map(item => [item?.id, item]).filter(([id]) => Boolean(id)));
+  const merged = asList(defaultRows).map(defaultItem => {
+    const storedItem = storedById.get(defaultItem.id);
+    if (!storedItem) {
+      return defaultItem;
+    }
+    storedById.delete(defaultItem.id);
+    return {
+      ...defaultItem,
+      ...storedItem,
+      assistant: {
+        ...(defaultItem.assistant || {}),
+        ...(storedItem.assistant || {}),
+      },
+      tags: asList(storedItem.tags).length > 0 ? storedItem.tags : defaultItem.tags,
+      instructions: asList(storedItem.instructions).length > 0 ? storedItem.instructions : defaultItem.instructions,
+      outputStyle: asList(storedItem.outputStyle).length > 0 ? storedItem.outputStyle : defaultItem.outputStyle,
+      guardrails: asList(storedItem.guardrails).length > 0 ? storedItem.guardrails : defaultItem.guardrails,
+    };
+  });
+  return [...merged, ...Array.from(storedById.values())];
+}
+
+function mergeReferenceStudioState(defaultStudio, storedStudio) {
+  if (!storedStudio || typeof storedStudio !== "object") {
+    return defaultStudio;
+  }
+  const skills = mergeReferenceStudioRows(defaultStudio.skills, storedStudio.skills);
+  const ruleSets = mergeReferenceStudioRows(defaultStudio.ruleSets, storedStudio.ruleSets);
+  const skillIds = new Set(skills.map(item => item.id));
+  const ruleIds = new Set(ruleSets.map(item => item.id));
+  return {
+    ...defaultStudio,
+    ...storedStudio,
+    skills,
+    ruleSets,
+    activeSkillIds: uniq([
+      ...asList(defaultStudio.activeSkillIds),
+      ...asList(storedStudio.activeSkillIds),
+    ]).filter(id => skillIds.has(id)),
+    activeRuleSetId: ruleIds.has(storedStudio.activeRuleSetId)
+      ? storedStudio.activeRuleSetId
+      : defaultStudio.activeRuleSetId,
+    selectedSkillId: skillIds.has(storedStudio.selectedSkillId)
+      ? storedStudio.selectedSkillId
+      : defaultStudio.selectedSkillId,
+    selectedRuleId: ruleIds.has(storedStudio.selectedRuleId)
+      ? storedStudio.selectedRuleId
+      : defaultStudio.selectedRuleId,
+  };
+}
+
 function mergeStudioProposal(item, proposal) {
   if (!proposal) {
     return item;
@@ -993,6 +1216,45 @@ function buildStudioAssistantProposal(item, prompt, selectedModel, selectedEffor
       "Check render cost and expensive component work before shipping the refactor.",
     ]);
     changes.push("Added a performance verification step");
+  }
+  if (
+    normalized.includes("godmode") ||
+    normalized.includes("g0dm0d3") ||
+    normalized.includes("jbheaven") ||
+    normalized.includes("red team")
+  ) {
+    patch.instructions = mergeUniqueLines(patch.instructions, [
+      "Confirm lab authorization, target boundaries, and proof destination before running model probes.",
+      "Save a transcript with prompts, model replies, route metadata, scoring, and artifact paths.",
+    ]);
+    patch.outputStyle = mergeUniqueLines(patch.outputStyle, [
+      "Separate visible rationale from hidden model reasoning; include a short scoring summary instead of chain-of-thought.",
+    ]);
+    patch.guardrails = mergeUniqueLines(patch.guardrails, [
+      "Keep adversarial testing scoped to safe lab canaries, detection, hardening, and educational analysis.",
+      "Do not generate real phishing, malware, credential theft, persistence, evasion, or unauthorized access instructions.",
+    ]);
+    changes.push("Added controlled red-team lab proof guidance");
+  }
+  if (normalized.includes("loop") || normalized.includes("routing") || normalized.includes("runtime")) {
+    patch.instructions = mergeUniqueLines(patch.instructions, [
+      "Define the loop as goal -> route -> action -> observation -> verification -> stop or resume.",
+      "Surface runtime blockers, stale model config, and proof gaps as first-class state.",
+    ]);
+    patch.outputStyle = mergeUniqueLines(patch.outputStyle, [
+      "Report planner, executor, verifier, and supervisor route decisions in plain language.",
+    ]);
+    changes.push("Added runtime loop and routing guidance");
+  }
+  if (normalized.includes("voice") || normalized.includes("dictation") || normalized.includes("vocal")) {
+    patch.instructions = mergeUniqueLines(patch.instructions, [
+      "Design voice-first flows with correction, confirmation, and keyboard fallback before expensive actions run.",
+      "Audit labels, focus order, and reduced-typing paths whenever composer behavior changes.",
+    ]);
+    patch.guardrails = mergeUniqueLines(patch.guardrails, [
+      "Do not claim speech recognition is implemented unless the bridge or browser API path is actually wired.",
+    ]);
+    changes.push("Added voice-first accessibility guidance");
   }
   if (changes.length === 0) {
     patch.instructions = mergeUniqueLines(patch.instructions, [
@@ -2754,10 +3016,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [referenceSettingsTab, setReferenceSettingsTab] = useState(
     requestedSettingsTab || storedUiState.referenceSettingsTab || "general",
   );
-  const [referenceStudio, setReferenceStudio] = useState(() => ({
-    ...buildDefaultReferenceStudio(profileFormFromWorkspace(null, "builder").routeOverrides),
-    ...(storedUiState.referenceStudio || {}),
-  }));
+  const [referenceStudio, setReferenceStudio] = useState(() =>
+    mergeReferenceStudioState(
+      buildDefaultReferenceStudio(profileFormFromWorkspace(null, "builder").routeOverrides),
+      storedUiState.referenceStudio,
+    ),
+  );
   const [codexImportSnapshot, setCodexImportSnapshot] = useState(storedCodexImportSnapshot);
   const [codexImportRefreshing, setCodexImportRefreshing] = useState(false);
   const [previewMode, setPreviewMode] = useState(
@@ -2931,7 +3195,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [surface]);
 
   useEffect(() => {
-    if (surface === "builder") {
+    if (["builder", "skills", "rule-sets", "images", "voice", "workbench", "settings"].includes(surface)) {
       if (uiMode !== "builder") {
         setUiMode("builder");
       }
@@ -4432,8 +4696,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         case "open_context":
           setActiveDrawer("context");
           return;
+        case "open_images":
+        case "open-images":
+          setUiMode("builder");
+          setSurface("images");
+          setActiveDrawer(null);
+          return;
         case "open_builder":
           setUiMode("builder");
+          setSurface("builder");
           setActiveDrawer("builder");
           return;
         case "run_validation": {
@@ -5563,7 +5834,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       const activeSkills = asList(referenceStudio.activeSkillIds)
         .map(skillId => findStudioItem(referenceStudio, "skill", skillId))
         .filter(Boolean)
-        .slice(0, 2);
+        .slice(0, 5);
       if (activeSkills.length > 0) {
         steeringLines.push(`Active skills: ${activeSkills.map(item => item.name).join(", ")}.`);
         const skillGuardrails = activeSkills
@@ -6226,6 +6497,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       null,
     [liveReviewEventsFlat, selectedLiveReviewEventId],
   );
+  const livePreviewUrl =
+    selectedLiveReviewEvent?.previewUrl ||
+    liveReviewStudio.previewUrl ||
+    mission?.state?.last_preview_url ||
+    mission?.state?.preview_url ||
+    "";
   const selectedLiveReviewFrames = asList(selectedLiveReviewEvent?.screenshotFrames);
   const selectedLiveReviewFrame =
     selectedLiveReviewFrames[selectedLiveReviewFrameIndex] || selectedLiveReviewFrames[0] || null;
@@ -7318,7 +7595,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const activeSkills = asList(referenceStudio.activeSkillIds)
       .map(skillId => findStudioItem(referenceStudio, "skill", skillId))
       .filter(Boolean)
-      .slice(0, 2);
+      .slice(0, 5);
     const systemContextLines = [
       workspace?.name ? `Workspace: ${workspace.name}.` : "",
       workspacePath ? `Workspace path: ${workspacePath}.` : "",
@@ -8091,6 +8368,167 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         })),
     [agentTraceTurns, agentTranscript],
   );
+  const referenceSkillEffectTrace = useMemo(() => {
+    const skillItems = asList(referenceStudio?.skills);
+    const activeSkillIds = new Set(asList(referenceStudio?.activeSkillIds));
+    const selectedSkill =
+      skillItems.find(item => item?.id === referenceStudio?.selectedSkillId) ||
+      skillItems.find(item => activeSkillIds.has(item?.id)) ||
+      skillItems[0] ||
+      null;
+
+    if (!selectedSkill) {
+      return null;
+    }
+
+    const activeSkills = skillItems.filter(item => activeSkillIds.has(item?.id)).slice(0, 5);
+    const delegatedLanes = asList(mission?.delegated_runtime_sessions);
+    const latestLane =
+      delegatedLanes.find(item =>
+        ["waiting_for_approval", "running", "launching"].includes(
+          String(item?.status || "").trim().toLowerCase(),
+        ),
+      ) ||
+      delegatedLanes[delegatedLanes.length - 1] ||
+      null;
+    const laneEvents = asList(latestLane?.latest_events);
+    const routeEvent =
+      laneEvents
+        .slice()
+        .reverse()
+        .find(event =>
+          [
+            "runtime.route_contract",
+            "runtime.phase_entered",
+            "runtime.route_switch_reason",
+            "runtime.handoff",
+          ].includes(String(event?.kind || "").toLowerCase()),
+        ) || null;
+    const routeData = routeEvent?.data || {};
+    const runtimeId =
+      latestLane?.runtime_id ||
+      missionRuntimeCompartment?.runtime ||
+      mission?.runtime_id ||
+      agentRuntimeSelectValue ||
+      "hermes";
+    const routeProvider =
+      routeData.provider ||
+      latestLane?.provider ||
+      missionRuntimeCompartment?.route?.provider ||
+      activeEffectiveRoute.provider ||
+      selectedAgentRoute.provider ||
+      "auto";
+    const routeModel =
+      routeData.model ||
+      latestLane?.model ||
+      missionRuntimeCompartment?.route?.model ||
+      activeEffectiveRoute.model ||
+      selectedAgentRoute.model ||
+      selectedModelLabel ||
+      "profile default";
+    const proofArtifacts = [
+      ...asList(mission?.proof_artifacts),
+      ...asList(mission?.proof?.artifacts),
+      ...asList(mission?.state?.code_execution?.artifacts),
+    ].slice(0, 4);
+    const skillTags = asList(selectedSkill.tags).map(tag => String(tag).toLowerCase());
+    const opencodeAvailable = runtimeOptions.some(option => option?.value === "opencode");
+    const activeInRoute = activeSkillIds.has(selectedSkill.id);
+    const statusTone = activeInRoute ? "good" : "warn";
+    const routeLabel = `${runtimeLabel(runtimeId)} / ${titleizeToken(routeProvider)} / ${routeModel}`;
+    const eventCount = laneEvents.length || referenceTimelineMoments.length;
+    const proofLabel = latestLane?.delegated_id
+      ? `Session ${latestLane.delegated_id}`
+      : proofArtifacts.length
+        ? `${proofArtifacts.length} artifact${proofArtifacts.length === 1 ? "" : "s"} attached`
+        : "Proof pending for the next live run";
+
+    const effectPoints = [
+      selectedSkill.triggerConditions
+        ? `Trigger: ${selectedSkill.triggerConditions}`
+        : "",
+      asList(selectedSkill.outputStyle)[0]
+        ? `Output: ${asList(selectedSkill.outputStyle)[0]}`
+        : "",
+      asList(selectedSkill.guardrails)[0]
+        ? `Guardrail: ${asList(selectedSkill.guardrails)[0]}`
+        : "",
+    ].filter(Boolean);
+
+    const proofItems = [
+      latestLane?.delegated_id ? { label: "Runtime session", value: latestLane.delegated_id } : null,
+      latestLane?.execution_root || missionRuntimeCompartment?.cwd
+        ? { label: "Execution root", value: latestLane?.execution_root || missionRuntimeCompartment?.cwd }
+        : null,
+      opencodeAvailable && skillTags.includes("opencode")
+        ? { label: "Preferred lab route", value: "OpenCodeGo available" }
+        : null,
+      proofArtifacts[0]
+        ? {
+            label: "Latest artifact",
+            value: proofArtifacts[0]?.path || proofArtifacts[0]?.artifactPath || proofArtifacts[0]?.title || "artifact recorded",
+          }
+        : null,
+    ].filter(Boolean);
+
+    return {
+      skillName: selectedSkill.name || titleizeToken(selectedSkill.id || "Active skill"),
+      skillSummary: selectedSkill.summary || selectedSkill.description || "Selected workspace skill.",
+      statusLabel: activeInRoute ? "Included in routing" : "Selected, not enabled",
+      statusTone,
+      activeSkillNames: activeSkills.map(item => item.name || titleizeToken(item.id)).filter(Boolean),
+      route: {
+        label: routeLabel,
+        runtime: runtimeLabel(runtimeId),
+        provider: titleizeToken(routeProvider),
+        model: routeModel,
+        effort: selectedEffortLabel,
+      },
+      effectPoints,
+      proofItems,
+      traceSteps: [
+        {
+          id: "skill-selected",
+          label: "Skill selected",
+          detail: `${selectedSkill.name || "Selected skill"} is ${activeInRoute ? "active" : "selected"} and changes the route instructions, proof expectations, and guardrails.`,
+          state: activeInRoute ? "done" : "warn",
+        },
+        {
+          id: "runtime-route",
+          label: "Runtime route",
+          detail: routeLabel,
+          state: runtimeId ? "done" : "pending",
+        },
+        {
+          id: "visible-trace",
+          label: "Visible trace",
+          detail:
+            eventCount > 0
+              ? `${eventCount} visible trace moment${eventCount === 1 ? "" : "s"} captured; summaries stay separate from private chain-of-thought.`
+              : "Trace summaries are ready; runtime events appear here when a lane publishes.",
+          state: eventCount > 0 ? "done" : "pending",
+        },
+        {
+          id: "proof-trail",
+          label: "Proof trail",
+          detail: proofLabel,
+          state: latestLane?.delegated_id || proofArtifacts.length ? "done" : "pending",
+        },
+      ],
+    };
+  }, [
+    activeEffectiveRoute,
+    agentRuntimeSelectValue,
+    mission,
+    missionRuntimeCompartment,
+    referenceStudio,
+    referenceTimelineMoments.length,
+    runtimeOptions,
+    selectedAgentRoute.model,
+    selectedAgentRoute.provider,
+    selectedEffortLabel,
+    selectedModelLabel,
+  ]);
   const referenceBuilderRows = useMemo(
     () =>
       missionOptions.map(item => {
@@ -8565,7 +9003,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "live:refresh-preview") {
-        await refreshAll("reference-preview-refresh");
+        await refreshAll("control-preview-refresh");
         return;
       }
 
@@ -9061,6 +9499,133 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     }
     pushToast("Use your system dictation shortcut if embedded capture is not configured.", "info");
   }, [markAction, previewMode, pushToast]);
+
+  const handleImageStudioRequestDraft = useCallback(
+    draft => {
+      const artifactCount = asList(draft?.proofArtifacts).length;
+      markAction(`image-studio:request-draft:${draft?.route?.id || "route"}`);
+      pushToast(
+        `Image request draft prepared with ${artifactCount} proof artifact${artifactCount === 1 ? "" : "s"}.`,
+        "info",
+      );
+    },
+    [markAction, pushToast],
+  );
+
+  const handleVoiceCommand = useCallback(
+    async command => {
+      const action = String(command?.action || "").trim();
+      const parameters = command?.parameters || {};
+      markAction(`voice:${action || "unknown"}`);
+
+      if (action === "surface.open") {
+        const nextSurface = String(parameters.surface || "").trim();
+        if (nextSurface === "agent") {
+          setUiMode("agent");
+          setSurface("agent");
+          setActiveDrawer(null);
+          return;
+        }
+        if (nextSurface === "builder") {
+          setUiMode("builder");
+          setSurface("builder");
+          setActiveDrawer("builder");
+          return;
+        }
+        if (nextSurface === "images") {
+          setUiMode("builder");
+          setSurface("images");
+          setActiveDrawer(null);
+          return;
+        }
+        if (nextSurface === "voice") {
+          setUiMode("builder");
+          setSurface("voice");
+          setActiveDrawer(null);
+          return;
+        }
+        if (["runtime", "skills", "proof", "queue", "context", "settings"].includes(nextSurface)) {
+          setUiMode("builder");
+          setSurface("builder");
+          setActiveDrawer(nextSurface);
+          return;
+        }
+        pushToast(`Voice command could not open ${nextSurface || "that surface"}.`, "warn");
+        return;
+      }
+
+      if (action === "voice.showCommands") {
+        setUiMode("builder");
+        setSurface("voice");
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (action === "voice.start") {
+        await handleReferenceDictation();
+        return;
+      }
+
+      if (action === "voice.clearTranscript") {
+        pushToast("Voice transcript cleared.", "info");
+        return;
+      }
+
+      if (action === "composer.addNote" || action === "composer.addComment") {
+        const text = String(parameters.text || command?.sourceText || "").trim();
+        if (!text) {
+          pushToast("Voice command did not include note text.", "warn");
+          return;
+        }
+        setOperatorDraft(current => [current, text].filter(Boolean).join(current ? "\n" : ""));
+        setUiMode("agent");
+        setSurface("agent");
+        pushToast("Dictated text added to the composer for review.", "info");
+        return;
+      }
+
+      if (action === "composer.send") {
+        if (mission) {
+          await handleAgentFollowUp();
+          return;
+        }
+        await handleAgentIdlePrimaryAction();
+        return;
+      }
+
+      if (action === "search.query") {
+        const query = String(parameters.query || "").trim();
+        setWorkspaceSearchQuery(query);
+        setMissionSearchQuery(query);
+        pushToast(query ? `Searching workspace and mission lists for "${query}".` : "Search cleared.", "info");
+        return;
+      }
+
+      if (action === "mission.pause" || action === "mission.resume") {
+        setUiMode("agent");
+        setSurface("agent");
+        setActiveDrawer("queue");
+        pushToast("Voice mission control opened the review queue; confirm the mission action there.", "info");
+        return;
+      }
+
+      if (action === "approval.resolve") {
+        setActiveDrawer("queue");
+        pushToast("Approval queue opened for review before any decision is applied.", "info");
+        return;
+      }
+
+      pushToast("Voice command parsed, but this shell action is not wired yet.", "warn");
+    },
+    [
+      handleAgentFollowUp,
+      handleAgentIdlePrimaryAction,
+      handleReferenceDictation,
+      markAction,
+      mission,
+      pushToast,
+    ],
+  );
 
   const handleReferenceAppearanceChange = useCallback((key, value) => {
     setReferenceAppearance(current => ({
@@ -10144,7 +10709,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         <section className="drawer-panel">
           <header>
             <h2>Tools and accounts</h2>
-            <p>Keep Hermes, OpenClaw, image tools, and phone alerts healthy from one simple setup panel.</p>
+            <p>Keep Hermes, OpenClaw, OpenCodeGo, image tools, and phone alerts healthy from one simple setup panel.</p>
           </header>
 
           <section className="drawer-block" id="provider-auth-panel">
@@ -10467,7 +11032,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </ActionButton>
             </div>
             <p className="drawer-footnote">
-              Syntelos can install, repair, update, and re-check Hermes and OpenClaw from here.
+              Syntelos can install, repair, update, and re-check Hermes, OpenClaw, and OpenCodeGo from here.
             </p>
           </section>
 
@@ -10501,7 +11066,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ))
               ) : (
                 <article className="drawer-card">
-                  <strong>Hermes and OpenClaw are not visible yet.</strong>
+                  <strong>Hermes, OpenClaw, and OpenCodeGo are not visible yet.</strong>
                   <p>After setup checks run, Syntelos shows them here with install and repair buttons.</p>
                 </article>
               )}
@@ -12156,613 +12721,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }
 
   return (
-    <>
-      <FluxioReferenceShell
-        agentScene={agentScene}
-        appearance={referenceAppearance}
-        appearanceStyle={referencePreviewStyle}
-        builderDetailOpen={builderDetailOpen}
-        builderRows={referenceBuilderRows}
-        changedItems={referenceChangedItems}
-        conversationMode={activeChatSessionId ? "chat" : mission ? "mission" : "chat"}
-        currentProjectLabel={currentProjectLabel}
-        draft={operatorDraft}
-        activeCommentTarget={activeCommentTarget}
-        favoriteFlows={referenceFavoriteFlows}
-        feedbackItems={referenceFeedbackItems}
-        flowProjects={referenceProjectGroups}
-        generatedImageArtifacts={generatedImageArtifacts}
-        hermesEvidenceItems={hermesEvidenceItems}
-        messages={referenceAgentMessages}
-        nasDeployChecks={nasDeployChecks}
-        onAttach={handleReferenceAttach}
-        onBackFromBuilder={handleReferenceBuilderBack}
-        onChangeDraft={setOperatorDraft}
-        onDictation={() => void handleReferenceDictation()}
-        onHistory={handleReferenceHistory}
-        onIdleSubmit={handleAgentIdleChat}
-        onInsertSlashCommand={handleReferenceInsertSlashCommand}
-        onMore={handleReferenceMore}
-        onOpenBuilderDetail={missionId =>
-          handleReferenceMissionSelect({
-            missionId,
-            nextSurface: "builder",
-            openBuilderDetail: true,
-          })
-        }
-        onOpenSettings={handleReferenceSettings}
-        onOpenSkillStudio={handleReferenceSkillStudio}
-        onPaste={handleComposerPaste}
-        onRequestAction={(actionId, payload) => void handleReferenceAction(actionId, payload)}
-        callBackend={callBackend}
-        onSelectFlow={handleReferenceFlowSelect}
-        onSelectProject={handleReferenceProjectSelect}
-        onSetAppearance={handleReferenceAppearanceChange}
-        onRuntimeChange={value => {
-          if (mission && !activeChatSessionId) {
-            setAgentRuntimeFocus(value);
-            return;
-          }
-          setMissionForm(current => ({ ...current, runtime: value }));
-        }}
-        onSend={() => {
-          void handleAgentIdleChat();
-        }}
-        onSetAgentScene={setAgentScene}
-        onSetSurface={handleReferenceSurfaceChange}
-        runtimeOptions={runtimeOptions}
-        runtimeStatus={referenceRuntimeStatus}
-        runtimeCompartment={latestAgentCompartment}
-        routeControls={referenceRouteControls}
-        selectedEffortLabel={selectedEffortLabel}
-        selectedHarnessMeta={selectedHarnessMeta}
-        selectedModelLabel={selectedModelLabel}
-        selectedProjectId={referenceSidebarProjectId}
-        selectedRuntime={agentRuntimeSelectValue}
-        slashCommands={referenceSlashCommands}
-        settingsState={referenceSettingsProps}
-        sidebarBehavior={referenceAppearance.sidebarBehavior || "auto"}
-        skillStudioState={referenceSkillStudioProps}
-        surface={surface}
-        timelineMoments={referenceTimelineMoments}
-        missionLoop={activeChatSessionId ? null : referenceMissionLoop}
-        workbenchState={referenceWorkbenchState}
-      />
-
-      <Modal
-        actions={
-          <>
-            <ActionButton
-              disabled={!openAICodexOAuthFlow.helperCommand}
-              onClick={async () => {
-                const copied = await copyTextValue(openAICodexOAuthFlow.helperCommand || "");
-                pushToast(
-                  copied
-                    ? "Fallback relay helper command copied. Run it on the same device as this browser."
-                    : "Could not copy the relay helper command.",
-                  copied ? "info" : "warn",
-                );
-              }}
-            >
-              Copy fallback relay helper
-            </ActionButton>
-            <ActionButton
-              disabled={!(openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl)}
-              onClick={() =>
-                window.open(
-                  openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl,
-                  "_blank",
-                  "noopener,noreferrer",
-                )
-              }
-            >
-              Open OpenAI sign-in
-            </ActionButton>
-            <ActionButton
-              disabled={["checking", "completing"].includes(openAICodexOAuthFlow.status)}
-              onClick={() => void completeOpenAICodexOAuth()}
-              variant="primary"
-            >
-              {["checking", "completing"].includes(openAICodexOAuthFlow.status)
-                ? "Connecting..."
-                : "Connect Codex OAuth"}
-            </ActionButton>
-          </>
-        }
-        onClose={() => setOpenAICodexOAuthFlow(current => ({ ...current, open: false }))}
-        open={openAICodexOAuthFlow.open}
-        summary="OpenAI redirects Codex OAuth to localhost. The desktop app catches that callback directly; NAS/web installs use this relay fallback."
-        title="Complete OpenAI Codex OAuth"
-      >
-        <div className="dialog-form">
-          <p>
-            Run the fallback relay helper on the same device as this browser. It listens on
-            <strong> localhost:{openAICodexOAuthFlow.callbackPort || 1455}</strong>, opens
-            OpenAI sign-in, and forwards the callback to the NAS.
-          </p>
-          {openAICodexOAuthFlow.helperCommand ? (
-            <pre className="runtime-output">{openAICodexOAuthFlow.helperCommand}</pre>
-          ) : null}
-          <Field label="Final localhost callback URL or authorization code">
-            <textarea
-              onChange={event =>
-                setOpenAICodexOAuthFlow(current => ({
-                  ...current,
-                  callback: event.target.value,
-                }))
-              }
-              placeholder="http://localhost:1455/auth/callback?code=..."
-              rows={5}
-              value={openAICodexOAuthFlow.callback}
-            />
-          </Field>
-          {openAICodexOAuthFlow.message ? <p>{openAICodexOAuthFlow.message}</p> : null}
-          {openAICodexOAuthFlow.output ? (
-            <pre className="runtime-output">{openAICodexOAuthFlow.output}</pre>
-          ) : null}
-        </div>
-      </Modal>
-
-      <Modal
-        actions={
-          <>
-            <ActionButton
-              disabled={!miniMaxOAuthFlow.verificationUrl}
-              onClick={() =>
-                window.open(
-                  miniMaxOAuthFlow.verificationUrl,
-                  "_blank",
-                  "noopener,noreferrer",
-                )
-              }
-            >
-              Open MiniMax
-            </ActionButton>
-            <ActionButton
-              disabled={!miniMaxOAuthFlow.userCode}
-              onClick={async () => {
-                const copied = await copyTextValue(miniMaxOAuthFlow.userCode || "");
-                pushToast(
-                  copied ? "MiniMax code copied." : "Could not copy the MiniMax code.",
-                  copied ? "info" : "warn",
-                );
-              }}
-            >
-              Copy code
-            </ActionButton>
-            <ActionButton
-              disabled={miniMaxOAuthFlow.status === "checking"}
-              onClick={() => void completeMiniMaxOAuth()}
-              variant="primary"
-            >
-              {miniMaxOAuthFlow.status === "checking" ? "Checking..." : "Verify MiniMax"}
-            </ActionButton>
-          </>
-        }
-        onClose={() => setMiniMaxOAuthFlow(current => ({ ...current, open: false }))}
-        open={miniMaxOAuthFlow.open}
-        summary="MiniMax uses a portal user-code grant. Syntelos starts it on the NAS, then writes the completed token into the OpenClaw auth profile."
-        title="Complete MiniMax OpenClaw OAuth"
-      >
-        <div className="dialog-form">
-          <p>
-            Open MiniMax verification, approve access, then verify the NAS session.
-          </p>
-          {miniMaxOAuthFlow.verificationUrl ? (
-            <Field label="Verification URL">
-              <input readOnly value={miniMaxOAuthFlow.verificationUrl} />
-            </Field>
-          ) : null}
-          {miniMaxOAuthFlow.userCode ? (
-            <Field label="MiniMax code">
-              <pre className="runtime-output">{miniMaxOAuthFlow.userCode}</pre>
-            </Field>
-          ) : null}
-          {miniMaxOAuthFlow.command ? (
-            <Field label="Fallback command">
-              <pre className="runtime-output">{miniMaxOAuthFlow.command}</pre>
-            </Field>
-          ) : null}
-          {miniMaxOAuthFlow.message ? <p>{miniMaxOAuthFlow.message}</p> : null}
-          {miniMaxOAuthFlow.output ? (
-            <pre className="runtime-output">{miniMaxOAuthFlow.output}</pre>
-          ) : null}
-        </div>
-      </Modal>
-
-      <Modal
-        actions={
-          <ActionButton onClick={handleWorkspaceSubmit} type="submit" variant="primary">
-            Save project
-          </ActionButton>
-        }
-        onClose={() => setShowWorkspaceDialog(false)}
-        open={showWorkspaceDialog}
-        summary="Choose the project folder Syntelos should work on. If NAS mirroring is enabled, missions run on the NAS working copy."
-        title="Add project"
-      >
-        <form className="dialog-form project-dialog-form" onSubmit={handleWorkspaceSubmit}>
-          <Field label="Project name">
-            <input
-              onChange={event =>
-                setWorkspaceForm(current => ({ ...current, name: event.target.value }))
-              }
-              placeholder="Syntelos Workspace"
-              value={workspaceForm.name}
-            />
-          </Field>
-          <Field label="Project folder">
-            <input
-              onChange={event => {
-                const nextPath = event.target.value;
-                setWorkspaceForm(current => ({
-                  ...current,
-                  name: current.name || pathLeaf(nextPath),
-                  path: nextPath,
-                  localProjectPath: nextPath,
-                  nasProjectPath: current.nasProjectPath || defaultNasProjectPath(nextPath),
-                }));
-              }}
-              placeholder="C:/Users/paul/Projects/vibe-coding-platform"
-              value={workspaceForm.path}
-            />
-          </Field>
-          {!hasTauriBackend() ? (
-            <p className="project-dialog-note">
-              Web mode: browse server folders or paste a project path manually.
-            </p>
-          ) : null}
-          {previewMode !== "live" ? (
-            <p className="project-dialog-note is-warn">
-              Saving is disabled in preview mode. Switch the backend mode to Live Backend first.
-            </p>
-          ) : null}
-          <label className="checkbox-row">
-            <input
-              checked={workspaceForm.autoSyncToNas}
-              onChange={event =>
-                setWorkspaceForm(current => ({
-                  ...current,
-                  autoSyncToNas: event.target.checked,
-                  syncMode: event.target.checked ? "auto_nas_mirror" : "manual",
-                  localProjectPath: current.localProjectPath || current.path,
-                  nasProjectPath: current.nasProjectPath || defaultNasProjectPath(current.path),
-                }))
-              }
-              type="checkbox"
-            />
-            <span>Run long missions on a NAS working copy</span>
-          </label>
-          {workspaceForm.autoSyncToNas ? (
-            <Field label="NAS working copy">
-              <input
-                onChange={event =>
-                  setWorkspaceForm(current => ({ ...current, nasProjectPath: event.target.value }))
-                }
-                placeholder="/volume1/Saclay/projects/vibe-coding-platform"
-                value={workspaceForm.nasProjectPath}
-              />
-            </Field>
-          ) : null}
-          {previewMode === "live" && hasCommandBackend() ? (
-            <div className="inline-actions">
-              <ActionButton onClick={() => void handleReferencePickWorkspaceFolder()} type="button">
-                {hasTauriBackend() ? "Browse for folder" : "Browse server folders"}
-              </ActionButton>
-            </div>
-          ) : null}
-        </form>
-      </Modal>
-
-      <Modal
-        actions={
-          <>
-            <ActionButton
-              disabled={!workspaceBrowser.parentPath || workspaceBrowser.loading}
-              onClick={() => void handleWorkspaceBrowserNavigate(workspaceBrowser.parentPath)}
-              type="button"
-            >
-              Up one level
-            </ActionButton>
-            <ActionButton
-              disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
-              onClick={handleWorkspaceBrowserUseCurrent}
-              type="button"
-              variant="primary"
-            >
-              Use this folder
-            </ActionButton>
-          </>
-        }
-        onClose={closeWorkspaceBrowser}
-        open={workspaceBrowser.open}
-        summary="Browse directories available to the web backend and choose a project folder."
-        title="Browse server folders"
-      >
-        <div className="dialog-form workspace-browser-dialog">
-          <Field label="Current folder">
-            <input
-              onChange={event =>
-                setWorkspaceBrowser(current => ({
-                  ...current,
-                  currentPath: event.target.value,
-                }))
-              }
-              value={workspaceBrowser.currentPath}
-            />
-          </Field>
-          <div className="inline-actions">
-            <ActionButton
-              disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
-              onClick={() => void handleWorkspaceBrowserNavigate(workspaceBrowser.currentPath)}
-              type="button"
-            >
-              Open path
-            </ActionButton>
-          </div>
-          {workspaceBrowser.roots.length ? (
-            <div className="workspace-browser-roots">
-              {workspaceBrowser.roots.map(rootPath => (
-                <button
-                  className="workspace-browser-root-button"
-                  disabled={workspaceBrowser.loading}
-                  key={rootPath}
-                  onClick={() => void handleWorkspaceBrowserNavigate(rootPath)}
-                  type="button"
-                >
-                  {rootPath}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {workspaceBrowser.error ? (
-            <p className="project-dialog-note is-warn">{workspaceBrowser.error}</p>
-          ) : null}
-          <div className="workspace-browser-list" role="list">
-            {workspaceBrowser.entries.length ? (
-              workspaceBrowser.entries.map(item => (
-                <button
-                  className={`workspace-browser-entry ${item.isDirectory ? "" : "is-file"}`.trim()}
-                  disabled={!item.isDirectory || workspaceBrowser.loading}
-                  key={item.path}
-                  onClick={() => void handleWorkspaceBrowserNavigate(item.path)}
-                  type="button"
-                >
-                  <span className="workspace-browser-entry-name">{item.name}</span>
-                  <span className="workspace-browser-entry-kind">
-                    {item.isDirectory ? "Folder" : "File"}
-                  </span>
-                </button>
-              ))
-            ) : (
-              <p className="workspace-browser-empty">
-                {workspaceBrowser.loading ? "Loading folders..." : "No folders found here."}
-              </p>
-            )}
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
-        actions={
-          <ActionButton onClick={handleMissionSubmit} type="submit" variant="primary">
-            Launch mission
-          </ActionButton>
-        }
-        onClose={() => setShowMissionDialog(false)}
-        open={showMissionDialog}
-        summary="Mission launch remains available, but operational clutter is removed from the top bar."
-        title="Start mission"
-      >
-        <form className="dialog-form" onSubmit={handleMissionSubmit}>
-          <div className="field-row">
-            <Field label="Workspace">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, workspaceId: event.target.value }))
-                }
-                value={missionForm.workspaceId}
-              >
-                {workspaces.map(item => (
-                  <option key={item.workspace_id} value={item.workspace_id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Runtime">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, runtime: event.target.value }))
-                }
-                value={missionForm.runtime}
-              >
-                <option value="openclaw">OpenClaw</option>
-                <option value="hermes">Hermes</option>
-              </select>
-            </Field>
-          </div>
-
-          <div className="field-row">
-            <Field label="Run mode">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, mode: event.target.value }))
-                }
-                value={missionForm.mode}
-              >
-                <option value="Autopilot">Autopilot</option>
-                <option value="Focus">Focus</option>
-                <option value="Deep Run">Deep Run</option>
-                <option value="Research">Research</option>
-              </select>
-            </Field>
-            <Field label="Profile">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, profile: event.target.value }))
-                }
-                value={missionForm.profile}
-              >
-                {(snapshot.profiles?.availableProfiles || ["beginner", "builder", "advanced"]).map(
-                  option => (
-                    <option key={option} value={option}>
-                      {titleizeToken(option)}
-                    </option>
-                  ),
-                )}
-              </select>
-            </Field>
-          </div>
-
-          <div className="field-row">
-            <Field label="Provider">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, modelProvider: event.target.value }))
-                }
-                value={missionForm.modelProvider}
-              >
-                {MODEL_PROVIDER_OPTIONS.map(option => (
-                  <option key={`mission-provider-${option.value}`} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Model">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, model: event.target.value }))
-                }
-                value={missionForm.model}
-              >
-                <option value="">Profile default</option>
-                {ROUTE_MODEL_OPTIONS.map(option => (
-                  <option key={`mission-model-${option}`} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Effort">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, modelEffort: event.target.value }))
-                }
-                value={normalizeRouteEffort(missionForm.modelEffort, "medium")}
-              >
-                {MODEL_EFFORT_OPTIONS.map(option => (
-                  <option key={`mission-effort-${option.value}`} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-
-          <div className="field-row">
-            <Field label="Budget hours">
-              <input
-                min="1"
-                onChange={event =>
-                  setMissionForm(current => ({
-                    ...current,
-                    budgetHours: Number(event.target.value || 12),
-                  }))
-                }
-                type="number"
-                value={missionForm.budgetHours}
-              />
-            </Field>
-            <Field label="Run until">
-              <select
-                onChange={event =>
-                  setMissionForm(current => ({ ...current, runUntil: event.target.value }))
-                }
-                value={missionForm.runUntil}
-              >
-                <option value="pause_on_failure">Pause on failure</option>
-                <option value="continue_until_blocked">Continue until blocked</option>
-              </select>
-            </Field>
-          </div>
-
-          <Field label="Stop after (minutes, optional)">
-            <input
-              min="0"
-              onChange={event =>
-                setMissionForm(current => ({
-                  ...current,
-                  relativeStopMinutes: event.target.value.replace(/[^\d]/g, ""),
-                }))
-              }
-              placeholder="Leave empty to use Budget hours only"
-              type="number"
-              value={missionForm.relativeStopMinutes}
-            />
-          </Field>
-
-          <Field label="Mission objective">
-            <textarea
-              onChange={event =>
-                setMissionForm(current => ({ ...current, objective: event.target.value }))
-              }
-              placeholder={missionObjectivePlaceholder(missionForm.profile)}
-              value={missionForm.objective}
-            />
-          </Field>
-
-          <Field label="Success checks">
-            <textarea
-              onChange={event =>
-                setMissionForm(current => ({ ...current, successChecks: event.target.value }))
-              }
-              placeholder={missionChecksPlaceholder(missionForm.profile)}
-              value={missionForm.successChecks}
-            />
-          </Field>
-        </form>
-      </Modal>
-
-      <Modal
-        actions={
-          <div className="inline-actions">
-            <ActionButton onClick={handleClearTelegram}>Clear token</ActionButton>
-            <ActionButton onClick={handleSaveTelegram} type="submit" variant="primary">
-              Save escalation
-            </ActionButton>
-          </div>
-        }
-        onClose={() => setShowEscalationDialog(false)}
-        open={showEscalationDialog}
-        summary="Escalation stays accessible, but only opens when the operator needs it."
-        title="Configure Telegram escalation"
-      >
-        <form className="dialog-form" onSubmit={handleSaveTelegram}>
-          <Field label="Telegram connection token">
-            <input
-              onChange={event => setTelegramBotToken(event.target.value)}
-              placeholder="123456:ABCDEF..."
-              type="password"
-              value={telegramBotToken}
-            />
-          </Field>
-          <Field label="Telegram chat ID">
-            <input
-              onChange={event => setTelegramChatId(event.target.value)}
-              placeholder="123456789"
-              value={telegramChatId}
-            />
-          </Field>
-        </form>
-      </Modal>
-
-      <ToastHost items={toasts} />
-    </>
-  );
-
-  return (
     <div
       className="fluxio-shell"
       data-drawer={showPersistentDrawer ? "open" : "collapsed"}
@@ -12928,6 +12886,26 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     onClick={() => {
                       markAction("rail:runtime");
                       setActiveDrawer(current => (current === "runtime" ? null : "runtime"));
+                    }}
+                  />
+                  <GlobalRailButton
+                    active={surface === "images"}
+                    icon="▧"
+                    label="Images"
+                    onClick={() => {
+                      markAction("rail:images");
+                      setSurface("images");
+                      setActiveDrawer(null);
+                    }}
+                  />
+                  <GlobalRailButton
+                    active={surface === "voice"}
+                    icon="◉"
+                    label="Voice"
+                    onClick={() => {
+                      markAction("rail:voice");
+                      setSurface("voice");
+                      setActiveDrawer(null);
                     }}
                   />
                   <GlobalRailButton
@@ -13243,7 +13221,55 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
         <main className="fluxio-main">
           {!mission ? (
-            uiMode === "builder" ? (
+            uiMode === "builder" && surface === "images" ? (
+              <section className="builder-shell image-studio-shell">
+                <ImageStudioPlayground onRequestDraft={handleImageStudioRequestDraft} />
+              </section>
+            ) : uiMode === "builder" && surface === "voice" ? (
+              <section className="builder-shell voice-studio-shell">
+                <header className="builder-head builder-studio-head">
+                  <div>
+                    <p className="eyebrow">Voice-first control</p>
+                    <h1>Dictation and command review</h1>
+                    <p>
+                      Review dictated text, command confidence, keyboard parity, and confirmation boundaries before the app runs an action.
+                    </p>
+                  </div>
+                  <div className="builder-head-actions">
+                    <ActionButton onClick={() => void handleReferenceDictation()} variant="primary">
+                      System dictation
+                    </ActionButton>
+                    <ActionButton onClick={() => void handleBuilderFeatureAction("open_skills")}>
+                      Voice skill
+                    </ActionButton>
+                  </div>
+                </header>
+                <div className="voice-studio-grid">
+                  <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                  <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
+                    <p className="eyebrow">Accessible operation</p>
+                    <h2>Built for low typing</h2>
+                    <div className="builder-thread-list">
+                      <article className="builder-thread-item tone-good">
+                        <span>Keyboard parity</span>
+                        <strong>Every spoken action keeps a pointer and keyboard path.</strong>
+                        <p>Buttons expose labels that include command names and shortcuts where available.</p>
+                      </article>
+                      <article className="builder-thread-item tone-warn">
+                        <span>Confirmation</span>
+                        <strong>Risky actions pause for review.</strong>
+                        <p>Sending messages, clearing transcripts, approvals, and mission control require confirmation.</p>
+                      </article>
+                      <article className="builder-thread-item tone-neutral">
+                        <span>Support truth</span>
+                        <strong>No fake microphone state.</strong>
+                        <p>The panel only reports live support when browser speech APIs or a local bridge are actually present.</p>
+                      </article>
+                    </div>
+                  </aside>
+                </div>
+              </section>
+            ) : uiMode === "builder" ? (
               <section className="builder-shell builder-launch-shell">
                 <header className="builder-head builder-studio-head">
                   <div>
@@ -13621,6 +13647,54 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </form>
               </section>
             )
+          ) : uiMode === "builder" && surface === "images" ? (
+            <section className="builder-shell image-studio-shell">
+              <ImageStudioPlayground onRequestDraft={handleImageStudioRequestDraft} />
+            </section>
+          ) : uiMode === "builder" && surface === "voice" ? (
+            <section className="builder-shell voice-studio-shell">
+              <header className="builder-head builder-studio-head">
+                <div>
+                  <p className="eyebrow">Voice-first control</p>
+                  <h1>Dictation and command review</h1>
+                  <p>
+                    Review dictated text, command confidence, keyboard parity, and confirmation boundaries before the app runs an action.
+                  </p>
+                </div>
+                <div className="builder-head-actions">
+                  <ActionButton onClick={() => void handleReferenceDictation()} variant="primary">
+                    System dictation
+                  </ActionButton>
+                  <ActionButton onClick={() => void handleBuilderFeatureAction("open_skills")}>
+                    Voice skill
+                  </ActionButton>
+                </div>
+              </header>
+              <div className="voice-studio-grid">
+                <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
+                  <p className="eyebrow">Accessible operation</p>
+                  <h2>Built for low typing</h2>
+                  <div className="builder-thread-list">
+                    <article className="builder-thread-item tone-good">
+                      <span>Keyboard parity</span>
+                      <strong>Every spoken action keeps a pointer and keyboard path.</strong>
+                      <p>Buttons expose labels that include command names and shortcuts where available.</p>
+                    </article>
+                    <article className="builder-thread-item tone-warn">
+                      <span>Confirmation</span>
+                      <strong>Risky actions pause for review.</strong>
+                      <p>Sending messages, clearing transcripts, approvals, and mission control require confirmation.</p>
+                    </article>
+                    <article className="builder-thread-item tone-neutral">
+                      <span>Support truth</span>
+                      <strong>No fake microphone state.</strong>
+                      <p>The panel only reports live support when browser speech APIs or a local bridge are actually present.</p>
+                    </article>
+                  </div>
+                </aside>
+              </div>
+            </section>
           ) : uiMode === "builder" ? (
             <section className="builder-shell">
               <header className="builder-head builder-studio-head">
@@ -13951,7 +14025,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         <article className="builder-cowork-status-card">
                           <span>Co-working status</span>
                           <strong>Side-by-side preview</strong>
-                          <small>{selectedLiveReviewEvent?.previewUrl || liveReviewStudio.previewUrl || previewUrl || "Preview URL pending"}</small>
+                          <small>{livePreviewUrl || "Preview URL pending"}</small>
                         </article>
                         <article className="builder-cowork-status-card">
                           <span>Feedback bridge</span>
@@ -15532,6 +15606,147 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
       <Modal
         actions={
+          <>
+            <ActionButton
+              disabled={!openAICodexOAuthFlow.helperCommand}
+              onClick={async () => {
+                const copied = await copyTextValue(openAICodexOAuthFlow.helperCommand || "");
+                pushToast(
+                  copied
+                    ? "Fallback relay helper command copied. Run it on the same device as this browser."
+                    : "Could not copy the relay helper command.",
+                  copied ? "info" : "warn",
+                );
+              }}
+            >
+              Copy fallback relay helper
+            </ActionButton>
+            <ActionButton
+              disabled={!(openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl)}
+              onClick={() =>
+                window.open(
+                  openAICodexOAuthFlow.verificationUrl || openAICodexOAuthFlow.authUrl,
+                  "_blank",
+                  "noopener,noreferrer",
+                )
+              }
+            >
+              Open OpenAI sign-in
+            </ActionButton>
+            <ActionButton
+              disabled={["checking", "completing"].includes(openAICodexOAuthFlow.status)}
+              onClick={() => void completeOpenAICodexOAuth()}
+              variant="primary"
+            >
+              {["checking", "completing"].includes(openAICodexOAuthFlow.status)
+                ? "Connecting..."
+                : "Connect Codex OAuth"}
+            </ActionButton>
+          </>
+        }
+        onClose={() => setOpenAICodexOAuthFlow(current => ({ ...current, open: false }))}
+        open={openAICodexOAuthFlow.open}
+        summary="OpenAI redirects Codex OAuth to localhost. The desktop app catches that callback directly; NAS/web installs use this relay fallback."
+        title="Complete OpenAI Codex OAuth"
+      >
+        <div className="dialog-form">
+          <p>
+            Run the fallback relay helper on the same device as this browser. It listens on
+            <strong> localhost:{openAICodexOAuthFlow.callbackPort || 1455}</strong>, opens
+            OpenAI sign-in, and forwards the callback to the NAS.
+          </p>
+          {openAICodexOAuthFlow.helperCommand ? (
+            <pre className="runtime-output">{openAICodexOAuthFlow.helperCommand}</pre>
+          ) : null}
+          <Field label="Final localhost callback URL or authorization code">
+            <textarea
+              onChange={event =>
+                setOpenAICodexOAuthFlow(current => ({
+                  ...current,
+                  callback: event.target.value,
+                }))
+              }
+              placeholder="http://localhost:1455/auth/callback?code=..."
+              rows={5}
+              value={openAICodexOAuthFlow.callback}
+            />
+          </Field>
+          {openAICodexOAuthFlow.message ? <p>{openAICodexOAuthFlow.message}</p> : null}
+          {openAICodexOAuthFlow.output ? (
+            <pre className="runtime-output">{openAICodexOAuthFlow.output}</pre>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        actions={
+          <>
+            <ActionButton
+              disabled={!miniMaxOAuthFlow.verificationUrl}
+              onClick={() =>
+                window.open(
+                  miniMaxOAuthFlow.verificationUrl,
+                  "_blank",
+                  "noopener,noreferrer",
+                )
+              }
+            >
+              Open MiniMax
+            </ActionButton>
+            <ActionButton
+              disabled={!miniMaxOAuthFlow.userCode}
+              onClick={async () => {
+                const copied = await copyTextValue(miniMaxOAuthFlow.userCode || "");
+                pushToast(
+                  copied ? "MiniMax code copied." : "Could not copy the MiniMax code.",
+                  copied ? "info" : "warn",
+                );
+              }}
+            >
+              Copy code
+            </ActionButton>
+            <ActionButton
+              disabled={miniMaxOAuthFlow.status === "checking"}
+              onClick={() => void completeMiniMaxOAuth()}
+              variant="primary"
+            >
+              {miniMaxOAuthFlow.status === "checking" ? "Checking..." : "Verify MiniMax"}
+            </ActionButton>
+          </>
+        }
+        onClose={() => setMiniMaxOAuthFlow(current => ({ ...current, open: false }))}
+        open={miniMaxOAuthFlow.open}
+        summary="MiniMax uses a portal user-code grant. Syntelos starts it on the NAS, then writes the completed token into the OpenClaw auth profile."
+        title="Complete MiniMax OpenClaw OAuth"
+      >
+        <div className="dialog-form">
+          <p>
+            Open MiniMax verification, approve access, then verify the NAS session.
+          </p>
+          {miniMaxOAuthFlow.verificationUrl ? (
+            <Field label="Verification URL">
+              <input readOnly value={miniMaxOAuthFlow.verificationUrl} />
+            </Field>
+          ) : null}
+          {miniMaxOAuthFlow.userCode ? (
+            <Field label="MiniMax code">
+              <pre className="runtime-output">{miniMaxOAuthFlow.userCode}</pre>
+            </Field>
+          ) : null}
+          {miniMaxOAuthFlow.command ? (
+            <Field label="Fallback command">
+              <pre className="runtime-output">{miniMaxOAuthFlow.command}</pre>
+            </Field>
+          ) : null}
+          {miniMaxOAuthFlow.message ? <p>{miniMaxOAuthFlow.message}</p> : null}
+          {miniMaxOAuthFlow.output ? (
+            <pre className="runtime-output">{miniMaxOAuthFlow.output}</pre>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        actions={
           <ActionButton onClick={handleWorkspaceSubmit} type="submit" variant="primary">
             Save project
           </ActionButton>
@@ -15650,6 +15865,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               >
                 <option value="openclaw">OpenClaw</option>
                 <option value="hermes">Hermes</option>
+                <option value="opencode">OpenCodeGo</option>
               </select>
             </Field>
           </div>

@@ -170,10 +170,18 @@ def main() -> int:
         dom_text = decode_output(dom.stdout)
     dom_path.write_text(dom_text, encoding="utf-8")
 
-    expected = args.expect or ["Runtime operations", "Automatic verify", "OpenClaw", "Hermes"]
+    expected = args.expect or ["Syntelos", "Agent", "Builder", "OpenClaw"]
     missing = [] if not dom_supported else [fragment for fragment in expected if fragment not in dom_text]
+    skin_errors = []
+    if dom_supported:
+        if 'class="fluxio-shell' not in dom_text:
+            skin_errors.append("missing .fluxio-shell current app root")
+        if 'class="fluxos-shell' in dom_text:
+            skin_errors.append("rendered removed .fluxos-shell reference skin")
+        if 'class="grand-public-page' in dom_text:
+            skin_errors.append("rendered public landing page instead of /control app")
     stats = image_stats(screenshot_path)
-    passed = not missing and bool(stats["nonBlank"])
+    passed = not missing and not skin_errors and bool(stats["nonBlank"])
     report = {
         "checkedAt": datetime.now(timezone.utc).isoformat(),
         "url": args.url,
@@ -184,6 +192,7 @@ def main() -> int:
         "domPath": str(dom_path),
         "expectedFragments": expected,
         "missingFragments": missing,
+        "skinErrors": skin_errors,
         "image": stats,
         "passed": passed,
     }

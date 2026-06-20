@@ -10,6 +10,7 @@ export function escapeHtml(value) {
 export function runtimeLabel(runtimeId) {
   if (runtimeId === 'openclaw') return 'OpenClaw';
   if (runtimeId === 'hermes') return 'Hermes';
+  if (runtimeId === 'opencode') return 'OpenCodeGo';
   return runtimeId;
 }
 

@@ -1,0 +1,134 @@
+.fluxio-voice-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line, rgba(234, 228, 214, 0.12));
+  border-radius: 8px;
+  background: var(--panel, #202321);
+  color: var(--text, #f4f0e8);
+  padding: 14px;
+}
+
+.fluxio-voice-panel-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fluxio-voice-panel h2,
+.fluxio-voice-panel p {
+  margin: 0;
+}
+
+.fluxio-voice-status-pill,
+.fluxio-voice-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line, rgba(234, 228, 214, 0.12));
+  border-radius: 999px;
+  color: var(--muted, #aaa395);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.fluxio-voice-status-pill[data-supported="true"] {
+  border-color: rgba(34, 197, 94, 0.28);
+  color: var(--good, #22c55e);
+}
+
+.fluxio-voice-live-status {
+  color: var(--muted, #aaa395);
+}
+
+.fluxio-voice-transcript {
+  display: grid;
+  gap: 8px;
+  min-height: 88px;
+  border: 1px solid var(--line, rgba(234, 228, 214, 0.12));
+  border-radius: 8px;
+  background: var(--panel-soft, #161918);
+  padding: 10px;
+}
+
+.fluxio-voice-empty {
+  color: var(--muted, #aaa395);
+}
+
+.fluxio-voice-warning {
+  justify-self: start;
+  border-color: rgba(245, 158, 11, 0.32);
+  color: var(--warn, #f59e0b);
+}
+
+.fluxio-voice-actions,
+.fluxio-voice-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fluxio-voice-actions button,
+.fluxio-voice-confirm button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--line, rgba(234, 228, 214, 0.12));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text, #f4f0e8);
+  padding: 0 10px;
+}
+
+.fluxio-voice-actions button:disabled,
+.fluxio-voice-confirm button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.fluxio-voice-actions button:active,
+.fluxio-voice-confirm button:active {
+  transform: translateY(1px);
+}
+
+.fluxio-voice-confirm {
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--line, rgba(234, 228, 214, 0.12));
+  padding-top: 10px;
+}
+
+.fluxio-voice-help summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--muted, #aaa395);
+}
+
+.fluxio-voice-help ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.fluxio-voice-panel[data-motion="available"] .fluxio-voice-live-status {
+  transition: opacity 160ms ease, color 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluxio-voice-panel *,
+  .fluxio-voice-panel *::before,
+  .fluxio-voice-panel *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .fluxio-voice-actions button:active,
+  .fluxio-voice-confirm button:active {
+    transform: none;
+  }
+}

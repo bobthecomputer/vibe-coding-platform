@@ -16,9 +16,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "docs" / "cleanup" / "before-after" / "2026-05-20"
+OUT_DIR = Path(os.environ.get("FLUXIO_PROOF_OUT_DIR", str(ROOT / "docs" / "cleanup" / "before-after" / "2026-05-20")))
 CHECK_PATH = OUT_DIR / "interaction-smoke-check.json"
-BASE_URL = "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&surface=home"
+BASE_URL = os.environ.get(
+    "FLUXIO_CONTROL_URL",
+    "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder",
+)
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 
 
@@ -187,6 +190,23 @@ def wait_for_ready(cdp: Cdp, timeout: float = 12.0) -> None:
     raise RuntimeError(f"Timed out waiting for React route to render. location={location!r} ready={ready!r} text={text!r}")
 
 
+def assert_current_control_shell(cdp: Cdp) -> None:
+    result = cdp.eval(
+        """
+(() => ({
+  hasFluxioShell: Boolean(document.querySelector('.fluxio-shell')),
+  hasFluxosShell: Boolean(document.querySelector('.fluxos-shell')),
+  hasPublicPage: Boolean(document.querySelector('.grand-public-page')),
+  url: location.href,
+}))()
+"""
+    )
+    if not isinstance(result, dict) or not result.get("hasFluxioShell"):
+        raise RuntimeError(f"Current .fluxio-shell did not render: {result}")
+    if result.get("hasFluxosShell") or result.get("hasPublicPage"):
+        raise RuntimeError(f"Wrong skin rendered for control proof: {result}")
+
+
 def click_button(cdp: Cdp, label: str) -> None:
     expression = f"""
 (() => {{
@@ -246,15 +266,18 @@ def main() -> int:
         cdp.send("Page.navigate", {"url": BASE_URL})
         time.sleep(1.5)
         wait_for_ready(cdp)
+        assert_current_control_shell(cdp)
 
         steps = []
         for label, expected in [
-            ("Workbench", ["Runtime operations", "OpenClaw", "Hermes"]),
-            ("Rule Sets", ["Rule Sets", "Core policy", "Approval"]),
-            ("Settings", ["Settings", "Rules & Routing", "Workspace"]),
-            ("Home", ["Fluxio", "What will we build today?", "Agent", "Builder"]),
+            ("Builder", ["CONVERSATION COMMAND BOARD", "Launch mission"]),
+            ("Skills", ["Skills"]),
+            ("Runtime", ["Runtime", "OpenClaw", "Work engines"]),
+            ("Settings", ["Settings", "Workspace"]),
+            ("Agent", ["Agent", "Syntelos"]),
         ]:
             click_button(cdp, label)
+            assert_current_control_shell(cdp)
             for fragment in expected:
                 wait_for_text(cdp, fragment)
             visible = str(cdp.eval("document.body.innerText")).replace("\r\n", "\n")

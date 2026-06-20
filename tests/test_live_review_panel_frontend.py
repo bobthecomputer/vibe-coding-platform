@@ -5,7 +5,6 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-REFERENCE_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioReferenceShell.jsx"
 FLUXIO_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
 FLUXIO_APP = ROOT / "web" / "src" / "fluxio" / "FluxioApp.tsx"
 MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
@@ -16,78 +15,87 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
     def test_live_review_model_includes_required_event_domains(self) -> None:
         model = MODEL.read_text(encoding="utf-8")
 
-        self.assertIn('kind: "file_change"', model)
-        self.assertIn('kind: "browser_qa"', model)
-        self.assertIn('kind: "computer_use"', model)
-        self.assertIn('kind: "preview_refresh"', model)
-        self.assertIn('kind: "verification"', model)
-        self.assertIn('kind: "image_playground"', model)
-        self.assertIn('kind: "operator_followup"', model)
-        self.assertIn('kind: "progress_update"', model)
-        self.assertIn('kind: "runtime_activity"', model)
-        self.assertIn('kind: "continuation_supervisor"', model)
-        self.assertIn('kind: "replay_marker"', model)
-        self.assertIn("annotationReadiness", model)
-        self.assertIn("recoveryAction", model)
-        self.assertIn("queueTimeline", model)
-        self.assertIn("providerEvents", model)
-        self.assertIn("generatedImages", model)
-        self.assertIn("layerHandoff", model)
-        self.assertIn("launchedPrograms", model)
-        self.assertIn("runtimeActivity", model)
-        self.assertIn("progressUpdate", model)
-        self.assertIn("cadenceMinutes", model)
-        self.assertIn("cadenceState", model)
-        self.assertIn("cadenceAgeMinutes", model)
-        self.assertIn("deepLink", model)
-        self.assertIn("tests", model)
-        self.assertIn("replayMarkers", model)
-        self.assertIn("acknowledgedBy", model)
-        self.assertIn("operatorMessages", model)
-        self.assertIn("page", model)
-        self.assertIn("screenshotFrames", model)
-        self.assertIn("snapshotPath", model)
-        self.assertIn("thumbnailPath", model)
-        self.assertIn("frameId", model)
-        self.assertIn("proofTarget", model)
-        self.assertIn("threadTarget", model)
-        self.assertIn("selectedSkills", model)
-        self.assertIn("plannerRules", model)
-        self.assertIn("designPrompts", model)
-        self.assertIn("plannerProof", model)
-        self.assertIn("continuationSupervisor", model)
-        self.assertIn("routePreservation", model)
-        self.assertIn("dispatchLagMinutes", model)
-        self.assertIn("reconcileLatencyMs", model)
-        self.assertIn("blockerReason", model)
-        self.assertIn("externalHeartbeatRequired", model)
-        self.assertIn("failureReason", model)
-        self.assertIn("nextIdea", model)
-        self.assertIn("structuredFeedbackReceipt", model)
-        self.assertIn("latestStructuredFeedbackReceipt", model)
-        self.assertIn("live_review_structured_feedback", model)
-        self.assertIn("plannerExecutorHandoffId", model)
+        for fragment in [
+            'kind: "file_change"',
+            'kind: "browser_qa"',
+            'kind: "computer_use"',
+            'kind: "preview_refresh"',
+            'kind: "verification"',
+            'kind: "image_playground"',
+            'kind: "operator_followup"',
+            'kind: "progress_update"',
+            'kind: "runtime_activity"',
+            'kind: "continuation_supervisor"',
+            'kind: "replay_marker"',
+            "annotationReadiness",
+            "recoveryAction",
+            "queueTimeline",
+            "providerEvents",
+            "generatedImages",
+            "layerHandoff",
+            "launchedPrograms",
+            "runtimeActivity",
+            "progressUpdate",
+            "cadenceMinutes",
+            "cadenceState",
+            "cadenceAgeMinutes",
+            "deepLink",
+            "tests",
+            "replayMarkers",
+            "acknowledgedBy",
+            "operatorMessages",
+            "page",
+            "screenshotFrames",
+            "snapshotPath",
+            "thumbnailPath",
+            "frameId",
+            "proofTarget",
+            "threadTarget",
+            "selectedSkills",
+            "plannerRules",
+            "designPrompts",
+            "plannerProof",
+            "continuationSupervisor",
+            "routePreservation",
+            "dispatchLagMinutes",
+            "reconcileLatencyMs",
+            "blockerReason",
+            "externalHeartbeatRequired",
+            "failureReason",
+            "nextIdea",
+            "structuredFeedbackReceipt",
+            "latestStructuredFeedbackReceipt",
+            "live_review_structured_feedback",
+            "plannerExecutorHandoffId",
+        ]:
+            self.assertIn(fragment, model)
 
     def test_connected_device_bridge_evidence_is_exposed_to_live_review(self) -> None:
         bridge = (ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts").read_text(encoding="utf-8")
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
 
-        self.assertIn("connectedDeviceBridge", bridge)
-        self.assertIn("dualPathBridge", bridge)
-        self.assertIn("performedByHost", bridge)
-        self.assertIn("pendingApprovals", bridge)
-        self.assertIn("syncStatus", bridge)
-        self.assertIn("receipts", bridge)
-        self.assertIn("bridge.permission", bridge)
-        self.assertIn("set_connected_device_bridge_permission_command", bridge)
-        self.assertIn("plan_connected_device_bridge_operation_command", bridge)
-        self.assertIn("Dual-path bridge", shell)
-        self.assertIn("builder-live-review-bridge", shell)
-        self.assertIn("Performed by", shell)
-        self.assertIn("Sync:", shell)
-        self.assertIn("Operation receipt", shell)
-        self.assertIn("Host status:", shell)
+        for fragment in [
+            "connectedDeviceBridge",
+            "dualPathBridge",
+            "performedByHost",
+            "pendingApprovals",
+            "syncStatus",
+            "receipts",
+            "bridge.permission",
+            "set_connected_device_bridge_permission_command",
+            "plan_connected_device_bridge_operation_command",
+        ]:
+            self.assertIn(fragment, bridge)
+        for fragment in [
+            "Dual-path bridge",
+            "builder-live-review-bridge",
+            "Performed by",
+            "Sync:",
+            "Operation receipt",
+            "Host status:",
+        ]:
+            self.assertIn(fragment, shell)
         self.assertIn(".builder-live-review-bridge", styles)
 
     def test_live_review_planner_proof_shows_decision_influence_and_coworking_status(self) -> None:
@@ -96,264 +104,195 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         styles = STYLES.read_text(encoding="utf-8")
 
         self.assertIn("decisionInfluence", model)
-        self.assertIn("Skill/ruleset impact", shell)
-        self.assertIn("builder-live-proof-impact-grid", shell)
-        self.assertIn("Applied to", shell)
-        self.assertIn("Co-working status", shell)
-        self.assertIn("Side-by-side preview", shell)
-        self.assertIn("Feedback bridge", shell)
-        self.assertIn("Evidence timeline", shell)
-        self.assertIn("Planner → executor bridge packet", shell)
-        self.assertIn("Route context", shell)
-        self.assertIn("Task context", shell)
-        self.assertIn("Verifier feedback", shell)
-        self.assertIn("status updates", shell)
-        self.assertIn(".builder-cowork-status-grid", styles)
-        self.assertIn(".builder-live-proof-impact-grid", styles)
-        self.assertIn(".builder-live-bridge-packet", styles)
-        self.assertIn(".builder-live-bridge-grid", styles)
-        self.assertIn("touch-action: manipulation", styles)
+        for fragment in [
+            "Skill/ruleset impact",
+            "builder-live-proof-impact-grid",
+            "Applied to",
+            "Co-working status",
+            "Side-by-side preview",
+            "Feedback bridge",
+            "Evidence timeline",
+            "Planner \u2192 executor bridge packet",
+            "Route context",
+            "Task context",
+            "Verifier feedback",
+            "status updates",
+        ]:
+            self.assertIn(fragment, shell)
+        for fragment in [
+            ".builder-cowork-status-grid",
+            ".builder-live-proof-impact-grid",
+            ".builder-live-bridge-packet",
+            ".builder-live-bridge-grid",
+            "touch-action: manipulation",
+        ]:
+            self.assertIn(fragment, styles)
 
     def test_fluxio_app_live_review_renders_coworking_bridge_and_skill_influence_panels(self) -> None:
         app = FLUXIO_APP.read_text(encoding="utf-8")
         bridge = (ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts").read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
 
-        self.assertIn("skillInfluence", bridge)
-        self.assertIn("coworkStatus", bridge)
-        self.assertIn("plannerBridgePacket", bridge)
-        self.assertIn("statusUpdates", bridge)
-        self.assertIn("routeContext", bridge)
-        self.assertIn("taskContext", bridge)
-        self.assertIn("verifierFeedback", bridge)
+        for fragment in [
+            "skillInfluence",
+            "coworkStatus",
+            "plannerBridgePacket",
+            "statusUpdates",
+            "routeContext",
+            "taskContext",
+            "verifierFeedback",
+        ]:
+            self.assertIn(fragment, bridge)
+        for fragment in [
+            "Side-by-side preview",
+            "Feedback bridge",
+            "Evidence timeline",
+            "Planner \u2192 executor bridge packet",
+            "Route/model/task context",
+            "Verifier feedback",
+            "Skill/ruleset impact",
+            "Design prompts + next idea",
+            "Status updates",
+        ]:
+            self.assertIn(fragment, app)
+        for fragment in [
+            ".syntelos-review-cowork-grid",
+            ".syntelos-review-bridge-grid",
+            ".syntelos-review-skill-influence",
+            ".syntelos-review-status-updates",
+            "touch-action: manipulation",
+        ]:
+            self.assertIn(fragment, styles)
 
-        self.assertIn("Side-by-side preview", app)
-        self.assertIn("Feedback bridge", app)
-        self.assertIn("Evidence timeline", app)
-        self.assertIn("Planner → executor bridge packet", app)
-        self.assertIn("Route/model/task context", app)
-        self.assertIn("Verifier feedback", app)
-        self.assertIn("Skill/ruleset impact", app)
-        self.assertIn("Design prompts + next idea", app)
-        self.assertIn("Status updates", app)
+    def test_live_review_side_panel_renders_current_shell_timeline_and_annotations(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
 
-        self.assertIn(".syntelos-review-cowork-grid", styles)
-        self.assertIn(".syntelos-review-bridge-grid", styles)
-        self.assertIn(".syntelos-review-skill-influence", styles)
-        self.assertIn(".syntelos-review-status-updates", styles)
-        self.assertIn("touch-action: manipulation", styles)
-
-    def test_live_review_side_panel_renders_event_timeline_and_annotations(self) -> None:
-        shell = REFERENCE_SHELL.read_text(encoding="utf-8")
-        app = FLUXIO_SHELL.read_text(encoding="utf-8")
-
-        self.assertIn("Live Review Timeline", shell)
-        self.assertIn("builder-live-review-panel", shell)
-        self.assertIn("builder-live-review-events", shell)
-        self.assertIn("builder-live-review-event", shell)
-        self.assertIn("builder-live-review-queue-strip", shell)
-        self.assertIn("builder-live-review-event-group", shell)
-        self.assertIn("builder-live-review-meta", shell)
-        self.assertIn("Live Preview Side Panel", shell)
-        self.assertIn("builder-live-review-sidepanel", shell)
-        self.assertIn("builder-live-review-event-details", shell)
-        self.assertIn("10-20 minute update payload", shell)
-        self.assertIn("Browser QA actions", shell)
-        self.assertIn("Launched programs", shell)
-        self.assertIn("Image provider events", shell)
-        self.assertIn("Operator follow-up messages", shell)
-        self.assertIn("Browser annotations", shell)
-        self.assertIn("builder-live-annotation-item", shell)
-        self.assertIn("Page/layer:", shell)
-        self.assertIn("Recovery:", shell)
-        self.assertIn("builder-live-annotation-map", shell)
-        self.assertIn("builder-live-annotation-rect", shell)
-        self.assertIn("builder-live-annotation-pin", shell)
-        self.assertIn("Planner selected skills", shell)
-        self.assertIn("Planner rules", shell)
-        self.assertIn("Design prompts", shell)
-        self.assertIn("Next idea handoff", shell)
-        self.assertIn("Co-working bridge contract", shell)
-        self.assertIn("Structured feedback into agent mission bridge", shell)
-        self.assertIn("Route/model/task context", shell)
-        self.assertIn("Verifier feedback loop", shell)
-        self.assertIn("Activity/timelapse evidence", shell)
-        self.assertIn("Send structured feedback", app)
-        self.assertIn("Latest structured feedback receipt", app)
-        self.assertIn("Receipt kind: live_review_structured_feedback", app)
-        self.assertIn("Timeline receipt kind: live_review_structured_feedback", app)
-        self.assertIn("Proof eventId", app)
-        self.assertIn("Copy receipt proof handle", app)
-        self.assertIn("builder-live-review-receipt-handles", app)
-        self.assertIn("Copy latest receipt eventId", app)
-        self.assertIn("Copy latest plannerExecutorHandoffId", app)
-        self.assertIn("data-proof-handle", app)
-        self.assertIn("Structured feedback receipt history", app)
-        self.assertIn("Copy receipt history eventId", app)
-        self.assertIn("Copy receipt history plannerExecutorHandoffId", app)
-        self.assertIn("Copy receipt history combined proof handle", app)
-        self.assertIn("Copy all handles", app)
-        self.assertIn("Jump to source event", app)
-        self.assertIn("history-jump-source-event", app)
-        self.assertIn(".builder-live-review-receipt-handles", STYLES.read_text(encoding="utf-8"))
-        self.assertIn(".builder-live-review-receipt-history", STYLES.read_text(encoding="utf-8"))
-        self.assertIn("plannerExecutorHandoffId", app)
+        for fragment in [
+            "Live Review Timeline",
+            "builder-live-review-panel",
+            "builder-live-review-events",
+            "builder-live-review-event",
+            "builder-live-review-queue-strip",
+            "builder-live-review-event-group",
+            "builder-live-review-meta",
+            "Browser annotations",
+            "builder-live-annotation-item",
+            "Page/layer:",
+            "Recovery:",
+            "builder-live-annotation-map",
+            "builder-live-annotation-rect",
+            "builder-live-annotation-pin",
+            "Design prompts",
+            "Next idea handoff",
+            "Send structured feedback",
+            "Latest structured feedback receipt",
+            "Receipt kind: live_review_structured_feedback",
+            "Timeline receipt kind: live_review_structured_feedback",
+            "Proof eventId",
+            "Copy receipt proof handle",
+            "builder-live-review-receipt-handles",
+            "Copy latest receipt eventId",
+            "Copy latest plannerExecutorHandoffId",
+            "data-proof-handle",
+            "Structured feedback receipt history",
+            "Copy receipt history eventId",
+            "Copy receipt history plannerExecutorHandoffId",
+            "Copy receipt history combined proof handle",
+            "Copy all handles",
+            "Jump to source event",
+            "history-jump-source-event",
+            "plannerExecutorHandoffId",
+        ]:
+            self.assertIn(fragment, shell)
+        self.assertIn(".builder-live-review-receipt-handles", styles)
+        self.assertIn(".builder-live-review-receipt-history", styles)
 
     def test_control_room_renders_runtime_compartment_and_visual_generated_artifacts(self) -> None:
-        app = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
 
-        self.assertIn("agent-compartment-box", app)
-        self.assertIn("Runtime compartment", app)
-        self.assertIn("Tool/action timeline", app)
-        self.assertIn("Files and approvals", app)
-        self.assertIn("builder-live-review-image-grid", app)
-        self.assertIn("artifactUrlForRecord", app)
-        self.assertIn("resolveControlArtifactUrl", app)
-        self.assertIn("Preview not served", app)
-        self.assertIn(".agent-compartment-box", styles)
-        self.assertIn(".agent-compartment-matrix", styles)
-        self.assertIn(".builder-live-review-image-card", styles)
-        self.assertIn(".builder-live-review-artifact-list", styles)
+        for fragment in [
+            "agent-compartment-box",
+            "Runtime compartment",
+            "Tool/action timeline",
+            "Files and approvals",
+            "builder-live-review-image-grid",
+            "artifactUrlForRecord",
+            "resolveControlArtifactUrl",
+            "Preview not served",
+        ]:
+            self.assertIn(fragment, shell)
+        for fragment in [
+            ".agent-compartment-box",
+            ".agent-compartment-matrix",
+            ".builder-live-review-image-card",
+            ".builder-live-review-artifact-list",
+        ]:
+            self.assertIn(fragment, styles)
 
-    def test_image_playground_has_simple_generation_plugin_path(self) -> None:
-        app = (ROOT / "web" / "src" / "fluxio" / "ImagePlayground.jsx").read_text(encoding="utf-8")
-        adapters = (ROOT / "web" / "src" / "fluxio" / "imageProviderAdapters.js").read_text(encoding="utf-8")
+    def test_removed_standalone_old_ui_files_stay_deleted(self) -> None:
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "FluxioReferenceShell.jsx").exists())
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "ImagePlayground.jsx").exists())
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "RuntimeOperationsPanel.jsx").exists())
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "imageProviderAdapters.js").exists())
         styles = STYLES.read_text(encoding="utf-8")
-
-        self.assertIn("Image generation plugin", app)
-        self.assertIn("Generate image now", app)
-        self.assertIn("imagePluginMode", app)
-        self.assertIn('operation === "generate" ? options.imagePluginMode !== false', app)
-        self.assertIn('runOperation("generate", { imagePluginMode: true })', app)
-        self.assertIn("resetImageHorizontalScroll", app)
-        self.assertIn("renderMode: imagePluginMode ? \"provider-image\"", adapters)
-        self.assertIn('imagePluginMode ? getProviderAdapter("codex_subscription_gpt_image2")', adapters)
-        self.assertIn("GPT-Image-2 via Codex subscription", adapters)
-        self.assertIn("createProviderBlockedResult", adapters)
-        self.assertIn('canvas.toDataURL("image/png")', adapters)
-        self.assertNotIn("data:image/svg", adapters)
-        self.assertIn(".image-simple-generator", styles)
-
-    def test_agent_conversation_creation_is_explicit(self) -> None:
-        shell = REFERENCE_SHELL.read_text(encoding="utf-8")
-        styles = STYLES.read_text(encoding="utf-8")
-
-        self.assertIn("New chat", shell)
-        self.assertIn("Start new conversation", shell)
-        self.assertIn('onRequestAction?.("flow:new-conversation")', shell)
-        self.assertIn(".reference-search-shell-new span", styles)
-        self.assertIn(".reference-conversation-blank .reference-black-button", styles)
-
-    def test_control_room_uses_reference_board_theme_for_primary_states(self) -> None:
-        styles = STYLES.read_text(encoding="utf-8")
-
-        self.assertIn("Syntelos 10-state reference board theme", styles)
-        self.assertIn("--control-bg: #050606", styles)
-        self.assertIn(".grand-login-screen::before", styles)
-        self.assertIn(".grand-login-sticker-row", styles)
-        self.assertIn(".reference-home-card-row", styles)
-        self.assertIn(".agent-compartment-box", styles)
-        self.assertIn(".image-library-grid", styles)
-        self.assertIn(".reference-main.surface-settings", styles)
-        self.assertIn("visual-first generated image artifacts", styles)
+        self.assertNotIn(".reference-shell", styles)
+        self.assertNotIn(".image-playground", styles)
 
     def test_live_review_side_panel_renders_clickthrough_and_replay_controls(self) -> None:
-        shell = REFERENCE_SHELL.read_text(encoding="utf-8")
-
-        self.assertIn("selectedLiveReviewEvent", shell)
-        self.assertIn("builder-live-review-focus", shell)
-        self.assertIn("builder-live-review-controls", shell)
-        self.assertIn("Rewind marker", shell)
-        self.assertIn("Previous frame", shell)
-        self.assertIn("Next frame", shell)
-        self.assertIn("setSelectedLiveReviewEventId", shell)
-        self.assertIn("selectedScreenshotFrame", shell)
-        self.assertIn("screenshotFrames", shell)
-        self.assertIn("builder-live-review-frame-strip", shell)
-        self.assertIn("builder-live-review-frame-thumb", shell)
-        self.assertIn("builder-live-review-frame-image", shell)
-        self.assertIn("Marker jump", shell)
-        self.assertIn("Jump to frame", shell)
-        self.assertIn("Marker timeline scrubber", shell)
-        self.assertIn("Direct scrubber drag and timelapse sync", shell)
-        self.assertIn("Autoplay timelapse", shell)
-        self.assertIn("Pause timelapse", shell)
-        self.assertIn("Open proof pane", shell)
-        self.assertIn("Open thread pane", shell)
-        self.assertIn("Marker context", shell)
-        self.assertIn("Use ←/→ to step frames", shell)
-        self.assertIn("live:jump-marker", shell)
-
-        fluxio_shell = FLUXIO_SHELL.read_text(encoding="utf-8")
-        self.assertIn("Jump to review block", fluxio_shell)
-        self.assertIn("Open preview URL", fluxio_shell)
-        self.assertIn("Open {titleizeToken(selectedLiveReviewEvent.deepLink.drawerId)} drawer", fluxio_shell)
-        self.assertIn("Cadence ${titleizeToken(item.cadenceState)}", fluxio_shell)
-        self.assertIn("Marker-to-frame timeline rail", fluxio_shell)
-        self.assertIn("stepReplayMarker", fluxio_shell)
-        self.assertIn("Autoplay timelapse", fluxio_shell)
-        self.assertIn("Pause timelapse", fluxio_shell)
-        self.assertIn("Runtime activity detail", fluxio_shell)
-        self.assertIn("Live evidence", shell)
-        self.assertIn("Runtime, artifacts, Hermes, NAS", shell)
-        self.assertIn("live:evidence:runtime", shell)
-        self.assertIn("live:evidence:images", shell)
-        self.assertIn("live:evidence:hermes", shell)
-        self.assertIn("live:evidence:nas", shell)
-        self.assertNotIn("live:comment-emoji", shell)
-        self.assertIn("Internal Continuation Supervisor", fluxio_shell)
-        self.assertIn("Internal supervisor state and failure reason", fluxio_shell)
-        self.assertIn("Failure reason:", fluxio_shell)
-        self.assertIn("Blocker reason:", fluxio_shell)
-        self.assertIn("External heartbeat required:", fluxio_shell)
-        self.assertIn("Preserved route:", fluxio_shell)
-        self.assertIn("continuation_supervisor", fluxio_shell)
-        self.assertIn("Planner proof", fluxio_shell)
-        self.assertIn("Planner skills and prompts", fluxio_shell)
-        self.assertIn("Selected skills: none captured yet", fluxio_shell)
-        self.assertIn("builder-live-proof-chip-row", fluxio_shell)
-        self.assertIn("builder-live-proof-chip", fluxio_shell)
-        self.assertIn("Skill chip opened", fluxio_shell)
-        self.assertIn("Skills drawer filtered to", fluxio_shell)
-        self.assertIn("Design prompt detail", fluxio_shell)
-        self.assertIn("Next idea handoff draft seeded", fluxio_shell)
-        self.assertIn("Follow-up from planner next idea", fluxio_shell)
-        self.assertIn("ArrowRight", fluxio_shell)
-        self.assertIn("ArrowLeft", fluxio_shell)
-        self.assertIn("role=\"listbox\"", fluxio_shell)
-        self.assertIn("onKeyDown={event =>", fluxio_shell)
-
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
 
-        self.assertIn(".builder-live-review-layout", styles)
-        self.assertIn(".builder-live-review-panel", styles)
-        self.assertIn(".builder-live-review-sidepanel", styles)
-        self.assertIn(".builder-live-review-event-details", styles)
-        self.assertIn(".builder-live-review-sidegroup", styles)
-        self.assertIn(".builder-live-review-events", styles)
-        self.assertIn(".builder-live-annotation-list", styles)
-        self.assertIn(".builder-live-review-event-group", styles)
-        self.assertIn(".builder-live-review-meta", styles)
-        self.assertIn(".builder-live-annotation-map", styles)
-        self.assertIn(".builder-live-review-frame-strip", styles)
-        self.assertIn(".builder-live-review-frame-thumb", styles)
-        self.assertIn(".builder-live-review-frame-image", styles)
-        self.assertIn(".builder-live-review-marker-jump", styles)
-        self.assertIn(".builder-live-review-timeline-rail", styles)
-        self.assertIn(".builder-live-review-scrubber", styles)
-        self.assertIn(".builder-live-review-marker-pill", styles)
-        self.assertIn(".builder-live-review-runtime-drawer", styles)
-        self.assertIn(".builder-live-review-planner-proof", styles)
-        self.assertIn(".builder-live-review-supervisor", styles)
-        self.assertIn(".builder-live-proof-chip-row", styles)
-        self.assertIn(".builder-live-proof-chip", styles)
-        self.assertIn(".builder-live-proof-detail", styles)
-        self.assertIn(".builder-live-coworking-bridge", styles)
-        self.assertIn(".builder-live-coworking-grid", styles)
-        self.assertIn("@media (max-width: 1280px)", styles)
-        self.assertIn("@media (max-width: 900px)", styles)
-        self.assertIn("position: static", styles)
+        for fragment in [
+            "selectedLiveReviewEvent",
+            "builder-live-review-focus",
+            "builder-live-review-controls",
+            "Rewind marker",
+            "Previous frame",
+            "Next frame",
+            "setSelectedLiveReviewEventId",
+            "screenshotFrames",
+            "Marker-to-frame timeline rail",
+            "Autoplay timelapse",
+            "Pause timelapse",
+            "Jump to review block",
+            "Open preview URL",
+            "Open {titleizeToken(selectedLiveReviewEvent.deepLink.drawerId)} drawer",
+            "Cadence ${titleizeToken(item.cadenceState)}",
+            "stepReplayMarker",
+            "Runtime activity detail",
+            "Internal Continuation Supervisor",
+            "Internal supervisor state and failure reason",
+            "Failure reason:",
+            "Blocker reason:",
+            "External heartbeat required:",
+            "Preserved route:",
+            "continuation_supervisor",
+            "Planner proof",
+            "Planner skills and prompts",
+            "Selected skills: none captured yet",
+            "builder-live-proof-chip-row",
+            "builder-live-proof-chip",
+            "Skill chip opened",
+            "Skills drawer filtered to",
+            "Design prompt detail",
+            "Next idea handoff draft seeded",
+            "Follow-up from planner next idea",
+            "ArrowRight",
+            "ArrowLeft",
+            'role="listbox"',
+            "onKeyDown={event =>",
+        ]:
+            self.assertIn(fragment, shell)
+        for fragment in [
+            ".builder-live-review-layout",
+            ".builder-live-review-panel",
+            ".builder-live-review-focus",
+            ".builder-live-review-controls",
+            ".builder-live-review-timeline-rail",
+        ]:
+            self.assertIn(fragment, styles)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,14 @@ INDEX_HTML = ROOT / "web" / "index.html"
 MAIN_TSX = ROOT / "web" / "src" / "main.tsx"
 FLUXIO_APP = ROOT / "web" / "src" / "fluxio" / "FluxioApp.tsx"
 FLUXIO_BRIDGE = ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts"
-FLUXIO_REFERENCE_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioReferenceShell.jsx"
 FLUXIO_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
 FLUXIO_STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
 HELPERS_JS = ROOT / "desktop-ui" / "fluxioHelpers.js"
 TAURI_CONF = ROOT / "src-tauri" / "tauri.conf.json"
 PACKAGE_JSON = ROOT / "package.json"
+CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
+CONTROL_VISUAL_SMOKE = ROOT / "scripts" / "control_route_visual_smoke.py"
+CONTROL_INTERACTION_SMOKE = ROOT / "scripts" / "control_route_interaction_smoke.py"
 
 
 class DesktopUiContractTests(unittest.TestCase):
@@ -73,35 +75,53 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("timeBudget?.lastPauseReason", helpers)
         self.assertIn("currentRuntimeLane", helpers)
 
-    def test_reference_shell_buttons_are_wired_to_actions(self) -> None:
-        shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
-
-        self.assertNotIn("onClick={() => {}}", shell)
-        self.assertIn('onRequestAction?.("flow:search")', shell)
-        self.assertIn('onRequestAction?.("flow:new-conversation")', shell)
-        self.assertIn('onRequestAction?.("flow:add-project")', shell)
-        self.assertIn('onRequestAction?.("builder:new-project")', shell)
-        self.assertIn('onRequestAction?.("builder:project-actions"', shell)
-        self.assertIn('onRequestAction?.("idle:reset-defaults")', shell)
-        self.assertIn('onRequestAction?.("settings:export-data")', shell)
-
-    def test_slash_panel_surfaces_comments_and_skills(self) -> None:
-        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+    def test_private_control_route_renders_current_black_shell_not_old_reference_skin(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
-
-        self.assertIn('kind === "skill"', reference_shell)
-        self.assertIn('return "S"', reference_shell)
-        self.assertIn("COMMENT_SLASH_COMMANDS", shell)
-        self.assertIn('kind: "comment"', shell)
-
-    def test_settings_is_global_rail_navigation_item(self) -> None:
-        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
 
-        self.assertIn('active={surface === "settings"}', reference_shell)
-        self.assertIn('label="Settings"', reference_shell)
-        self.assertNotIn("reference-sidebar-settings", styles)
-        self.assertNotIn('className="reference-sidebar-settings"', reference_shell)
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "FluxioReferenceShell.jsx").exists())
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "ImagePlayground.jsx").exists())
+        self.assertFalse((ROOT / "web" / "src" / "fluxio" / "RuntimeOperationsPanel.jsx").exists())
+        self.assertNotIn("FluxioReferenceShell", shell)
+        self.assertNotIn("fluxos-", shell)
+        self.assertNotIn(".fluxos-", styles)
+        self.assertNotIn(".reference-", styles)
+        self.assertNotIn(".image-playground", styles)
+        self.assertIn('className="fluxio-shell"', shell)
+        self.assertIn("data-mode={uiMode}", shell)
+        self.assertIn("control-preview-refresh", shell)
+        self.assertNotIn("reference-preview-refresh", shell)
+
+    def test_browser_proof_scripts_reject_wrong_skins(self) -> None:
+        smoke = CONTROL_SMOKE.read_text(encoding="utf-8")
+        visual = CONTROL_VISUAL_SMOKE.read_text(encoding="utf-8")
+        interaction = CONTROL_INTERACTION_SMOKE.read_text(encoding="utf-8")
+
+        for source in (smoke, visual, interaction):
+            self.assertIn("preview-control=1", source)
+            self.assertIn("fluxio-shell", source)
+            self.assertIn("fluxos-shell", source)
+            self.assertIn("grand-public-page", source)
+
+    def test_slash_panel_surfaces_comments_skills_and_cleanup_command(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+
+        self.assertIn("COMMENT_SLASH_COMMANDS", shell)
+        self.assertIn('kind: "comment"', shell)
+        self.assertIn('kind: "skill"', shell)
+        self.assertIn("/cleanup-legacy-ui", shell)
+        self.assertIn("Legacy UI cleanup", shell)
+
+    def test_skills_hub_surfaces_jbheaven_runtime_loop_and_voice_accessibility_skills(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+
+        self.assertIn("JBHEAVEN Godmode Lab", shell)
+        self.assertIn("Hermes Skill Packager", shell)
+        self.assertIn("Runtime Loop Supervisor", shell)
+        self.assertIn("Voice Accessibility Operator", shell)
+        self.assertIn("mergeReferenceStudioState", shell)
+        self.assertIn("referenceSkillEffectTrace", shell)
+        self.assertIn("private chain-of-thought", shell)
 
     def test_packaged_tauri_defaults_to_live_mode_without_fixture(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
@@ -120,12 +140,11 @@ class DesktopUiContractTests(unittest.TestCase):
 
         self.assertIn(".agent-control-grid", styles)
         self.assertIn('content: "Route selector"', styles)
-        self.assertIn(".field select,", styles)
+        self.assertIn("select,\ninput,\ntextarea", styles)
         self.assertIn("appearance: none", styles)
 
     def test_provider_auth_ui_does_not_fake_chatgpt_or_minimax_login(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
-        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
 
         self.assertNotIn("chatgpt.com/auth/login", shell)
         self.assertNotIn("Connect ChatGPT", shell)
@@ -142,18 +161,12 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Accounts used by OpenClaw", shell)
         self.assertIn("Connect model accounts", shell)
         self.assertIn("Connect model account", shell)
-        self.assertIn("ChatGPT connection", reference_shell)
-        self.assertIn("ChatGPT-compatible MCP endpoint", reference_shell)
 
     def test_provider_oauth_actions_offer_web_nas_fallback(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
-        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
 
         self.assertIn("providerOAuthActionsAvailable", shell)
-        self.assertIn(
-            'protocol === "https:"',
-            shell,
-        )
+        self.assertIn('protocol === "https:"', shell)
         self.assertIn("Complete OpenAI Codex OAuth", shell)
         self.assertIn("callbackPort || 1455", shell)
         self.assertIn("OpenAI redirects Codex OAuth to localhost", shell)
@@ -166,8 +179,6 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn("codex/device", shell)
         self.assertNotIn("device-code", shell)
         self.assertIn("MiniMax OpenClaw auth command copied", shell)
-        self.assertIn("quickAuth.disabled", reference_shell)
-        self.assertIn("disabled={Boolean(provider.quickAuth.disabled)}", reference_shell)
 
     def test_control_room_surfaces_live_agent_artifacts_compartments_and_deploy_readiness(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
@@ -179,19 +190,26 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Generated image artifacts", shell)
         self.assertIn("Hermes mission evidence", shell)
         self.assertIn("NAS deploy readiness", shell)
-        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
-        self.assertIn("Generated image artifacts", reference_shell)
-        self.assertIn("Hermes mission evidence", reference_shell)
-        self.assertIn("NAS deploy readiness", reference_shell)
-        self.assertIn("generatedImageArtifacts", reference_shell)
-        self.assertIn("hermesEvidenceItems", reference_shell)
-        self.assertIn("nasDeployChecks", reference_shell)
         self.assertIn("Live runtime compartments", shell)
         self.assertIn("artifact.previewUrl", shell)
         self.assertIn("artifact.manifestUrl", shell)
         self.assertIn("emptyState", shell)
         self.assertIn(".agent-live-workbench-grid", styles)
         self.assertIn(".agent-artifact-card", styles)
+
+    def test_current_shell_mounts_image_and_voice_surfaces(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+
+        self.assertIn("ImageStudioPlayground", shell)
+        self.assertIn("VoiceCommandPanel", shell)
+        self.assertIn('surface === "images"', shell)
+        self.assertIn('surface === "voice"', shell)
+        self.assertIn("handleImageStudioRequestDraft", shell)
+        self.assertIn("handleVoiceCommand", shell)
+        self.assertIn('label="Images"', shell)
+        self.assertIn('label="Voice"', shell)
+        self.assertIn(".voice-studio-grid", styles)
 
     def test_builder_agent_modes_and_runtimes_remain_distinct(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
@@ -206,6 +224,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Work engines", shell)
         self.assertIn("Work engines and accounts", shell)
         self.assertIn("primaryRuntimeServices", shell)
+        self.assertIn("OpenCodeGo", shell)
+        self.assertIn('<option value="opencode">OpenCodeGo</option>', shell)
 
 
 if __name__ == "__main__":

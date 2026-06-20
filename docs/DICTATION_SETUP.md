@@ -34,3 +34,5 @@ Example payload:
 
 - Audio recording is UI-provided; backend transcribes an explicit file path.
 - No continuous capture is performed by backend services.
+- Frontend voice UX primitives live in `web/src/fluxio/voice/`; see `docs/VOICE_ACCESSIBILITY_PRIMITIVES.md`.
+- The UI must check browser or local bridge support before presenting live speech recognition as available.

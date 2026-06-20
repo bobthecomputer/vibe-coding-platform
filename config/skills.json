@@ -262,5 +262,137 @@
       "Simplify noisy settings controls",
       "Give a model selector a calmer editorial hierarchy"
     ]
+  },
+  {
+    "name": "ui_refactor_expert",
+    "description": "Refactor user interfaces for clarity, accessibility, responsive behavior, state quality, and consistency while preserving existing app behavior.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "surface": { "type": "string" },
+        "user_intent": { "type": "string" }
+      },
+      "required": ["surface"]
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "action_kinds": ["ui_refactor", "accessibility", "frontend_polish"],
+    "profile_suitability": ["beginner", "builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Improve the Skills Hub so a non-technical user can understand active skills",
+      "Refactor the agent composer for keyboard and screen-reader accessibility"
+    ]
+  },
+  {
+    "name": "frontend_taste_director",
+    "description": "Review frontend work for visual hierarchy, spacing rhythm, interaction fidelity, mobile behavior, and non-generic app polish before implementation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "surface": { "type": "string" },
+        "risk": { "type": "string" }
+      },
+      "required": ["surface"]
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "action_kinds": ["design_review", "frontend_polish", "accessibility"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Review a new skill studio flow before broad component edits",
+      "Call out visual risks before changing the runtime workbench"
+    ]
+  },
+  {
+    "name": "jbheaven_godmode_lab",
+    "description": "Use the imported NAS Hermes Godmode/G0DM0D3 skill bundle for authorized JBHEAVEN, GBEH, Gandalf, and controlled red-team lab work with transcript proof, OpenCode or MiniMax routing, and safety-scoped model probing.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "target_model": { "type": "string" },
+        "prompt_set": { "type": "string" },
+        "artifact_path": { "type": "string" }
+      },
+      "required": ["target_model"]
+    },
+    "permissions": ["file_read", "file_write", "shell"],
+    "action_kinds": ["security_red_team", "model_probe", "runtime_routing", "proof_collection"],
+    "profile_suitability": ["advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Run a safe JBHEAVEN red-team proof against an OpenCode model and save the transcript",
+      "Package the NAS Hermes godmode skill and related helpers into a reviewable artifact"
+    ]
+  },
+  {
+    "name": "hermes_skill_packager",
+    "description": "Select, package, and document the strongest imported NAS Hermes skills into portable zip bundles with manifests, provenance, validation notes, and app-catalog mapping.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_root": { "type": "string" },
+        "bundle_name": { "type": "string" },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["source_root", "bundle_name"]
+    },
+    "permissions": ["file_read", "file_write", "shell"],
+    "action_kinds": ["skill_packaging", "artifact_export", "nas_sync"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Create a JBHEAVEN skill zip from godmode, obliteratus, opencode, and frontend helper skills",
+      "Write a manifest that explains which NAS skills were selected and why"
+    ]
+  },
+  {
+    "name": "runtime_loop_supervisor",
+    "description": "Design and verify self-running agent loops: plan, act, observe, verify, route, and resume across Hermes, OpenClaw, OpenCode, Codex, and MiniMax without hiding blockers or proof.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "loop_goal": { "type": "string" },
+        "runtime": { "type": "string" },
+        "max_duration": { "type": "string" }
+      },
+      "required": ["loop_goal"]
+    },
+    "permissions": ["file_read", "file_write", "shell"],
+    "action_kinds": ["runtime_routing", "loop_supervision", "verification"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Create a loop that watches tests and fixes failures until the suite passes",
+      "Show why Hermes or OpenClaw owns a mission lane and when OpenCode should execute"
+    ]
+  },
+  {
+    "name": "voice_accessibility_operator",
+    "description": "Improve voice-first and accessibility-first operation for Fluxio: dictation recovery, keyboard navigation, screen-reader labels, plain-language confirmations, and low-typing workflows.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "surface": { "type": "string" },
+        "access_need": { "type": "string" }
+      },
+      "required": ["surface"]
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "action_kinds": ["accessibility", "voice_workflow", "ui_refactor"],
+    "profile_suitability": ["beginner", "builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Make the central composer usable with fewer typed corrections",
+      "Audit voice and keyboard control paths for accessibility blockers"
+    ]
   }
 ]

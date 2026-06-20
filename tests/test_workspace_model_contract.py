@@ -9,6 +9,7 @@ def test_workspace_model_promotes_rule_sets_as_core_surface() -> None:
     source = WORKSPACE_MODEL.read_text(encoding="utf-8")
 
     assert '{ id: "rule-sets", label: "Rule Sets", section: "workspace" }' in source
+    assert '{ id: "voice", label: "Voice", section: "workspace" }' in source
     assert '{ id: "settings", label: "Settings", section: "global" }' in source
 
 
@@ -34,4 +35,6 @@ def test_workspace_model_defines_shared_route_model_controls() -> None:
         "ROUTE_ROLE_OPTIONS",
     ]:
         assert f"export const {token}" in source
+
+    assert '{ value: "opencode", label: "OpenCodeGo" }' in source
 
