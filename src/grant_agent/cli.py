@@ -2827,7 +2827,22 @@ def _auto_resume_ready_delegated_missions(
         if mission.state.status in {"completed", "failed", "stopped"}:
             continue
         if mission.state.planner_loop_status == "launching":
-            continue
+            active_dispatches = _active_mission_async_dispatches(root, mission.mission_id)
+            if active_dispatches:
+                continue
+            mission.state.planner_loop_status = "idle"
+            mission.state.last_runtime_event = (
+                "Cleared stale mission launch state; no async resume worker is active."
+            )
+            store.append_event(
+                MissionEvent(
+                    mission_id=mission.mission_id,
+                    kind="mission.stale_launch_cleared",
+                    message="Cleared stale launching state after no active resume worker was found.",
+                    metadata={"previousPlannerLoopStatus": "launching"},
+                )
+            )
+            changed = True
         if mission.state.stop_reason != "delegated_runtime_running":
             continue
         if not mission.delegated_runtime_sessions:
@@ -3570,6 +3585,29 @@ def _update_latest_approval_requirement(
             "ok": True,
             "approval_kind": "delegated_runtime",
             "delegated_session": asdict(resolved),
+        }
+    pending_payload = getattr(mission.state, "pending_approval_payload", {}) or {}
+    pending_prompts = list(getattr(mission.proof, "pending_approvals", []) or [])
+    if pending_payload or pending_prompts:
+        history = list(getattr(mission.state, "approval_history", []) or [])
+        history.append(
+            {
+                "status": status,
+                "actor": "operator",
+                "resolved_at": utc_stamp(),
+                "source": "mission_pending_approval_payload",
+                "prompt": str(
+                    pending_payload.get("prompt")
+                    or (pending_prompts[0] if pending_prompts else "")
+                ),
+            }
+        )
+        mission.state.approval_history = history[-8:]
+        mission.state.pending_approval_payload = {}
+        return {
+            "ok": True,
+            "approval_kind": "mission_pending_payload",
+            "recoveredFrom": local_result.get("error", ""),
         }
     return local_result
 

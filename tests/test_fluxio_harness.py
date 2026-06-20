@@ -14,7 +14,7 @@ from grant_agent.fluxio_harness import (
     recommended_model_routes,
     resolve_efficiency_autotune_policy,
 )
-from grant_agent.models import DelegatedRuntimeSession, ModelRouteConfig, PlannedStep, PlanRevision
+from grant_agent.models import DelegatedRuntimeSession, ExecutionPolicy, ModelRouteConfig, PlannedStep, PlanRevision
 from grant_agent.session_store import SessionStore
 from grant_agent.skill_library import SkillLibrary
 from grant_agent.skills import SkillRegistry
@@ -373,6 +373,37 @@ class FluxioHarnessTests(unittest.TestCase):
             self.assertEqual(result["runtime_autonomy"]["routingStrategy"], "uniform_quality")
             self.assertGreaterEqual(result["route_change_count"], 1)
             self.assertEqual(result["execution_policy"]["delegation_aggressiveness"], "low")
+
+    def test_experimental_guardrail_preserves_hands_free_runtime_delegation(self) -> None:
+        routes, policy, _autonomy, changed, _route_change_count = FluxioHarness._apply_runtime_autonomy(
+            profile_name="experimental",
+            route_configs=recommended_model_routes("experimental", routing_strategy_override="budget_first"),
+            route_overrides=[],
+            execution_policy=ExecutionPolicy(
+                profile_name="experimental",
+                approval_mode="hands_free",
+                explanation_depth="low",
+                delegation_aggressiveness="high",
+                auto_allowed_kinds=["runtime_delegate"],
+                approval_required_kinds=["git_commit", "shell_command"],
+            ),
+            repeated_failure_count=2,
+            verification_failures=[],
+            stable_success_streak=0,
+            context_status="ok",
+            delegated_status="",
+            route_change_count=0,
+            parallel_agents=1,
+            merge_policy="best_score",
+            max_tokens=1024,
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(policy.approval_mode, "hands_free")
+        self.assertEqual(policy.delegation_aggressiveness, "high")
+        self.assertIn("runtime_delegate", policy.auto_allowed_kinds)
+        self.assertNotIn("runtime_delegate", policy.approval_required_kinds)
+        self.assertEqual(FluxioHarness._routing_strategy_for_routes(routes), "uniform_quality")
 
 
 if __name__ == "__main__":

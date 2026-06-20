@@ -59,7 +59,7 @@ PROFILE_EXECUTION_DEFAULTS = {
 
 WRITE_HINTS = ("implement", "edit", "update", "patch", "fix", "write", "refactor")
 CREATE_HINTS = ("create", "new file", "draft", "author")
-DELEGATE_HINTS = ("delegate", "runtime lane", "openclaw", "hermes")
+DELEGATE_HINTS = ("delegate", "runtime lane", "openclaw", "hermes", "opencode", "opencodego")
 STATUS_HINTS = ("status", "ground", "inspect mutable", "workspace state")
 DIFF_HINTS = ("rollout", "diff", "next iteration", "changed files")
 VERIFY_HINTS = ("verify", "test", "build", "lint", "smoke")

@@ -2046,8 +2046,12 @@ class FluxioHarness:
 
         if verification_failures or repeated_failure_count >= 2:
             target_strategy = "uniform_quality"
-            target_approval_mode = "tiered"
-            target_delegation = "low"
+            if profile_name == "experimental":
+                target_approval_mode = "hands_free"
+                target_delegation = "high"
+            else:
+                target_approval_mode = "tiered"
+                target_delegation = "low"
             policy_name = "verification_guardrail"
             reason = "Verification pressure moved the mission onto the high-confidence route and reduced delegation."
         elif context_status in {"rollover", "hard_stop"}:

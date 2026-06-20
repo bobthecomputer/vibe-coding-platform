@@ -11,6 +11,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.runtimes.hermes import HermesRuntimeAdapter
 from grant_agent.runtimes.openclaw import OpenClawRuntimeAdapter
+from grant_agent.runtimes.opencode import OpenCodeRuntimeAdapter
+from grant_agent.runtimes import runtime_adapter_map
 
 
 class RuntimeAdapterTests(unittest.TestCase):
@@ -194,6 +196,71 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("--provider openai-codex", command)
         self.assertIn("--model gpt-5.4", command)
         self.assertEqual(launch["route_contract"]["provider"], "openai-codex")
+
+    def test_runtime_registry_exposes_opencodego_adapter(self) -> None:
+        adapters = runtime_adapter_map()
+
+        self.assertIn("opencode", adapters)
+        self.assertEqual(adapters["opencode"].label, "OpenCodeGo")
+
+    @mock.patch("grant_agent.runtimes.opencode.subprocess.run")
+    @mock.patch("grant_agent.runtimes.opencode.shutil.which")
+    def test_opencode_adapter_detects_subscription_models(
+        self,
+        which_mock: mock.Mock,
+        run_mock: mock.Mock,
+    ) -> None:
+        which_mock.return_value = "opencode"
+        run_mock.side_effect = [
+            mock.Mock(stdout="1.1.12\n", stderr=""),
+            mock.Mock(stdout="Credentials\nOpenAI oauth\nMiniMax Token Plan api\n", stderr=""),
+            mock.Mock(
+                stdout="opencode/deepseek-v4-flash-free\nminimax-coding-plan/MiniMax-M3\n",
+                stderr="",
+            ),
+        ]
+
+        adapter = OpenCodeRuntimeAdapter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status = adapter.doctor(pathlib.Path(temp_dir))
+
+        self.assertTrue(status.detected)
+        self.assertEqual(status.label, "OpenCodeGo")
+        self.assertEqual(status.version, "1.1.12")
+        self.assertIn("OpenCodeGo is ready", status.doctor_summary)
+
+    def test_opencode_launch_uses_opencodego_model_route(self) -> None:
+        adapter = OpenCodeRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_opencode1234",
+            objective="Return OPENCODE_APP_ROUTE_OK only",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "opencode",
+                    "model": "deepseek-v4-flash-free",
+                    "effort": "medium",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        with mock.patch(
+            "grant_agent.runtimes.opencode.shutil.which",
+            return_value=r"C:\Users\paul\AppData\Roaming\npm\opencode.CMD",
+        ):
+            launch = adapter.start_mission(mission, workspace)
+
+        command = str(launch["launch_command"])
+        self.assertIn("C:/Users/paul/AppData/Roaming/npm/opencode.CMD", command)
+        self.assertIn("run", command)
+        self.assertIn("--model opencode/deepseek-v4-flash-free", command)
+        self.assertIn("Return OPENCODE_APP_ROUTE_OK only", command)
+        self.assertEqual(launch["runtime_id"], "opencode")
+        self.assertEqual(
+            launch["route_contract"]["canonical_model_id"],
+            "opencode/deepseek-v4-flash-free",
+        )
 
     def test_openclaw_launch_uses_planner_route_during_plan_phase(self) -> None:
         adapter = OpenClawRuntimeAdapter()

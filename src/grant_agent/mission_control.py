@@ -349,13 +349,51 @@ class ControlRoomStore:
 
     def _write_json_if_changed(self, path: Path, payload: object) -> None:
         serialized = json.dumps(payload, indent=2)
-        if path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_dir = path.with_name(f".{path.name}.lock")
+        stale_after_seconds = float(os.environ.get("FLUXIO_JSON_STORE_LOCK_STALE_SECONDS", "30"))
+        deadline = time.monotonic() + 15
+        while True:
             try:
-                if path.read_text(encoding="utf-8") == serialized:
-                    return
+                lock_dir.mkdir()
+                break
+            except FileExistsError:
+                try:
+                    lock_age = time.time() - lock_dir.stat().st_mtime
+                except OSError:
+                    lock_age = 0
+                if lock_age > stale_after_seconds:
+                    try:
+                        lock_dir.rmdir()
+                        continue
+                    except OSError:
+                        pass
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for JSON store lock: {lock_dir}")
+                time.sleep(0.05)
+        temp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            if path.exists():
+                try:
+                    if path.read_text(encoding="utf-8") == serialized:
+                        return
+                except OSError:
+                    pass
+            with temp_path.open("w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                if os.environ.get("FLUXIO_JSON_STORE_FSYNC") == "1":
+                    os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
-        path.write_text(serialized, encoding="utf-8")
+            try:
+                lock_dir.rmdir()
+            except OSError:
+                pass
 
     def _invalidate_snapshot_caches(self) -> None:
         invalidate_onboarding_status_cache(self.root)
@@ -713,10 +751,7 @@ class ControlRoomStore:
         histories = self.load_workspace_actions()
         if workspace_id in histories:
             histories.pop(workspace_id, None)
-            self.workspace_actions_path.write_text(
-                json.dumps(histories, indent=2),
-                encoding="utf-8",
-            )
+            self._write_json_if_changed(self.workspace_actions_path, histories)
 
         return target, len(removed_missions)
 
@@ -934,10 +969,7 @@ class ControlRoomStore:
         entries = list(histories.get(history_key, []))
         entries.append(record)
         histories[history_key] = entries[-max(1, limit) :]
-        self.workspace_actions_path.write_text(
-            json.dumps(histories, indent=2),
-            encoding="utf-8",
-        )
+        self._write_json_if_changed(self.workspace_actions_path, histories)
         return record
 
     def build_snapshot(self) -> dict:

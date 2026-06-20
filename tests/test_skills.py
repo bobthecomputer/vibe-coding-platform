@@ -33,6 +33,34 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertIn("high_end_visual_design", names)
         self.assertIn("gpt_taste_frontend_motion", names)
         self.assertIn("frontend_image_direction", names)
+        self.assertIn("ui_refactor_expert", names)
+        self.assertIn("frontend_taste_director", names)
+        self.assertIn("jbheaven_godmode_lab", names)
+        self.assertIn("hermes_skill_packager", names)
+        self.assertIn("runtime_loop_supervisor", names)
+        self.assertIn("voice_accessibility_operator", names)
+
+    def test_retrieves_jbheaven_godmode_skill_for_red_team_objectives(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        registry = SkillRegistry(root / "config" / "skills.json")
+        skills = registry.retrieve(
+            "run a JBHEAVEN Godmode G0DM0D3 red-team proof with OpenCode transcript",
+            top_k=4,
+        )
+        names = [skill.name for skill in skills]
+
+        self.assertIn("jbheaven_godmode_lab", names)
+
+    def test_retrieves_voice_accessibility_skill_for_low_typing_objectives(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        registry = SkillRegistry(root / "config" / "skills.json")
+        skills = registry.retrieve(
+            "improve voice dictation accessibility keyboard screen reader low typing composer",
+            top_k=4,
+        )
+        names = [skill.name for skill in skills]
+
+        self.assertIn("voice_accessibility_operator", names)
 
 
 if __name__ == "__main__":

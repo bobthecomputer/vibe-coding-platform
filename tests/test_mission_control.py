@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import pathlib
@@ -9,13 +10,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import asdict
 from datetime import datetime, timezone
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from grant_agent.cli import cmd_mission_follow_up, cmd_workspace_delete
+from grant_agent.cli import cmd_mission_action, cmd_mission_follow_up, cmd_workspace_delete
 from grant_agent.mission_control import (
     ControlRoomStore,
     _build_generated_image_artifacts_snapshot,
@@ -36,6 +38,12 @@ from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
 class MissionControlTests(unittest.TestCase):
+    def _run_json_command(self, command, **kwargs) -> tuple[int, dict]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            exit_code = command(argparse.Namespace(**kwargs))
+        return exit_code, json.loads(buffer.getvalue())
+
     def test_empty_workspace_store_falls_back_to_default_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -48,6 +56,90 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(len(workspaces), 1)
             saved = json.loads((control_dir / "workspaces.json").read_text(encoding="utf-8"))
             self.assertEqual(saved[0]["workspace_id"], workspaces[0].workspace_id)
+
+    def test_json_store_write_is_atomic_and_leaves_valid_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            target = root / ".agent_control" / "missions.json"
+
+            for index in range(25):
+                store._write_json_if_changed(  # noqa: SLF001 - covers store durability
+                    target,
+                    [{"mission_id": f"mission_{index}", "state": {"status": "running"}}],
+                )
+                payload = json.loads(target.read_text(encoding="utf-8"))
+                self.assertEqual(payload[0]["mission_id"], f"mission_{index}")
+
+            leftovers = list(target.parent.glob(".missions.json.*.tmp"))
+            self.assertEqual(leftovers, [])
+
+    def test_json_store_write_recovers_stale_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            store = ControlRoomStore(root)
+            target = root / ".agent_control" / "missions.json"
+            lock = target.with_name(".missions.json.lock")
+            lock.mkdir(parents=True)
+            stale_time = 1
+            os.utime(lock, (stale_time, stale_time))
+
+            with mock.patch.dict(os.environ, {"FLUXIO_JSON_STORE_LOCK_STALE_SECONDS": "0"}):
+                store._write_json_if_changed(  # noqa: SLF001 - covers stale lock recovery
+                    target,
+                    [{"mission_id": "mission_recovered"}],
+                )
+
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload[0]["mission_id"], "mission_recovered")
+            self.assertFalse(lock.exists())
+
+    def test_approve_latest_recovers_from_missing_session_state_when_payload_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            store = ControlRoomStore(root)
+            store.upsert_workspace(
+                name="Fusion",
+                root_path=str(workspace_root),
+                default_runtime="hermes",
+                workspace_id="workspace_fusion",
+            )
+            mission = store.create_mission(
+                workspace_id="workspace_fusion",
+                runtime_id="hermes",
+                objective="Fuse the projects inside the managed system.",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "needs_approval"
+            mission.state.latest_session_id = "session_missing"
+            mission.state.pending_approval_payload = {
+                "prompt": "Approve Hermes Plus managed runtime delegation."
+            }
+            mission.proof.pending_approvals = [
+                "Approve Hermes Plus managed runtime delegation."
+            ]
+            store.update_mission(mission)
+
+            exit_code, payload = self._run_json_command(
+                cmd_mission_action,
+                root=str(root),
+                mission_id=mission.mission_id,
+                action="approve-latest",
+            )
+
+            self.assertEqual(exit_code, 0)
+            approved = payload["mission"]
+            self.assertEqual(approved["state"]["status"], "queued")
+            self.assertEqual(approved["state"]["pending_approval_payload"], {})
+            self.assertEqual(
+                approved["state"]["approval_history"][-1]["source"],
+                "mission_pending_approval_payload",
+            )
 
     def test_invalid_workspace_store_falls_back_to_default_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -15,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.cli import (
+    _auto_resume_ready_delegated_missions,
     _launch_async_mission_resume,
     _mission_budget_settings,
     _pid_exists,
@@ -28,7 +29,7 @@ from grant_agent.cli import (
 )
 from grant_agent.checkpoints import CheckpointStore
 from grant_agent.mission_control import ControlRoomStore
-from grant_agent.models import RunState, RuntimeInstallStatus
+from grant_agent.models import DelegatedRuntimeSession, RunState, RuntimeInstallStatus
 
 
 def _init_git_repo(root: pathlib.Path) -> None:
@@ -672,6 +673,60 @@ class CliPreferenceTests(unittest.TestCase):
             self.assertEqual(dispatch["pid"], 6262)
             self.assertEqual(dispatch["reason"], "mission_resume_already_running")
             mocked_popen.assert_not_called()
+
+    def test_auto_resume_clears_stale_launching_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            bootstrap_project(root)
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Resume after stale launch latch",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=[],
+                max_runtime_seconds=7200,
+                run_until_behavior="continue_until_blocked",
+            )
+            mission.state.status = "running"
+            mission.state.stop_reason = "delegated_runtime_running"
+            mission.state.planner_loop_status = "launching"
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegated_done",
+                    runtime_id="hermes",
+                    launch_command="hermes run",
+                    status="completed",
+                    acknowledged=False,
+                )
+            ]
+            store.update_mission(mission)
+
+            with (
+                mock.patch("grant_agent.cli._active_mission_async_dispatches", return_value=[]),
+                mock.patch(
+                    "grant_agent.cli._launch_async_mission_resume",
+                    return_value={
+                        "pid": 3131,
+                        "logPath": str(root / ".agent_control" / "mission_async" / "mission.log"),
+                        "command": ["python", "-m", "grant_agent.cli", "mission-action"],
+                    },
+                ) as mocked_launch,
+            ):
+                dispatched = _auto_resume_ready_delegated_missions(root, store)
+
+            self.assertEqual(dispatched[0]["pid"], 3131)
+            mocked_launch.assert_called_once_with(root, mission.mission_id)
+            refreshed = store.get_mission(mission.mission_id)
+            self.assertIsNotNone(refreshed)
+            assert refreshed is not None
+            self.assertEqual(refreshed.state.planner_loop_status, "launching")
+            events = (root / ".agent_control" / "mission_events.jsonl").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("mission.stale_launch_cleared", events)
 
     def test_windows_pid_check_rejects_localized_no_task_output(self) -> None:
         completed = subprocess.CompletedProcess(
