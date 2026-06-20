@@ -56,7 +56,17 @@ class SkillRegistry:
         query_tokens = _tokenize(task_brief)
 
         def score(skill: Skill) -> tuple[int, int]:
-            text_tokens = _tokenize(skill.name + " " + skill.description)
+            text_tokens = _tokenize(
+                " ".join(
+                    [
+                        skill.name,
+                        skill.description,
+                        " ".join(skill.examples),
+                        " ".join(skill.action_kinds),
+                        " ".join(skill.profile_suitability),
+                    ]
+                )
+            )
             overlap = len(query_tokens & text_tokens)
             return overlap, -len(skill.name)
 

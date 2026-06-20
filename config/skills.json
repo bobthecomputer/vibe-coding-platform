@@ -55,6 +55,27 @@
     "examples": ["Search for TODO|FIXME in src and docs"]
   },
   {
+    "name": "stuck_state_recovery",
+    "description": "Recover blocked missions by inspecting blockers, repeated failures, missing context, weak provider routes, and stale delegated runtime lanes before retrying.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "mission_id": { "type": "string" },
+        "trigger": { "type": "string" }
+      },
+      "required": ["mission_id", "trigger"]
+    },
+    "permissions": ["file_read"],
+    "action_kinds": ["blocked_recovery", "runtime_routing", "context_recovery", "verification"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "examples": [
+      "Inspect a blocked mission and choose recovery actions from recorded evidence",
+      "Recover from repeated verification failures without retrying the same route blindly"
+    ]
+  },
+  {
     "name": "generate_public_report",
     "description": "Create a concise run report and social thread draft from session artifacts.",
     "schema": {

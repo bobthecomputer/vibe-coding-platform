@@ -472,6 +472,7 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("setupHealth", snapshot)
             self.assertIn("workflowStudio", snapshot)
             self.assertIn("providerSetupStatus", snapshot)
+            self.assertIn("providerEcosystem", snapshot)
             self.assertIn("efficiencyAutotune", snapshot)
             self.assertIn("releaseReadiness", snapshot)
             self.assertIn("runtimeCompartments", snapshot)
@@ -496,6 +497,22 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(
                 snapshot["providerSetupStatus"]["minimax"]["authPath"],
                 "not configured",
+            )
+            self.assertEqual(
+                snapshot["providerEcosystem"]["schemaVersion"],
+                "provider-ecosystem.v1",
+            )
+            provider_ids = {
+                item["providerId"]
+                for item in snapshot["providerEcosystem"]["providers"]
+            }
+            self.assertIn("openai", provider_ids)
+            self.assertIn("minimax", provider_ids)
+            self.assertIn("local", provider_ids)
+            self.assertTrue(
+                snapshot["providerEcosystem"]["updatePolicy"][
+                    "requiresApprovalForDefaultChanges"
+                ]
             )
             self.assertFalse(snapshot["efficiencyAutotune"]["eligible"])
             workflow = snapshot["workflowStudio"]["recipes"][0]
@@ -593,6 +610,38 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(snapshot["hermesMissionEvidence"]["items"], [])
             self.assertIn("emptyState", snapshot["hermesMissionEvidence"])
             self.assertIn("checks", snapshot["nasDeployReadiness"])
+
+    def test_provider_ecosystem_tracks_update_sources_without_claiming_full_support(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "test-openai-key",
+                    "ANTHROPIC_API_KEY": "",
+                    "OPENROUTER_API_KEY": "",
+                    "MINIMAX_API_KEY": "",
+                    "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT": "",
+                    "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                },
+                clear=False,
+            ):
+                snapshot = ControlRoomStore(root).build_snapshot()
+
+            ecosystem = snapshot["providerEcosystem"]
+            providers = {item["providerId"]: item for item in ecosystem["providers"]}
+            self.assertEqual(ecosystem["lastVerifiedAt"], "2026-06-21")
+            self.assertEqual(providers["openai"]["status"], "repo_supported")
+            self.assertTrue(providers["openai"]["authPresent"])
+            self.assertTrue(providers["openai"]["canRouteNow"])
+            self.assertEqual(providers["local"]["status"], "planned_adapter")
+            self.assertFalse(providers["local"]["canRouteNow"])
+            self.assertIn("https://ai-gateway.vercel.sh/v1/models", ecosystem["updatePolicy"]["dynamicSources"])
+            source_ids = {item["sourceId"] for item in ecosystem["sources"]}
+            self.assertIn("opencode_models", source_ids)
+            self.assertIn("crush_local_models", source_ids)
+            self.assertIn("openclaw_model_providers", source_ids)
 
     def test_create_mission_persists_and_builds_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -842,6 +891,97 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(
                 mission_payload["providerTruth"]["authPath"],
                 "MiniMax OpenClaw OAuth",
+            )
+
+    def test_snapshot_recommends_skills_for_blocked_runtime_recovery(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "",
+                "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT": "",
+            },
+            clear=False,
+        ), tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            config_dir = root / "config"
+            config_dir.mkdir()
+            source_config = pathlib.Path(__file__).resolve().parents[1] / "config" / "skills.json"
+            shutil.copy2(source_config, config_dir / "skills.json")
+            store = ControlRoomStore(root)
+            workspace = store.load_workspaces()[0]
+            mission = store.create_mission(
+                workspace_id=workspace.workspace_id,
+                runtime_id="hermes",
+                objective="Recover a blocked mission with repeated verification failures",
+                success_checks=[],
+                mode="Autopilot",
+                verification_commands=["python -m unittest"],
+                max_runtime_seconds=3600,
+            )
+            mission.state.status = "blocked"
+            mission.state.current_cycle_phase = "execute"
+            mission.state.repeated_failure_count = 3
+            mission.state.context_status = "missing"
+            mission.state.context_usage_ratio = 0.91
+            mission.state.verification_failures = ["python -m unittest"]
+            mission.state.route_change_count = 2
+            mission.proof.blocked_by = ["missing operator decision"]
+            mission.effective_route_contract = {
+                "roles": [
+                    {
+                        "role": "executor",
+                        "provider": "openai",
+                        "model": "gpt-5.5",
+                        "effort": "medium",
+                    }
+                ]
+            }
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_stale",
+                    runtime_id="hermes",
+                    launch_command="hermes chat -q recover",
+                    status="running",
+                    heartbeat_status="stale",
+                    detail="Heartbeat is stale.",
+                    target_phase="execute",
+                    target_role="executor",
+                    target_provider="openai",
+                    target_model="gpt-5.5",
+                )
+            ]
+            store.update_mission(mission)
+
+            snapshot = store.build_snapshot()
+            mission_payload = next(
+                item for item in snapshot["missions"] if item["mission_id"] == mission.mission_id
+            )
+            recovery = mission_payload["missionLoop"]["skillRecovery"]
+
+            self.assertEqual(recovery["schemaVersion"], "mission-skill-recovery.v1")
+            self.assertEqual(recovery["status"], "needs_recovery")
+            trigger_ids = {item["triggerId"] for item in recovery["triggers"]}
+            self.assertTrue(
+                {
+                    "mission_blocked",
+                    "verification_failure",
+                    "repeated_failure",
+                    "context_missing",
+                    "weak_provider_route",
+                    "runtime_lane_attention",
+                }.issubset(trigger_ids)
+            )
+            skill_ids = {item["skillId"] for item in recovery["recommendations"]}
+            self.assertIn("stuck_state_recovery", skill_ids)
+            self.assertEqual(
+                recovery["routeSeparation"]["providerRoute"]["provider"],
+                "openai",
+            )
+            self.assertIn("hermes", recovery["routeSeparation"]["runtimeLane"])
+            self.assertEqual(
+                mission_payload["state"]["skill_recovery"]["schemaVersion"],
+                "mission-skill-recovery.v1",
             )
 
     def test_second_mission_is_queued_behind_active_workspace_mission(self) -> None:

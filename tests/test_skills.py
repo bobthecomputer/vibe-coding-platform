@@ -23,6 +23,16 @@ class SkillRegistryTests(unittest.TestCase):
         skills = registry.retrieve("zzzz unmatched tokens", top_k=2)
         self.assertEqual(len(skills), 2)
 
+    def test_retrieves_stuck_state_recovery_from_runtime_failure_context(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        registry = SkillRegistry(root / "config" / "skills.json")
+        skills = registry.retrieve(
+            "blocked mission repeated failure missing context weak provider route stale runtime lane",
+            top_k=3,
+        )
+        names = [skill.name for skill in skills]
+        self.assertIn("stuck_state_recovery", names)
+
     def test_packaged_catalog_includes_curated_design_and_browser_skills(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         registry = SkillRegistry(root / "config" / "skills.json")
@@ -33,6 +43,7 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertIn("high_end_visual_design", names)
         self.assertIn("gpt_taste_frontend_motion", names)
         self.assertIn("frontend_image_direction", names)
+        self.assertIn("stuck_state_recovery", names)
 
 
 if __name__ == "__main__":

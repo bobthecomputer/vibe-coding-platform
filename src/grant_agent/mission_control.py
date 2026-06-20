@@ -26,6 +26,7 @@ from .models import (
     MissionRunBudget,
     MissionStateSnapshot,
     MissionVerificationPolicy,
+    RuntimeInstallStatus,
     SkillRecommendation,
     WorkspaceProfile,
     utc_now_iso,
@@ -116,6 +117,117 @@ PROVIDER_ENV_HINTS = {
     "minimax-cn": "MINIMAX_API_KEY",
     "minimax-portal": "MINIMAX_OAUTH_TOKEN",
 }
+PROVIDER_ECOSYSTEM_SOURCES = [
+    {
+        "sourceId": "opencode_models",
+        "label": "OpenCode models",
+        "url": "https://opencode.ai/docs/models/",
+        "verifiedAt": "2026-06-21",
+        "signal": "OpenCode uses AI SDK plus Models.dev for broad provider/model discovery.",
+    },
+    {
+        "sourceId": "crush_local_models",
+        "label": "Crush local providers",
+        "url": "https://github.com/charmbracelet/crush",
+        "verifiedAt": "2026-06-21",
+        "signal": "Crush auto-discovers Ollama, LM Studio, LiteLLM, and OMLX providers.",
+    },
+    {
+        "sourceId": "openclaw_model_providers",
+        "label": "OpenClaw model providers",
+        "url": "https://docs.openclaw.ai/concepts/model-providers",
+        "verifiedAt": "2026-06-21",
+        "signal": "OpenClaw exposes a provider directory and exact-origin network trust rules.",
+    },
+    {
+        "sourceId": "vercel_ai_gateway_models",
+        "label": "Vercel AI Gateway models endpoint",
+        "url": "https://ai-gateway.vercel.sh/v1/models",
+        "verifiedAt": "2026-06-21",
+        "signal": "Gateway model metadata can include IDs, pricing, context windows, and capabilities.",
+    },
+    {
+        "sourceId": "litellm_providers",
+        "label": "LiteLLM providers",
+        "url": "https://docs.litellm.ai/docs/providers",
+        "verifiedAt": "2026-06-21",
+        "signal": "LiteLLM is a broad adapter/gateway source for remote, local, speech, and image providers.",
+    },
+]
+PROVIDER_ECOSYSTEM_ROWS = [
+    {
+        "providerId": "openai",
+        "label": "OpenAI / Codex",
+        "status": "repo_supported",
+        "routeRole": "primary_model_route",
+        "authPath": "OpenAI API key or OpenAI Codex OAuth",
+        "updateSource": "official_docs_and_runtime_status",
+        "supports": ["chat", "coding", "image-route-check"],
+    },
+    {
+        "providerId": "minimax",
+        "label": "MiniMax",
+        "status": "repo_supported",
+        "routeRole": "bounded_model_route",
+        "authPath": "MiniMax API key or OpenClaw OAuth",
+        "updateSource": "OpenClaw provider directory",
+        "supports": ["chat", "coding", "hermes-route"],
+    },
+    {
+        "providerId": "anthropic",
+        "label": "Anthropic",
+        "status": "credential_ready",
+        "routeRole": "external_model_route",
+        "authPath": "Anthropic API key",
+        "updateSource": "AI SDK provider registry",
+        "supports": ["chat", "coding", "verification"],
+    },
+    {
+        "providerId": "openrouter",
+        "label": "OpenRouter",
+        "status": "credential_ready",
+        "routeRole": "gateway_model_route",
+        "authPath": "OpenRouter API key",
+        "updateSource": "OpenCode/OpenRouter integration",
+        "supports": ["multi-provider", "fallback", "benchmarking"],
+    },
+    {
+        "providerId": "google",
+        "label": "Google Gemini / Vertex",
+        "status": "planned_adapter",
+        "routeRole": "future_model_route",
+        "authPath": "Google AI Studio or Vertex credentials",
+        "updateSource": "AI SDK provider registry",
+        "supports": ["chat", "vision", "long-context"],
+    },
+    {
+        "providerId": "local",
+        "label": "Local models",
+        "status": "planned_adapter",
+        "routeRole": "local_model_route",
+        "authPath": "Ollama, LM Studio, LiteLLM, vLLM, or OMLX endpoint",
+        "updateSource": "Crush local-provider discovery",
+        "supports": ["private-chat", "cheap-probes", "offline-runs"],
+    },
+    {
+        "providerId": "vercel-ai-gateway",
+        "label": "Vercel AI Gateway",
+        "status": "planned_gateway",
+        "routeRole": "provider_catalog_source",
+        "authPath": "AI Gateway key",
+        "updateSource": "AI Gateway /v1/models endpoint",
+        "supports": ["model-catalog", "pricing", "capability-metadata"],
+    },
+    {
+        "providerId": "litellm",
+        "label": "LiteLLM",
+        "status": "planned_gateway",
+        "routeRole": "adapter_gateway",
+        "authPath": "LiteLLM proxy or provider-specific keys",
+        "updateSource": "LiteLLM provider docs",
+        "supports": ["many-providers", "speech", "image", "fallback"],
+    },
+]
 
 
 def normalize_route_overrides(route_overrides: object) -> list[dict]:
@@ -291,6 +403,85 @@ def _openai_codex_setup_status_for_workspace(
         "configured": configured,
         "authPresent": configured,
         "lastCheckedAt": workspace_payload.get("updated_at", ""),
+    }
+
+
+def _build_provider_ecosystem_snapshot(
+    *,
+    provider_setup_status: dict,
+    provider_auth_presence: dict[str, bool],
+    runtime_statuses: list[RuntimeInstallStatus],
+    harness_lab: dict,
+) -> dict:
+    runtime_ids = {item.runtime_id for item in runtime_statuses if item.detected}
+    fused_runtime = harness_lab.get("fusedRuntime", {})
+    observed_routes = {
+        str(item.get("provider", "")).strip().lower(): int(item.get("observedCount", 0) or 0)
+        for item in fused_runtime.get("modelProviderRoutes", [])
+        if isinstance(item, dict)
+    }
+    rows = []
+    for row in PROVIDER_ECOSYSTEM_ROWS:
+        provider_id = row["providerId"]
+        setup = provider_setup_status.get(provider_id, {})
+        auth_present = bool(
+            setup.get("authPresent")
+            or setup.get("configured")
+            or provider_auth_presence.get(provider_id, False)
+        )
+        can_route_now = row["status"] in {"repo_supported", "credential_ready"} and auth_present
+        rows.append(
+            {
+                **row,
+                "authPresent": auth_present,
+                "canRouteNow": can_route_now,
+                "observedRouteCount": observed_routes.get(provider_id, 0),
+                "setup": setup,
+            }
+        )
+    implemented = [item for item in rows if item["status"] in {"repo_supported", "credential_ready"}]
+    route_ready = [item for item in rows if item["canRouteNow"]]
+    missing_auth = [
+        item["providerId"]
+        for item in rows
+        if item["status"] in {"repo_supported", "credential_ready"} and not item["authPresent"]
+    ]
+    next_actions: list[str] = []
+    if "openclaw" not in runtime_ids:
+        next_actions.append("Install or repair OpenClaw before widening provider routing.")
+    if "hermes" not in runtime_ids:
+        next_actions.append("Install or repair Hermes before assigning long-running provider routes.")
+    if missing_auth:
+        next_actions.append(
+            "Connect provider credentials for: " + ", ".join(missing_auth) + "."
+        )
+    next_actions.append(
+        "Use dynamic catalog refresh for Vercel AI Gateway, LiteLLM, OpenClaw, and OpenCode/Models.dev before changing default model IDs."
+    )
+    return {
+        "schemaVersion": "provider-ecosystem.v1",
+        "lastVerifiedAt": "2026-06-21",
+        "summary": {
+            "totalProvidersTracked": len(rows),
+            "implementedOrCredentialReady": len(implemented),
+            "routeReadyCount": len(route_ready),
+            "missingAuthCount": len(missing_auth),
+        },
+        "providers": rows,
+        "sources": PROVIDER_ECOSYSTEM_SOURCES,
+        "updatePolicy": {
+            "mode": "safe_refresh",
+            "cadence": "manual_or_weekly",
+            "requiresApprovalForDefaultChanges": True,
+            "neverOverwriteUserModels": True,
+            "dynamicSources": [
+                "https://ai-gateway.vercel.sh/v1/models",
+                "OpenClaw provider directory",
+                "OpenCode Models.dev-backed provider catalog",
+                "LiteLLM provider registry",
+            ],
+        },
+        "nextActions": next_actions,
     }
 
 
@@ -1052,6 +1243,10 @@ class ControlRoomStore:
                 auth_presence=provider_auth_presence,
                 workspace=workspace_lookup.get(mission.workspace_id),
             )
+            mission.state.skill_recovery = build_skill_recovery_snapshot(
+                mission,
+                skill_library=skill_library,
+            )
             sync_mission_state_snapshot(mission)
         self._rebalance_workspace_queue_in_place(missions)
         missions_payload = []
@@ -1182,6 +1377,12 @@ class ControlRoomStore:
                 auth_presence=provider_auth_presence,
             ),
         }
+        provider_ecosystem = _build_provider_ecosystem_snapshot(
+            provider_setup_status=provider_setup_status,
+            provider_auth_presence=provider_auth_presence,
+            runtime_statuses=runtime_statuses,
+            harness_lab=harness_lab_snapshot,
+        )
         efficiency_autotune = _build_efficiency_autotune_snapshot(
             harness_lab=harness_lab_snapshot,
             auto_optimize_enabled=bool(
@@ -1259,6 +1460,7 @@ class ControlRoomStore:
             ),
             "harnessLab": harness_lab_snapshot,
             "providerSetupStatus": provider_setup_status,
+            "providerEcosystem": provider_ecosystem,
             "efficiencyAutotune": efficiency_autotune,
             "bridgeLab": connected_apps_snapshot,
             "storageBridge": storage_bridge,
@@ -1298,6 +1500,7 @@ class ControlRoomStore:
         missions_payload = []
         for mission in missions:
             _sync_execution_scope_snapshot(mission)
+            mission.state.skill_recovery = build_skill_recovery_snapshot(mission)
             mission_payload = asdict(mission)
             mission_payload["missionLoop"] = build_mission_loop_snapshot(mission)
             mission_payload["effectiveRouteContract"] = (
@@ -1310,6 +1513,13 @@ class ControlRoomStore:
         storage_bridge: dict = {}
         setup_health: dict = {"actionHistory": []}
         autonomous_workflows = self.reconcile_autonomous_workflows(missions)
+        provider_setup_status: dict = {}
+        provider_ecosystem = _build_provider_ecosystem_snapshot(
+            provider_setup_status=provider_setup_status,
+            provider_auth_presence=provider_auth_presence,
+            runtime_statuses=[],
+            harness_lab={},
+        )
         return {
             "workspaceRoot": str(self.root),
             "ui": {
@@ -1331,7 +1541,8 @@ class ControlRoomStore:
             "skillLibrary": {"items": [], "recommendedPacks": []},
             "workflowStudio": {},
             "harnessLab": {},
-            "providerSetupStatus": {},
+            "providerSetupStatus": provider_setup_status,
+            "providerEcosystem": provider_ecosystem,
             "efficiencyAutotune": {},
             "bridgeLab": {"connectedSessions": []},
             "storageBridge": storage_bridge,
@@ -1577,6 +1788,290 @@ def _profile_parameter_snapshot(profile_name: str, profile) -> dict:
     }
 
 
+def _skill_recovery_evidence(values: list[object], limit: int = 4) -> list[str]:
+    evidence: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in evidence:
+            evidence.append(text)
+        if len(evidence) >= limit:
+            break
+    return evidence
+
+
+def _recovery_action_for_trigger(kind: str) -> str:
+    actions = {
+        "mission_blocked": "Inspect the recorded blocker, confirm the missing input or approval, then resume from the latest mission state.",
+        "verification_failure": "Run the verification skill against the failed checks, capture the failing command output, and replan only from that evidence.",
+        "repeated_failure": "Stop retrying the same step, inspect the last failures, and choose a different skill or route before resuming.",
+        "context_missing": "Generate a handoff or repo-grounding packet before continuing so the next runtime has the missing context.",
+        "weak_provider_route": "Repair the provider route or auth state before retrying; keep Hermes/OpenClaw as runtime lanes, not provider fallbacks.",
+        "runtime_lane_attention": "Inspect the delegated runtime session and restart or resume that lane only after heartbeat and approval state are clear.",
+    }
+    return actions.get(kind, "Inspect the mission evidence and choose the smallest recovery action before retrying.")
+
+
+def _mission_skill_recovery_triggers(mission: Mission) -> list[dict]:
+    triggers: list[dict] = []
+    delegated = mission.delegated_runtime_sessions or []
+    provider_truth = (
+        dict(mission.state.provider_runtime_truth)
+        if isinstance(mission.state.provider_runtime_truth, dict)
+        else {}
+    )
+    active_route = (
+        dict(provider_truth.get("activeRoute", {}))
+        if isinstance(provider_truth.get("activeRoute"), dict)
+        else {}
+    )
+    runtime_lane = _current_runtime_lane_for_mission(mission, delegated)
+    route_contract = (
+        mission.effective_route_contract
+        if mission.effective_route_contract
+        else _effective_route_contract_for_mission(mission)
+    )
+    route_rows = route_contract.get("roles", []) if isinstance(route_contract, dict) else []
+    if not isinstance(route_rows, list):
+        route_rows = []
+
+    def add_trigger(kind: str, label: str, reason: str, severity: str, evidence: list[object]) -> None:
+        if any(item["triggerId"] == kind for item in triggers):
+            return
+        triggers.append(
+            {
+                "triggerId": kind,
+                "kind": kind,
+                "label": label,
+                "severity": severity,
+                "reason": reason,
+                "evidence": _skill_recovery_evidence(evidence),
+                "recoveryAction": _recovery_action_for_trigger(kind),
+            }
+        )
+
+    if mission.state.status == "blocked" or mission.proof.blocked_by:
+        add_trigger(
+            "mission_blocked",
+            "Mission blocked",
+            "Mission state or proof contains an explicit blocker.",
+            "high",
+            [*mission.proof.blocked_by, mission.state.last_error, mission.state.stop_reason],
+        )
+
+    verification_failures = [
+        *list(mission.state.verification_failures or []),
+        *list(mission.proof.failed_checks or []),
+    ]
+    if mission.state.status == "verification_failed" or verification_failures:
+        add_trigger(
+            "verification_failure",
+            "Verification failed",
+            "Verification proof has failed checks that need evidence-driven recovery.",
+            "high",
+            verification_failures,
+        )
+
+    if int(mission.state.repeated_failure_count or 0) >= 2:
+        add_trigger(
+            "repeated_failure",
+            "Repeated failures",
+            "The same mission has failed repeatedly and should not continue with the same route blindly.",
+            "high",
+            [
+                f"repeated_failure_count={mission.state.repeated_failure_count}",
+                mission.state.last_error,
+                mission.state.last_replan_reason,
+            ],
+        )
+
+    context_status = str(mission.state.context_status or "ok").strip().lower()
+    if context_status in {"missing", "insufficient", "needs_handoff", "handoff_required", "critical", "exhausted"} or float(mission.state.context_usage_ratio or 0.0) >= 0.85:
+        add_trigger(
+            "context_missing",
+            "Context needs recovery",
+            "Mission context is missing, near rollover, or needs a handoff before another runtime continues.",
+            "medium",
+            [
+                f"context_status={context_status}",
+                f"context_usage_ratio={mission.state.context_usage_ratio}",
+                mission.state.last_handoff_reason,
+            ],
+        )
+
+    active_provider = str(active_route.get("provider", "") or "").strip().lower()
+    active_model = str(active_route.get("model", "") or "").strip()
+    last_failure = (
+        dict(provider_truth.get("lastFailure", {}))
+        if isinstance(provider_truth.get("lastFailure"), dict)
+        else {}
+    )
+    route_is_weak = (
+        not route_rows
+        or not active_provider
+        or not active_model
+        or (active_provider and provider_truth.get("authKnown") and not provider_truth.get("authPresent"))
+        or bool(last_failure)
+        or int(mission.state.route_change_count or 0) >= 2
+    )
+    if route_is_weak:
+        add_trigger(
+            "weak_provider_route",
+            "Provider route needs attention",
+            "The provider/model route is unresolved, unauthenticated, recently failed, or changing too often.",
+            "medium" if active_provider else "high",
+            [
+                f"provider={active_provider or 'unresolved'}",
+                f"model={active_model or 'unresolved'}",
+                f"route_count={len(route_rows)}",
+                f"auth_present={provider_truth.get('authPresent')}",
+                last_failure.get("summary", ""),
+            ],
+        )
+
+    runtime_evidence: list[str] = []
+    for session in delegated:
+        row = asdict(session) if hasattr(session, "__dataclass_fields__") else dict(session)
+        status = str(row.get("status", "") or "").strip().lower()
+        heartbeat = str(row.get("heartbeat_status", "") or "").strip().lower()
+        if status in {"failed", "stopped"} or heartbeat == "stale":
+            runtime_evidence.append(
+                " ".join(
+                    [
+                        str(row.get("runtime_id", "") or "runtime"),
+                        str(row.get("delegated_id", "") or ""),
+                        status or "unknown",
+                        heartbeat or "",
+                    ]
+                ).strip()
+            )
+    if runtime_evidence:
+        add_trigger(
+            "runtime_lane_attention",
+            "Runtime lane needs attention",
+            "A delegated Hermes/OpenClaw runtime session failed, stopped, or has a stale heartbeat.",
+            "high",
+            runtime_evidence,
+        )
+
+    for trigger in triggers:
+        trigger["runtimeLane"] = runtime_lane
+        trigger["providerRoute"] = {
+            "role": str(active_route.get("role", "") or "").strip().lower(),
+            "provider": active_provider,
+            "model": active_model,
+        }
+    return triggers
+
+
+def build_skill_recovery_snapshot(
+    mission: Mission,
+    *,
+    skill_library: SkillLibrary | None = None,
+    recommendation_limit: int = 6,
+) -> dict:
+    triggers = _mission_skill_recovery_triggers(mission)
+    provider_truth = (
+        dict(mission.state.provider_runtime_truth)
+        if isinstance(mission.state.provider_runtime_truth, dict)
+        else {}
+    )
+    active_route = (
+        dict(provider_truth.get("activeRoute", {}))
+        if isinstance(provider_truth.get("activeRoute"), dict)
+        else {}
+    )
+    runtime_lane = _current_runtime_lane_for_mission(
+        mission,
+        mission.delegated_runtime_sessions or [],
+    )
+    recommendations: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for trigger in triggers:
+        if skill_library is None:
+            candidates = []
+        else:
+            query = " ".join(
+                [
+                    mission.objective,
+                    trigger["kind"],
+                    trigger["label"],
+                    trigger["reason"],
+                    " ".join(trigger.get("evidence", [])),
+                ]
+            )
+            candidates = skill_library.retrieve(query, top_k=3)
+        for rank, skill in enumerate(candidates):
+            skill_id = str(skill.get("skillId", "") or "")
+            if not skill_id:
+                continue
+            key = (trigger["triggerId"], skill_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            recommendations.append(
+                {
+                    "recommendationId": f"{trigger['triggerId']}:{skill_id}",
+                    "triggerId": trigger["triggerId"],
+                    "skillId": skill_id,
+                    "label": skill.get("label", skill_id),
+                    "sourceKind": skill.get("sourceKind", "curated"),
+                    "reason": f"{skill.get('label', skill_id)} matches {trigger['label'].lower()} recovery.",
+                    "recoveryAction": trigger["recoveryAction"],
+                    "permissions": skill.get("permissions", []),
+                    "actionKinds": skill.get("actionKinds", []),
+                    "profileSuitability": skill.get("profileSuitability", []),
+                    "guidanceOnly": bool(skill.get("guidanceOnly", False)),
+                    "executionCapable": bool(skill.get("executionCapable", False)),
+                    "confidence": round(max(0.52, 0.86 - (rank * 0.08)), 2),
+                    "evidence": trigger.get("evidence", []),
+                    "appliesTo": {
+                        "missionStatus": mission.state.status,
+                        "currentPhase": mission.state.current_cycle_phase,
+                        "runtimeLane": runtime_lane,
+                        "providerRoute": {
+                            "role": str(active_route.get("role", "") or "").strip().lower(),
+                            "provider": str(active_route.get("provider", "") or "").strip().lower(),
+                            "model": str(active_route.get("model", "") or "").strip(),
+                        },
+                    },
+                }
+            )
+            if len(recommendations) >= recommendation_limit:
+                break
+        if len(recommendations) >= recommendation_limit:
+            break
+
+    recovery_actions = []
+    for trigger in triggers:
+        recovery_actions.append(
+            {
+                "triggerId": trigger["triggerId"],
+                "label": trigger["label"],
+                "action": trigger["recoveryAction"],
+                "severity": trigger["severity"],
+            }
+        )
+
+    return {
+        "schemaVersion": "mission-skill-recovery.v1",
+        "status": "needs_recovery" if triggers else "idle",
+        "generatedFrom": "mission_state_and_skill_registry",
+        "triggerCount": len(triggers),
+        "triggers": triggers,
+        "recommendations": recommendations,
+        "recoveryActions": recovery_actions,
+        "routeSeparation": {
+            "runtimeLane": runtime_lane,
+            "providerRoute": {
+                "role": str(active_route.get("role", "") or "").strip().lower(),
+                "provider": str(active_route.get("provider", "") or "").strip().lower(),
+                "model": str(active_route.get("model", "") or "").strip(),
+            },
+            "rule": "Hermes/OpenClaw are runtime lanes; OpenAI/MiniMax/etc. are provider routes.",
+        },
+    }
+
+
 def build_mission_loop_snapshot(mission: Mission) -> dict:
     plan_revisions = mission.plan_revisions or []
     latest_revision = plan_revisions[-1] if plan_revisions else None
@@ -1639,6 +2134,8 @@ def build_mission_loop_snapshot(mission: Mission) -> dict:
         "blocker": mission.state.blocker_classification,
         "providerTruth": mission.state.provider_runtime_truth,
         "codeExecution": mission.state.code_execution,
+        "skillRecovery": mission.state.skill_recovery
+        or build_skill_recovery_snapshot(mission),
     }
 
 
@@ -1661,6 +2158,7 @@ def sync_mission_state_snapshot(mission: Mission) -> dict:
     mission.state.blocker_classification = mission_loop.get("blocker", {})
     mission.state.provider_runtime_truth = mission_loop.get("providerTruth", {})
     mission.state.code_execution = mission_loop.get("codeExecution", {})
+    mission.state.skill_recovery = mission_loop.get("skillRecovery", {})
     return mission_loop
 
 
