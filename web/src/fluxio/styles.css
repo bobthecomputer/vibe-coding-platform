@@ -7162,6 +7162,21 @@ button.builder-review-target:hover {
   line-height: 1.35;
 }
 
+.fusion-contract-card {
+  gap: 8px;
+}
+
+.fusion-source-path {
+  border-top: 1px solid rgba(238, 242, 236, 0.08);
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  padding-top: 8px;
+}
+
 .bridge-context-list {
   display: grid;
   gap: 6px;

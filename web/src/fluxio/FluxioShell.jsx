@@ -18,6 +18,7 @@ import {
 } from "../../../desktop-ui/fluxioHelpers.js";
 import { ActionButton, Field, Modal, StatusPill } from "../../../desktop-ui/MissionControlPrimitives.jsx";
 import { buildMissionControlModel } from "../../../desktop-ui/missionControlModel.js";
+import { buildFusionWorkbench } from "./fusion/fusionFixtures.js";
 import { ImageStudioPlayground } from "./image-studio/ImageStudioPlayground.jsx";
 import { VoiceCommandPanel } from "./voice/index.js";
 import {
@@ -6191,6 +6192,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     () => (Array.isArray(snapshot?.bridgeLab?.connectedSessions) ? snapshot.bridgeLab.connectedSessions : []),
     [snapshot?.bridgeLab?.connectedSessions],
   );
+  const fusionWorkbench = useMemo(
+    () => buildFusionWorkbench(snapshot?.fusionWorkbench?.rows),
+    [snapshot?.fusionWorkbench?.rows],
+  );
   const effectiveRouteRows = useMemo(
     () => (Array.isArray(mission?.effectiveRouteContract?.roles) ? mission.effectiveRouteContract.roles : []),
     [mission?.effectiveRouteContract?.roles],
@@ -11243,6 +11248,46 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           </section>
 
           <section className="drawer-block">
+            <h3>Fusion contract preview</h3>
+            <p>
+              Read-only Solantir, Mind Tower, and JBH-EAVEN rows are visible before live adapters so provenance and risk labels stay attached.
+            </p>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Rows</span>
+                <strong>{fusionWorkbench.summary.totalRows}</strong>
+              </article>
+              <article className="context-item">
+                <span>Ready</span>
+                <strong>{fusionWorkbench.summary.readyRows}</strong>
+              </article>
+              <article className="context-item">
+                <span>Blocked</span>
+                <strong>{fusionWorkbench.summary.blockedRows}</strong>
+              </article>
+            </div>
+            <div className="drawer-list">
+              {fusionWorkbench.rows.map(item => (
+                <article
+                  className={`drawer-card fusion-contract-card ${toneClass(item.collectionMode === "blocked" ? "warn" : "neutral")}`}
+                  key={`fusion-contract-${item.id}`}
+                >
+                  <span>{item.sourceProject} · {item.collectionMode}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.summary}</p>
+                  <div className="pill-row">
+                    <span className="mini-pill">{item.riskLabel}</span>
+                    <span className="mini-pill muted">{item.status}</span>
+                    <span className="mini-pill muted">{item.lastVerifiedAt}</span>
+                  </div>
+                  <p>{item.proofNeed}</p>
+                  <p className="fusion-source-path">{item.sourcePath}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="drawer-block">
             <h3>Setup controls</h3>
             <div className="drawer-actions">
               {viewModel.drawers.builder.serviceStudio.services.flatMap(service =>
@@ -13093,6 +13138,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         <strong>{bridgeSummary.mobileReady}</strong>
                         <em>mobile</em>
                       </span>
+                      <span className="fluxio-nav-stat tone-neutral">
+                        <strong>{fusionWorkbench.summary.readyRows}</strong>
+                        <em>fusion</em>
+                      </span>
                     </div>
                   </article>
                 </section>
@@ -13785,6 +13834,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             <p>{item.detail}</p>
                           </article>
                         ))}
+                        <article className="builder-metric-card tone-neutral">
+                          <span>Fusion contracts</span>
+                          <strong>{fusionWorkbench.summary.readyRows}</strong>
+                          <p>Solantir, Mind Tower, and JBH-EAVEN rows are fixture-backed and read-only.</p>
+                        </article>
                       </div>
                     </div>
 
@@ -15024,6 +15078,24 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         Connect model account
                       </ActionButton>
                     </div>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus">
+                    <p className="eyebrow">Fusion preview</p>
+                    <h3>{fusionWorkbench.summary.readyRows} read-only fusion row{fusionWorkbench.summary.readyRows === 1 ? "" : "s"} ready</h3>
+                    <p>
+                      Solantir, Mind Tower, and JBH-EAVEN data stay fixture-backed until each adapter proves provenance, collection mode, and risk.
+                    </p>
+                    <div className="builder-thread-list">
+                      {fusionWorkbench.rows.slice(0, 3).map(item => (
+                        <article className={`builder-thread-item ${toneClass(item.collectionMode === "blocked" ? "warn" : "neutral")}`} key={`builder-fusion-${item.id}`}>
+                          <span>{item.sourceProject} · {item.collectionMode}</span>
+                          <strong>{item.title}</strong>
+                          <p>{item.riskLabel} · {item.nextSlice}</p>
+                        </article>
+                      ))}
+                    </div>
+                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Open fusion contract</ActionButton>
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
