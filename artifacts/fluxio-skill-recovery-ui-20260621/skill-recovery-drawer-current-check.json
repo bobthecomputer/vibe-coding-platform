@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-20T23:46:59.169886+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&drawer=skills&proofReload=skill-recovery8",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-skill-recovery-ui-20260621\\skill-recovery-drawer-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-skill-recovery-ui-20260621\\skill-recovery-drawer-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Skill recovery",
+    "Recovery actions and route separation",
+    "Hermes/OpenClaw remain runtime lanes"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 554,
+    "averageLuma": 35.16,
+    "nonBlank": true
+  },
+  "passed": true
+}

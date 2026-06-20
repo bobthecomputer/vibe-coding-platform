@@ -192,6 +192,23 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("provider-ecosystem-panel", styles)
         self.assertIn("provider-ecosystem-list", styles)
 
+    def test_skills_drawer_surfaces_stuck_state_recovery_contract(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+
+        self.assertIn("missionSkillRecovery", shell)
+        self.assertIn("mission?.missionLoop?.skillRecovery", shell)
+        self.assertIn("mission?.state?.skill_recovery", shell)
+        self.assertIn("Skill recovery", shell)
+        self.assertIn("Recommended recovery skills", shell)
+        self.assertIn("Recovery actions and route separation", shell)
+        self.assertIn("Hermes/OpenClaw remain runtime lanes", shell)
+        self.assertIn("Mission skill recovery", shell)
+        self.assertIn("function cx(...values)", shell)
+        self.assertIn("skill-recovery-panel", styles)
+        self.assertIn("skill-recovery-strip", styles)
+        self.assertIn("skill-recovery-list", styles)
+
     def test_control_room_surfaces_live_agent_artifacts_compartments_and_deploy_readiness(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")

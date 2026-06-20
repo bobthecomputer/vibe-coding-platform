@@ -1623,6 +1623,10 @@ function toneClass(tone) {
   return "tone-neutral";
 }
 
+function cx(...values) {
+  return values.filter(Boolean).join(" ");
+}
+
 function timestampLabel(value) {
   if (!value) {
     return "";
@@ -7907,6 +7911,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     mission?.missionLoop?.providerTruth ||
     mission?.state?.provider_runtime_truth ||
     {};
+  const missionSkillRecovery =
+    asRecord(mission?.missionLoop?.skillRecovery || mission?.state?.skill_recovery);
+  const missionSkillRecoveryTriggers = asList(missionSkillRecovery.triggers);
+  const missionSkillRecoveryRecommendations = asList(missionSkillRecovery.recommendations);
+  const missionSkillRecoveryActions = asList(missionSkillRecovery.recoveryActions);
+  const missionSkillRecoveryRoute = asRecord(missionSkillRecovery.routeSeparation);
+  const missionSkillRecoveryProviderRoute = asRecord(missionSkillRecoveryRoute.providerRoute);
+  const missionSkillRecoveryNeedsAction =
+    String(missionSkillRecovery.status || "").toLowerCase() === "needs_recovery" ||
+    missionSkillRecoveryTriggers.length > 0;
   const missionCodeExecutionState =
     mission?.state?.code_execution ||
     mission?.missionLoop?.codeExecution ||
@@ -10659,6 +10673,90 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </div>
           </section>
 
+          <section className={`drawer-block skill-recovery-panel ${toneClass(missionSkillRecoveryNeedsAction ? "warn" : "good")}`}>
+            <div className="skill-recovery-head">
+              <div>
+                <h3>Skill recovery</h3>
+                <p>
+                  {missionSkillRecoveryNeedsAction
+                    ? "The current mission has recovery signals. Pick a different skill, route, or handoff before retrying the same step."
+                    : "No blocked-state skill recovery is active for the current mission."}
+                </p>
+              </div>
+              <span>{titleizeToken(missionSkillRecovery.status || "idle")}</span>
+            </div>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Triggers</span>
+                <strong>{missionSkillRecoveryTriggers.length}</strong>
+              </article>
+              <article className="context-item">
+                <span>Recommended skills</span>
+                <strong>{missionSkillRecoveryRecommendations.length}</strong>
+              </article>
+              <article className="context-item">
+                <span>Runtime lane</span>
+                <strong>{titleizeToken(missionSkillRecoveryRoute.runtimeLane || mission?.runtime_id || "none")}</strong>
+              </article>
+            </div>
+            {missionSkillRecoveryTriggers.length > 0 ? (
+              <div className="drawer-list compact skill-recovery-list">
+                {missionSkillRecoveryTriggers.slice(0, 4).map(item => (
+                  <article
+                    className={`drawer-card ${toneClass(item.severity === "high" ? "bad" : "warn")}`}
+                    key={`skill-recovery-trigger-${item.triggerId || item.label}`}
+                  >
+                    <span>{titleizeToken(item.severity || "signal")}</span>
+                    <strong>{item.label || titleizeToken(item.triggerId || "Recovery signal")}</strong>
+                    <p>{item.reason || "Recovery signal captured from mission state."}</p>
+                    {asList(item.evidence).length > 0 ? (
+                      <p>{`Evidence: ${asList(item.evidence).slice(0, 2).map(listLabel).join(" | ")}`}</p>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            {missionSkillRecoveryRecommendations.length > 0 ? (
+              <details open>
+                <summary>Recommended recovery skills</summary>
+                <div className="drawer-list compact skill-recovery-list">
+                  {missionSkillRecoveryRecommendations.slice(0, 4).map(item => (
+                    <article className="drawer-card tone-neutral" key={`skill-recovery-rec-${item.recommendationId || item.skillId}`}>
+                      <span>{titleizeToken(item.sourceKind || "skill")}</span>
+                      <strong>{item.label || titleizeToken(item.skillId || "Recovery skill")}</strong>
+                      <p>{item.reason || item.recoveryAction || "Recommended by the mission recovery contract."}</p>
+                      <div className="pill-row">
+                        <span className="mini-pill">{item.executionCapable ? "Execution-capable" : "Guidance"}</span>
+                        <span className="mini-pill muted">{item.guidanceOnly ? "Review first" : "Can route"}</span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+            <details>
+              <summary>Recovery actions and route separation</summary>
+              <ul>
+                {missionSkillRecoveryActions.length > 0 ? (
+                  missionSkillRecoveryActions.slice(0, 5).map(item => (
+                    <li key={`skill-recovery-action-${item.triggerId || item.label}`}>
+                      {item.action || item.label}
+                    </li>
+                  ))
+                ) : (
+                  <li>Continue normal plan-execute-verify flow; no recovery action is currently required.</li>
+                )}
+              </ul>
+              <p className="drawer-footnote">
+                {missionSkillRecoveryRoute.rule ||
+                  "Hermes/OpenClaw remain runtime lanes; model providers remain provider routes."}
+                {missionSkillRecoveryProviderRoute.provider
+                  ? ` Provider: ${missionSkillRecoveryProviderRoute.provider} ${missionSkillRecoveryProviderRoute.model || ""}`.trim()
+                  : ""}
+              </p>
+            </details>
+          </section>
+
           <section className="drawer-block">
             <h3>Recommended packs</h3>
             <div className="drawer-list">
@@ -11957,6 +12055,24 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <h2>Confidence and operations</h2>
             <p>{viewModel.drawers.builder.liveSurface.note}</p>
           </header>
+
+          <div className={`skill-recovery-strip ${toneClass(missionSkillRecoveryNeedsAction ? "warn" : "good")}`}>
+            <div>
+              <span>Mission skill recovery</span>
+              <strong>
+                {missionSkillRecoveryNeedsAction
+                  ? `${missionSkillRecoveryTriggers.length} trigger(s), ${missionSkillRecoveryRecommendations.length} skill lead(s)`
+                  : "Clear"}
+              </strong>
+            </div>
+            <p>
+              {missionSkillRecoveryNeedsAction
+                ? missionSkillRecoveryActions[0]?.action ||
+                  missionSkillRecoveryTriggers[0]?.recoveryAction ||
+                  "Choose a recovery skill or route before retrying the same step."
+                : "The agent can continue the normal plan, execute, verify, repair loop."}
+            </p>
+          </div>
 
           <section className="drawer-block">
             <h3>Confidence engine</h3>
