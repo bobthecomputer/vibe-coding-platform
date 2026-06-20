@@ -295,6 +295,64 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("setupHealth", readiness)
             self.assertIn("source", readiness)
 
+    def test_live_review_structured_feedback_command_persists_visual_proof_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            payload = {
+                "eventId": "evt-screenshot",
+                "source": "builder-live-review",
+                "plannerExecutorHandoffId": "live-review:mission-1:evt-screenshot:target",
+                "routeContext": {
+                    "missionId": "mission-1",
+                    "provider": "openai-codex",
+                    "model": "gpt-5.5",
+                },
+                "taskContext": {
+                    "reviewTargetId": "review-preview",
+                    "screenshots": ["screenshots/latest.png"],
+                    "annotations": [
+                        {
+                            "id": "anno-hero",
+                            "severity": "high",
+                            "note": "CTA overlap",
+                        }
+                    ],
+                },
+                "visualProofPacket": {
+                    "framePath": "screenshots/latest.png",
+                    "annotationCount": 1,
+                    "annotationIds": ["anno-hero"],
+                    "proofTarget": "review-preview",
+                    "threadTarget": "mission-1",
+                },
+                "nextIdea": "Repair the hero spacing.",
+            }
+
+            receipt = backend.dispatch(
+                "record_live_review_structured_feedback_command",
+                {"payload": payload},
+            )
+
+            self.assertEqual(receipt["receiptKind"], "live_review_structured_feedback")
+            self.assertEqual(receipt["eventId"], "evt-screenshot")
+            self.assertEqual(
+                receipt["plannerExecutorHandoffId"],
+                "live-review:mission-1:evt-screenshot:target",
+            )
+            self.assertEqual(receipt["visualProofPacket"]["annotationCount"], 1)
+            self.assertEqual(receipt["taskContext"]["screenshots"], ["screenshots/latest.png"])
+            self.assertEqual(receipt["taskContext"]["annotations"][0]["id"], "anno-hero")
+            artifact_path = pathlib.Path(receipt["artifactPath"])
+            self.assertTrue(artifact_path.exists())
+
+            with mock.patch.object(backend, "_run_cli", return_value={"missions": []}):
+                snapshot = backend.dispatch("get_control_room_snapshot_command", {})
+
+            receipts = snapshot["connectedDeviceBridge"]["receipts"]
+            self.assertEqual(receipts[-1]["eventId"], "evt-screenshot")
+            self.assertEqual(receipts[-1]["visualProofPacket"]["proofTarget"], "review-preview")
+
     def test_provider_secret_presence_uses_session_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

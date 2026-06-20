@@ -5792,6 +5792,7 @@ async fn get_control_room_snapshot_command(
             }
         }
     }
+    merge_live_review_receipts(&app, &mut snapshot)?;
     Ok(snapshot)
 }
 
@@ -6321,6 +6322,156 @@ async fn export_control_room_data_command(
     Ok(response)
 }
 
+fn live_review_safe_identifier(value: Option<&str>, fallback: &str) -> String {
+    let mut output = String::new();
+    for character in value.unwrap_or("").chars() {
+        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+            output.push(character);
+        } else if !output.ends_with('_') {
+            output.push('_');
+        }
+    }
+    let trimmed = output.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.chars().take(96).collect()
+    }
+}
+
+fn live_review_receipt_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data dir: {error}"))?;
+    Ok(base.join("live_review_receipts"))
+}
+
+fn load_live_review_receipts(app: &AppHandle) -> Result<Vec<Value>, String> {
+    let receipt_dir = live_review_receipt_dir(app)?;
+    if !receipt_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&receipt_dir)
+        .map_err(|error| format!("Failed to read live review receipts: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to inspect receipt: {error}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        entries.push((modified, path));
+    }
+    entries.sort_by_key(|(modified, _)| *modified);
+    let mut receipts = Vec::new();
+    for (_, path) in entries.into_iter().rev().take(25).rev() {
+        let raw = fs::read_to_string(&path)
+            .map_err(|error| format!("Failed to read receipt {}: {error}", path.display()))?;
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            if value.is_object() {
+                receipts.push(value);
+            }
+        }
+    }
+    Ok(receipts)
+}
+
+fn merge_live_review_receipts(app: &AppHandle, snapshot: &mut Value) -> Result<(), String> {
+    let receipts = load_live_review_receipts(app)?;
+    if receipts.is_empty() {
+        return Ok(());
+    }
+    let Some(root) = snapshot.as_object_mut() else {
+        return Ok(());
+    };
+    let bridge = root
+        .entry("connectedDeviceBridge".to_string())
+        .or_insert_with(|| json!({}));
+    let Some(bridge_object) = bridge.as_object_mut() else {
+        return Ok(());
+    };
+    let mut merged = bridge_object
+        .get("receipts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    merged.extend(receipts);
+    let keep_from = merged.len().saturating_sub(25);
+    bridge_object.insert("receipts".to_string(), Value::Array(merged.split_off(keep_from)));
+    bridge_object
+        .entry("status".to_string())
+        .or_insert_with(|| Value::String("local_receipts".to_string()));
+    Ok(())
+}
+
+#[tauri::command]
+async fn record_live_review_structured_feedback_command(
+    app: AppHandle,
+    payload: Value,
+) -> Result<Value, String> {
+    let source_payload = payload
+        .get("payload")
+        .filter(|value| value.is_object())
+        .unwrap_or(&payload);
+    if !source_payload.is_object() {
+        return Err("Structured Live Review feedback payload is required.".to_string());
+    }
+    let now = now_utc_iso();
+    let event_id = live_review_safe_identifier(
+        source_payload
+            .get("eventId")
+            .or_else(|| source_payload.get("sourceEventId"))
+            .and_then(Value::as_str),
+        "live_review",
+    );
+    let handoff = source_payload
+        .get("plannerExecutorHandoffId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("live-review:{event_id}:{}", Uuid::new_v4()));
+    let mut receipt = json!({
+        "receiptKind": "live_review_structured_feedback",
+        "eventId": event_id.clone(),
+        "sourceEventId": source_payload.get("sourceEventId").cloned().unwrap_or_else(|| Value::String(event_id.clone())),
+        "plannerExecutorHandoffId": handoff.clone(),
+        "status": "received",
+        "timestamp": now,
+        "source": source_payload.get("source").cloned().unwrap_or_else(|| Value::String("builder-live-review".to_string())),
+        "routeContext": source_payload.get("routeContext").cloned().unwrap_or_else(|| json!({})),
+        "taskContext": source_payload.get("taskContext").cloned().unwrap_or_else(|| json!({})),
+        "visualProofPacket": source_payload.get("visualProofPacket").cloned().unwrap_or_else(|| json!({})),
+        "verifierFeedback": source_payload.get("verifierFeedback").cloned().unwrap_or_else(|| json!({})),
+        "nextIdea": source_payload.get("nextIdea").cloned().unwrap_or_else(|| Value::String(String::new())),
+    });
+    let receipt_dir = live_review_receipt_dir(&app)?;
+    fs::create_dir_all(&receipt_dir)
+        .map_err(|error| format!("Failed to create live review receipt dir: {error}"))?;
+    let file_name = format!(
+        "{}-{}.json",
+        event_id,
+        live_review_safe_identifier(Some(&handoff), "handoff")
+    );
+    let path = receipt_dir.join(file_name);
+    if let Some(object) = receipt.as_object_mut() {
+        object.insert(
+            "artifactPath".to_string(),
+            Value::String(path.to_string_lossy().to_string()),
+        );
+    }
+    let serialized = serde_json::to_string_pretty(&receipt)
+        .map_err(|error| format!("Failed to serialize live review receipt: {error}"))?;
+    fs::write(&path, serialized)
+        .map_err(|error| format!("Failed to persist live review receipt: {error}"))?;
+    emit_control_room_changed(&app, "live_review.structured_feedback");
+    Ok(receipt)
+}
+
 #[tauri::command]
 async fn start_control_room_mission_command(
     app: AppHandle,
@@ -6760,6 +6911,7 @@ pub fn run() {
             apply_control_room_mission_action_command,
             send_control_room_mission_follow_up_command,
             apply_control_room_workspace_action_command,
+            record_live_review_structured_feedback_command,
             has_telegram_bot_token_command,
             save_telegram_bot_token_command,
             clear_telegram_bot_token_command,

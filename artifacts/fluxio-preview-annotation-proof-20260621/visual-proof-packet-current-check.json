@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-20T23:59:28.998781+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder&builderDetail=1&proofReload=visual-proof-packet3",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-preview-annotation-proof-20260621\\visual-proof-packet-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-preview-annotation-proof-20260621\\visual-proof-packet-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Visual proof packet",
+    "Screenshot frame",
+    "Copy frame path",
+    "Browser annotations"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 530,
+    "averageLuma": 34.61,
+    "nonBlank": true
+  },
+  "passed": true
+}

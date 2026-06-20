@@ -6515,9 +6515,69 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const selectedLiveReviewFrames = asList(selectedLiveReviewEvent?.screenshotFrames);
   const selectedLiveReviewFrame =
     selectedLiveReviewFrames[selectedLiveReviewFrameIndex] || selectedLiveReviewFrames[0] || null;
+  const firstLiveReviewFrameEvent =
+    liveReviewEventsFlat.find(item => asList(item?.screenshotFrames).length > 0) || null;
+  const visualProofFrame =
+    selectedLiveReviewFrame || asList(firstLiveReviewFrameEvent?.screenshotFrames)[0] || null;
   const selectedReplayMarkers = asList(selectedLiveReviewEvent?.replayMarkers);
   const selectedReplayMarker =
     selectedReplayMarkers[selectedReplayMarkerIndex] || selectedReplayMarkers[0] || null;
+  const liveReviewAnnotationBlocks = asList(liveReviewStudio.annotationReadiness?.blocks);
+  const visualProofPacket = useMemo(() => {
+    const severeAnnotations = liveReviewAnnotationBlocks.filter(block =>
+      ["high", "critical"].includes(String(block?.severity || "").toLowerCase()),
+    );
+    const mediumAnnotations = liveReviewAnnotationBlocks.filter(
+      block => String(block?.severity || "").toLowerCase() === "medium",
+    );
+    return {
+      eventId: selectedLiveReviewEvent?.id || firstLiveReviewFrameEvent?.id || "",
+      eventLabel:
+        selectedLiveReviewEvent?.label ||
+        firstLiveReviewFrameEvent?.label ||
+        "Preview proof",
+      frameLabel: visualProofFrame?.label || "No frame selected",
+      framePath: visualProofFrame?.path || visualProofFrame?.thumbnailPath || "",
+      previewUrl: livePreviewUrl,
+      annotationCount: liveReviewAnnotationBlocks.length,
+      severeAnnotationCount: severeAnnotations.length,
+      mediumAnnotationCount: mediumAnnotations.length,
+      proofTarget:
+        selectedReplayMarker?.deepLink?.proofTarget ||
+        selectedLiveReviewEvent?.proofTarget ||
+        builderSelectedReviewTarget?.id ||
+        "",
+      threadTarget:
+        selectedReplayMarker?.deepLink?.threadTarget ||
+        selectedLiveReviewEvent?.threadTarget ||
+        mission?.mission_id ||
+        "",
+      receiptKind: latestStructuredFeedbackReceipt?.receiptKind || "live_review_structured_feedback",
+      receiptHandle:
+        latestStructuredFeedbackReceipt?.eventId ||
+        latestStructuredFeedbackReceipt?.plannerExecutorHandoffId ||
+        "",
+    };
+  }, [
+    builderSelectedReviewTarget?.id,
+    firstLiveReviewFrameEvent?.id,
+    firstLiveReviewFrameEvent?.label,
+    latestStructuredFeedbackReceipt?.eventId,
+    latestStructuredFeedbackReceipt?.plannerExecutorHandoffId,
+    latestStructuredFeedbackReceipt?.receiptKind,
+    livePreviewUrl,
+    liveReviewAnnotationBlocks,
+    mission?.mission_id,
+    selectedLiveReviewEvent?.id,
+    selectedLiveReviewEvent?.label,
+    selectedLiveReviewEvent?.proofTarget,
+    selectedLiveReviewEvent?.threadTarget,
+    selectedReplayMarker?.deepLink?.proofTarget,
+    selectedReplayMarker?.deepLink?.threadTarget,
+    visualProofFrame?.label,
+    visualProofFrame?.path,
+    visualProofFrame?.thumbnailPath,
+  ]);
   const [liveReviewAutoplay, setLiveReviewAutoplay] = useState(false);
   const markerFrameMap = useMemo(() => {
     const map = new Map();
@@ -6610,6 +6670,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             recoveryAction: block?.recoveryAction || "",
           })),
         },
+        visualProofPacket,
         verifierFeedback: {
           selectedEventDetail: event.kind === "verification" ? event.detail || event.title || "" : "",
           failures: asList(mission?.state?.verification_failures),
@@ -6667,6 +6728,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushToast,
       refreshAll,
       selectedLiveReviewEvent,
+      visualProofPacket,
       workspace?.workspace_id,
     ],
   );
@@ -12074,6 +12136,30 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </p>
           </div>
 
+          <div className="builder-visual-proof-packet compact">
+            <div className="builder-live-review-panel-head compact">
+              <strong>Visual proof packet</strong>
+              <span className="mini-pill muted">{visualProofPacket.annotationCount} annotation mark(s)</span>
+            </div>
+            <div className="builder-visual-proof-grid">
+              <article>
+                <span>Frame</span>
+                <strong>{visualProofPacket.frameLabel}</strong>
+                <small>{visualProofPacket.framePath || "Frame path pending"}</small>
+              </article>
+              <article>
+                <span>Target</span>
+                <strong>{visualProofPacket.proofTarget || "Proof target pending"}</strong>
+                <small>{visualProofPacket.threadTarget || "Thread target pending"}</small>
+              </article>
+              <article>
+                <span>Receipt</span>
+                <strong>{visualProofPacket.receiptHandle || "No receipt yet"}</strong>
+                <small>{visualProofPacket.receiptKind}</small>
+              </article>
+            </div>
+          </div>
+
           <section className="drawer-block">
             <h3>Confidence engine</h3>
             <div className="confidence-headline">
@@ -14405,6 +14491,77 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             <p className="builder-live-review-meta">
                               Host status: {Object.entries(latestBridgeHostStatus).map(([host, status]) => `${host}:${status}`).join(" · ") || "not recorded"}
                             </p>
+                          </article>
+                          <article className="builder-visual-proof-packet" aria-label="Visual proof packet">
+                            <div className="builder-live-review-panel-head compact">
+                              <strong>Visual proof packet</strong>
+                              <span className="mini-pill muted">{visualProofPacket.receiptKind}</span>
+                            </div>
+                            <div className="builder-visual-proof-grid">
+                              <article>
+                                <span>Screenshot frame</span>
+                                <strong>{visualProofPacket.frameLabel}</strong>
+                                <small>{visualProofPacket.framePath || "Frame path pending"}</small>
+                              </article>
+                              <article>
+                                <span>Annotations</span>
+                                <strong>{visualProofPacket.annotationCount} mark(s)</strong>
+                                <small>
+                                  {visualProofPacket.severeAnnotationCount} high · {visualProofPacket.mediumAnnotationCount} medium
+                                </small>
+                              </article>
+                              <article>
+                                <span>Targets</span>
+                                <strong>{visualProofPacket.proofTarget || "Proof target pending"}</strong>
+                                <small>{visualProofPacket.threadTarget || "Thread target pending"}</small>
+                              </article>
+                            </div>
+                            <p className="builder-live-review-meta">
+                              Event: {visualProofPacket.eventLabel} · Handle: {visualProofPacket.receiptHandle || "none yet"}
+                            </p>
+                            <div className="builder-live-review-controls">
+                              <ActionButton
+                                disabled={!visualProofPacket.framePath}
+                                onClick={() => copyContextValue(visualProofPacket.framePath)}
+                                type="button"
+                                variant="ghost"
+                              >
+                                Copy frame path
+                              </ActionButton>
+                              <ActionButton
+                                disabled={!visualProofPacket.receiptHandle}
+                                onClick={() =>
+                                  copyContextValue(
+                                    `${visualProofPacket.receiptKind} ${visualProofPacket.receiptHandle}`,
+                                  )
+                                }
+                                type="button"
+                                variant="ghost"
+                              >
+                                Copy proof handle
+                              </ActionButton>
+                              <ActionButton
+                                disabled={!firstLiveReviewFrameEvent?.id}
+                                onClick={() => {
+                                  if (firstLiveReviewFrameEvent?.id) {
+                                    setSelectedLiveReviewEventId(firstLiveReviewFrameEvent.id);
+                                  }
+                                }}
+                                type="button"
+                                variant="ghost"
+                              >
+                                Open screenshot event
+                              </ActionButton>
+                              {visualProofPacket.previewUrl && !visualProofPacket.previewUrl.startsWith("No ") ? (
+                                <ActionButton
+                                  onClick={() => window.open(visualProofPacket.previewUrl, "_blank", "noopener,noreferrer")}
+                                  type="button"
+                                  variant="ghost"
+                                >
+                                  Open proof preview
+                                </ActionButton>
+                              ) : null}
+                            </div>
                           </article>
                           {selectedLiveReviewEvent ? (
                             <article

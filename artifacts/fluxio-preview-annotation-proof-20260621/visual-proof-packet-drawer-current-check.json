@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-20T23:59:29.133912+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder&drawer=builder&proofReload=visual-proof-packet3",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-preview-annotation-proof-20260621\\visual-proof-packet-drawer-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-preview-annotation-proof-20260621\\visual-proof-packet-drawer-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Visual proof packet",
+    "Mission skill recovery",
+    "annotation mark",
+    "Frame"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 692,
+    "averageLuma": 36.36,
+    "nonBlank": true
+  },
+  "passed": true
+}

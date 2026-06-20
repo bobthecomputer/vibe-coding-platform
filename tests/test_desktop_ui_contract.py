@@ -192,6 +192,13 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("provider-ecosystem-panel", styles)
         self.assertIn("provider-ecosystem-list", styles)
 
+    def test_tauri_registers_live_review_structured_feedback_command(self) -> None:
+        tauri = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+
+        self.assertIn("record_live_review_structured_feedback_command", tauri)
+        self.assertIn("live_review_receipts", tauri)
+        self.assertIn("merge_live_review_receipts", tauri)
+
     def test_skills_drawer_surfaces_stuck_state_recovery_contract(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")

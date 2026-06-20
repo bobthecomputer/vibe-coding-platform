@@ -203,10 +203,19 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "Jump to source event",
             "history-jump-source-event",
             "plannerExecutorHandoffId",
+            "Visual proof packet",
+            "visualProofPacket",
+            "Screenshot frame",
+            "Copy frame path",
+            "Copy proof handle",
+            "Open screenshot event",
+            "Open proof preview",
         ]:
             self.assertIn(fragment, shell)
         self.assertIn(".builder-live-review-receipt-handles", styles)
         self.assertIn(".builder-live-review-receipt-history", styles)
+        self.assertIn(".builder-visual-proof-packet", styles)
+        self.assertIn(".builder-visual-proof-grid", styles)
 
     def test_control_room_renders_runtime_compartment_and_visual_generated_artifacts(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")

@@ -2219,6 +2219,98 @@ class FluxioWebBackend:
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax-cn"]
         return env
 
+    def _live_review_receipt_dir(self) -> Path:
+        return self.root / ".agent_control" / "live_review_receipts"
+
+    def _load_live_review_receipts(self, limit: int = 25) -> list[dict[str, Any]]:
+        receipt_dir = self._live_review_receipt_dir()
+        if not receipt_dir.exists():
+            return []
+        receipts: list[dict[str, Any]] = []
+        for path in sorted(receipt_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                receipts.append(payload)
+            if len(receipts) >= limit:
+                break
+        return list(reversed(receipts))
+
+    def _record_live_review_structured_feedback(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not payload:
+            raise ValueError("Structured Live Review feedback payload is required.")
+        event_id = _safe_identifier(
+            payload.get("eventId")
+            or payload.get("sourceEventId")
+            or payload.get("selectedEventId")
+            or f"live_review_{int(time.time())}",
+            "live_review",
+        )
+        handoff_id = str(
+            payload.get("plannerExecutorHandoffId")
+            or f"live-review:{event_id}:{secrets.token_hex(4)}"
+        ).strip()
+        if not handoff_id:
+            handoff_id = f"live-review:{event_id}:{secrets.token_hex(4)}"
+        task_context = payload.get("taskContext") if isinstance(payload.get("taskContext"), dict) else {}
+        route_context = payload.get("routeContext") if isinstance(payload.get("routeContext"), dict) else {}
+        visual_proof = payload.get("visualProofPacket") if isinstance(payload.get("visualProofPacket"), dict) else {}
+        screenshots = [
+            str(item).strip()
+            for item in task_context.get("screenshots", [])
+            if str(item or "").strip()
+        ] if isinstance(task_context.get("screenshots"), list) else []
+        annotations = [
+            item
+            for item in task_context.get("annotations", [])
+            if isinstance(item, dict)
+        ] if isinstance(task_context.get("annotations"), list) else []
+        if not visual_proof:
+            visual_proof = {
+                "framePath": screenshots[0] if screenshots else "",
+                "previewUrl": payload.get("previewUrl") or "",
+                "annotationCount": len(annotations),
+                "annotationIds": [
+                    str(item.get("id") or "").strip()
+                    for item in annotations
+                    if str(item.get("id") or "").strip()
+                ],
+                "annotationSeverities": [
+                    str(item.get("severity") or "").strip()
+                    for item in annotations
+                    if str(item.get("severity") or "").strip()
+                ],
+                "proofTarget": task_context.get("reviewTargetId") or "",
+                "threadTarget": route_context.get("missionId") or "",
+            }
+        now = _utc_now()
+        receipt = {
+            "receiptKind": "live_review_structured_feedback",
+            "eventId": event_id,
+            "sourceEventId": _safe_identifier(payload.get("sourceEventId") or event_id, "live_review"),
+            "plannerExecutorHandoffId": handoff_id,
+            "status": "received",
+            "timestamp": now,
+            "source": str(payload.get("source") or "builder-live-review"),
+            "routeContext": route_context,
+            "taskContext": {
+                **task_context,
+                "screenshots": screenshots,
+                "annotations": annotations,
+            },
+            "visualProofPacket": visual_proof,
+            "verifierFeedback": payload.get("verifierFeedback") if isinstance(payload.get("verifierFeedback"), dict) else {},
+            "nextIdea": str(payload.get("nextIdea") or "").strip(),
+        }
+        receipt_dir = self._live_review_receipt_dir()
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        path = receipt_dir / f"{event_id}-{_safe_identifier(handoff_id, 'handoff')}.json"
+        receipt["artifactPath"] = str(path)
+        path.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+        return receipt
+
     def _run_cli(
         self,
         root: Path,
@@ -3167,6 +3259,18 @@ class FluxioWebBackend:
                 "commandSurface": "http",
                 "root": str(root),
             }
+            connected_bridge = snapshot.get("connectedDeviceBridge")
+            if not isinstance(connected_bridge, dict):
+                connected_bridge = {}
+            existing_receipts = connected_bridge.get("receipts")
+            receipts = [
+                *([item for item in existing_receipts if isinstance(item, dict)] if isinstance(existing_receipts, list) else []),
+                *self._load_live_review_receipts(),
+            ]
+            if receipts:
+                connected_bridge["receipts"] = receipts[-25:]
+                connected_bridge.setdefault("status", "local_receipts")
+                snapshot["connectedDeviceBridge"] = connected_bridge
             return snapshot
         if command == "get_nas_deploy_readiness_command":
             from .mission_control import build_nas_deploy_readiness_snapshot
@@ -3215,6 +3319,8 @@ class FluxioWebBackend:
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
         if command == "image_playground_operation_command":
             return self._write_image_playground_artifact(payload)
+        if command == "record_live_review_structured_feedback_command":
+            return self._record_live_review_structured_feedback(payload)
         if command == "save_workspace_profile_command":
             args = [
                 "--workspace-id",
