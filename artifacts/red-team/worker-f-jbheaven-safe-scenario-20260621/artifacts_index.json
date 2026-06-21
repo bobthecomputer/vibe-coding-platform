@@ -12,6 +12,9 @@
     "probe_refusal_fictional_abuse": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\probe-refusal-fictional-abuse.json",
     "probe_false_data_conflict": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\probe-false-data-conflict.json",
     "probe_prompt_injection_scope": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\probe-prompt-injection-scope.json",
-    "probe_harmless_dual_use": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\probe-harmless-dual-use.json"
+    "probe_harmless_dual_use": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\probe-harmless-dual-use.json",
+    "browser_proof": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\browser-proof.json",
+    "desktop_screenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\redteam-proof-desktop.png",
+    "mobile_screenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\redteam-proof-mobile.png"
   }
 }

@@ -1,0 +1,54 @@
+{
+  "checkedAt": "2026-06-21T08:25:07.377034+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "runs": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1180
+      },
+      "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\redteam-proof-desktop.png",
+      "selectors": {
+        "proofCard": true,
+        "promotionGates": true,
+        "taxonomyMap": true,
+        "coverageMatrix": true,
+        "probeTranscripts": true
+      },
+      "expectedFragments": [
+        "JBH-EAVEN controlled safe red-team probe set",
+        "LLM01:2025 Prompt Injection",
+        "PROMOTION GATE SUMMARY",
+        "browser-proof.json",
+        "sample_transcript.json"
+      ],
+      "missingFragments": []
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 980
+      },
+      "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\red-team\\worker-f-jbheaven-safe-scenario-20260621\\redteam-proof-mobile.png",
+      "selectors": {
+        "proofCard": true,
+        "promotionGates": true,
+        "taxonomyMap": true,
+        "coverageMatrix": true,
+        "probeTranscripts": true
+      },
+      "expectedFragments": [
+        "JBH-EAVEN controlled safe red-team probe set",
+        "LLM01:2025 Prompt Injection",
+        "PROMOTION GATE SUMMARY",
+        "browser-proof.json",
+        "sample_transcript.json"
+      ],
+      "missingFragments": []
+    }
+  ],
+  "selectorFailures": [],
+  "missingFragmentsByViewport": {},
+  "passed": true
+}

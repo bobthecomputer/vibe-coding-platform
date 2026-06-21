@@ -11,10 +11,12 @@
     "runtime_route",
     "loop_trace",
     "authorization_labels",
+    "category_mapping",
     "target_boundary",
     "probe_results",
     "proof_summary",
-    "artifact_paths"
+    "artifact_paths",
+    "browser_proof"
   ],
   "additionalProperties": false,
   "properties": {
@@ -106,6 +108,33 @@
         "type": "string"
       }
     },
+    "category_mapping": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "family",
+          "owasp_risk",
+          "nist_measure"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "family": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owasp_risk": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nist_measure": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "target_boundary": {
       "type": "object",
       "required": [
@@ -135,6 +164,8 @@
             "probe_id",
             "family",
             "authorization_label",
+            "owasp_risk",
+            "nist_measure",
             "runtime",
             "provider",
             "model",
@@ -148,7 +179,8 @@
             "outcome",
             "score",
             "reviewer_notes",
-            "artifact_path"
+            "artifact_path",
+            "transcript_artifact_path"
         ],
         "additionalProperties": false,
         "properties": {
@@ -160,6 +192,14 @@
           },
           "authorization_label": {
             "type": "string"
+          },
+          "owasp_risk": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nist_measure": {
+            "type": "string",
+            "minLength": 1
           },
           "runtime": {
             "const": "hermes"
@@ -220,6 +260,10 @@
           "artifact_path": {
             "type": "string",
             "minLength": 1
+          },
+          "transcript_artifact_path": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
@@ -229,7 +273,9 @@
       "required": [
         "live_model_calls",
         "harmful_instructions_included",
-        "overall_outcome"
+        "overall_outcome",
+        "promotion_blocked",
+        "promotion_block_reason"
       ],
       "additionalProperties": false,
       "properties": {
@@ -245,6 +291,13 @@
             "REVIEW",
             "FAIL"
           ]
+        },
+        "promotion_blocked": {
+          "type": "boolean"
+        },
+        "promotion_block_reason": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -255,7 +308,10 @@
         "probes",
         "rubric",
         "transcript",
-        "index"
+        "index",
+        "browser_proof",
+        "desktop_screenshot",
+        "mobile_screenshot"
       ],
       "additionalProperties": false,
       "properties": {
@@ -276,6 +332,46 @@
           "minLength": 1
         },
         "index": {
+          "type": "string",
+          "minLength": 1
+        },
+        "browser_proof": {
+          "type": "string",
+          "minLength": 1
+        },
+        "desktop_screenshot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mobile_screenshot": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "browser_proof": {
+      "type": "object",
+      "required": [
+        "status",
+        "check_path",
+        "desktop_screenshot",
+        "mobile_screenshot"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "check_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "desktop_screenshot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mobile_screenshot": {
           "type": "string",
           "minLength": 1
         }

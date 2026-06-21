@@ -34,6 +34,10 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
             <span>Runtime {proofLabel(primary.route.runtime)}</span>
             <span>Model {proofLabel(primary.route.model)}</span>
             <span>Loop {proofLabel(primary.executionLoop?.currentStep)}</span>
+            <span>
+              Promotion {primary.promotionGateSummary?.promotionBlocked ? "blocked" : "clear"} ·{" "}
+              {primary.promotionGateSummary?.blockingGateCount || 0} gate(s)
+            </span>
           </div>
         ) : null}
         <div className="builder-thread-list">
@@ -82,6 +86,14 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
         <article className="context-item">
           <span>Probe transcripts</span>
           <strong>{board.summary.probeTranscriptCount}</strong>
+        </article>
+        <article className="context-item">
+          <span>Mapped risks</span>
+          <strong>{board.summary.taxonomyRiskCount}</strong>
+        </article>
+        <article className="context-item">
+          <span>Promotion gates</span>
+          <strong>{board.summary.promotionBlockingGateCount}</strong>
         </article>
       </div>
       <div className="drawer-list redteam-proof-list">
@@ -142,6 +154,40 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
               <span>{titleize(item.reviewStatus)}</span>
               <span>Blocked conditions {item.blockedConditionCount}</span>
             </div>
+            {item.promotionGateSummary ? (
+              <div className="redteam-promotion-gates" aria-label={`${item.title} promotion gates`}>
+                <div>
+                  <span>Promotion gate summary</span>
+                  <strong>
+                    {item.promotionGateSummary.promotionBlocked ? "Blocked until supervised run" : "Promotion clear"}
+                  </strong>
+                  <p>
+                    {titleize(item.promotionGateSummary.status)} · {item.promotionGateSummary.blockingGateCount || 0} blocking ·{" "}
+                    {item.promotionGateSummary.liveValidationGateCount || 0} live validation
+                  </p>
+                </div>
+                <div className="redteam-gate-artifacts">
+                  {(item.promotionGateSummary.requiredArtifacts || []).slice(0, 5).map(artifact => (
+                    <span key={`${item.id}-promotion-artifact-${artifact}`}>{artifact}</span>
+                  ))}
+                </div>
+                <ul>
+                  {(item.promotionGateSummary.nextRecoveryActions || []).slice(0, 3).map(action => (
+                    <li key={`${item.id}-promotion-action-${action}`}>{action}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="redteam-taxonomy-map" aria-label={`${item.title} safe probe taxonomy`}>
+              {(item.safeProbeTaxonomy || []).map(row => (
+                <article key={`${item.id}-taxonomy-${row.family}`}>
+                  <span>{titleize(row.family)}</span>
+                  <strong>{row.owaspRisk}</strong>
+                  <p>{row.safeQuestion}</p>
+                  <small>{row.nistMeasure}</small>
+                </article>
+              ))}
+            </div>
             <div className="redteam-loop-trace" aria-label={`${item.title} loop trace`}>
               {(item.executionLoop?.steps || []).map(step => (
                 <article key={`${item.id}-loop-${step.step}`}>
@@ -162,6 +208,7 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
                 <article className="redteam-coverage-row" key={`${item.id}-${row.family}`}>
                   <span>{titleize(row.family)} · {titleize(row.status)}</span>
                   <strong>{row.score}</strong>
+                  {row.taxonomyRisk ? <small>{row.taxonomyRisk}</small> : null}
                   <p>{row.evidence}</p>
                   <small>{row.humanReview ? "Human review required" : "Automated check only"}</small>
                 </article>
@@ -172,6 +219,7 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
                 <article className="redteam-probe-row" key={`${item.id}-${probe.id}`}>
                   <span>{titleize(probe.family)} · {titleize(probe.status)} · {probe.score}</span>
                   <strong>{probe.id}</strong>
+                  {probe.taxonomyRisk ? <small>{probe.taxonomyRisk}</small> : null}
                   <div className="redteam-probe-meta" aria-label={`${probe.id} route metadata`}>
                     <span>Skill {proofLabel(probe.selectedSkill)}</span>
                     <span>Runtime {proofLabel(probe.runtime)}</span>
@@ -183,6 +231,8 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
                   <p><b>Response:</b> {probe.response}</p>
                   <small>{probe.routeReason}</small>
                   <em>{probe.boundaryNotes}</em>
+                  {probe.transcriptArtifactPath ? <code>{probe.transcriptArtifactPath}</code> : null}
+                  {probe.probeArtifactPath ? <code>{probe.probeArtifactPath}</code> : null}
                   <code>{probe.artifactPath}</code>
                 </article>
               ))}

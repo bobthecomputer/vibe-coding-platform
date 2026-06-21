@@ -4776,6 +4776,86 @@ button.builder-review-target:hover {
   padding: 4px 8px;
 }
 
+.redteam-promotion-gates {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.075), transparent 58%),
+    rgba(255, 255, 255, 0.026);
+  padding: 10px;
+}
+
+.redteam-promotion-gates span,
+.redteam-promotion-gates li,
+.redteam-promotion-gates p,
+.redteam-taxonomy-map span,
+.redteam-taxonomy-map small,
+.redteam-taxonomy-map p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.redteam-promotion-gates strong,
+.redteam-taxonomy-map strong {
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.redteam-promotion-gates p {
+  margin: 3px 0 0;
+}
+
+.redteam-promotion-gates ul {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.redteam-gate-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.redteam-gate-artifacts span {
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 4px 8px;
+}
+
+.redteam-taxonomy-map {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.redteam-taxonomy-map article {
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.13);
+  min-width: 0;
+  padding: 8px;
+}
+
+.redteam-taxonomy-map span {
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.redteam-taxonomy-map p {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+
 .redteam-coverage-matrix {
   display: grid;
   gap: 7px;

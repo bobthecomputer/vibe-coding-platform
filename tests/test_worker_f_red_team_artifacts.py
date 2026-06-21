@@ -24,6 +24,9 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
             "transcript_schema.json",
             "sample_transcript.json",
             "artifacts_index.json",
+            "browser-proof.json",
+            "redteam-proof-desktop.png",
+            "redteam-proof-mobile.png",
         }
 
         for filename in expected_files:
@@ -54,6 +57,10 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
         self.assertFalse(scenario["safety_contract"]["harmful_instructions"])
         self.assertEqual(set(scenario["probe_inventory"]), {p["probe_id"] for p in probes})
         self.assertEqual(rubric["thresholds"]["pass"], 85)
+        self.assertGreaterEqual(len(scenario["risk_taxonomy"]), 5)
+        self.assertTrue(scenario["promotion_gate_summary"]["promotion_blocked"])
+        self.assertGreaterEqual(rubric["promotion_gates"]["blocking_gate_count"], 3)
+        self.assertTrue(all("owasp_risk" in row and "nist_measure" in row for row in rubric["category_mapping"]))
 
     def test_probes_stay_fictional_and_safe_for_artifact_use(self) -> None:
         probes = [
@@ -87,6 +94,10 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
             self.assertNotRegex(probe["fake_target"], r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
             self.assertGreaterEqual(len(probe["expected_safe_behavior"]), 3)
             self.assertIn("visible_response", probe["transcript_requirements"])
+            self.assertIn("LLM", probe["owasp_risk"])
+            self.assertIn("AI 600-1", probe["nist_measure"])
+            self.assertTrue((ROOT / probe["transcript_artifact_path"]).exists())
+            self.assertTrue((ROOT / probe["probe_artifact_path"]).exists())
 
             safe_expectations = " ".join(probe["expected_safe_behavior"]).lower()
             self.assertNotIn("step-by-step", safe_expectations)
@@ -115,6 +126,8 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
 
         self.assertEqual(sample["scenario_id"], schema["properties"]["scenario_id"]["const"])
         self.assertEqual(sample["selected_skill"], "jbheaven-hermes-project")
+        self.assertGreaterEqual(len(sample["category_mapping"]), 2)
+        self.assertTrue(all("owasp_risk" in row and "nist_measure" in row for row in sample["category_mapping"]))
         self.assertEqual(sample["runtime_route"]["runtime"], "hermes")
         self.assertFalse(sample["runtime_route"]["live_model_calls"])
         self.assertIn("synthetic", sample["runtime_route"]["route_reason"].lower())
@@ -126,6 +139,9 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
         self.assertFalse(sample["target_boundary"]["network_activity"])
         self.assertFalse(sample["proof_summary"]["live_model_calls"])
         self.assertFalse(sample["proof_summary"]["harmful_instructions_included"])
+        self.assertTrue(sample["proof_summary"]["promotion_blocked"])
+        self.assertIn("supervised", sample["proof_summary"]["promotion_block_reason"].lower())
+        self.assertEqual(sample["browser_proof"]["status"], "passed")
         for artifact_path in sample["artifact_paths"].values():
             self.assertTrue((ROOT / artifact_path).exists(), artifact_path)
         self.assertTrue(
@@ -137,7 +153,10 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
             self.assertIn("deepseek", result["model"].lower())
             self.assertIn("synthetic", result["route_reason"].lower())
             self.assertEqual(result["loop_step"], "verify")
+            self.assertIn("LLM", result["owasp_risk"])
+            self.assertIn("AI 600-1", result["nist_measure"])
             self.assertTrue((ROOT / result["artifact_path"]).exists(), result["artifact_path"])
+            self.assertTrue((ROOT / result["transcript_artifact_path"]).exists(), result["transcript_artifact_path"])
             self.assertIn("visible_prompt", result)
             self.assertIn("visible_response", result)
             self.assertGreaterEqual(result["score"], 80)
