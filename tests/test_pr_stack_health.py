@@ -65,6 +65,7 @@ class PrStackHealthTests(unittest.TestCase):
         self.assertIn("proof:pr-stack", package["scripts"])
         self.assertIn("scripts/pr_stack_health.py", workflow)
         self.assertIn("tests.test_pr_stack_health", workflow)
+        self.assertIn("docs/PR_STACK_HEALTH.md", workflow)
         self.assertIn("artifacts/pr-stack-health/pr-stack-health.json", workflow)
         self.assertIn("npm run verify:pr-stack", doc)
         self.assertIn("npm run proof:pr-stack", doc)
