@@ -1542,6 +1542,15 @@ class MissionControlTests(unittest.TestCase):
             self.assertTrue(
                 all("decision" in item and "recommendation" in item for item in route_decisions)
             )
+            self.assertTrue(
+                all("harnessId" in item and "fitLabel" in item and "fitReason" in item for item in route_decisions)
+            )
+            self.assertTrue(
+                any(item["harnessId"] == "fluxio_hybrid" for item in route_decisions)
+            )
+            self.assertTrue(
+                any(item["fitLabel"] == "High confidence" for item in route_decisions)
+            )
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
 
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:

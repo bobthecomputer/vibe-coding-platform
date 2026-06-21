@@ -15607,8 +15607,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         return (
                           <article className={`route-decision-card ${toneClass(decisionTone)}`} key={item.id}>
                             <span>{titleizeToken(item.label || item.decision || "Route decision")}</span>
+                            <div className="route-decision-meta">
+                              <b>{item.fitLabel || "Needs proof"}</b>
+                              <small>Harness: {titleizeToken(item.harnessId || "unknown_harness")}</small>
+                            </div>
                             <strong>{runtimeLabel(item.runtimeId)} / {providerLabel(item.provider)} / {item.model}</strong>
                             <p>{item.recommendation}</p>
+                            {item.fitReason ? <p className="route-decision-fit">{item.fitReason}</p> : null}
                             <small>
                               {item.observedRuns || 0} run{(item.observedRuns || 0) === 1 ? "" : "s"} · {item.completionRate || 0}% complete · {item.routeContractProofCount || 0} route proof
                             </small>

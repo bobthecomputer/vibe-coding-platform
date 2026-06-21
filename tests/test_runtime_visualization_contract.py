@@ -80,6 +80,12 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "routeDecisionRows" in source
     assert "Local route decision scorecards" in source
     assert "route-decision-card" in source
+    assert "route-decision-meta" in source
+    assert "Harness:" in source
     assert ".route-decision-card" in styles
+    assert ".route-decision-meta" in styles
+    assert "harnessId" in fixtures
+    assert "High confidence" in fixtures
+    assert "Needs proof" in fixtures
     assert "Use for similar work" in fixtures
     assert "Needs local evidence" in fixtures

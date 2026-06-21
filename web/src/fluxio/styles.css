@@ -1020,6 +1020,29 @@ button.builder-sidebar-nexus:hover {
   overflow-wrap: anywhere;
 }
 
+.route-decision-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.route-decision-meta b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.route-decision-meta small {
+  text-align: right;
+}
+
+.route-decision-fit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .route-decision-card em {
   font-style: normal;
 }

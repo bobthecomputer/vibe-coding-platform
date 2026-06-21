@@ -5897,19 +5897,45 @@ def _route_decision_recommendation(row: dict) -> tuple[str, str, str]:
     )
 
 
+def _route_decision_fit(row: dict) -> tuple[str, str]:
+    decision = str(row.get("decision", "needs_evidence"))
+    harness_id = str(row.get("harnessId", "unknown_harness"))
+    if decision == "use":
+        return (
+            "High confidence",
+            f"{harness_id} has local completion and route-contract proof for this lane.",
+        )
+    if decision == "watch":
+        return (
+            "Live proof pending",
+            f"{harness_id} is running this lane now; wait for verifier output before promoting it.",
+        )
+    if decision == "avoid_for_now":
+        return (
+            "Avoid for now",
+            f"{harness_id} has more blocked or failed evidence than useful proof for this lane.",
+        )
+    return (
+        "Needs proof",
+        f"{harness_id} needs a completed local proof run before this route becomes a default.",
+    )
+
+
 def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict]:
     rows: dict[str, dict] = {}
 
-    def ensure_row(runtime_id: str, provider: str, model: str, role: str) -> dict:
+    def ensure_row(harness_id: str, runtime_id: str, provider: str, model: str, role: str) -> dict:
+        clean_harness = harness_id or "unknown_harness"
         clean_runtime = runtime_id or "runtime"
         clean_provider = provider or "unresolved"
         clean_model = model or "profile default"
         clean_role = role or "mission"
-        key = f"{clean_runtime}::{clean_provider}::{clean_model}::{clean_role}"
+        key = f"{clean_harness}::{clean_runtime}::{clean_provider}::{clean_model}::{clean_role}"
         return rows.setdefault(
             key,
             {
                 "id": key,
+                "harnessId": clean_harness,
                 "runtimeId": clean_runtime,
                 "provider": clean_provider,
                 "model": clean_model,
@@ -5926,6 +5952,7 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
 
     for run in recent_runs:
         row = ensure_row(
+            str(run.get("harnessId", "") or "").strip(),
             str(run.get("runtimeId", "") or "").strip(),
             str(run.get("routeProvider", "") or "").strip().lower(),
             str(run.get("routeModel", "") or "").strip(),
@@ -5952,6 +5979,7 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
             if not isinstance(payload, dict):
                 continue
             row = ensure_row(
+                str(payload.get("harness_id", "") or "delegated_runtime_lane").strip(),
                 str(payload.get("runtime_id", "") or "").strip(),
                 str(payload.get("target_provider", "") or "").strip().lower(),
                 str(payload.get("target_model", "") or "").strip(),
@@ -5975,6 +6003,9 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
         row["decision"] = decision
         row["label"] = label
         row["recommendation"] = recommendation
+        fit_label, fit_reason = _route_decision_fit(row)
+        row["fitLabel"] = fit_label
+        row["fitReason"] = fit_reason
         row["completionRate"] = _percent(int(row["completedRuns"]), int(row["observedRuns"]))
         row["proofGaps"] = sorted(set(row["proofGaps"]))[:3]
         decision_rows.append(row)
@@ -5988,6 +6019,7 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
             ),
             -int(item["observedRuns"]),
             -int(item["delegatedLaneCount"]),
+            item["harnessId"],
             item["runtimeId"],
         ),
     )[:6]

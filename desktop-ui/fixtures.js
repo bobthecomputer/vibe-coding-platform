@@ -257,7 +257,8 @@ const baseSnapshot = {
     },
     routeDecisionRows: [
       {
-        id: 'openclaw::openai::gpt-5.4-mini::execute',
+        id: 'fluxio_hybrid::openclaw::openai::gpt-5.4-mini::execute',
+        harnessId: 'fluxio_hybrid',
         runtimeId: 'openclaw',
         provider: 'openai',
         model: 'gpt-5.4-mini',
@@ -272,10 +273,13 @@ const baseSnapshot = {
         decision: 'use',
         label: 'Use for similar work',
         recommendation: 'Local runs completed and proved provider/model route-contract resolution.',
+        fitLabel: 'High confidence',
+        fitReason: 'fluxio_hybrid has local completion and route-contract proof for this lane.',
         proofGaps: [],
       },
       {
-        id: 'opencode::opencode::deepseek-v4-flash-free::red_team',
+        id: 'delegated_runtime_lane::opencode::opencode::deepseek-v4-flash-free::red_team',
+        harnessId: 'delegated_runtime_lane',
         runtimeId: 'opencode',
         provider: 'opencode',
         model: 'deepseek-v4-flash-free',
@@ -290,6 +294,8 @@ const baseSnapshot = {
         decision: 'needs_evidence',
         label: 'Needs local evidence',
         recommendation: 'Run this route once before treating it as a recommended choice.',
+        fitLabel: 'Needs proof',
+        fitReason: 'delegated_runtime_lane needs a completed local proof run before this route becomes a default.',
         proofGaps: ['No completed local run recorded.', 'No route-contract proof recorded.'],
       },
     ],
