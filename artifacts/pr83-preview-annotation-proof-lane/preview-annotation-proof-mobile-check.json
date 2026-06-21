@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T07:24:03.700397+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr83-preview-annotation-proof-lane\\preview-annotation-proof-mobile.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr83-preview-annotation-proof-lane\\preview-annotation-proof-mobile.html",
+  "expectedFragments": [
+    "Preview + annotation proof",
+    "Next proof action",
+    "Frame proof",
+    "Open preview controls"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 390,
+    "height": 1600,
+    "sampleCount": 9310,
+    "uniqueSampleColors": 717,
+    "averageLuma": 40.9,
+    "nonBlank": true
+  },
+  "passed": true
+}

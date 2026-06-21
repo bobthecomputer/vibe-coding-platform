@@ -6681,6 +6681,32 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     visualProofFrame?.path,
     visualProofFrame?.thumbnailPath,
   ]);
+  const previewAnnotationTopBlock =
+    liveReviewAnnotationBlocks.find(block =>
+      ["high", "critical"].includes(String(block?.severity || "").toLowerCase()),
+    ) ||
+    liveReviewAnnotationBlocks[0] ||
+    null;
+  const previewAnnotationProofTone = visualProofPacket.hasRealFrame
+    ? visualProofPacket.severeAnnotationCount > 0
+      ? "warn"
+      : "good"
+    : "warn";
+  const previewAnnotationProofTarget =
+    previewAnnotationTopBlock?.label ||
+    builderSelectedReviewTarget?.title ||
+    selectedLiveReviewEvent?.label ||
+    "No review block selected";
+  const previewAnnotationProofNextAction = !visualProofPacket.hasRealFrame
+    ? "Capture or attach a real screenshot before claiming visual proof."
+    : visualProofPacket.receiptHandle
+      ? "Receipt handle linked; use annotations to steer the next UI repair."
+      : "Capture proof from Live Review before marking the preview verified.";
+  const previewAnnotationProofDetail =
+    previewAnnotationTopBlock?.recoveryAction ||
+    previewAnnotationTopBlock?.note ||
+    liveReviewStudio.compareHint ||
+    "Open Live Review controls to inspect, annotate, and attach proof.";
   const [liveReviewAutoplay, setLiveReviewAutoplay] = useState(false);
   const markerFrameMap = useMemo(() => {
     const map = new Map();
@@ -12311,6 +12337,39 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 </button>
                               </div>
                               <p>{runtimeSkillProofNextAction}</p>
+                            </div>
+                            <div className={`preview-annotation-proof-strip ${toneClass(previewAnnotationProofTone)}`} aria-label="Preview and annotation proof for current mission">
+                              <div className="preview-annotation-proof-head">
+                                <span>Preview + annotation proof</span>
+                                <strong>{titleizeToken(visualProofPacket.frameStatus)}</strong>
+                              </div>
+                              <div className="preview-annotation-proof-grid">
+                                <div>
+                                  <span>Preview surface</span>
+                                  <b>{liveReviewStudio.statusLine || "Preview pending"}</b>
+                                </div>
+                                <div>
+                                  <span>Frame proof</span>
+                                  <b>{visualProofPacket.hasRealFrame ? visualProofPacket.frameLabel : "missing frame"}</b>
+                                </div>
+                                <div>
+                                  <span>Annotations</span>
+                                  <b>
+                                    {visualProofPacket.annotationCount} mark(s) · {visualProofPacket.severeAnnotationCount} high
+                                  </b>
+                                </div>
+                                <div>
+                                  <span>Review target</span>
+                                  <b>{previewAnnotationProofTarget}</b>
+                                </div>
+                              </div>
+                              <div className="preview-annotation-proof-foot">
+                                <span>Next proof action: {previewAnnotationProofNextAction}</span>
+                                <button className="mini-pill muted" onClick={() => void handleBuilderFeatureAction("open_builder")} type="button">
+                                  Open preview controls
+                                </button>
+                              </div>
+                              <p>{previewAnnotationProofDetail}</p>
                             </div>
                             <div className="monitor-loop-strip" aria-label="External monitor loops">
                               <div>

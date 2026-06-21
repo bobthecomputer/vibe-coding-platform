@@ -194,7 +194,20 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "builder-live-review-event-group",
             "builder-live-review-meta",
             "Browser annotations",
+            "Preview + annotation proof",
+            "Preview and annotation proof for current mission",
+            "Next proof action:",
+            "previewAnnotationTopBlock",
+            "previewAnnotationProofTone",
+            "previewAnnotationProofTarget",
+            "previewAnnotationProofNextAction",
+            "previewAnnotationProofDetail",
+            "visualProofPacket.hasRealFrame",
+            "Capture or attach a real screenshot before claiming visual proof.",
+            "Open preview controls",
             "builder-live-annotation-item",
+            "preview-annotation-proof-strip",
+            "preview-annotation-proof-grid",
             "Page/layer:",
             "Recovery:",
             "builder-live-annotation-map",
@@ -248,6 +261,8 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn(".builder-visual-proof-packet", styles)
         self.assertIn(".builder-visual-proof-receipts", styles)
         self.assertIn(".builder-visual-proof-grid", styles)
+        self.assertIn(".preview-annotation-proof-strip", styles)
+        self.assertIn(".preview-annotation-proof-grid", styles)
 
     def test_control_room_renders_runtime_compartment_and_visual_generated_artifacts(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
