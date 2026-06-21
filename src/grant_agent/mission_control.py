@@ -6623,6 +6623,8 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
     return {
         "runId": str(payload.get("runId") or proof_path.parent.name),
         "mode": str(payload.get("mode") or ""),
+        "proofType": str(payload.get("proofType") or safety_contract.get("proofType") or ""),
+        "proofTruth": payload.get("proofTruth") if isinstance(payload.get("proofTruth"), dict) else {},
         "createdAt": str(payload.get("createdAt") or ""),
         "path": str(proof_path),
         "lanes": lanes[:4],
@@ -6637,6 +6639,8 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
             "harmfulInstructions": bool(safety_contract.get("harmfulInstructions")),
             "runtimeAdapterAdded": bool(safety_contract.get("runtimeAdapterAdded")),
             "openCodeGoRuntimeAdded": bool(safety_contract.get("openCodeGoRuntimeAdded")),
+            "liveRuntimeExecution": bool(safety_contract.get("liveRuntimeExecution")),
+            "proofType": str(safety_contract.get("proofType") or payload.get("proofType") or ""),
         },
     }
 

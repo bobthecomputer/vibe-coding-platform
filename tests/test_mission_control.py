@@ -1677,6 +1677,13 @@ class MissionControlTests(unittest.TestCase):
                     {
                         "runId": "runtime-lane-proof-test",
                         "mode": "deterministic-no-live-runtime-call",
+                        "proofType": "route_contract_proof",
+                        "proofTruth": {
+                            "classification": "route_contract_proof",
+                            "liveRuntimeExecution": False,
+                            "proves": ["route contract construction"],
+                            "doesNotProve": ["a live runtime process completed"],
+                        },
                         "createdAt": "2026-06-21T00:00:00Z",
                         "lanes": [
                             {
@@ -1711,6 +1718,8 @@ class MissionControlTests(unittest.TestCase):
                             "harmfulInstructions": False,
                             "runtimeAdapterAdded": False,
                             "openCodeGoRuntimeAdded": False,
+                            "liveRuntimeExecution": False,
+                            "proofType": "route_contract_proof",
                         },
                     },
                     indent=2,
@@ -1757,6 +1766,13 @@ class MissionControlTests(unittest.TestCase):
                 "runtime-lane-proof-test",
             )
             self.assertEqual(
+                fused_runtime["latestLaneProof"]["proofType"],
+                "route_contract_proof",
+            )
+            self.assertFalse(
+                fused_runtime["latestLaneProof"]["proofTruth"]["liveRuntimeExecution"]
+            )
+            self.assertEqual(
                 fused_runtime["latestLaneProof"]["lanes"][0]["skill"],
                 "jbheaven_godmode_lab",
             )
@@ -1765,6 +1781,9 @@ class MissionControlTests(unittest.TestCase):
             )
             self.assertFalse(
                 fused_runtime["latestLaneProof"]["safetyContract"]["runtimeAdapterAdded"]
+            )
+            self.assertFalse(
+                fused_runtime["latestLaneProof"]["safetyContract"]["liveRuntimeExecution"]
             )
             lane_roles = {
                 item["runtimeId"]: item["role"]

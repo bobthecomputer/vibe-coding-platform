@@ -39,7 +39,9 @@ export function RuntimeTruthContract({ fusedRuntime }) {
         <b>Latest runtime lane proof</b>
         {latestProof.runId ? (
           <>
-            <span>{latestProof.runId} · {latestProof.mode || "proof recorded"}</span>
+            <span>
+              {latestProof.runId} · {latestProof.proofType || latestProof.mode || "proof recorded"}
+            </span>
             <ul>
               {proofLanes.slice(0, 3).map(item => (
                 <li key={`${item.runtimeId}-${item.provider}-${item.model}`}>
@@ -48,7 +50,7 @@ export function RuntimeTruthContract({ fusedRuntime }) {
               ))}
             </ul>
             <small>
-              {proofArtifactCount} artifact{proofArtifactCount === 1 ? "" : "s"} · live model calls: {latestProof.safetyContract?.liveModelCalls ? "yes" : "no"} · runtime adapter added: {latestProof.safetyContract?.runtimeAdapterAdded ? "yes" : "no"}
+              {proofArtifactCount} artifact{proofArtifactCount === 1 ? "" : "s"} · live runtime execution: {latestProof.safetyContract?.liveRuntimeExecution ? "yes" : "no"} · live model calls: {latestProof.safetyContract?.liveModelCalls ? "yes" : "no"} · runtime adapter added: {latestProof.safetyContract?.runtimeAdapterAdded ? "yes" : "no"}
             </small>
           </>
         ) : (

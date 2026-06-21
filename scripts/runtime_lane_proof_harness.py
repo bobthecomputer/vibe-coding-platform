@@ -24,6 +24,25 @@ from grant_agent.runtimes import runtime_adapter_map  # noqa: E402
 from grant_agent.skills import SkillRegistry  # noqa: E402
 
 DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "runtime-lanes"
+PROOF_TYPE = "route_contract_proof"
+PROOF_TRUTH_CONTRACT = {
+    "classification": PROOF_TYPE,
+    "liveRuntimeExecution": False,
+    "liveModelCalls": False,
+    "proves": [
+        "runtime adapter registration",
+        "route contract construction",
+        "launch command shape",
+        "skill visibility",
+        "fused supervisor metadata shape",
+    ],
+    "doesNotProve": [
+        "a live runtime process completed",
+        "a provider model generated output",
+        "a delegated runtime modified files",
+        "a red-team probe was executed",
+    ],
+}
 
 
 LANE_ROUTES = {
@@ -266,6 +285,8 @@ def _scorecard_candidate(lane: dict, artifact_paths: dict) -> dict:
         "verifierProof": {
             "verifierType": "deterministic_test",
             "independence": "deterministic",
+            "proofType": PROOF_TYPE,
+            "liveRuntimeExecution": False,
             "requiredCommands": [
                 "python -m pytest tests/test_runtime_lane_proof_harness.py",
             ],
@@ -353,8 +374,9 @@ def _markdown(payload: dict) -> str:
         "",
         f"Run id: `{payload['runId']}`",
         f"Mode: `{payload['mode']}`",
+        f"Proof type: `{payload['proofType']}`",
         "",
-        "This proof records route contracts, launch commands, skill visibility, and fused supervision fields. It does not call live models and does not add a runtime adapter.",
+        "This proof records route contracts, launch command shape, skill visibility, and fused supervision fields. It does not launch a live runtime process, call live models, or add a runtime adapter.",
         "",
         "## Runtime Lanes",
         "",
@@ -412,7 +434,11 @@ def build_proof(
             "harmfulInstructions": False,
             "runtimeAdapterAdded": False,
             "openCodeGoRuntimeAdded": False,
+            "liveRuntimeExecution": False,
+            "proofType": PROOF_TYPE,
         },
+        "proofType": PROOF_TYPE,
+        "proofTruth": PROOF_TRUTH_CONTRACT,
         "artifactPaths": artifact_paths,
     }
     route_scorecard = _route_scorecard_payload(

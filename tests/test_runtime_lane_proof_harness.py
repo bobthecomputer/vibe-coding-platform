@@ -26,6 +26,12 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
         self.assertEqual(set(lanes), {"openclaw", "hermes"})
         self.assertNotIn("opencode", runtime_adapter_map())
         self.assertNotIn("opencode", payload["fusedRuntime"]["registeredRuntimeAdapters"])
+        self.assertEqual(payload["proofType"], "route_contract_proof")
+        self.assertFalse(payload["proofTruth"]["liveRuntimeExecution"])
+        self.assertIn("route contract construction", payload["proofTruth"]["proves"])
+        self.assertIn("a live runtime process completed", payload["proofTruth"]["doesNotProve"])
+        self.assertFalse(payload["safetyContract"]["liveRuntimeExecution"])
+        self.assertEqual(payload["safetyContract"]["proofType"], "route_contract_proof")
 
         self.assertIn("openclaw agent", lanes["openclaw"]["launchCommand"])
         self.assertIn("--json", lanes["openclaw"]["launchCommand"])
@@ -70,6 +76,8 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
                 runtime_id,
             )
             self.assertFalse(candidate["runtimeLane"]["runtimeAdapterAdded"])
+            self.assertEqual(candidate["verifierProof"]["proofType"], "route_contract_proof")
+            self.assertFalse(candidate["verifierProof"]["liveRuntimeExecution"])
 
     def test_writes_artifact_index_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -86,6 +94,7 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
             )
             self.assertIn("Hermes/OpenClaw Runtime Lane Proof", markdown)
             self.assertIn("Runtime adapter added: `False`", markdown)
+            self.assertIn("Proof type: `route_contract_proof`", markdown)
 
             scorecard = json.loads(
                 pathlib.Path(payload["artifactPaths"]["route_scorecard"]).read_text(
