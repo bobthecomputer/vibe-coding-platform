@@ -378,9 +378,12 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(receipt["summary"]["elapsedMs"], 842)
             self.assertTrue(receipt["proofSignals"]["hasRuntimeReply"])
             self.assertTrue(receipt["proofSignals"]["hasRoute"])
+            self.assertTrue(receipt["proofSignals"]["hasIntentAlignment"])
             self.assertFalse(receipt["proofSignals"]["hasProcessEvidence"])
             self.assertFalse(receipt["safety"]["liveModelCallRecorded"])
             self.assertFalse(receipt["safety"]["runtimeAdapterAdded"])
+            self.assertEqual(receipt["intentAlignment"]["schemaVersion"], "mission-intent-alignment.v1")
+            self.assertEqual(receipt["intentAlignment"]["source"], "operator_message")
             self.assertEqual(receipt["processEvidence"], {})
             self.assertEqual(
                 next(lane for lane in compartment["lanes"] if lane["role"] == "executor")["health"],

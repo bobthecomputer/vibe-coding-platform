@@ -428,14 +428,23 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("recoveryCockpit", shell)
         self.assertIn("Skill recovery cockpit", shell)
         self.assertIn("Retry guard:", shell)
+        self.assertIn("Intent alignment", shell)
+        self.assertIn("Original intent", shell)
+        self.assertIn("Current focus", shell)
+        self.assertIn("Intent drift signals", shell)
+        self.assertIn("intent-alignment-proof", styles)
+        self.assertIn("intent-alignment-signal-list", styles)
         self.assertIn("skill-recovery-cockpit", styles)
         self.assertIn("skill-recovery-cockpit-grid", styles)
         self.assertIn("skill-recovery-evidence-list", styles)
         self.assertIn("recoveryCockpit", model)
+        self.assertIn("intentAlignment", model)
         self.assertIn("selectedSkill", model)
         self.assertIn("proofEvidence", model)
         self.assertIn("visibleRouteSummary", model)
         self.assertIn("mission-skill-recovery-plan.v1", fixtures)
+        self.assertIn("mission-intent-alignment.v1", fixtures)
+        self.assertIn("Intent alignment receipt", fixtures)
         self.assertIn("verification_failure-verification_failure_receipt.json", fixtures)
 
     def test_builder_surfaces_external_monitor_loops(self) -> None:
@@ -451,6 +460,8 @@ class DesktopUiContractTests(unittest.TestCase):
             "criticalCount",
             "blocked-state-sentry",
             "intent-drift-sentry",
+            "originalIntent",
+            "currentFocus",
             "silence-watchdog",
             "verification-sentinel",
             "milestone-notifier",

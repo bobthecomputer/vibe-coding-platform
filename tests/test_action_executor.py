@@ -489,8 +489,11 @@ class ActionExecutorTests(unittest.TestCase):
             ]
             self.assertEqual(payload["schemaVersion"], "fluxio.delegated-skill-payload.v1")
             self.assertEqual(payload["selectedSkills"][0]["skillId"], "jbheaven_godmode_lab")
+            self.assertEqual(payload["intentAlignment"]["schemaVersion"], "mission-intent-alignment.v1")
+            self.assertEqual(payload["intentAlignment"]["selectedSkillId"], "jbheaven_godmode_lab")
             self.assertEqual(payload["skillExecutionPolicy"]["matchedSkills"][0]["skillId"], "jbheaven_godmode_lab")
             self.assertEqual(observed["selectedSkills"][0]["skillId"], "jbheaven_godmode_lab")
+            self.assertEqual(observed["intentAlignment"]["selectedSkillId"], "jbheaven_godmode_lab")
             self.assertIn("runtime.skill_payload", event_kinds)
             self.assertEqual(
                 record.result.payload["delegatedSession"]["skill_payload_path"],

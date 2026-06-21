@@ -38,6 +38,36 @@ def _terminal_status_ok(status: str, exit_code: int | None) -> bool:
     return False
 
 
+def _intent_alignment_from_session(session: dict[str, Any]) -> dict[str, Any]:
+    raw = session.get("intent_alignment")
+    if not isinstance(raw, dict):
+        raw = session.get("intentAlignment") if isinstance(session.get("intentAlignment"), dict) else {}
+    if raw:
+        return {
+            "schemaVersion": str(raw.get("schemaVersion") or "mission-intent-alignment.v1"),
+            "status": str(raw.get("status") or "unknown"),
+            "source": str(raw.get("source") or "delegated_runtime_session"),
+            "objectiveExcerpt": str(raw.get("objectiveExcerpt") or raw.get("originalUserIntent") or ""),
+            "routeReason": str(raw.get("routeReason") or raw.get("driftReason") or ""),
+            "selectedSkillId": str(raw.get("selectedSkillId") or raw.get("selectedSkill") or ""),
+            "checkedAt": str(raw.get("checkedAt") or raw.get("updatedAt") or ""),
+        }
+    objective = str(session.get("objective") or session.get("mission_objective") or "").strip()
+    route_reason = str(session.get("route_reason") or session.get("target_reason") or "").strip()
+    selected_skill = str(session.get("selected_skill_id") or session.get("selectedSkillId") or "").strip()
+    if not any([objective, route_reason, selected_skill]):
+        return {}
+    return {
+        "schemaVersion": "mission-intent-alignment.v1",
+        "status": "unknown",
+        "source": "delegated_runtime_session",
+        "objectiveExcerpt": objective[:180],
+        "routeReason": route_reason,
+        "selectedSkillId": selected_skill,
+        "checkedAt": str(session.get("updated_at") or session.get("created_at") or ""),
+    }
+
+
 def build_delegated_runtime_proof_receipt(session: dict[str, Any]) -> dict[str, Any]:
     status = str(session.get("status") or "").strip().lower()
     exit_code = session.get("exit_code")
@@ -60,6 +90,7 @@ def build_delegated_runtime_proof_receipt(session: dict[str, Any]) -> dict[str, 
     }
     terminal_ok = _terminal_status_ok(status, exit_code)
     artifact_ok = all(artifact_checks.values())
+    intent_alignment = _intent_alignment_from_session(session)
     return {
         "schemaVersion": DELEGATED_RUNTIME_PROOF_SCHEMA,
         "delegatedId": str(session.get("delegated_id") or ""),
@@ -78,6 +109,7 @@ def build_delegated_runtime_proof_receipt(session: dict[str, Any]) -> dict[str, 
             "effort": str(session.get("target_effort") or ""),
             "budgetClass": str(session.get("target_budget_class") or ""),
         },
+        "intentAlignment": intent_alignment,
         "heartbeat": {
             "status": str(session.get("heartbeat_status") or "unknown"),
             "at": str(session.get("heartbeat_at") or ""),
@@ -110,6 +142,7 @@ def build_delegated_runtime_proof_receipt(session: dict[str, Any]) -> dict[str, 
             "terminalStatusVerified": terminal_ok,
             "artifactIntegrityVerified": artifact_ok,
             "eventLogObserved": event_count > 0,
+            "intentAlignmentRecorded": bool(intent_alignment),
         },
     }
 

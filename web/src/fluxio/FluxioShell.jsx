@@ -12221,6 +12221,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             {recommendationStudio.recoveryCockpit.artifactPath ? (
                               <p className="skill-recovery-proof-path">{recommendationStudio.recoveryCockpit.artifactPath}</p>
                             ) : null}
+                            {recommendationStudio.recoveryCockpit.intentAlignment ? (
+                              <div
+                                className={`intent-alignment-proof ${toneClass(recommendationStudio.recoveryCockpit.intentAlignment.tone)}`.trim()}
+                                aria-label="Intent alignment proof"
+                              >
+                                <span>Intent alignment</span>
+                                <strong>{recommendationStudio.recoveryCockpit.intentAlignment.status}</strong>
+                                <p>{recommendationStudio.recoveryCockpit.intentAlignment.driftReason}</p>
+                                <dl>
+                                  <div>
+                                    <dt>Original intent</dt>
+                                    <dd>{recommendationStudio.recoveryCockpit.intentAlignment.originalIntent}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Current focus</dt>
+                                    <dd>{recommendationStudio.recoveryCockpit.intentAlignment.currentFocus}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Recovery action</dt>
+                                    <dd>{recommendationStudio.recoveryCockpit.intentAlignment.recoveryAction}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Proof</dt>
+                                    <dd>{recommendationStudio.recoveryCockpit.intentAlignment.proofLabel}</dd>
+                                  </div>
+                                </dl>
+                                {recommendationStudio.recoveryCockpit.intentAlignment.signals?.length ? (
+                                  <div className="intent-alignment-signal-list" aria-label="Intent drift signals">
+                                    {recommendationStudio.recoveryCockpit.intentAlignment.signals.map(item => (
+                                      <span key={item.id || item.label}>
+                                        <strong>{item.label}</strong>
+                                        {item.detail ? <small>{item.detail}</small> : null}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
                             {recommendationStudio.recoveryCockpit.proofEvidence?.length ? (
                               <div className="skill-recovery-evidence-list" aria-label="Required recovery proof evidence">
                                 {recommendationStudio.recoveryCockpit.proofEvidence.map(item => (
@@ -13019,6 +13057,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           </div>
                           {recommendationStudio.recoveryCockpit.artifactPath ? (
                             <p className="skill-recovery-proof-path">{recommendationStudio.recoveryCockpit.artifactPath}</p>
+                          ) : null}
+                          {recommendationStudio.recoveryCockpit.intentAlignment ? (
+                            <div
+                              className={`intent-alignment-proof ${toneClass(recommendationStudio.recoveryCockpit.intentAlignment.tone)}`.trim()}
+                              aria-label="Intent alignment proof"
+                            >
+                              <span>Intent alignment</span>
+                              <strong>{recommendationStudio.recoveryCockpit.intentAlignment.status}</strong>
+                              <p>{recommendationStudio.recoveryCockpit.intentAlignment.driftReason}</p>
+                              <dl>
+                                <div>
+                                  <dt>Original intent</dt>
+                                  <dd>{recommendationStudio.recoveryCockpit.intentAlignment.originalIntent}</dd>
+                                </div>
+                                <div>
+                                  <dt>Current focus</dt>
+                                  <dd>{recommendationStudio.recoveryCockpit.intentAlignment.currentFocus}</dd>
+                                </div>
+                                <div>
+                                  <dt>Recovery action</dt>
+                                  <dd>{recommendationStudio.recoveryCockpit.intentAlignment.recoveryAction}</dd>
+                                </div>
+                                <div>
+                                  <dt>Proof</dt>
+                                  <dd>{recommendationStudio.recoveryCockpit.intentAlignment.proofLabel}</dd>
+                                </div>
+                              </dl>
+                              {recommendationStudio.recoveryCockpit.intentAlignment.signals?.length ? (
+                                <div className="intent-alignment-signal-list" aria-label="Intent drift signals">
+                                  {recommendationStudio.recoveryCockpit.intentAlignment.signals.map(item => (
+                                    <span key={item.id || item.label}>
+                                      <strong>{item.label}</strong>
+                                      {item.detail ? <small>{item.detail}</small> : null}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
                           ) : null}
                           {recommendationStudio.recoveryCockpit.proofEvidence?.length ? (
                             <div className="skill-recovery-evidence-list" aria-label="Required recovery proof evidence">

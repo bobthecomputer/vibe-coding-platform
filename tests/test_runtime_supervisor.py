@@ -231,6 +231,17 @@ class RuntimeSupervisorTests(unittest.TestCase):
                     mission=mission,
                     workspace=workspace,
                     source_step_id="step_delegate",
+                    skill_payload={
+                        "selectedSkills": [{"skillId": "stuck_state_recovery"}],
+                        "intentAlignment": {
+                            "schemaVersion": "mission-intent-alignment.v1",
+                            "status": "drift_risk",
+                            "source": "mission_objective",
+                            "objectiveExcerpt": "Keep the mission aligned with the original proof request.",
+                            "routeReason": "Recovery route selected after verification failure.",
+                            "selectedSkillId": "stuck_state_recovery",
+                        },
+                    },
                 )
                 self.assertIn(session.status, {"launching", "running", "completed"})
 
@@ -266,6 +277,9 @@ class RuntimeSupervisorTests(unittest.TestCase):
                 self.assertFalse(receipt["safety"]["liveModelCalls"])
                 self.assertFalse(receipt["safety"]["runtimeAdapterAdded"])
                 self.assertFalse(receipt["safety"]["secretsIncluded"])
+                self.assertEqual(receipt["intentAlignment"]["status"], "drift_risk")
+                self.assertEqual(receipt["intentAlignment"]["selectedSkillId"], "stuck_state_recovery")
+                self.assertTrue(receipt["promotionGate"]["intentAlignmentRecorded"])
                 self.assertIn("delegated.txt", receipt["changedFiles"])
                 self.assertTrue(
                     verify_delegated_runtime_proof_receipt(

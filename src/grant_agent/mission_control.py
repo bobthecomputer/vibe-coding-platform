@@ -2773,6 +2773,100 @@ def _recovery_proof_requirement_for_trigger(kind: str) -> dict:
     )
 
 
+def _objective_excerpt(value: str, limit: int = 180) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _recovery_title(value: str) -> str:
+    return " ".join(part.capitalize() for part in str(value or "").replace("-", "_").split("_") if part)
+
+
+def _build_intent_alignment_snapshot(
+    *,
+    mission: Mission,
+    primary_trigger: dict,
+    selected_skill_id: str,
+    active_route: dict,
+    recovery_action: str,
+) -> dict:
+    persisted = mission.state.intent_alignment if isinstance(mission.state.intent_alignment, dict) else {}
+    if persisted.get("schemaVersion"):
+        return persisted
+    route_change_count = int(mission.state.route_change_count or 0)
+    replan_reason = str(mission.state.last_replan_reason or "").strip()
+    trigger_kind = str(primary_trigger.get("kind") or primary_trigger.get("triggerId") or "").strip()
+    drift_signals: list[dict] = []
+    if route_change_count >= 2:
+        drift_signals.append(
+            {
+                "id": "route-change-count",
+                "kind": "route_change",
+                "label": "Route changed repeatedly",
+                "detail": f"{route_change_count} route change(s) recorded during this mission.",
+            }
+        )
+    if replan_reason:
+        drift_signals.append(
+            {
+                "id": "replan-reason",
+                "kind": "replan",
+                "label": "Planner replanned",
+                "detail": replan_reason,
+            }
+        )
+    if trigger_kind:
+        drift_signals.append(
+            {
+                "id": f"recovery-trigger-{trigger_kind}",
+                "kind": "recovery_trigger",
+                "label": _recovery_title(trigger_kind),
+                "detail": str(primary_trigger.get("reason") or "Recovery trigger active."),
+            }
+        )
+    status = "drift_risk" if drift_signals else "aligned"
+    proof_requirement = {
+        "artifactKind": "intent_alignment_receipt",
+        "label": "Intent alignment receipt",
+        "minimumEvidence": [
+            "original user intent",
+            "current focus",
+            "drift reason",
+            "next recovery action",
+        ],
+    }
+    provider = str(active_route.get("provider", "") or "").strip().lower()
+    model = str(active_route.get("model", "") or "").strip()
+    route_reason = str(primary_trigger.get("reason") or mission.state.last_plan_summary or "").strip()
+    return {
+        "schemaVersion": "mission-intent-alignment.v1",
+        "status": status,
+        "source": "mission_objective",
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "originalUserIntent": _objective_excerpt(mission.objective or mission.title),
+        "objectiveExcerpt": _objective_excerpt(mission.objective or mission.title),
+        "currentFocus": _objective_excerpt(
+            mission.state.last_plan_summary
+            or recovery_action
+            or mission.state.current_cycle_phase
+            or mission.state.status
+        ),
+        "driftReason": route_reason or "No drift signal recorded.",
+        "routeReason": route_reason or "Route still matches the mission objective.",
+        "selectedSkillId": selected_skill_id,
+        "providerRoute": {
+            "role": str(active_route.get("role", "") or "").strip().lower(),
+            "provider": provider,
+            "model": model,
+        },
+        "recoveryAction": recovery_action,
+        "driftSignals": drift_signals[:4],
+        "proofRequirement": proof_requirement,
+    }
+
+
 def _build_skill_recovery_plan(
     *,
     mission: Mission,
@@ -2793,6 +2887,17 @@ def _build_skill_recovery_plan(
     )
     trigger_id = str(primary_trigger.get("triggerId") or "normal_flow")
     proof_requirement = _recovery_proof_requirement_for_trigger(trigger_id)
+    recovery_action = str(
+        primary_trigger.get("recoveryAction")
+        or "Continue the normal plan-execute-verify loop."
+    )
+    intent_alignment = _build_intent_alignment_snapshot(
+        mission=mission,
+        primary_trigger=primary_trigger,
+        selected_skill_id=selected_skill_id,
+        active_route=active_route,
+        recovery_action=recovery_action,
+    )
     provider_route = {
         "role": str(active_route.get("role", "") or "").strip().lower(),
         "provider": str(active_route.get("provider", "") or "").strip().lower(),
@@ -2821,10 +2926,7 @@ def _build_skill_recovery_plan(
             or "No recovery trigger is active; continue the normal plan-execute-verify loop."
         ),
         "loopStep": _recovery_loop_step_for_trigger(trigger_id),
-        "nextAction": str(
-            primary_trigger.get("recoveryAction")
-            or "Continue the normal plan-execute-verify loop."
-        ),
+        "nextAction": recovery_action,
         "retryGuard": {
             "mode": "change_skill_or_route_before_retry" if triggers else "normal_flow",
             "blockSameStepRetry": bool(triggers),
@@ -2846,6 +2948,7 @@ def _build_skill_recovery_plan(
             ),
             "mustAttachBeforeRetry": bool(triggers),
         },
+        "intentAlignment": intent_alignment,
         "visibleRouteSummary": " · ".join(item for item in route_bits if item),
     }
 

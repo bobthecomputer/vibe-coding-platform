@@ -1480,6 +1480,20 @@ class MissionControlTests(unittest.TestCase):
             )
             self.assertIn("visibleRouteSummary", recovery_plan)
             self.assertEqual(
+                recovery_plan["intentAlignment"]["schemaVersion"],
+                "mission-intent-alignment.v1",
+            )
+            self.assertIn(
+                recovery_plan["intentAlignment"]["status"],
+                {"aligned", "drift_risk"},
+            )
+            self.assertIn("objectiveExcerpt", recovery_plan["intentAlignment"])
+            self.assertIn("routeReason", recovery_plan["intentAlignment"])
+            self.assertEqual(
+                recovery_plan["intentAlignment"]["proofRequirement"]["artifactKind"],
+                "intent_alignment_receipt",
+            )
+            self.assertEqual(
                 mission_payload["state"]["skill_recovery"]["schemaVersion"],
                 "mission-skill-recovery.v1",
             )

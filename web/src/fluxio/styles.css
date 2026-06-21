@@ -2174,6 +2174,89 @@ button.builder-inline-action:hover {
   color: var(--text);
 }
 
+.intent-alignment-proof {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.075);
+  padding-top: 9px;
+}
+
+.intent-alignment-proof > span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.intent-alignment-proof > strong {
+  width: fit-content;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.intent-alignment-proof.tone-good > strong {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.intent-alignment-proof p,
+.intent-alignment-proof dd,
+.intent-alignment-proof small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.intent-alignment-proof dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.intent-alignment-proof dl div {
+  min-width: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 8px;
+}
+
+.intent-alignment-proof dt {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.intent-alignment-proof dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.intent-alignment-signal-list {
+  display: grid;
+  gap: 5px;
+}
+
+.intent-alignment-signal-list span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 7px 8px;
+}
+
+.intent-alignment-signal-list strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
 .builder-feature-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

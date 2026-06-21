@@ -48,6 +48,34 @@ function buildVerificationFailureSkillRecovery() {
       suggestedPath: 'artifacts/mission-recovery/mission_verification_failure/verification_failure-verification_failure_receipt.json',
       mustAttachBeforeRetry: true,
     },
+    intentAlignment: {
+      schemaVersion: 'mission-intent-alignment.v1',
+      status: 'at_risk',
+      originalUserIntent: 'Keep the app black, cleaner, premium, and proof-driven while preventing agent drift.',
+      currentFocus: 'Verification recovery widened into environment diagnosis after repeated failures.',
+      driftReason: 'The loop changed route after failed verification and must prove the next repair still serves the original UI/proof objective.',
+      recoveryAction: 'Attach an intent-alignment receipt before retrying the broadened repair loop.',
+      selectedSkill: 'stuck_state_recovery',
+      driftSignals: [
+        {
+          id: 'verification-route-change',
+          kind: 'route_change_after_failure',
+          label: 'Route changed after failure',
+          detail: 'Planner moved from direct repair into broader diagnosis after verification failed.',
+        },
+        {
+          id: 'objective-proof-risk',
+          kind: 'proof_gap',
+          label: 'Proof gap risk',
+          detail: 'The next retry needs evidence that UI cleanup and proof requirements remain the active objective.',
+        },
+      ],
+      proofRequirement: {
+        artifactKind: 'intent_alignment_receipt',
+        label: 'Intent alignment receipt',
+        minimumEvidence: ['original user intent', 'current focus', 'drift reason', 'next recovery action'],
+      },
+    },
     visibleRouteSummary: 'Stuck State Recovery - runtime lane hermes verification lane - openai - gpt-5.4',
   };
 

@@ -181,6 +181,7 @@ class MissionStateSnapshot:
     provider_runtime_truth: dict[str, Any] = field(default_factory=dict)
     code_execution: dict[str, Any] = field(default_factory=dict)
     skill_recovery: dict[str, Any] = field(default_factory=dict)
+    intent_alignment: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -381,6 +382,7 @@ class DelegatedSessionSnapshot:
     handoff_count: int = 0
     handoff_reason: str = ""
     source_delegated_id: str = ""
+    intent_alignment: dict[str, Any] = field(default_factory=dict)
     changed_files: list[str] = field(default_factory=list)
 
 
@@ -431,6 +433,7 @@ class DelegatedRuntimeSession:
     handoff_count: int = 0
     handoff_reason: str = ""
     source_delegated_id: str = ""
+    intent_alignment: dict[str, Any] = field(default_factory=dict)
     changed_files: list[str] = field(default_factory=list)
 
 

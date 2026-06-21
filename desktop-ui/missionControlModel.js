@@ -1932,6 +1932,15 @@ function deriveRecommendationStudio({
   const recoveryActions = asList(skillRecovery.recoveryActions);
   const routeSeparation = asObject(skillRecovery.routeSeparation);
   const providerRoute = asObject(recoveryPlan.providerRoute || routeSeparation.providerRoute);
+  const intentAlignment = asObject(
+    recoveryPlan.intentAlignment ||
+      skillRecovery.intentAlignment ||
+      mission?.missionLoop?.intentAlignment ||
+      mission?.state?.intent_alignment,
+  );
+  const intentDriftSignals = asList(intentAlignment.driftSignals);
+  const intentAlignmentStatus = String(intentAlignment.status || "").toLowerCase();
+  const intentAtRisk = ["at_risk", "drifting", "needs_review", "misaligned"].includes(intentAlignmentStatus);
   const selectedSkill = asObject(
     recoveryPlan.selectedSkill ||
       recoveryRecommendations.find(item => item?.skillId) ||
@@ -1981,6 +1990,41 @@ function deriveRecommendationStudio({
     proofEvidence: asList(proofRequirement.minimumEvidence).slice(0, 4),
     artifactPath: proofArtifactPlan.suggestedPath || "",
     mustAttachBeforeRetry: Boolean(proofArtifactPlan.mustAttachBeforeRetry || recoveryNeedsAction),
+    intentAlignment: intentAlignment.schemaVersion
+      ? {
+          status: intentAlignment.status || "needs_review",
+          tone: intentAtRisk ? "warn" : "good",
+          originalIntent:
+            intentAlignment.originalUserIntent ||
+            mission?.objective ||
+            mission?.title ||
+            "Original objective not recorded",
+          currentFocus:
+            intentAlignment.currentFocus ||
+            recoveryPlan.nextAction ||
+            mission?.state?.last_plan_summary ||
+            "Current focus not recorded",
+          driftReason:
+            intentAlignment.driftReason ||
+            intentAlignment.reason ||
+            recoveryTriggers[0]?.reason ||
+            "No drift reason recorded.",
+          recoveryAction:
+            intentAlignment.recoveryAction ||
+            recoveryPlan.nextAction ||
+            "Compare current work against the original objective before continuing.",
+          proofLabel:
+            asObject(intentAlignment.proofRequirement).label ||
+            proofRequirement.label ||
+            "Intent alignment receipt",
+          signalCount: intentDriftSignals.length,
+          signals: intentDriftSignals.slice(0, 3).map(item => ({
+            id: item?.id || item?.kind || item?.label || "intent-signal",
+            label: item?.label || titleizeToken(item?.kind || "Intent signal"),
+            detail: item?.detail || item?.reason || "",
+          })),
+        }
+      : null,
     visibleRouteSummary:
       recoveryPlan.visibleRouteSummary ||
       [recoveryPlan.runtimeLane || routeSeparation.runtimeLane, providerRoute.provider, providerRoute.model]
@@ -2796,6 +2840,15 @@ function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQu
   const recoveryPlan = asObject(skillRecovery.recoveryPlan);
   const recoverySkill = asObject(recoveryPlan.selectedSkill || asList(skillRecovery.recommendations)[0]);
   const recoveryProof = asObject(recoveryPlan.proofRequirement || asList(skillRecovery.triggers)[0]?.proofRequirement);
+  const intentAlignment = asObject(
+    recoveryPlan.intentAlignment ||
+      skillRecovery.intentAlignment ||
+      mission?.missionLoop?.intentAlignment ||
+      mission?.state?.intent_alignment,
+  );
+  const intentDriftSignals = asList(intentAlignment.driftSignals);
+  const intentAlignmentStatus = String(intentAlignment.status || "").toLowerCase();
+  const intentAtRisk = ["at_risk", "drifting", "needs_review", "misaligned"].includes(intentAlignmentStatus);
   const recoveryActive =
     String(skillRecovery.status || "").toLowerCase() === "needs_recovery" ||
     asList(skillRecovery.triggers).length > 0 ||
@@ -2849,15 +2902,24 @@ function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQu
     {
       id: "intent-drift-sentry",
       label: "Intent-drift sentry",
-      status: routeChangeCount >= 2 || replanReason ? "warning" : "watching",
-      tone: routeChangeCount >= 2 || replanReason ? "warn" : "good",
-      trigger: `${routeChangeCount} route change(s)${replanReason ? ` · ${replanReason}` : ""}`,
+      status: intentAtRisk || routeChangeCount >= 2 || replanReason ? "warning" : "watching",
+      tone: intentAtRisk || routeChangeCount >= 2 || replanReason ? "warn" : "good",
+      trigger: intentAtRisk
+        ? `${intentAlignmentStatus || "needs_review"} - ${intentDriftSignals.length} drift signal(s)`
+        : `${routeChangeCount} route change(s)${replanReason ? ` - ${replanReason}` : ""}`,
       nextAction:
-        routeChangeCount >= 2 || replanReason
-          ? "Compare the latest plan against the original user objective before continuing."
+        intentAtRisk
+          ? intentAlignment.recoveryAction ||
+            "Compare the current focus against the original objective and attach an intent-alignment receipt."
+          : routeChangeCount >= 2 || replanReason
+            ? "Compare the latest plan against the original user objective before continuing."
           : "Original intent is not showing drift signals.",
       cadence: "on_replan_or_route_change",
       activation: "optional_monitor",
+      originalIntent: intentAlignment.originalUserIntent || mission?.objective || "",
+      currentFocus: intentAlignment.currentFocus || mission?.state?.last_plan_summary || "",
+      selectedSkill: intentAlignment.selectedSkill || recoverySkill.label || titleizeToken(recoverySkill.skillId || ""),
+      proofRequirement: asObject(intentAlignment.proofRequirement).label || recoveryProof.label || "",
     },
     {
       id: "silence-watchdog",

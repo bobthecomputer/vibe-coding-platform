@@ -162,6 +162,11 @@ class DelegatedRuntimeSupervisor:
             source_step_id=source_step_id,
         )
         if skill_payload:
+            raw_intent_alignment = (
+                skill_payload.get("intentAlignment")
+                if isinstance(skill_payload.get("intentAlignment"), dict)
+                else {}
+            )
             payload = {
                 **skill_payload,
                 "schemaVersion": "fluxio.delegated-skill-payload.v1",
@@ -171,6 +176,12 @@ class DelegatedRuntimeSupervisor:
                 "sourceStepId": source_step_id,
                 "objective": mission.objective,
             }
+            if raw_intent_alignment:
+                payload["intentAlignment"] = {
+                    **raw_intent_alignment,
+                    "checkedAt": raw_intent_alignment.get("checkedAt") or utc_now_iso(),
+                }
+                session.intent_alignment = payload["intentAlignment"]
             _atomic_write_json(skill_payload_path, payload)
         _apply_execution_truth(session)
         self._write_session(session)

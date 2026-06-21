@@ -302,6 +302,20 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 ),
                 {},
             )
+            intent_alignment = {
+                "schemaVersion": "mission-intent-alignment.v1",
+                "status": "unknown",
+                "source": "mission_objective",
+                "objectiveExcerpt": objective[:180],
+                "routeReason": (
+                    str(delegated_route.get("reason") or delegated_route.get("explanation") or "").strip()
+                    or "Delegated runtime route selected for this mission step."
+                ),
+                "selectedSkillId": str((skill_payload.get("selectedSkills") or [{}])[0].get("skillId") or ""),
+                "checkedAt": "",
+            }
+            if skill_payload:
+                skill_payload = {**skill_payload, "intentAlignment": intent_alignment}
             return self._proposal(
                 action_id=action_id,
                 event_id=event_id,
@@ -330,6 +344,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                     ],
                     "skill_execution_policy": skill_runtime_policy,
                     "skill_payload": skill_payload,
+                    "intent_alignment": intent_alignment,
                 },
             )
 

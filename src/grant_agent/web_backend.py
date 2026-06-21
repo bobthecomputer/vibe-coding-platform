@@ -3129,6 +3129,11 @@ class FluxioWebBackend:
             if isinstance(compartment.get("processEvidence"), dict)
             else {}
         )
+        intent_alignment = (
+            compartment.get("intentAlignment")
+            if isinstance(compartment.get("intentAlignment"), dict)
+            else {}
+        )
         live_model_call_recorded = (
             _valid_process_evidence(process_evidence)
             and any(item.get("role") == "assistant" for item in messages if isinstance(item, dict))
@@ -3157,7 +3162,9 @@ class FluxioWebBackend:
                 "hasToolTimeline": len(timeline) > 0,
                 "hasChangedFiles": len(files_changed) > 0,
                 "hasProcessEvidence": _valid_process_evidence(process_evidence),
+                "hasIntentAlignment": bool(intent_alignment),
             },
+            "intentAlignment": intent_alignment,
             "processEvidence": process_evidence,
             "safety": {
                 "liveModelCallRecorded": live_model_call_recorded,
@@ -3241,6 +3248,33 @@ class FluxioWebBackend:
             result.get("processEvidence") if isinstance(result.get("processEvidence"), dict) else {}
         )
         process_backed_reply = bool(runtime_reply and _valid_process_evidence(process_evidence))
+        raw_intent_alignment = (
+            result.get("intentAlignment")
+            if isinstance(result.get("intentAlignment"), dict)
+            else payload.get("intentAlignment")
+            if isinstance(payload.get("intentAlignment"), dict)
+            else {}
+        )
+        if raw_intent_alignment:
+            intent_alignment = {
+                "schemaVersion": str(raw_intent_alignment.get("schemaVersion") or "mission-intent-alignment.v1"),
+                "status": str(raw_intent_alignment.get("status") or "unknown"),
+                "source": str(raw_intent_alignment.get("source") or "runtime_compartment"),
+                "objectiveExcerpt": str(raw_intent_alignment.get("objectiveExcerpt") or raw_intent_alignment.get("originalUserIntent") or "")[:180],
+                "routeReason": str(raw_intent_alignment.get("routeReason") or raw_intent_alignment.get("driftReason") or ""),
+                "selectedSkillId": str(raw_intent_alignment.get("selectedSkillId") or raw_intent_alignment.get("selectedSkill") or ""),
+                "checkedAt": str(raw_intent_alignment.get("checkedAt") or now),
+            }
+        else:
+            intent_alignment = {
+                "schemaVersion": "mission-intent-alignment.v1",
+                "status": "unknown",
+                "source": "operator_message",
+                "objectiveExcerpt": operator_message[:180],
+                "routeReason": str(route.get("reason") or payload.get("routeReason") or ""),
+                "selectedSkillId": str(payload.get("selectedSkillId") or result.get("selectedSkillId") or ""),
+                "checkedAt": now,
+            } if operator_message or route.get("reason") or payload.get("selectedSkillId") else {}
         previous_files = previous.get("filesChanged") if isinstance(previous.get("filesChanged"), list) else []
         changed_files: list[str] = []
         seen_files: set[str] = set()
@@ -3280,6 +3314,7 @@ class FluxioWebBackend:
             "toolTimeline": timeline[-30:],
             "lanes": lanes,
             "processEvidence": process_evidence,
+            "intentAlignment": intent_alignment,
             "filesChanged": changed_files[:30],
             "approvals": [],
             "blockers": [],
