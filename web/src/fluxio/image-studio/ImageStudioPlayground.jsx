@@ -101,6 +101,10 @@ function artifactBackendBaseUrl() {
   return String(configured || "").trim().replace(/\/$/, "");
 }
 
+function artifactBackendHealthUrl() {
+  return `${artifactBackendBaseUrl()}/health`;
+}
+
 function resolveImageStudioArtifactUrl(value) {
   const source = String(value || "").trim();
   if (!source) return "";
@@ -481,11 +485,29 @@ function ChromaMattePreviewPanel({ preview }) {
   );
 }
 
+function ArtifactBackendHealthNote({ health }) {
+  const status = health?.status || "checking";
+  const label =
+    status === "ready" ? "Artifact backend ready" :
+      status === "offline" ? "Artifact backend offline" :
+        "Checking artifact backend";
+  return (
+    <div className="image-studio-backend-health" data-status={status} aria-live="polite">
+      <strong>{label}</strong>
+      <span>{health?.detail || "Served artifact sources need the local web backend."}</span>
+    </div>
+  );
+}
+
 export function ImageStudioPlayground({ generatedArtifacts = [], initialProject, onRequestDraft }) {
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
   const [draft, setDraft] = useState(null);
   const [mattePreview, setMattePreview] = useState(null);
+  const [backendHealth, setBackendHealth] = useState({
+    status: "checking",
+    detail: "Checking whether served artifacts can load through the local backend.",
+  });
   const [announcement, setAnnouncement] = useState("Image studio ready.");
   const fileInputRef = useRef(null);
   const referenceAssetsRef = useRef([]);
@@ -559,6 +581,50 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
   useEffect(() => {
     saveStudioSession(session);
   }, [session]);
+
+  useEffect(() => {
+    if (typeof fetch !== "function") {
+      setBackendHealth({
+        status: "offline",
+        detail: "Fetch is unavailable, so served artifact health cannot be checked.",
+      });
+      return;
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2500);
+    fetch(artifactBackendHealthUrl(), {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async response => {
+        window.clearTimeout(timeout);
+        if (!response.ok) {
+          throw new Error(`Backend health returned HTTP ${response.status}.`);
+        }
+        const payload = await response.json().catch(() => ({}));
+        setBackendHealth({
+          status: payload?.ok === false ? "offline" : "ready",
+          detail:
+            payload?.ok === false
+              ? "The backend responded, but did not report ready artifact serving."
+              : "Served artifact sources can load through /api/artifact.",
+        });
+      })
+      .catch(error => {
+        window.clearTimeout(timeout);
+        setBackendHealth({
+          status: "offline",
+          detail:
+            error?.name === "AbortError"
+              ? "Backend health timed out; use upload or the synthetic sample until it is started."
+              : "Backend is not reachable; use upload or the synthetic sample until scripts/run_web_backend.py is running.",
+        });
+      });
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
 
   useEffect(() => {
     referenceAssetsRef.current = session.referenceAssets || [];
@@ -899,6 +965,7 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
                 Preview matte
               </button>
             </div>
+            <ArtifactBackendHealthNote health={backendHealth} />
             <ChromaMattePreviewPanel preview={mattePreview} />
           </section>
         </aside>
