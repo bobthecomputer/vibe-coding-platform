@@ -22,7 +22,7 @@ from control_route_interaction_smoke import (
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "artifacts" / "fluxio-image-chroma-proof-workflow-20260621"
-URL = "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=1"
+URL = "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder"
 
 
 def capture(cdp: Cdp, name: str) -> str:
@@ -77,8 +77,12 @@ def read_state(cdp: Cdp) -> object:
 (() => ({
   hasShell: Boolean(document.querySelector('.fluxio-shell')),
   hasStudio: Boolean(document.querySelector('.image-studio')),
+  hasBreakdown: Boolean(document.querySelector('.image-studio-breakdown')),
+  breakdownSteps: document.querySelectorAll('.image-studio-breakdown-step').length,
   hasDiagnostics: Boolean(document.querySelector('.image-studio-chroma-diagnostics')),
   hasLocalProof: Boolean(document.querySelector('.image-studio-local-matte-proof')),
+  runButtonText: Array.from(document.querySelectorAll('button')).find(item => item.innerText.includes('Run provider image') || item.innerText.includes('Running provider'))?.innerText.trim() || '',
+  runButtonDisabled: Boolean(Array.from(document.querySelectorAll('button')).find(item => item.innerText.includes('Run provider image'))?.disabled),
   proofImages: document.querySelectorAll('.image-studio-local-matte-proof img').length,
   proofSource: document.querySelector('#image-studio-matte-source')?.value || '',
   text: document.body.innerText.slice(0, 2000),
@@ -146,7 +150,14 @@ def main() -> int:
             "before": before,
             "after": after,
             "screenshotPath": screenshot,
-            "passed": bool(after.get("hasLocalProof")) and int(after.get("proofImages") or 0) >= 2,
+            "passed": (
+                bool(after.get("hasBreakdown"))
+                and int(after.get("breakdownSteps") or 0) >= 6
+                and bool(after.get("hasLocalProof"))
+                and int(after.get("proofImages") or 0) >= 2
+                and "Run provider image" in str(after.get("runButtonText") or "")
+                and bool(after.get("runButtonDisabled"))
+            ),
         }
         report_path = OUT_DIR / "image-chroma-proof-interaction-check.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

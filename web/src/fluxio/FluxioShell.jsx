@@ -10019,6 +10019,22 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [markAction, pushToast],
   );
 
+  const handleImageStudioRunOperation = useCallback(
+    async (payload, draft) => {
+      markAction(`image-studio:run:${draft?.route?.id || payload?.providerId || "provider"}`);
+      const result = await callBackend("image_playground_operation_command", payload, {
+        throwOnError: true,
+      });
+      if (result?.providerStatus === "blocked" || result?.blockedReason) {
+        pushToast(result.message || "Image provider run is blocked.", "warn");
+        return result;
+      }
+      pushToast("Image provider artifact recorded with receipt and manifest links.", "success");
+      return result;
+    },
+    [markAction, pushToast],
+  );
+
   useEffect(() => {
     if (surface !== "images" || previewMode !== "live") {
       setImageGenerationCapability(null);
@@ -11902,6 +11918,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     generatedArtifacts={generatedImageArtifacts}
                     imageGenerationCapability={imageGenerationCapability}
                     onRequestDraft={handleImageStudioRequestDraft}
+                    onRunImageOperation={handleImageStudioRunOperation}
                   />
                 </Suspense>
               </section>
@@ -12346,6 +12363,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   generatedArtifacts={generatedImageArtifacts}
                   imageGenerationCapability={imageGenerationCapability}
                   onRequestDraft={handleImageStudioRequestDraft}
+                  onRunImageOperation={handleImageStudioRunOperation}
                 />
               </Suspense>
             </section>

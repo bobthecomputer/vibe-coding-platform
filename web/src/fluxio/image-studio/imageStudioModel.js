@@ -412,6 +412,95 @@ export function buildImageStudioProofReview(project, draft = null, options = {})
   };
 }
 
+export function buildImageBreakdownWorkflow(project, draft = null, options = {}) {
+  const normalized = normalizeProject(project);
+  const review = buildImageStudioProofReview(normalized, draft, options);
+  const routeStatus = review.imageGenerationRouteStatus;
+  const promptText = String(normalized.prompt?.text || "").trim();
+  const styleText = String(normalized.prompt?.style || "").trim();
+  const hasPromptIntent = promptText.length >= 24 && styleText.length >= 8;
+  const hasReferences = review.references.count > 0 || review.preview.hasRealArtifact;
+  const hasMask = Boolean(normalized.selection?.visible);
+  const matteReady = Boolean(review.chromaKey.ready);
+  const hasAnnotations = review.annotations.total > 0;
+  const providerReceiptReady = Boolean(routeStatus.readyForRealRun && routeStatus.runActionAvailable);
+  const stages = [
+    {
+      id: "source-intake",
+      label: "Source intake",
+      status: hasReferences ? "ready" : "needs_input",
+      detail: hasReferences
+        ? `${review.references.count} reference${review.references.count === 1 ? "" : "s"} and ${review.preview.hasRealArtifact ? "real artifact history" : "no history"} available.`
+        : "Attach a reference, served artifact, or real history item before claiming visual grounding.",
+      evidence: review.preview.hasRealArtifact ? "history artifact" : review.references.count ? "reference inventory" : "missing source",
+    },
+    {
+      id: "region-plan",
+      label: "Region plan",
+      status: hasMask ? "ready" : "needs_input",
+      detail: hasMask
+        ? `${Math.round(normalized.selection.width || 0)}x${Math.round(normalized.selection.height || 0)} mask with ${Math.round(normalized.selection.feather || 0)}px feather.`
+        : "Select a visible region or explicitly run full-canvas generation.",
+      evidence: "mask geometry",
+    },
+    {
+      id: "matte-quality",
+      label: "Matte quality",
+      status: matteReady ? review.chromaKey.edgeRisk === "controlled" ? "ready" : "review" : "blocked",
+      detail: review.chromaKey.exportStatus,
+      evidence: "chroma-key matte checklist",
+    },
+    {
+      id: "prompt-intent",
+      label: "Prompt intent",
+      status: hasPromptIntent ? "ready" : "needs_input",
+      detail: hasPromptIntent
+        ? `${promptText.length} prompt chars with style notes and preserve-composition ${normalized.prompt.preserveComposition ? "on" : "off"}.`
+        : "Write a concrete prompt and style direction before provider handoff.",
+      evidence: "prompt, negative prompt, style, strength",
+    },
+    {
+      id: "review-markup",
+      label: "Review markup",
+      status: hasAnnotations ? "ready" : "optional",
+      detail: hasAnnotations
+        ? `${review.annotations.total} annotation marker${review.annotations.total === 1 ? "" : "s"} will travel with the proof packet.`
+        : "No annotations attached; acceptable for simple matte tasks but weaker for image breakdown.",
+      evidence: "annotation pins, rectangles, comments",
+    },
+    {
+      id: "provider-route",
+      label: "Provider route",
+      status: providerReceiptReady ? "ready" : "draft_only",
+      detail: providerReceiptReady
+        ? "A provider run action is available; require receipt, manifest, and artifact hash after execution."
+        : routeStatus.proofLimit,
+      evidence: routeStatus.model,
+    },
+  ];
+  const blockedStages = stages.filter(stage => ["blocked", "needs_input"].includes(stage.status));
+  const readyStages = stages.filter(stage => stage.status === "ready");
+  const reviewStages = stages.filter(stage => ["review", "optional", "draft_only"].includes(stage.status));
+  const nextStage = blockedStages[0] || reviewStages[0] || stages[stages.length - 1];
+  return {
+    generatedAt: nowIso(),
+    stageCount: stages.length,
+    readyCount: readyStages.length,
+    blockedCount: blockedStages.length,
+    reviewCount: reviewStages.length,
+    handoffState:
+      blockedStages.length === 0 && review.readyForProviderHandoff
+        ? providerReceiptReady
+          ? "provider_run_ready"
+          : "draft_handoff_ready"
+        : "needs_breakdown",
+    nextAction: nextStage
+      ? `${nextStage.label}: ${nextStage.detail}`
+      : "Review provider receipt, output manifest, and artifact hash after the run.",
+    stages,
+  };
+}
+
 export function buildImageStudioRequestDraft(project, options = {}) {
   const route = getProviderRoute(options.routeId || project?.provider?.routeId);
   const operation = options.operation || project?.prompt?.mode || "edit";
@@ -458,7 +547,38 @@ export function buildImageStudioRequestDraft(project, options = {}) {
       "This surface prepares a provider request and proof plan. It does not call an image provider until a real connector is wired.",
   };
   draft.proofReview = buildImageStudioProofReview(project, draft, { referenceAssets: references, route });
+  draft.breakdownWorkflow = buildImageBreakdownWorkflow(project, draft, { referenceAssets: references, route });
   return draft;
+}
+
+export function buildImageStudioOperationPayload(draft = {}) {
+  const payload = draft.payload && typeof draft.payload === "object" ? draft.payload : {};
+  const route = draft.route && typeof draft.route === "object" ? draft.route : {};
+  return {
+    ...payload,
+    requestId: draft.id || payload.requestId || makeId("image-request"),
+    operation: draft.operation || payload.operation || "edit",
+    providerId: route.providerId || payload.providerId || payload.provider?.id || "",
+    provider: {
+      ...(payload.provider && typeof payload.provider === "object" ? payload.provider : {}),
+      id: route.providerId || payload.provider?.id || "",
+      model: route.model || payload.provider?.model || "",
+      routeId: route.id || payload.provider?.routeId || "",
+    },
+    route: {
+      id: route.id || "",
+      label: route.label || "",
+      model: route.model || "",
+      authMode: route.authMode || "",
+      status: route.status || "",
+    },
+    mask: draft.mask || {},
+    chromaKey: draft.chromaKey || payload.chromaKey || {},
+    proofReview: draft.proofReview || {},
+    breakdownWorkflow: draft.breakdownWorkflow || {},
+    proofArtifacts: Array.isArray(draft.proofArtifacts) ? draft.proofArtifacts : [],
+    noGenerationReason: draft.noGenerationReason || "",
+  };
 }
 
 export function validateImageStudioRequestDraft(draft = {}) {

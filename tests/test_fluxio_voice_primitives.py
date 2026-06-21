@@ -550,6 +550,8 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             """
             import { DEFAULT_IMAGE_PROJECT } from './web/src/fluxio/imagePlaygroundState.js';
             import {
+              buildImageBreakdownWorkflow,
+              buildImageStudioOperationPayload,
               buildImageStudioProofReview,
               buildImageStudioRequestDraft,
               getImageGenerationRouteStatus,
@@ -573,6 +575,11 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               referenceAssets: draft.references,
               routeId: 'local-request-draft',
             });
+            const workflow = buildImageBreakdownWorkflow(project, draft, {
+              referenceAssets: draft.references,
+              routeId: 'local-request-draft',
+            });
+            const operationPayload = buildImageStudioOperationPayload(draft);
             const openAiRouteStatus = getImageGenerationRouteStatus(
               getProviderRoute('openai-gpt-image-2'),
               { openAIReady: false },
@@ -591,6 +598,9 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               matteStrength: review.chromaKey.matteStrength,
               edgeRisk: review.chromaKey.edgeRisk,
               exportStatus: review.chromaKey.exportStatus,
+              workflow,
+              draftWorkflow: draft.breakdownWorkflow,
+              operationPayload,
               artifactIds: draft.proofArtifacts.map(item => item.id),
               openAiRouteStatus,
             }));
@@ -612,6 +622,29 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertGreater(payload["matteStrength"], 0)
         self.assertEqual(payload["edgeRisk"], "controlled")
         self.assertIn("Transparent export plan ready", payload["exportStatus"])
+        self.assertEqual(payload["workflow"]["stageCount"], 6)
+        self.assertEqual(payload["draftWorkflow"]["stageCount"], 6)
+        self.assertGreaterEqual(payload["workflow"]["readyCount"], 5)
+        self.assertEqual(payload["workflow"]["handoffState"], "draft_handoff_ready")
+        self.assertIn("Provider route", payload["workflow"]["nextAction"])
+        self.assertTrue(payload["operationPayload"]["requestId"].startswith("image-request"))
+        self.assertEqual(payload["operationPayload"]["providerId"], "local-request-draft")
+        self.assertEqual(payload["operationPayload"]["provider"]["model"], "manual-handoff")
+        self.assertEqual(payload["operationPayload"]["chromaKey"]["keyColor"], "#00ff66")
+        self.assertEqual(payload["operationPayload"]["breakdownWorkflow"]["stageCount"], 6)
+        self.assertIn("chroma-key-matte", [item["id"] for item in payload["operationPayload"]["proofArtifacts"]])
+        self.assertEqual(
+            [stage["id"] for stage in payload["workflow"]["stages"]],
+            [
+                "source-intake",
+                "region-plan",
+                "matte-quality",
+                "prompt-intent",
+                "review-markup",
+                "provider-route",
+            ],
+        )
+        self.assertIn("not a provider completion receipt", payload["claim"])
         self.assertIn(["comparison-artifact", "planned"], payload["matteChecklist"])
         self.assertIn(["spill-cleanup", "ready"], payload["matteChecklist"])
         self.assertEqual(payload["openAiRouteStatus"]["model"], "gpt-image-2")

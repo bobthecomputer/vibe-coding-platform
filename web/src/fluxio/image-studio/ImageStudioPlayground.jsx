@@ -16,6 +16,7 @@ import {
 import {
   CANVAS_SIZE_PRESETS,
   IMAGE_TOOL_DEFINITIONS,
+  addHistoryEntry,
   createLayerFromSelection,
   loadImageProject,
   normalizeProject,
@@ -26,6 +27,8 @@ import {
   IMAGE_STUDIO_MASK_MODES,
   IMAGE_STUDIO_PROVIDER_ROUTES,
   IMAGE_STUDIO_STORAGE_KEY,
+  buildImageBreakdownWorkflow,
+  buildImageStudioOperationPayload,
   buildImageStudioProofReview,
   buildImageStudioRequestDraft,
   createReferenceAssetFromFile,
@@ -273,7 +276,9 @@ function ProjectLayer({ layer, canvas }) {
     opacity: Number(layer.opacity ?? 1),
     mixBlendMode: layer.blendMode || "normal",
     borderRadius: layer.radius ? `${layer.radius}px` : undefined,
-    background: layer.fill || "rgba(255,255,255,.24)",
+    background: layer.src
+      ? `url("${layer.src}") center / cover no-repeat`
+      : layer.fill || "rgba(255,255,255,.24)",
   };
   return <div className="image-studio-canvas-layer" style={style} aria-hidden="true" />;
 }
@@ -383,6 +388,32 @@ function GeneratedArtifactCard({ artifact }) {
   );
 }
 
+function ProviderRunResult({ result, error }) {
+  if (!result && !error) return null;
+  if (error) {
+    return (
+      <div className="image-studio-run-result is-error" role="status">
+        <strong>Provider run blocked</strong>
+        <span>{error}</span>
+      </div>
+    );
+  }
+  const imageUrl = imageUrlForRecord(result);
+  return (
+    <div className="image-studio-run-result" role="status">
+      <div>
+        <strong>{result.message || "Provider image artifact recorded."}</strong>
+        <span>{result.provider || result.providerId || "provider"} - {result.model || "model"}</span>
+        {result.receipt?.artifactSha256 ? <code>sha {String(result.receipt.artifactSha256).slice(0, 12)}</code> : null}
+      </div>
+      <div className="image-studio-run-result-actions">
+        {imageUrl ? <a href={imageUrl}>Open image</a> : null}
+        {result.manifestUrl ? <a href={result.manifestUrl}>Manifest</a> : null}
+      </div>
+    </div>
+  );
+}
+
 function ProofReviewSummary({ review }) {
   if (!review) return null;
   return (
@@ -410,6 +441,37 @@ function ProofReviewSummary({ review }) {
         <strong>{review.readyForProviderHandoff ? "Ready" : "Needs review"}</strong>
       </div>
     </div>
+  );
+}
+
+function ImageBreakdownWorkflow({ workflow }) {
+  if (!workflow) return null;
+  return (
+    <section className="image-studio-breakdown" aria-label="Image breakdown workflow">
+      <div className="image-studio-breakdown-head">
+        <div>
+          <span>Image breakdown</span>
+          <strong>{workflow.handoffState.replace(/_/g, " ")}</strong>
+        </div>
+        <b>{workflow.readyCount}/{workflow.stageCount} ready</b>
+      </div>
+      <p>{workflow.nextAction}</p>
+      <div className="image-studio-breakdown-rail">
+        {workflow.stages.map((stage, index) => (
+          <article
+            className={`image-studio-breakdown-step is-${stage.status}`}
+            key={stage.id}
+            style={{ "--image-studio-step-index": index }}
+          >
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{stage.label}</strong>
+            <em>{stage.status.replace(/_/g, " ")}</em>
+            <p>{stage.detail}</p>
+            <code>{stage.evidence}</code>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -504,11 +566,17 @@ export function ImageStudioPlayground({
   imageGenerationCapability = null,
   initialProject,
   onRequestDraft,
+  onRunImageOperation,
 }) {
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
   const [draft, setDraft] = useState(null);
   const [mattePreview, setMattePreview] = useState(null);
+  const [runState, setRunState] = useState({
+    status: "idle",
+    result: null,
+    error: "",
+  });
   const [backendHealth, setBackendHealth] = useState({
     status: "checking",
     detail: "Checking whether served artifacts can load through the local backend.",
@@ -522,6 +590,15 @@ export function ImageStudioPlayground({
   const proofReview = useMemo(
     () =>
       buildImageStudioProofReview(project, draft, {
+        capability: imageGenerationCapability,
+        referenceAssets: session.referenceAssets,
+        route,
+      }),
+    [draft, imageGenerationCapability, project, route, session.referenceAssets],
+  );
+  const breakdownWorkflow = useMemo(
+    () =>
+      buildImageBreakdownWorkflow(project, draft, {
         capability: imageGenerationCapability,
         referenceAssets: session.referenceAssets,
         route,
@@ -751,6 +828,76 @@ export function ImageStudioPlayground({
     setAnnouncement("Provider request draft prepared. No image provider was called.");
   }
 
+  async function runProviderImage() {
+    const nextDraft = draft || buildImageStudioRequestDraft(project, {
+      routeId: route.id,
+      maskMode: session.maskMode,
+      referenceAssets: session.referenceAssets,
+    });
+    setDraft(nextDraft);
+    onRequestDraft?.(nextDraft);
+    if (!routeAvailability.readyForRealRun || !routeAvailability.runActionAvailable) {
+      const message = routeAvailability.blockedReason
+        ? `Provider run blocked: ${routeAvailability.blockedReason}.`
+        : routeAvailability.proofLimit;
+      setRunState({ status: "blocked", result: null, error: message });
+      setAnnouncement(message);
+      return;
+    }
+    if (!onRunImageOperation) {
+      const message = "Provider run is unavailable because the shell did not attach a backend operation handler.";
+      setRunState({ status: "blocked", result: null, error: message });
+      setAnnouncement(message);
+      return;
+    }
+    setRunState({ status: "running", result: null, error: "" });
+    setAnnouncement("Provider image run started. Waiting for backend receipt.");
+    try {
+      const result = await onRunImageOperation(buildImageStudioOperationPayload(nextDraft), nextDraft);
+      if (!result || typeof result !== "object") {
+        throw new Error("Backend did not return an image operation result.");
+      }
+      if (result.providerStatus === "blocked" || result.blockedReason) {
+        const message = result.message || result.blockedReason || "Image provider run was blocked.";
+        setRunState({ status: "blocked", result, error: message });
+        setAnnouncement(message);
+        return;
+      }
+      setProject(current => {
+        const withHistory = addHistoryEntry(current, {
+          id: result.requestId || result.artifactId,
+          title: result.message || "Provider image artifact",
+          prompt: nextDraft.payload?.prompt?.text || current.prompt?.text || "",
+          provider: result.provider || result.providerId || "Image provider",
+          providerId: result.providerId || nextDraft.route?.providerId || "",
+          providerStatus: result.providerStatus || "available",
+          status: "generated",
+          requestId: result.requestId || nextDraft.id,
+          outputArtifactPath: result.outputArtifactPath || result.imagePath || "",
+          previewSrc: result.previewUrl || result.outputArtifactPath || "",
+          manifestPath: result.manifestPath || "",
+          manifestUrl: result.manifestUrl || "",
+          artifactSha256: result.receipt?.artifactSha256 || result.artifactSha256 || "",
+          receipt: result.receipt || {},
+          layerCount: current.layers.length + (result.layer ? 1 : 0),
+        });
+        if (!result.layer) return withHistory;
+        const layerExists = withHistory.layers.some(layer => layer.id === result.layer.id);
+        return {
+          ...withHistory,
+          selectedLayerId: result.layer.id || withHistory.selectedLayerId,
+          layers: layerExists ? withHistory.layers : [...withHistory.layers, result.layer],
+        };
+      });
+      setRunState({ status: "completed", result, error: "" });
+      setAnnouncement("Provider image artifact recorded with receipt and manifest links.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Provider image run failed.";
+      setRunState({ status: "error", result: null, error: message });
+      setAnnouncement(message);
+    }
+  }
+
   async function previewLocalMatte() {
     if (!selectedMatteSource) {
       setAnnouncement("Attach a reference image or use a served artifact before previewing the matte.");
@@ -798,6 +945,8 @@ export function ImageStudioPlayground({
           <b>{route.status.replace(/_/g, " ")}</b>
         </div>
       </div>
+
+      <ImageBreakdownWorkflow workflow={breakdownWorkflow} />
 
       <div className="image-studio-grid">
         <aside className="image-studio-panel image-studio-controls" aria-label="Prompt and route controls">
@@ -1167,10 +1316,21 @@ export function ImageStudioPlayground({
             <ClipboardText size={17} aria-hidden="true" />
             Prepare request draft
           </button>
+          <button
+            type="button"
+            className="image-studio-primary-action"
+            onClick={runProviderImage}
+            disabled={runState.status === "running" || !routeAvailability.readyForRealRun}
+            title={!routeAvailability.readyForRealRun ? routeAvailability.proofLimit : ""}
+          >
+            <ImageSquare size={17} aria-hidden="true" />
+            {runState.status === "running" ? "Running provider" : "Run provider image"}
+          </button>
           <button type="button" className="image-studio-secondary-action" onClick={copyDraftJson} disabled={!draft}>
             Copy JSON
           </button>
         </div>
+        <ProviderRunResult result={runState.result} error={runState.error} />
         <ProofReviewSummary review={proofReview} />
         <div className="image-studio-route-proof-note">
           <strong>{proofReview.imageGenerationRouteStatus.model}</strong>
