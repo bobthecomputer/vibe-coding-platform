@@ -266,6 +266,27 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn(".image-mission-workbench", styles)
         self.assertIn(".image-self-repair-proof", styles)
 
+    def test_builder_has_mission2_current_mission_canvas_and_self_repair_path(self) -> None:
+        shell = REFERENCE_SHELL.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+        backend = (ROOT / "src" / "grant_agent" / "web_backend.py").read_text(encoding="utf-8")
+
+        self.assertIn('data-builder-current-mission="true"', shell)
+        self.assertIn('data-ui-self-repair-canvas="mission2"', shell)
+        self.assertIn('data-builder-self-repair-action="true"', shell)
+        self.assertIn("runBuilderSelfRepairLoop", shell)
+        self.assertIn("ui_self_repair_loop_command", shell)
+        self.assertIn("Hermes primary", shell)
+        self.assertIn("OpenClaw fallback", shell)
+        self.assertIn("Fixture readiness proof", shell)
+        self.assertIn(".fluxos-builder-current-mission", styles)
+        self.assertIn(".fluxos-builder-current-proof", styles)
+        self.assertIn(".fluxos-shell.surface-builder .fluxos-builder-preview-grid", styles)
+        self.assertIn("proof-side-by-side-diff.preview-contract", styles)
+        self.assertIn(".fluxos-builder[data-builder-clarity-mode=\"focus\"] :where(", styles)
+        self.assertIn("ui_self_repair_loop_command", backend)
+        self.assertIn("fluxio.ui_self_repair_route_proof.v1", backend)
+
     def test_agent_conversation_creation_is_explicit(self) -> None:
         shell = REFERENCE_SHELL.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")

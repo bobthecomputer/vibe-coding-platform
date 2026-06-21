@@ -6859,7 +6859,7 @@ function FluxioAgentSurface(props) {
 }
 
 function FluxioBuilderSurface(props) {
-  const { builderRows, changedItems, liveDataStatus, missionWatchdog, notificationItems, onOpenBuilderDetail, onRequestAction, onSelectFlow, onSelectProject, projectProgressHistory, systemAuditDigest, timelineMoments, workbenchState } = props;
+  const { builderRows, callBackend, changedItems, liveDataStatus, missionWatchdog, notificationItems, onOpenBuilderDetail, onRequestAction, onSelectFlow, onSelectProject, projectProgressHistory, systemAuditDigest, timelineMoments, workbenchState } = props;
   const [builderClarityMode, setBuilderClarityMode] = useState(() => {
     if (typeof window === "undefined") return "focus";
     return window.localStorage?.getItem("fluxio.builder.clarityMode") || "focus";
@@ -6876,6 +6876,8 @@ function FluxioBuilderSurface(props) {
     if (typeof window === "undefined") return false;
     return window.localStorage?.getItem("fluxio.builder.timelineShowDone") === "true";
   });
+  const [builderSelfRepairBusy, setBuilderSelfRepairBusy] = useState(false);
+  const [builderSelfRepairProof, setBuilderSelfRepairProof] = useState(null);
   const sourceRows = asList(builderRows);
   const isLiveBackend = liveDataStatus?.previewMode === "live";
   const normalizedBuilderClarityMode = builderClarityMode === "full" ? "full" : "focus";
@@ -6916,6 +6918,48 @@ function FluxioBuilderSurface(props) {
     setBuilderTimelineShowDone(nextValue);
     if (typeof window !== "undefined") {
       window.localStorage?.setItem("fluxio.builder.timelineShowDone", nextValue ? "true" : "false");
+    }
+  };
+  const runBuilderSelfRepairLoop = async () => {
+    if (builderSelfRepairBusy) return;
+    setBuilderSelfRepairBusy(true);
+    try {
+      const result = await callBackend?.("ui_self_repair_loop_command", {
+        requestId: `mission2-builder-${Date.now()}`,
+        surface: "builder",
+        clarityMode: normalizedBuilderClarityMode,
+        previewMode: liveDataStatus?.previewMode || "fixture",
+        missionCount: liveDataStatus?.missionCount || builderRows?.length || 0,
+        selectedMissionId: workbenchState?.missionId || "",
+        selectedMissionTitle: workbenchState?.missionTitle || "",
+        screenshotPath: "artifacts/mission2-ui-self-repair/before-builder-fixture-surface.png",
+        domFacts: {
+          firstViewport: "Builder preview/current mission surface",
+          visibleProblem: "status/proof cards compete with current mission command path",
+          intendedRepair: "current mission command canvas with folded proof",
+        },
+      });
+      const proof = result && typeof result === "object" ? result : {};
+      setBuilderSelfRepairProof({
+        status: proof.routeStatus || proof.status || "recorded",
+        message: proof.message || "UI self-repair proof artifacts were written.",
+        artifacts: proof.artifacts || {},
+        skillsUsed: asList(proof.skillsUsed).map(item => item.id || item.skill || item).filter(Boolean),
+      });
+      onRequestAction?.("builder:self-repair-proof", {
+        surface: "builder",
+        artifacts: proof.artifacts || {},
+        route: proof.route || {},
+      });
+    } catch (error) {
+      setBuilderSelfRepairProof({
+        status: "failed",
+        message: error?.message || "UI self-repair proof command failed.",
+        artifacts: {},
+        skillsUsed: [],
+      });
+    } finally {
+      setBuilderSelfRepairBusy(false);
     }
   };
   const liveRows = sortLiveBuilderRows(sourceRows);
@@ -7465,6 +7509,71 @@ function FluxioBuilderSurface(props) {
       tone: topQueueRow?.safeToLaunch ? "good" : topQueueRow ? "warn" : "neutral",
     },
   ];
+  const builderPrimaryRow = selectedMissionRow && Object.keys(selectedMissionRow).length
+    ? selectedMissionRow
+    : rows[0] || {};
+  const builderPrimaryMissionId =
+    builderActionMissionId ||
+    builderPrimaryRow?.id ||
+    builderPrimaryRow?.missionId ||
+    builderPrimaryRow?.mission_id ||
+    "";
+  const builderPrimaryStatus = titleizeToken(
+    builderPrimaryRow?.status ||
+      builderPrimaryRow?.statusLabel ||
+      (isLiveBackend ? liveControlStateLabel : "Preview mission"),
+  );
+  const builderSelectedProgressForCanvas =
+    !isLiveBackend && selectedMissionProgressValue === 0 ? null : selectedMissionProgressValue;
+  const builderRowProgressValue = progressPercentValue(builderPrimaryRow?.progress);
+  const builderRowProgressForCanvas =
+    !isLiveBackend && builderRowProgressValue === 0 ? null : builderRowProgressValue;
+  const builderPrimaryProgress =
+    builderSelectedProgressForCanvas ??
+    builderRowProgressForCanvas ??
+    (isLiveBackend ? null : 34);
+  const builderProgressLabelRaw =
+    workbenchState?.progress?.label ||
+    builderPrimaryRow?.progressLabel ||
+    "";
+  const builderPrimaryProgressLabel =
+    !isLiveBackend && /live progress metric unavailable/i.test(String(builderProgressLabelRaw))
+      ? "Fixture readiness proof"
+      : builderProgressLabelRaw || "Mission readiness";
+  const builderPrimaryTitle =
+    (isLiveBackend ? workbenchState?.missionTitle : "") ||
+    builderPrimaryRow?.name ||
+    builderPrimaryRow?.title ||
+    topQueueRow?.title ||
+    "Choose the next Builder mission";
+  const builderPrimaryDetail =
+    workbenchState?.progress?.nextAction ||
+    builderPrimaryRow?.turningPoint ||
+    builderPrimaryRow?.description ||
+    builderPrimaryRow?.detail ||
+    builderPrimaryRow?.summary ||
+    topQueueRow?.recommendedAction ||
+    "Pick one mission, continue it, verify proof, or launch the next safe queued task.";
+  const builderProofCompactRows = [
+    {
+      label: "Route",
+      value: "Hermes",
+      detail: "Primary runtime; OpenClaw stays fallback proof.",
+      tone: "good",
+    },
+    {
+      label: "Thread",
+      value: selectedThreadRows.length ? `${selectedThreadRows.length} rows` : isLiveBackend ? "Waiting" : "Fixture",
+      detail: firstLiveThreadLine || "Open Agent for transcript and verifier output.",
+      tone: selectedThreadRows.length || !isLiveBackend ? "good" : "warn",
+    },
+    {
+      label: "Proof",
+      value: builderSelfRepairProof ? titleizeToken(builderSelfRepairProof.status) : proofDiffRows.length ? `${proofDiffRows.length} rows` : "Folded",
+      detail: builderSelfRepairProof?.message || "Use self-repair to write route, breakdown, plan, and verifier artifacts.",
+      tone: builderSelfRepairProof?.status === "failed" ? "bad" : builderSelfRepairProof ? "good" : "neutral",
+    },
+  ];
   const storageTriageSummary = systemAuditDigest?.storageTriageSummary || {};
   const nasStoragePressure = systemAuditDigest?.nasStoragePressure || {};
   const nasStorageAvailableBytes = Number(nasStoragePressure.availableBytes || 0);
@@ -7632,6 +7741,57 @@ function FluxioBuilderSurface(props) {
             {liveDataStatus?.refreshing && !liveLoading ? " · full snapshot refreshing" : ""}
           </p>
         </div>
+        <section
+          className="fluxos-builder-current-mission"
+          aria-label="Builder current mission command canvas"
+          data-builder-current-mission="true"
+          data-ui-self-repair-canvas="mission2"
+        >
+          <div className="fluxos-builder-current-copy">
+            <span>{isLiveBackend ? "Current mission" : "Fixture mission"}</span>
+            <strong>{builderPrimaryTitle}</strong>
+            <p>{builderPrimaryDetail}</p>
+            <div className="fluxos-builder-current-meta" aria-label="Mission route and state">
+              <em>{builderPrimaryStatus}</em>
+              <em>Hermes primary</em>
+              <em>OpenClaw fallback</em>
+              <em>{isLiveBackend ? "live NAS" : "fixture proof"}</em>
+            </div>
+          </div>
+          <div className="fluxos-builder-current-progress">
+            <span>{builderPrimaryProgress == null ? "No live percent" : `${builderPrimaryProgress}%`}</span>
+            <i aria-hidden="true" style={{ "--progress": `${builderPrimaryProgress ?? 12}%` }} />
+            <small>{builderPrimaryProgressLabel}</small>
+          </div>
+          <div className="fluxos-builder-current-actions">
+            <button disabled={!builderPrimaryMissionId} onClick={() => onOpenBuilderDetail?.(builderPrimaryMissionId)} type="button">
+              Continue
+            </button>
+            <button onClick={() => onRequestAction?.("run:proof")} type="button">
+              Verify
+            </button>
+            <button onClick={() => onRequestAction?.("launch:mission")} type="button">
+              Launch
+            </button>
+            <button
+              data-builder-self-repair-action="true"
+              disabled={builderSelfRepairBusy || !callBackend}
+              onClick={() => void runBuilderSelfRepairLoop()}
+              type="button"
+            >
+              {builderSelfRepairBusy ? "Recording proof" : "Run self-repair"}
+            </button>
+          </div>
+          <div className="fluxos-builder-current-proof" aria-label="Builder self-repair proof">
+            {builderProofCompactRows.map(item => (
+              <article className={`tone-${item.tone || "neutral"}`} key={`builder-current-proof-${item.label}`}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <p>{item.detail}</p>
+              </article>
+            ))}
+          </div>
+        </section>
         {isLiveBackend ? (
           <section
             className="fluxos-builder-timeline"

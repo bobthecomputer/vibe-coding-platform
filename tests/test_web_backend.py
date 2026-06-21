@@ -272,6 +272,58 @@ class FluxioWebBackendTests(unittest.TestCase):
             for artifact_path in result["artifacts"].values():
                 self.assertTrue(pathlib.Path(artifact_path).exists(), artifact_path)
 
+    def test_ui_self_repair_loop_writes_builder_skill_artifacts_and_prefers_hermes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command, path=None):
+                if command in {"opencode", "hermes", "openclaw"}:
+                    return command
+                return None
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):
+                executable = pathlib.Path(str(args[0])).name.lower()
+                if executable == "opencode":
+                    return {}, "openrouter/z-ai/glm-5.2\nopenrouter/z-ai/glm-4.6\n", "", 80
+                if executable == "hermes":
+                    payload = {"reply": "{\"findings\":[\"builder proof clutter\"]}"}
+                    return payload, json.dumps(payload), "", 110
+                raise AssertionError(f"Unexpected command: {args}")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                    result = backend.dispatch(
+                        "ui_self_repair_loop_command",
+                        {
+                            "requestId": "mission2-builder-proof",
+                            "surface": "builder",
+                            "clarityMode": "focus",
+                            "missionCount": 3,
+                            "timeoutSeconds": 5,
+                            "probeExternalRoutes": True,
+                        },
+                    )
+
+            self.assertEqual(result["route"]["runtime"], "hermes")
+            self.assertEqual(result["route"]["fallbackRuntime"], "openclaw")
+            self.assertEqual(result["route"]["modelId"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(result["routeStatus"], "ok")
+            skill_ids = [item["id"] for item in result["skillsUsed"]]
+            self.assertIn("operator_ui_breakdown", skill_ids)
+            self.assertIn("operator_ui_repair_planner", skill_ids)
+            self.assertIn("implementation_surface_contract", skill_ids)
+            self.assertIn("self_repair_verifier", skill_ids)
+
+            route_proof = json.loads(pathlib.Path(result["artifacts"]["routeProofPath"]).read_text(encoding="utf-8"))
+            self.assertTrue(route_proof["opencode"]["modelsContainGlm52"])
+            self.assertEqual(route_proof["hermes"]["call"]["status"], "ok")
+            self.assertEqual(route_proof["selectedRuntime"], "hermes")
+            contract = json.loads(pathlib.Path(result["artifacts"]["implementationContractPath"]).read_text(encoding="utf-8"))
+            self.assertIn('data-builder-current-mission="true"', contract["surfaceMarkers"])
+            for artifact_path in result["artifacts"].values():
+                self.assertTrue(pathlib.Path(artifact_path).exists(), artifact_path)
+
     def test_artifact_resolver_maps_nas_absolute_path_to_local_volume_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
