@@ -342,6 +342,7 @@ def main() -> int:
             builder_expected.extend(
                 [
                     "SKILL RECOVERY COCKPIT",
+                    "Skill recovery",
                     "Runtime lane:",
                     "Provider route:",
                     "Retry guard:",
@@ -356,6 +357,7 @@ def main() -> int:
             skills_expected.extend(
                 [
                     "SKILL RECOVERY",
+                    "Skill recovery",
                     "Recovery actions and route separation",
                 ]
             )

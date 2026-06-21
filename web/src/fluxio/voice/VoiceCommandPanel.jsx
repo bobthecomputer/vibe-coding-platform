@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   Info,
@@ -207,15 +207,58 @@ export function VoiceCommandPanel({
     });
     setManualDictationDraft("");
   };
-  const runReviewedTranscriptCommand = () => {
+  const runReviewedTranscriptCommand = useCallback(() => {
     if (runDisabled) {
       return;
     }
     voice.runTranscriptCommand();
-  };
+  }, [runDisabled, voice]);
+  const clearOrCancelVoiceReview = useCallback(() => {
+    if (voice.pendingCommand) {
+      voice.cancelPendingCommand?.();
+      return;
+    }
+    voice.clearTranscript?.();
+  }, [voice]);
+  const handleVoiceShortcutKeyDown = useCallback(
+    event => {
+      const key = String(event.key || "").toLowerCase();
+      if (event.ctrlKey && event.shiftKey && key === "v") {
+        if (!startDisabled) {
+          event.preventDefault();
+          if (voice.listening) {
+            void voice.stopListening?.();
+          } else {
+            void voice.startListening?.();
+          }
+        }
+        return;
+      }
+      if (event.ctrlKey && !event.shiftKey && key === "enter") {
+        if (!runDisabled) {
+          event.preventDefault();
+          runReviewedTranscriptCommand();
+        }
+        return;
+      }
+      if (key === "escape") {
+        if (voice.pendingCommand || voice.transcript.combinedText) {
+          event.preventDefault();
+          clearOrCancelVoiceReview();
+        }
+      }
+    },
+    [clearOrCancelVoiceReview, runDisabled, runReviewedTranscriptCommand, startDisabled, voice],
+  );
 
   return (
-    <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
+    <section
+      className="fluxio-voice-panel"
+      aria-label="Voice command controls"
+      onKeyDown={handleVoiceShortcutKeyDown}
+      tabIndex={0}
+      {...motion}
+    >
       <div className="fluxio-voice-panel-head">
         <div>
           <p className="eyebrow">Voice input</p>
@@ -561,6 +604,7 @@ export function VoiceCommandPanel({
             shortcut: "Ctrl+Shift+V",
             voice: voice.listening ? "stop dictation" : "start dictation",
           })}
+          aria-keyshortcuts="Control+Shift+V"
           disabled={startDisabled}
           onClick={() => (voice.listening ? voice.stopListening() : voice.startListening())}
           type="button"
@@ -575,6 +619,7 @@ export function VoiceCommandPanel({
             shortcut: "Ctrl+Enter",
             voice: "send message",
           })}
+          aria-keyshortcuts="Control+Enter"
           disabled={runDisabled}
           onClick={runReviewedTranscriptCommand}
           type="button"
@@ -589,8 +634,9 @@ export function VoiceCommandPanel({
             shortcut: "Escape",
             voice: "clear transcript",
           })}
+          aria-keyshortcuts="Escape"
           disabled={!voice.transcript.combinedText && !voice.pendingCommand}
-          onClick={() => voice.clearTranscript()}
+          onClick={clearOrCancelVoiceReview}
           type="button"
         >
           Clear

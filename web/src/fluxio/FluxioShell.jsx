@@ -10099,65 +10099,75 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           setUiMode("agent");
           setSurface("agent");
           setActiveDrawer(null);
-          return;
+          return { status: "complete", reason: "surface_opened", label: "Opened", detail: "Voice command opened the agent surface." };
         }
         if (nextSurface === "builder") {
           setUiMode("builder");
           setSurface("builder");
           setActiveDrawer("builder");
-          return;
+          return { status: "complete", reason: "surface_opened", label: "Opened", detail: "Voice command opened the builder surface." };
         }
         if (nextSurface === "images") {
           setUiMode("builder");
           setSurface("images");
           setActiveDrawer(null);
-          return;
+          return { status: "complete", reason: "surface_opened", label: "Opened", detail: "Voice command opened the image surface." };
         }
         if (nextSurface === "voice") {
           openVoiceReview();
-          return;
+          return { status: "complete", reason: "surface_opened", label: "Opened", detail: "Voice review opened." };
         }
         if (["runtime", "skills", "proof", "queue", "context", "settings"].includes(nextSurface)) {
           setUiMode("builder");
           setSurface("builder");
           setActiveDrawer(nextSurface);
-          return;
+          return { status: "complete", reason: "surface_opened", label: "Opened", detail: `Voice command opened ${nextSurface}.` };
         }
         pushToast(`Voice command could not open ${nextSurface || "that surface"}.`, "warn");
-        return;
+        return {
+          status: "blocked",
+          reason: "unknown_surface",
+          label: "Blocked",
+          detail: `Voice command could not open ${nextSurface || "that surface"}.`,
+        };
       }
 
       if (action === "voice.showCommands") {
         openVoiceReview();
-        return;
+        return { status: "complete", reason: "voice_review_opened", label: "Opened", detail: "Voice command examples opened." };
       }
 
       if (action === "voice.start") {
         openVoiceReview({ autoStart: true });
         pushToast("Voice panel opened; live capture will start when a browser or local adapter is ready.", "info");
-        return;
+        return { status: "complete", reason: "voice_capture_requested", label: "Opened", detail: "Voice capture was requested." };
       }
 
       if (action === "voice.stop") {
-        return;
+        return { status: "complete", reason: "voice_capture_stopped", label: "Stopped", detail: "Voice capture stop was handled by the controller." };
       }
 
       if (action === "voice.clearTranscript") {
         pushToast("Voice transcript cleared.", "info");
-        return;
+        return { status: "complete", reason: "voice_transcript_cleared", label: "Cleared", detail: "Voice transcript cleared." };
       }
 
       if (action === "composer.addNote" || action === "composer.addComment") {
         const text = String(parameters.text || command?.sourceText || "").trim();
         if (!text) {
           pushToast("Voice command did not include note text.", "warn");
-          return;
+          return {
+            status: "blocked",
+            reason: "empty_note",
+            label: "Blocked",
+            detail: "Voice command did not include note text.",
+          };
         }
         setOperatorDraft(current => [current, text].filter(Boolean).join(current ? "\n" : ""));
         setUiMode("agent");
         setSurface("agent");
         pushToast("Dictated text added to the composer for review.", "info");
-        return;
+        return { status: "complete", reason: "composer_text_added", label: "Added", detail: "Dictated text added to the composer for review." };
       }
 
       if (action === "composer.send") {
@@ -10166,15 +10176,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           const currentFingerprint = fingerprintVoiceText(operatorDraft.trim());
           if (currentFingerprint !== reviewTarget.textFingerprint) {
             pushToast("Voice send canceled because the composer changed after review. Run the voice command again.", "warn");
-            return;
+            return {
+              status: "canceled",
+              reason: "composer_changed_after_review",
+              label: "Canceled",
+              detail: "Voice send canceled because the composer changed after review. Run the voice command again.",
+            };
           }
         }
         if (mission) {
           await handleAgentFollowUp();
-          return;
+          return { status: "complete", reason: "mission_followup_sent", label: "Sent", detail: "Voice-confirmed mission follow-up was sent." };
         }
         handleAgentIdleSubmit();
-        return;
+        return { status: "complete", reason: "chat_message_sent", label: "Sent", detail: "Voice-confirmed chat message was sent." };
       }
 
       if (action === "search.query") {
@@ -10182,7 +10197,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         setWorkspaceSearchQuery(query);
         setMissionSearchQuery(query);
         pushToast(query ? `Searching workspace and mission lists for "${query}".` : "Search cleared.", "info");
-        return;
+        return { status: "complete", reason: "search_updated", label: "Search", detail: query ? `Searching for "${query}".` : "Search cleared." };
       }
 
       if (action === "mission.pause" || action === "mission.resume") {
@@ -10190,16 +10205,22 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         setSurface("agent");
         setActiveDrawer("queue");
         pushToast("Voice mission control opened the review queue; confirm the mission action there.", "info");
-        return;
+        return { status: "complete", reason: "mission_queue_opened", label: "Opened", detail: "Mission review queue opened for confirmation." };
       }
 
       if (action === "approval.resolve") {
         setActiveDrawer("queue");
         pushToast("Approval queue opened for review before any decision is applied.", "info");
-        return;
+        return { status: "complete", reason: "approval_queue_opened", label: "Opened", detail: "Approval queue opened for review." };
       }
 
       pushToast("Voice command parsed, but this shell action is not wired yet.", "warn");
+      return {
+        status: "blocked",
+        reason: "unwired_shell_action",
+        label: "Blocked",
+        detail: "Voice command parsed, but this shell action is not wired yet.",
+      };
     },
     [
       handleAgentFollowUp,

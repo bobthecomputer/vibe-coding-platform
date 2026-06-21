@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -21,9 +22,12 @@ from control_route_interaction_smoke import (
 )
 
 
-OUT_DIR = ROOT / "artifacts" / "pr92-voice-confirmation-targets"
+OUT_DIR = Path(os.environ.get("FLUXIO_PROOF_OUT_DIR", ROOT / "artifacts" / "pr98-voice-dictation-safety"))
 CHECK_PATH = OUT_DIR / "voice-control-checkpoint-check.json"
-URL = "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=agent&surface=agent"
+URL = os.environ.get(
+    "FLUXIO_CONTROL_URL",
+    "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=agent&surface=agent",
+)
 
 
 def capture(cdp: Cdp, path: Path) -> None:
@@ -44,6 +48,50 @@ def click_button(cdp: Cdp, label: str) -> bool:
               if (!button || button.disabled) return false;
               button.click();
               return true;
+            }})()
+            """
+        )
+    )
+
+
+def set_agent_composer(cdp: Cdp, value: str) -> bool:
+    return bool(
+        cdp.eval(
+            f"""
+            (() => {{
+              const field =
+                document.querySelector('textarea[aria-label="Agent message composer"]') ||
+                document.querySelector('#thread-note') ||
+                document.querySelector('.agent-composer textarea');
+              if (!field) return false;
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+              if (setter) setter.call(field, {json.dumps(value)});
+              else field.value = {json.dumps(value)};
+              field.dispatchEvent(new Event("input", {{ bubbles: true }}));
+              return true;
+            }})()
+            """
+        )
+    )
+
+
+def press_voice_shortcut(cdp: Cdp, key: str, *, ctrl: bool = False, shift: bool = False) -> bool:
+    return bool(
+        cdp.eval(
+            f"""
+            (() => {{
+              const panel = document.querySelector(".fluxio-voice-panel");
+              if (!panel) return false;
+              panel.focus();
+              const event = new KeyboardEvent("keydown", {{
+                key: {json.dumps(key)},
+                ctrlKey: {str(ctrl).lower()},
+                shiftKey: {str(shift).lower()},
+                bubbles: true,
+                cancelable: true
+              }});
+              panel.dispatchEvent(event);
+              return event.defaultPrevented;
             }})()
             """
         )
@@ -95,19 +143,7 @@ def main() -> int:
         )
         time.sleep(0.45)
         assert_current_control_shell(cdp)
-        cdp.eval(
-            """
-            (() => {
-              const field = document.querySelector('textarea[aria-label="Agent message composer"]');
-              if (!field) return false;
-              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-              if (setter) setter.call(field, "Continue the PR stack and attach proof.");
-              else field.value = "Continue the PR stack and attach proof.";
-              field.dispatchEvent(new Event("input", { bubbles: true }));
-              return true;
-            })()
-            """
-        )
+        set_agent_composer(cdp, "Continue the PR stack and attach proof.")
         time.sleep(0.25)
         checkpoint_text = str(cdp.eval('document.querySelector(".voice-control-checkpoint")?.innerText || ""'))
         opened_review = click_button(cdp, "Open voice review")
@@ -154,7 +190,7 @@ def main() -> int:
         time.sleep(0.45)
         command_mode_selected = click_button(cdp, "Command")
         time.sleep(0.35)
-        run_clicked_for_confirmation = click_button(cdp, "Run")
+        run_shortcut_for_confirmation = press_voice_shortcut(cdp, "Enter", ctrl=True)
         time.sleep(0.65)
         confirmation_target_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-confirm-target"))'))
         cancel_found = bool(
@@ -166,7 +202,8 @@ def main() -> int:
             )
         )
         confirm_target_text = str(cdp.eval('document.querySelector(".fluxio-voice-confirm-target")?.innerText || ""'))
-        visible_text = f"{checkpoint_text}\n{review_mode_checkpoint_text}\n{str(cdp.eval('document.body.innerText || \"\"'))}\n{confirm_target_text}"
+        body_text = str(cdp.eval('document.body.innerText || ""'))
+        visible_text = f"{checkpoint_text}\n{review_mode_checkpoint_text}\n{body_text}\n{confirm_target_text}"
         cdp.eval(
             """
             document.querySelector(".fluxio-voice-confirm-target")
@@ -201,9 +238,10 @@ def main() -> int:
             "modeCheckpointFound": mode_checkpoint_found,
             "markedReviewed": marked_reviewed,
             "commandModeSelected": command_mode_selected,
-            "runClickedForConfirmation": run_clicked_for_confirmation,
+            "runShortcutForConfirmation": run_shortcut_for_confirmation,
             "confirmationTargetFound": confirmation_target_found,
             "cancelFound": cancel_found,
+            "composerMutationVisualProof": "skipped: this builder voice proof surface does not mount the agent composer",
             "reviewModeCheckpointText": review_mode_checkpoint_text,
             "confirmationTargetText": confirm_target_text,
             "checkpointText": checkpoint_text,
@@ -219,7 +257,7 @@ def main() -> int:
             and mode_checkpoint_found
             and marked_reviewed
             and command_mode_selected
-            and run_clicked_for_confirmation
+            and run_shortcut_for_confirmation
             and confirmation_target_found
             and cancel_found
         )

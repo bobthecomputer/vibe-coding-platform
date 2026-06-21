@@ -299,6 +299,34 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["reviewedBy"], "operator")
         self.assertIn("unknown-confidence", payload["checkIds"])
 
+    def test_voice_handler_outcomes_preserve_shell_cancellations(self) -> None:
+        payload = run_node(
+            """
+            import { normalizeVoiceCommandOutcome } from './web/src/fluxio/voice/useVoiceInteractionController.js';
+
+            const canceled = normalizeVoiceCommandOutcome({
+              status: 'canceled',
+              reason: 'composer_changed_after_review',
+              label: 'Canceled',
+              detail: 'Voice send canceled because the composer changed after review. Run the voice command again.',
+            });
+            const fallback = normalizeVoiceCommandOutcome(undefined, {
+              matched: true,
+              label: 'Send message',
+              requiresConfirmation: true,
+              confirmationPrompt: 'Send the current message?',
+            });
+            console.log(JSON.stringify({ canceled, fallback }));
+            """
+        )
+
+        self.assertEqual(payload["canceled"]["status"], "canceled")
+        self.assertEqual(payload["canceled"]["reason"], "composer_changed_after_review")
+        self.assertIn("composer changed after review", payload["canceled"]["detail"])
+        self.assertEqual(payload["fallback"]["status"], "complete")
+        self.assertEqual(payload["fallback"]["reason"], "handler_complete")
+        self.assertIn("Send the current message?", payload["fallback"]["detail"])
+
     def test_accessibility_helpers_do_not_claim_live_voice_without_checked_support(self) -> None:
         payload = run_node(
             """

@@ -52,6 +52,18 @@ function createInitialState(options = {}) {
   };
 }
 
+export function normalizeVoiceCommandOutcome(outcome, fallbackCommand = null) {
+  if (outcome && typeof outcome === "object" && typeof outcome.status === "string") {
+    return outcome;
+  }
+  return {
+    status: "complete",
+    reason: "handler_complete",
+    label: "Complete",
+    detail: describeVoiceCommandResult(fallbackCommand),
+  };
+}
+
 function reducer(state, action) {
   if (action.type === "support") {
     const support = action.support || state.support;
@@ -282,6 +294,24 @@ function reducer(state, action) {
       status: describeVoiceCommandResult(action.command || state.pendingCommand || state.lastCommand),
     };
   }
+  if (action.type === "command.handlerBlocked") {
+    const outcome = normalizeVoiceCommandOutcome(action.outcome, action.command || state.pendingCommand || state.lastCommand);
+    return {
+      ...state,
+      pendingCommand: null,
+      sendGuard: {
+        status: outcome.status === "canceled" ? "blocked" : outcome.status || "blocked",
+        reason: outcome.reason || "handler_blocked",
+        label: outcome.label || (outcome.status === "canceled" ? "Canceled" : "Blocked"),
+        detail: outcome.detail || "The shell handler did not run this voice command.",
+      },
+      lastCommand: {
+        ...(action.command || state.pendingCommand || state.lastCommand || {}),
+        handlerOutcome: outcome,
+      },
+      status: outcome.detail || "Voice command did not run.",
+    };
+  }
   if (action.type === "error") {
     const error = action.message || buildVoiceErrorRecovery(action.code || "unknown");
     return {
@@ -462,9 +492,19 @@ export function useVoiceInteractionController({
       if (command.action === "voice.stop") {
         await stopListening();
       }
-      await onVoiceCommand?.(commandWithPacket);
+      const outcome = normalizeVoiceCommandOutcome(await onVoiceCommand?.(commandWithPacket), commandWithPacket);
+      if (outcome.status === "blocked" || outcome.status === "canceled") {
+        dispatch({ type: "command.handlerBlocked", command: commandWithPacket, outcome });
+        return {
+          ...commandWithPacket,
+          matched: false,
+          blockedReason: outcome.reason,
+          recovery: outcome.detail,
+          handlerOutcome: outcome,
+        };
+      }
       dispatch({ type: "command.complete", command: commandWithPacket, guard });
-      return commandWithPacket;
+      return { ...commandWithPacket, handlerOutcome: outcome };
     },
     [getCommandReviewContext, minConfidence, onVoiceCommand, state.inputMode, state.transcript, stopListening],
   );
@@ -492,11 +532,19 @@ export function useVoiceInteractionController({
       return null;
     }
     if (state.pendingCommand.action === "voice.clearTranscript") {
-      await onVoiceCommand?.(state.pendingCommand);
+      const outcome = normalizeVoiceCommandOutcome(await onVoiceCommand?.(state.pendingCommand), state.pendingCommand);
+      if (outcome.status === "blocked" || outcome.status === "canceled") {
+        dispatch({ type: "command.handlerBlocked", command: state.pendingCommand, outcome });
+        return null;
+      }
       dispatch({ type: "transcript.clear", reason: "voice_command" });
       return state.pendingCommand;
     }
-    await onVoiceCommand?.(state.pendingCommand);
+    const outcome = normalizeVoiceCommandOutcome(await onVoiceCommand?.(state.pendingCommand), state.pendingCommand);
+    if (outcome.status === "blocked" || outcome.status === "canceled") {
+      dispatch({ type: "command.handlerBlocked", command: state.pendingCommand, outcome });
+      return null;
+    }
     dispatch({
       type: "command.complete",
       command: state.pendingCommand,
