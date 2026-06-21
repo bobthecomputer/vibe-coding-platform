@@ -24,6 +24,8 @@ export function ProviderEcosystemPanel({
   const readinessSummary = asRecord(updatePolicy.readinessSummary);
   const sourceFreshness = asRecord(providerEcosystem.sourceFreshness);
   const refreshProof = asRecord(updatePolicy.refreshProof);
+  const sourceVerificationGate = asRecord(updatePolicy.sourceVerificationGate);
+  const sourceVerificationSources = asList(sourceVerificationGate.primarySources);
   const readinessChecklist =
     providedReadinessChecklist.length > 0
       ? providedReadinessChecklist
@@ -104,6 +106,58 @@ export function ProviderEcosystemPanel({
           {refreshProof.writesProviderRegistry ? "may write registry" : "writesProviderRegistry=false"}
         </small>
       </div>
+      <div
+        className={`provider-source-verification-gate ${toneClass(sourceVerificationGate.reviewRequiredCount > 0 ? "warn" : "good")}`}
+        aria-label="Provider source verification gate"
+      >
+        <div className="provider-source-gate-head">
+          <div>
+            <span>Source verification gate</span>
+            <strong>{titleizeToken(sourceVerificationGate.status || "review only current")}</strong>
+            <p>
+              {sourceVerificationGate.defaultChangeBlocked
+                ? "Default model changes stay blocked until source review, route smoke proof, and approval are complete."
+                : "Source gate is open for reviewed metadata changes."}
+            </p>
+          </div>
+          <StatusPill tone={sourceVerificationGate.reviewRequiredCount > 0 ? "warn" : "good"}>
+            {sourceVerificationGate.currentSourceCount || 0}/{sourceVerificationGate.primarySourceCount || sources.length || 0} current
+          </StatusPill>
+        </div>
+        <div className="provider-source-gate-grid">
+          <div>
+            <span>Default changes</span>
+            <b>{sourceVerificationGate.defaultChangeAllowed ? "allowed" : "blocked"}</b>
+          </div>
+          <div>
+            <span>Review needed</span>
+            <b>{sourceVerificationGate.reviewRequiredCount || 0} source(s)</b>
+          </div>
+          <div>
+            <span>Verified</span>
+            <b>{sourceVerificationGate.lastVerifiedAt || providerEcosystem.lastVerifiedAt || "pending"}</b>
+          </div>
+        </div>
+        <code>{sourceVerificationGate.nextVerificationCommand || refreshProof.command || "python scripts/provider_catalog_refresh.py"}</code>
+        <small>{sourceVerificationGate.schemaVersion || "provider-source-verification-gate.v1"}</small>
+        {sourceVerificationSources.length > 0 ? (
+          <div className="provider-source-list">
+            {sourceVerificationSources.map(item => (
+              <article key={`provider-source-gate-${item.sourceId || item.url}`}>
+                <span>{titleizeToken(item.freshnessStatus || "review")}</span>
+                <strong>{item.label || item.sourceId}</strong>
+                <p>{item.url}</p>
+                <small>{item.verifiedAt ? `verified ${item.verifiedAt}` : "verification date pending"}</small>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        {asList(sourceVerificationGate.blockingReasons).length > 0 ? (
+          <p className="provider-source-blockers">
+            {sourceVerificationGate.blockingReasons.slice(0, 2).join(" ")}
+          </p>
+        ) : null}
+      </div>
       {readinessChecklist.length > 0 ? (
         <div className="provider-update-readiness" aria-label="Provider update readiness checklist">
           <div className="section-header compact">
@@ -146,12 +200,13 @@ export function ProviderEcosystemPanel({
                 <span>{item.routeRole || "provider route"}</span>
                 <strong>{item.label || item.providerId}</strong>
                 <p>
-                  {titleizeToken(item.status || "unknown")} · {item.canRouteNow ? "route ready" : item.authPresent ? "auth present" : "auth or adapter needed"}
+                  {titleizeToken(item.status || "unknown")} · {item.canRouteNow ? "route ready" : item.credentialReady ? "credential ready, smoke needed" : item.authPresent ? "auth present" : "auth or adapter needed"}
                 </p>
                 <div className="pill-row">
                   <span className="mini-pill">{item.providerId}</span>
                   <span className="mini-pill muted">{item.updateSource || "manual"}</span>
                   <span className="mini-pill muted">{item.observedRouteCount || 0} observed</span>
+                  <span className="mini-pill muted">smoke {item.routeSmokeStatus || "missing"}</span>
                   <span className="mini-pill muted">{item.routeExposure?.label || "Exposure review"}</span>
                 </div>
                 {item.routeExposure?.summary ? (

@@ -649,16 +649,18 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(snapshot["providerSecretPresence"]["openai"])
             self.assertTrue(snapshot["providerSetupStatus"]["openai"]["authPresent"])
             self.assertTrue(provider["authPresent"])
-            self.assertTrue(provider["canRouteNow"])
-            self.assertEqual(provider["healthCheck"]["status"], "ready")
-            self.assertEqual(snapshot["providerEcosystem"]["summary"]["routeReadyCount"], 1)
+            self.assertTrue(provider["credentialReady"])
+            self.assertFalse(provider["canRouteNow"])
+            self.assertEqual(provider["routeSmokeStatus"], "missing")
+            self.assertEqual(provider["healthCheck"]["status"], "route_smoke_missing")
+            self.assertEqual(snapshot["providerEcosystem"]["summary"]["routeReadyCount"], 0)
             self.assertEqual(snapshot["providerEcosystem"]["summary"]["missingAuthCount"], 0)
             checklist = {
                 item["checkId"]: item
                 for item in snapshot["providerEcosystem"]["updatePolicy"]["readinessChecklist"]
             }
             self.assertEqual(checklist["credential_safety"]["status"], "ready")
-            self.assertEqual(checklist["route_smoke"]["status"], "ready")
+            self.assertEqual(checklist["route_smoke"]["status"], "review")
 
     def test_web_backend_prepends_packaged_runtime_bin_to_cli_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

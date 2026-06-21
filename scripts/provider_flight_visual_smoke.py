@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -23,7 +24,7 @@ from control_route_interaction_smoke import (
 )
 
 
-OUT_DIR = ROOT / "artifacts" / "pr85-provider-update-health"
+OUT_DIR = Path(os.environ.get("FLUXIO_PROVIDER_FLIGHT_OUT_DIR", "")).resolve() if os.environ.get("FLUXIO_PROVIDER_FLIGHT_OUT_DIR") else ROOT / "artifacts" / "pr100-provider-source-verification-gate"
 CHECK_PATH = OUT_DIR / "provider-flight-focused-check.json"
 
 
@@ -90,6 +91,8 @@ def main() -> int:
                 "PROVIDER UPDATE FLIGHT CHECK",
                 "Open provider ecosystem",
                 "Review-only artifact",
+                "Source gate",
+                "Default changes blocked",
             ],
             "missingFragments": [
                 fragment
@@ -97,6 +100,8 @@ def main() -> int:
                     "PROVIDER UPDATE FLIGHT CHECK",
                     "Open provider ecosystem",
                     "Review-only artifact",
+                    "Source gate",
+                    "Default changes blocked",
                 ]
                 if fragment not in visible_text
             ],

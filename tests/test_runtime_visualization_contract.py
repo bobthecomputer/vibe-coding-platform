@@ -171,6 +171,8 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "Provider update flight check" in source
     assert "provider-flight-check" in source
     assert "Open provider ecosystem" in source
+    assert "Source gate" in source
+    assert "Default changes blocked" in source
     assert "provider-flight-check" in (ROOT / "scripts" / "provider_flight_visual_smoke.py").read_text(encoding="utf-8")
     assert "routeDecisionSummary" in source
     assert "highestRouteTier" in source
@@ -189,10 +191,16 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert ".benchmark-route-grid" in styles
     assert ".provider-flight-check" in styles
     assert ".provider-flight-grid" in styles
+    assert ".provider-source-verification-gate" in styles
+    assert ".provider-source-gate-grid" in styles
     assert "harnessId" in fixtures
     assert "routeDecisionSummary" in fixtures
     assert "sourceFreshness" in fixtures
+    assert "sourceVerificationGate" in fixtures
+    assert "provider-source-verification-gate.v1" in fixtures
+    assert "https://ai-gateway.vercel.sh/v1/models" in fixtures
     assert "routeExposure" in fixtures
+    assert "routeSmokeStatus" in fixtures
     assert "provider-catalog-refresh/v1" in fixtures
     assert "Benchmark F7" in fixtures
     assert "MiniMax-M3" in fixtures

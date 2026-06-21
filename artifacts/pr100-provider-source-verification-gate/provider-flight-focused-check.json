@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-06-21T10:21:13.942139+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&proofReload=pr100-provider-flight",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr100-provider-source-verification-gate\\provider-flight-focused.png",
+  "expectedFragments": [
+    "PROVIDER UPDATE FLIGHT CHECK",
+    "Open provider ecosystem",
+    "Review-only artifact",
+    "Source gate",
+    "Default changes blocked"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

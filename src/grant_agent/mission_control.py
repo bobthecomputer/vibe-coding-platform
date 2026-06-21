@@ -276,7 +276,8 @@ def _provider_route_exposure(row: dict, *, can_route_now: bool) -> dict:
     }
 
 
-def _provider_source_freshness(sources: list[dict], *, as_of: str = "2026-06-21") -> dict:
+def _provider_source_freshness(sources: list[dict], *, as_of: str | None = None) -> dict:
+    as_of = as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     as_of_date = datetime.strptime(as_of, "%Y-%m-%d").date()
     source_rows: list[dict] = []
     fresh_count = 0
@@ -318,6 +319,57 @@ def _provider_source_freshness(sources: list[dict], *, as_of: str = "2026-06-21"
         "reviewOnly": True,
         "sources": source_rows,
         "nextRefreshAction": "Run scripts/provider_catalog_refresh.py, review the artifact, then run provider health checks before default changes.",
+    }
+
+
+def _provider_source_verification_gate(source_freshness: dict) -> dict:
+    source_rows = [
+        item
+        for item in source_freshness.get("sources", [])
+        if isinstance(item, dict)
+    ]
+    review_rows = [
+        item
+        for item in source_rows
+        if item.get("freshnessStatus") != "current"
+    ]
+    primary_sources = [
+        {
+            "sourceId": item.get("sourceId", ""),
+            "label": item.get("label", ""),
+            "url": item.get("url", ""),
+            "verifiedAt": item.get("verifiedAt", ""),
+            "freshnessStatus": item.get("freshnessStatus", "review"),
+            "ageDays": item.get("ageDays"),
+        }
+        for item in source_rows
+    ]
+    blocking_reasons = [
+        "Provider default changes are review-only and require explicit approval.",
+        "Catalog refresh artifacts must not write credentials, defaults, or provider registry entries.",
+    ]
+    if review_rows:
+        blocking_reasons.insert(
+            0,
+            "One or more provider catalog sources are stale, expired, or need manual review.",
+        )
+    return {
+        "schemaVersion": "provider-source-verification-gate.v1",
+        "status": "source_review_required" if review_rows else "review_only_current",
+        "reviewOnly": True,
+        "defaultChangeAllowed": False,
+        "defaultChangeBlocked": True,
+        "primarySourceCount": len(primary_sources),
+        "currentSourceCount": len(source_rows) - len(review_rows),
+        "reviewRequiredCount": len(review_rows),
+        "lastVerifiedAt": source_freshness.get("latestVerifiedAt", ""),
+        "asOf": source_freshness.get("asOf", ""),
+        "nextVerificationCommand": (
+            "python scripts/provider_catalog_refresh.py "
+            "--run-id provider-source-verification --fetch-ai-gateway"
+        ),
+        "primarySources": primary_sources,
+        "blockingReasons": blocking_reasons,
     }
 
 
@@ -385,6 +437,9 @@ def _provider_health_check(
         evidence.append("auth missing")
     if observed_route_count:
         evidence.append(f"{observed_route_count} observed route{'s' if observed_route_count != 1 else ''}")
+        evidence.append("route smoke verified")
+    else:
+        evidence.append("route smoke missing")
     if needs_openclaw:
         evidence.append("OpenClaw detected" if "openclaw" in runtime_ids else "OpenClaw missing")
     if needs_hermes:
@@ -406,9 +461,9 @@ def _provider_health_check(
         summary = "A supported provider route exists, but credentials are not configured."
         safe_next_step = "Connect credentials, then rerun provider health."
     else:
-        health_status = "unverified"
-        summary = "Provider metadata is tracked but no recent route proof is available."
-        safe_next_step = "Run a route smoke test and keep the previous default until it passes."
+        health_status = "route_smoke_missing"
+        summary = "Credentials are present, but no recent route smoke proof is available."
+        safe_next_step = "Run a cheap route smoke test and keep the previous default until it passes."
     return {
         "status": health_status,
         "summary": summary,
@@ -619,6 +674,7 @@ def _build_provider_ecosystem_snapshot(
 ) -> dict:
     runtime_ids = {item.runtime_id for item in runtime_statuses if item.detected}
     source_freshness = _provider_source_freshness(PROVIDER_ECOSYSTEM_SOURCES)
+    source_verification_gate = _provider_source_verification_gate(source_freshness)
     sources_by_id = {
         str(item.get("sourceId", "")).strip(): item
         for item in source_freshness["sources"]
@@ -639,13 +695,14 @@ def _build_provider_ecosystem_snapshot(
             or setup.get("configured")
             or provider_auth_presence.get(provider_id, False)
         )
-        can_route_now = row["status"] in {"repo_supported", "credential_ready"} and auth_present
+        observed_route_count = observed_routes.get(provider_id, 0)
+        credential_ready = row["status"] in {"repo_supported", "credential_ready"} and auth_present
+        can_route_now = credential_ready and observed_route_count > 0
         compatibility_warnings = _provider_compatibility_warnings(
             row,
             auth_present=auth_present,
             can_route_now=can_route_now,
         )
-        observed_route_count = observed_routes.get(provider_id, 0)
         model_capabilities = _provider_model_capabilities(row)
         route_exposure = _provider_route_exposure(row, can_route_now=can_route_now)
         row_source = sources_by_id.get(str(row.get("sourceId", "")).strip(), {})
@@ -653,8 +710,10 @@ def _build_provider_ecosystem_snapshot(
             {
                 **row,
                 "authPresent": auth_present,
+                "credentialReady": credential_ready,
                 "canRouteNow": can_route_now,
                 "observedRouteCount": observed_route_count,
+                "routeSmokeStatus": "verified" if observed_route_count > 0 else "missing",
                 "routeExposure": route_exposure,
                 "sourceFreshness": {
                     "sourceId": row_source.get("sourceId") or row.get("sourceId"),
@@ -703,6 +762,18 @@ def _build_provider_ecosystem_snapshot(
         "Use dynamic catalog refresh for Vercel AI Gateway, LiteLLM, OpenClaw, and OpenCode/Models.dev before changing default model IDs."
     )
     readiness_checklist = [
+        {
+            "checkId": "source_verification_gate",
+            "label": "Source verification gate",
+            "status": "review" if source_verification_gate["reviewRequiredCount"] else "ready",
+            "summary": "Provider source freshness is checked before any model catalog or default-route change.",
+            "safeAction": source_verification_gate["nextVerificationCommand"],
+            "proof": (
+                f"{source_verification_gate['currentSourceCount']}/"
+                f"{source_verification_gate['primarySourceCount']} primary sources current; "
+                "defaultChangeAllowed=false."
+            ),
+        },
         {
             "checkId": "catalog_refresh_review",
             "label": "Catalog refresh review",
@@ -779,7 +850,7 @@ def _build_provider_ecosystem_snapshot(
         exposure_counts[level] = exposure_counts.get(level, 0) + 1
     return {
         "schemaVersion": "provider-ecosystem.v1",
-        "lastVerifiedAt": "2026-06-21",
+        "lastVerifiedAt": source_freshness["latestVerifiedAt"],
         "sourceFreshness": {
             key: value
             for key, value in source_freshness.items()
@@ -795,6 +866,8 @@ def _build_provider_ecosystem_snapshot(
             "catalogSourceCount": source_freshness["sourceCount"],
             "freshCatalogSourceCount": source_freshness["freshSourceCount"],
             "catalogReviewRequiredCount": source_freshness["reviewRequiredCount"],
+            "sourceVerificationStatus": source_verification_gate["status"],
+            "sourceVerificationBlocked": source_verification_gate["defaultChangeBlocked"],
             "firstClassRouteCount": exposure_counts.get("first_class_route", 0),
             "boundedRouteCount": exposure_counts.get("bounded_openclaw_route", 0),
             "catalogOnlyCount": exposure_counts.get("catalog_source_only", 0),
@@ -817,6 +890,7 @@ def _build_provider_ecosystem_snapshot(
                 "writesProviderRegistry": False,
                 "requiresProviderHealthAfterRefresh": True,
             },
+            "sourceVerificationGate": source_verification_gate,
             "compatibilityWarnings": [
                 "Review refreshed catalog metadata before changing default model IDs.",
                 "Keep user-defined models unchanged until a route smoke test passes.",
@@ -918,9 +992,11 @@ def reconcile_provider_secret_presence(
         status = str(item.get("status") or "").strip().lower()
         existing_health = item.get("healthCheck") if isinstance(item.get("healthCheck"), dict) else {}
         blocked_by_runtime = existing_health.get("status") == "runtime_missing"
+        observed_route_count = int(item.get("observedRouteCount", 0) or 0)
+        credential_ready = status in {"repo_supported", "credential_ready"} and auth_present
         can_route_now = bool(
-            status in {"repo_supported", "credential_ready"}
-            and auth_present
+            credential_ready
+            and observed_route_count > 0
             and not blocked_by_runtime
         )
         compatibility_warnings = _provider_compatibility_warnings(
@@ -946,7 +1022,7 @@ def reconcile_provider_secret_presence(
                 item,
                 auth_present=auth_present,
                 can_route_now=can_route_now,
-                observed_route_count=int(item.get("observedRouteCount", 0) or 0),
+                observed_route_count=observed_route_count,
                 runtime_ids=set(),
                 compatibility_warnings=compatibility_warnings,
             )
@@ -954,7 +1030,9 @@ def reconcile_provider_secret_presence(
             {
                 **item,
                 "authPresent": auth_present,
+                "credentialReady": credential_ready,
                 "canRouteNow": can_route_now,
+                "routeSmokeStatus": "verified" if observed_route_count > 0 else "missing",
                 "compatibilityWarnings": compatibility_warnings,
                 "healthCheck": health_check,
             }

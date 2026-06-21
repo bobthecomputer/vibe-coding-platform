@@ -17,6 +17,8 @@ if str(SRC) not in sys.path:
 from grant_agent.mission_control import (  # noqa: E402
     PROVIDER_ECOSYSTEM_ROWS,
     PROVIDER_ECOSYSTEM_SOURCES,
+    _provider_source_freshness,
+    _provider_source_verification_gate,
 )
 
 
@@ -105,6 +107,8 @@ def build_catalog_refresh_report(
     run_id: str | None = None,
 ) -> dict:
     stable_run_id = run_id or f"provider-catalog-refresh-{slug_now()}"
+    source_freshness = _provider_source_freshness(PROVIDER_ECOSYSTEM_SOURCES)
+    source_verification_gate = _provider_source_verification_gate(source_freshness)
     tracked_providers = []
     for row in PROVIDER_ECOSYSTEM_ROWS:
         tracked_providers.append(
@@ -127,6 +131,12 @@ def build_catalog_refresh_report(
         "liveFetch": {
             "aiGateway": fetch_ai_gateway,
         },
+        "sourceFreshness": {
+            key: value
+            for key, value in source_freshness.items()
+            if key != "sources"
+        },
+        "sourceVerificationGate": source_verification_gate,
         "trackedProviders": tracked_providers,
         "sourceSnapshots": [
             {

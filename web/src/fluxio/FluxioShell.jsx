@@ -8266,6 +8266,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       : EMPTY_OBJECT;
   const providerCatalogFreshness = asRecord(providerEcosystem.sourceFreshness);
   const providerRefreshProof = asRecord(providerEcosystemUpdatePolicy.refreshProof);
+  const providerSourceVerificationGate = asRecord(providerEcosystemUpdatePolicy.sourceVerificationGate);
   const providerExposureSummary = {
     firstClass: Number(providerEcosystemSummary.firstClassRouteCount || 0),
     bounded: Number(providerEcosystemSummary.boundedRouteCount || 0),
@@ -14304,10 +14305,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           <span>Refresh proof</span>
                           <b>{providerRefreshProof.reviewOnly ? "Review-only artifact" : "Proof pending"}</b>
                         </div>
+                        <div>
+                          <span>Source gate</span>
+                          <b>{providerSourceVerificationGate.defaultChangeBlocked ? "Default changes blocked" : "Review clear"}</b>
+                        </div>
                       </div>
                       <p>
-                        {providerCatalogFreshness.latestVerifiedAt
-                          ? `Sources verified ${providerCatalogFreshness.latestVerifiedAt}; default route changes still require provider health checks.`
+                        {providerSourceVerificationGate.status
+                          ? `Source gate ${titleizeToken(providerSourceVerificationGate.status)}; ${providerSourceVerificationGate.reviewRequiredCount || 0} source review(s) pending.`
+                          : providerCatalogFreshness.latestVerifiedAt
+                            ? `Sources verified ${providerCatalogFreshness.latestVerifiedAt}; default route changes still require provider health checks.`
                           : "Provider source freshness is waiting for a live setup snapshot."}
                       </p>
                       <div className="provider-flight-actions">

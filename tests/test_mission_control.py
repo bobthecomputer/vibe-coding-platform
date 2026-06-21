@@ -604,8 +604,9 @@ class MissionControlTests(unittest.TestCase):
             readiness = snapshot["providerEcosystem"]["updatePolicy"][
                 "readinessChecklist"
             ]
-            self.assertGreaterEqual(len(readiness), 5)
+            self.assertGreaterEqual(len(readiness), 6)
             readiness_ids = {item["checkId"] for item in readiness}
+            self.assertIn("source_verification_gate", readiness_ids)
             self.assertIn("catalog_refresh_review", readiness_ids)
             self.assertIn("credential_safety", readiness_ids)
             self.assertIn("runtime_compatibility", readiness_ids)
@@ -635,6 +636,24 @@ class MissionControlTests(unittest.TestCase):
             refresh_proof = snapshot["providerEcosystem"]["updatePolicy"][
                 "refreshProof"
             ]
+            source_gate = snapshot["providerEcosystem"]["updatePolicy"][
+                "sourceVerificationGate"
+            ]
+            self.assertEqual(
+                source_gate["schemaVersion"],
+                "provider-source-verification-gate.v1",
+            )
+            self.assertEqual(source_gate["status"], "review_only_current")
+            self.assertFalse(source_gate["defaultChangeAllowed"])
+            self.assertTrue(source_gate["defaultChangeBlocked"])
+            self.assertEqual(
+                source_gate["primarySourceCount"],
+                snapshot["providerEcosystem"]["summary"]["catalogSourceCount"],
+            )
+            self.assertIn(
+                "sourceVerificationStatus",
+                snapshot["providerEcosystem"]["summary"],
+            )
             self.assertEqual(
                 refresh_proof["schemaVersion"],
                 "provider-catalog-refresh/v1",
@@ -829,10 +848,21 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(ecosystem["lastVerifiedAt"], "2026-06-21")
             self.assertEqual(providers["openai"]["status"], "repo_supported")
             self.assertTrue(providers["openai"]["authPresent"])
-            self.assertTrue(providers["openai"]["canRouteNow"])
+            self.assertTrue(providers["openai"]["credentialReady"])
+            self.assertFalse(providers["openai"]["canRouteNow"])
+            self.assertEqual(providers["openai"]["routeSmokeStatus"], "missing")
+            self.assertEqual(
+                providers["openai"]["healthCheck"]["status"],
+                "route_smoke_missing",
+            )
             self.assertEqual(providers["local"]["status"], "planned_adapter")
             self.assertFalse(providers["local"]["canRouteNow"])
             self.assertIn("https://ai-gateway.vercel.sh/v1/models", ecosystem["updatePolicy"]["dynamicSources"])
+            self.assertTrue(
+                ecosystem["updatePolicy"]["sourceVerificationGate"][
+                    "defaultChangeBlocked"
+                ]
+            )
             checklist = ecosystem["updatePolicy"]["readinessChecklist"]
             self.assertIn(
                 "scripts/provider_catalog_refresh.py",
@@ -883,16 +913,17 @@ class MissionControlTests(unittest.TestCase):
             }
             self.assertTrue(snapshot["providerSetupStatus"]["openai"]["authPresent"])
             self.assertTrue(providers["openai"]["authPresent"])
-            self.assertTrue(providers["openai"]["canRouteNow"])
-            self.assertEqual(providers["openai"]["healthCheck"]["status"], "ready")
+            self.assertTrue(providers["openai"]["credentialReady"])
+            self.assertFalse(providers["openai"]["canRouteNow"])
+            self.assertEqual(providers["openai"]["healthCheck"]["status"], "route_smoke_missing")
             self.assertTrue(snapshot["providerSetupStatus"]["minimax"]["authPresent"])
             self.assertTrue(providers["minimax"]["authPresent"])
             if providers["minimax"]["healthCheck"]["status"] == "runtime_missing":
                 self.assertFalse(providers["minimax"]["canRouteNow"])
                 self.assertIn("auth present", providers["minimax"]["healthCheck"]["evidence"])
-            self.assertGreaterEqual(
+            self.assertEqual(
                 snapshot["providerEcosystem"]["summary"]["routeReadyCount"],
-                1,
+                0,
             )
             self.assertEqual(
                 snapshot["providerEcosystem"]["summary"]["missingAuthCount"],

@@ -28,6 +28,28 @@ class ProviderCatalogRefreshTests(unittest.TestCase):
         self.assertFalse(report["approvalPolicy"]["writesDefaults"])
         self.assertFalse(report["approvalPolicy"]["writesCredentials"])
         self.assertFalse(report["approvalPolicy"]["writesProviderRegistry"])
+        self.assertEqual(
+            report["sourceVerificationGate"]["schemaVersion"],
+            "provider-source-verification-gate.v1",
+        )
+        self.assertEqual(
+            report["sourceVerificationGate"]["status"],
+            "review_only_current",
+        )
+        self.assertFalse(report["sourceVerificationGate"]["defaultChangeAllowed"])
+        self.assertTrue(report["sourceVerificationGate"]["defaultChangeBlocked"])
+        self.assertGreaterEqual(
+            report["sourceVerificationGate"]["primarySourceCount"],
+            5,
+        )
+        source_urls = {
+            item["url"]
+            for item in report["sourceVerificationGate"]["primarySources"]
+        }
+        self.assertIn("https://opencode.ai/docs/models/", source_urls)
+        self.assertIn("https://docs.openclaw.ai/concepts/model-providers", source_urls)
+        self.assertIn("https://ai-gateway.vercel.sh/v1/models", source_urls)
+        self.assertIn("https://docs.litellm.ai/docs/providers", source_urls)
 
         source_snapshot = report["sourceSnapshots"][0]
         self.assertEqual(source_snapshot["status"], "metadata_only")
@@ -62,7 +84,38 @@ class ProviderCatalogRefreshTests(unittest.TestCase):
 
         self.assertEqual(payload["runId"], "test-provider-catalog-refresh")
         self.assertFalse(payload["approvalPolicy"]["writesDefaults"])
+        self.assertTrue(payload["sourceVerificationGate"]["defaultChangeBlocked"])
         self.assertIn("Promote changes through a separate PR", " ".join(payload["reviewActions"]))
+
+    def test_source_freshness_expires_with_real_age(self) -> None:
+        freshness = refresh._provider_source_freshness(
+            [
+                {
+                    "sourceId": "old_source",
+                    "label": "Old source",
+                    "url": "https://example.invalid/provider",
+                    "verifiedAt": "2026-01-01",
+                }
+            ],
+            as_of="2026-06-21",
+        )
+        gate = refresh._provider_source_verification_gate(freshness)
+
+        self.assertEqual(freshness["status"], "review_required")
+        self.assertEqual(freshness["sources"][0]["freshnessStatus"], "expired")
+        self.assertEqual(gate["status"], "source_review_required")
+        self.assertEqual(gate["reviewRequiredCount"], 1)
+        self.assertTrue(gate["defaultChangeBlocked"])
+
+    def test_report_does_not_leak_secret_values(self) -> None:
+        report = refresh.build_catalog_refresh_report(
+            fetch_ai_gateway=False,
+            run_id="test-provider-catalog-refresh",
+        )
+        serialized = json.dumps(report)
+
+        self.assertNotIn("sk-test-DO-NOT-LEAK", serialized)
+        self.assertNotIn("test-openai-key", serialized)
 
 
 if __name__ == "__main__":

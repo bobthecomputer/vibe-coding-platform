@@ -1,0 +1,28 @@
+{
+  "checkedAt": "2026-06-21T10:21:00.020904+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&drawer=runtime&surface=workbench&proofReload=pr100-provider-source-verification-rerun",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr100-provider-source-verification-gate\\provider-source-gate-desktop.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr100-provider-source-verification-gate\\provider-source-gate-desktop.html",
+  "expectedFragments": [
+    "Provider ecosystem",
+    "Routes, catalogs, and safe updates",
+    "Provider source verification gate",
+    "Source verification gate",
+    "Default model changes stay blocked",
+    "provider-source-verification-gate.v1"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1400,
+    "sampleCount": 8460,
+    "uniqueSampleColors": 823,
+    "averageLuma": 35.43,
+    "nonBlank": true
+  },
+  "passed": true
+}
