@@ -465,6 +465,7 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("skillLibrary", snapshot)
             self.assertIn("harnessLab", snapshot)
             self.assertIn("bridgeLab", snapshot)
+            self.assertIn("fusionWorkbench", snapshot)
             self.assertIn("storageBridge", snapshot)
             self.assertIn("guidance", snapshot)
             self.assertIn("onboarding", snapshot)
@@ -509,6 +510,9 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("openai", provider_ids)
             self.assertIn("minimax", provider_ids)
             self.assertIn("local", provider_ids)
+            self.assertFalse(snapshot["fusionWorkbench"]["adapter"]["available"])
+            self.assertTrue(snapshot["fusionWorkbench"]["adapter"]["readOnly"])
+            self.assertEqual(snapshot["fusionWorkbench"]["adapter"]["writeActions"], 0)
             self.assertTrue(
                 snapshot["providerEcosystem"]["updatePolicy"][
                     "requiresApprovalForDefaultChanges"

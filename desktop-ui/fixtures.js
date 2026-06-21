@@ -501,6 +501,43 @@ const baseSnapshot = {
   },
 };
 
+baseSnapshot.fusionWorkbench = {
+  adapter: {
+    adapterId: 'mindtower-readonly-sqlite',
+    sourceProject: 'Mind Tower',
+    sourcePath: 'C:/Users/paul/projects/mind-tower/data/mindtower.sqlite',
+    available: true,
+    readOnly: true,
+    writeActions: 0,
+    credentialValuesExposed: false,
+    status: 'ready',
+    recordCounts: {
+      sources: 4,
+      'watch-rules': 2,
+      'credential-status': 3,
+      'summary-jobs': 2,
+    },
+    eventCount: 8,
+    runtimeStateCount: 3,
+  },
+  rows: [
+    {
+      id: 'mindtower-readonly-sqlite-adapter',
+      sourceProject: 'Mind Tower',
+      sourcePath: 'C:/Users/paul/projects/mind-tower/data/mindtower.sqlite',
+      sourceHashPrefix: '',
+      collectionMode: 'read-only-adapter',
+      riskLabel: 'no-credential-copy',
+      status: 'ready-for-adapter-shape',
+      title: 'Mind Tower read-only source and event adapter',
+      summary: 'Read-only adapter found 11 records, 8 events, and 3 runtime-state rows.',
+      proofNeed: 'Counts and credential status are read from SQLite in read-only mode; credential values stay masked and no writes are exposed.',
+      nextSlice: 'Promote selected Mind Tower source health and summary job rows into Fluxio bridge health cards.',
+      lastVerifiedAt: '2026-06-21',
+    },
+  ],
+};
+
 baseSnapshot.storageBridge = {
   available: true,
   connected: false,

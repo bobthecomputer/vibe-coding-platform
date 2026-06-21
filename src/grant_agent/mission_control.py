@@ -33,6 +33,7 @@ from .models import (
 )
 from .app_capability_standard import build_connected_apps_snapshot
 from .execution_truth import derive_execution_target
+from .mindtower_fusion import build_mindtower_fusion_snapshot
 from .onboarding import (
     build_guidance_snapshot,
     detect_onboarding_status,
@@ -1460,6 +1461,7 @@ class ControlRoomStore:
             provider_auth_presence=provider_auth_presence,
         )
         generated_image_artifacts = _build_generated_image_artifacts_snapshot(self.root)
+        fusion_workbench = build_mindtower_fusion_snapshot(self.root)
         hermes_mission_evidence = _build_hermes_mission_evidence(
             self.root,
             missions,
@@ -1515,6 +1517,7 @@ class ControlRoomStore:
             "providerEcosystem": provider_ecosystem,
             "efficiencyAutotune": efficiency_autotune,
             "bridgeLab": connected_apps_snapshot,
+            "fusionWorkbench": fusion_workbench,
             "storageBridge": storage_bridge,
             "releaseReadiness": release_readiness,
             "runtimeCompartments": runtime_compartments,
@@ -1597,6 +1600,7 @@ class ControlRoomStore:
             "providerEcosystem": provider_ecosystem,
             "efficiencyAutotune": {},
             "bridgeLab": {"connectedSessions": []},
+            "fusionWorkbench": build_mindtower_fusion_snapshot(self.root),
             "storageBridge": storage_bridge,
             "releaseReadiness": {},
             "runtimeCompartments": _build_runtime_compartments_snapshot(

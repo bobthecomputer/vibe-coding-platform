@@ -134,7 +134,14 @@ export const FUSION_MIGRATION_LANES = Object.freeze([
 ]);
 
 export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
-  const rows = Array.isArray(fixtures) ? fixtures : [];
+  const providedRows = Array.isArray(fixtures) ? fixtures : [];
+  const rowMap = new Map(FUSION_FIXTURES.map(item => [item.id, item]));
+  for (const row of providedRows) {
+    if (row?.id) {
+      rowMap.set(row.id, row);
+    }
+  }
+  const rows = [...rowMap.values()];
   const migrationLanes = FUSION_MIGRATION_LANES;
   const projects = [...new Set(rows.map(item => item.sourceProject).filter(Boolean))];
   const ready = rows.filter(item =>

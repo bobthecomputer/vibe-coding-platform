@@ -100,6 +100,7 @@ def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
     source = SHELL.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
     fixtures = (ROOT / "web" / "src" / "fluxio" / "fusion" / "fusionFixtures.js").read_text(encoding="utf-8")
+    desktop_fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
 
     assert "migrationLanes" in source
     assert "fusion-migration-card" in source
@@ -109,6 +110,9 @@ def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
     assert "Terminal and operator workbench shell" in fixtures
     assert "Synology monitoring and event records" in fixtures
     assert "Synthetic red-team proof lane" in fixtures
+    assert "mindtower-readonly-sqlite-adapter" in desktop_fixtures
+    assert "credentialValuesExposed: false" in desktop_fixtures
+    assert "writeActions: 0" in desktop_fixtures
 
 
 def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:

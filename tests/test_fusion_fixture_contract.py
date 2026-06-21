@@ -108,6 +108,38 @@ class FusionFixtureContractTests(unittest.TestCase):
             any(row["collectionMode"] == "blocked" for row in payload["rows"])
         )
 
+    def test_backend_fusion_rows_merge_with_default_inventory(self) -> None:
+        payload = run_node(
+            """
+            import { buildFusionWorkbench } from './web/src/fluxio/fusion/fusionFixtures.js';
+            const workbench = buildFusionWorkbench([
+              {
+                id: 'mindtower-readonly-sqlite-adapter',
+                sourceProject: 'Mind Tower',
+                sourcePath: 'C:/Users/paul/projects/mind-tower/data/mindtower.sqlite',
+                sourceHashPrefix: '',
+                collectionMode: 'read-only-adapter',
+                riskLabel: 'no-credential-copy',
+                status: 'ready-for-adapter-shape',
+                title: 'Mind Tower read-only source and event adapter',
+                summary: 'Read-only adapter found 10 records.',
+                proofNeed: 'Credential values stay masked and no writes are exposed.',
+                nextSlice: 'Promote source health rows into Fluxio bridge cards.',
+                lastVerifiedAt: '2026-06-21',
+              }
+            ]);
+            console.log(JSON.stringify({
+              ids: workbench.rows.map(item => item.id),
+              totalRows: workbench.summary.totalRows,
+            }));
+            """
+        )
+
+        self.assertIn("mindtower-readonly-sqlite-adapter", payload["ids"])
+        self.assertIn("solantir-signal-contract", payload["ids"])
+        self.assertIn("jbheaven-defensive-harness", payload["ids"])
+        self.assertGreaterEqual(payload["totalRows"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
