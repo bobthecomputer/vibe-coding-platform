@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-06-21T10:36:43.000237+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&proofReload=pr102-benchmark-board-final",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr102-benchmark-harness-decision-board\\benchmark-board-focused.png",
+  "expectedFragments": [
+    "HARNESS BENCHMARK BOARD",
+    "DECISION GUIDE",
+    "Benchmark",
+    "Source:",
+    "Local proof"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

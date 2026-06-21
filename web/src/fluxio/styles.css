@@ -1295,6 +1295,22 @@ button.builder-sidebar-nexus:hover {
   font-size: 12px;
 }
 
+.route-decision-rules {
+  display: grid;
+  gap: 5px;
+}
+
+.route-decision-rules span {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(238, 242, 236, 0.68);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 6px 7px;
+  text-transform: none;
+}
+
 .benchmark-route-board {
   display: grid;
   gap: 8px;
@@ -1357,6 +1373,70 @@ button.builder-sidebar-nexus:hover {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.benchmark-decision-guide {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 9px;
+}
+
+.benchmark-decision-guide.tone-warn {
+  border-color: rgba(245, 158, 11, 0.24);
+  background:
+    linear-gradient(90deg, rgba(245, 158, 11, 0.08), transparent 68%),
+    rgba(0, 0, 0, 0.16);
+}
+
+.benchmark-decision-guide-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.benchmark-decision-guide-head span,
+.benchmark-decision-guide-grid span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.benchmark-decision-guide-head strong {
+  color: var(--text);
+  display: block;
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.benchmark-decision-guide-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.benchmark-decision-guide-grid span,
+.benchmark-decision-guide code,
+.benchmark-decision-guide em {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 5px 7px;
+}
+
+.benchmark-decision-guide code,
+.benchmark-decision-guide em {
+  border-radius: 8px;
+  color: rgba(238, 242, 236, 0.74);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-style: normal;
+  overflow-wrap: anywhere;
 }
 
 .provider-flight-check {

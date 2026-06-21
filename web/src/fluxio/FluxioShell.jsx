@@ -6473,6 +6473,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       needsLocalProof: rows.some(item => item?.localProofRequired),
     };
   }, [benchmarkRouteRows, rawRouteDecisionSummary, routeDecisionRows]);
+  const routeDecisionGuide = asRecord(snapshot.harnessLab?.routeDecisionGuide);
+  const routeDecisionDisplayRows = useMemo(() => {
+    const seen = new Set();
+    return [...routeDecisionRows, ...benchmarkRouteRows]
+      .filter(item => {
+        const id = item?.id || `${item?.harnessId}-${item?.runtimeId}-${item?.provider}-${item?.model}`;
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
+      .sort((a, b) => {
+        const order = { use: 0, watch: 1, needs_evidence: 2, avoid_for_now: 3 };
+        const aPromotion = a?.promotionStatus === "usable_now" ? 0 : 1;
+        const bPromotion = b?.promotionStatus === "usable_now" ? 0 : 1;
+        if (aPromotion !== bPromotion) return aPromotion - bPromotion;
+        return (order[a?.decision] ?? 4) - (order[b?.decision] ?? 4);
+      })
+      .slice(0, 4);
+  }, [benchmarkRouteRows, routeDecisionRows]);
   const workspaceById = useMemo(
     () => new Map(workspaces.map(item => [item.workspace_id, item])),
     [workspaces],
@@ -14213,9 +14232,31 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           ? `${routeDecisionSummary.localProofRequiredCount || 0} route candidate(s) need a local proof run before default promotion.`
                           : "Local proof is attached for the shown benchmark route candidates."}
                       </p>
+                      <div className={`benchmark-decision-guide ${toneClass(routeDecisionGuide.localProofRequired ? "warn" : routeDecisionGuide.status === "ready" ? "good" : "neutral")}`} aria-label="Benchmark route decision guide">
+                        <div className="benchmark-decision-guide-head">
+                          <div>
+                            <span>Decision guide</span>
+                            <strong>{titleizeToken(routeDecisionGuide.status || "review")}</strong>
+                          </div>
+                          <span className="mini-pill muted">
+                            {titleizeToken(routeDecisionGuide.sourceMode || "benchmark_prior")}
+                          </span>
+                        </div>
+                        <p>{routeDecisionGuide.recommendation || "Use benchmark rows as priors until local proof is attached."}</p>
+                        <div className="benchmark-decision-guide-grid">
+                          <span>Route {routeDecisionGuide.routeTier || routeDecisionSummary.highestRouteTier || "F0"}</span>
+                          <span>{titleizeToken(routeDecisionGuide.costBand || routeDecisionSummary.highestRouteCostBand || "unknown")} cost</span>
+                          <span>{titleizeToken(routeDecisionGuide.expectedWallTimeBand || routeDecisionSummary.highestRouteWallTimeBand || "unknown")} time</span>
+                          <span>{routeDecisionGuide.redTeamApplicable ? titleizeToken(routeDecisionGuide.redTeamScope || "synthetic_lab") : "normal scope"}</span>
+                        </div>
+                        <code>{routeDecisionGuide.nextAction || "python scripts/runtime_lane_proof_harness.py --run-id benchmark-decision-proof"}</code>
+                        {asList(routeDecisionGuide.proofGaps).length > 0 ? (
+                          <em>{asList(routeDecisionGuide.proofGaps).slice(0, 2).join(" · ")}</em>
+                        ) : null}
+                      </div>
                     </div>
-                    <div className="route-decision-grid" aria-label="Local route decision scorecards">
-                      {routeDecisionRows.slice(0, 3).map(item => {
+                    <div className="route-decision-grid" aria-label="Model and harness route decision scorecards">
+                      {routeDecisionDisplayRows.map(item => {
                         const decisionTone =
                           item.decision === "use"
                             ? "good"
@@ -14230,6 +14271,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             <div className="route-decision-meta">
                               <b>{item.fitLabel || "Needs proof"}</b>
                               <small>Harness: {titleizeToken(item.harnessId || "unknown_harness")}</small>
+                              <small>Source: {item.sourceLabel || titleizeToken(item.evidenceKind || "local_proof")}</small>
                             </div>
                             <strong>{runtimeLabel(item.runtimeId)} / {providerLabel(item.provider)} / {item.model}</strong>
                             <p>{item.recommendation}</p>
@@ -14237,12 +14279,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               {[
                                 item.routeTier || "local",
                                 titleizeToken(item.workClass || "route"),
+                                titleizeToken(item.evidenceKind || "local_proof"),
+                                titleizeToken(item.promotionStatus || "needs_local_proof"),
                                 item.expectedWallTimeBand ? titleizeToken(item.expectedWallTimeBand) : "",
+                                item.costBand ? `${titleizeToken(item.costBand)} cost` : "",
+                                item.contextWindowTokens ? `${Number(item.contextWindowTokens).toLocaleString()} ctx` : "",
                                 item.redTeamApplicable ? titleizeToken(item.redTeamScope || "synthetic_lab") : "",
+                                item.escalationRequired ? "Escalation" : "",
                                 item.localProofRequired ? "Local proof" : "",
                               ].filter(Boolean).join(" · ")}
                             </small>
                             {item.fitReason ? <p className="route-decision-fit">{item.fitReason}</p> : null}
+                            {asList(item.useWhen).length > 0 || asList(item.doNotUseWhen).length > 0 ? (
+                              <div className="route-decision-rules">
+                                {asList(item.useWhen)[0] ? <span>Use: {asList(item.useWhen)[0]}</span> : null}
+                                {asList(item.doNotUseWhen)[0] ? <span>Do not: {asList(item.doNotUseWhen)[0]}</span> : null}
+                              </div>
+                            ) : null}
                             <small>
                               {item.observedRuns || 0} run{(item.observedRuns || 0) === 1 ? "" : "s"} · {item.completionRate || 0}% complete · {item.routeContractProofCount || 0} route proof
                             </small>

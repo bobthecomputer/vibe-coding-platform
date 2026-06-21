@@ -2035,7 +2035,7 @@ class MissionControlTests(unittest.TestCase):
             )
             self.assertIn(
                 "Run one bounded OpenClaw proving mission",
-                fused_runtime["proofGateSummary"]["nextRecoveryActions"][0],
+                " ".join(fused_runtime["proofGateSummary"]["nextRecoveryActions"]),
             )
             self.assertFalse(
                 fused_runtime["latestLaneProof"]["safetyContract"]["liveModelCalls"]
@@ -2098,12 +2098,19 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(openai_route["sourceKind"], "local")
             self.assertTrue(openai_route["routeTier"].startswith("F"))
             self.assertIn(openai_route["costBand"], {"observed", "unknown"})
+            self.assertEqual(openai_route["evidenceKind"], "local_proof")
+            self.assertEqual(openai_route["promotionStatus"], "usable_now")
+            self.assertFalse(openai_route["decisionRecommendation"]["localProofRequired"])
             self.assertIn("outcomeScorecard", openai_route)
             self.assertEqual(openai_route["outcomeScorecard"]["totalTokens"], 449)
             self.assertEqual(openai_route["outcomeScorecard"]["wallTimeSeconds"], 143)
             self.assertEqual(openai_route["outcomeScorecard"]["retryCount"], 1)
             self.assertEqual(openai_route["outcomeScorecard"]["latestTestResult"], "passed")
             self.assertEqual(openai_route["outcomeScorecard"]["proofArtifactCount"], 3)
+            guide = snapshot["routeDecisionGuide"]
+            self.assertEqual(guide["schemaVersion"], "benchmark-route-decision-guide.v1")
+            self.assertEqual(guide["sourceMode"], "local_proof")
+            self.assertEqual(guide["primaryRouteId"], openai_route["id"])
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
 
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:

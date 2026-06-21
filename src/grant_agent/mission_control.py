@@ -6789,6 +6789,56 @@ def _benchmark_work_class(route_tier: str, safe_redteam: dict) -> str:
     return "unclassified_route"
 
 
+def _route_row_evidence_kind(row: dict) -> str:
+    if not row.get("benchmarkCandidate"):
+        return "local_proof"
+    source = str(row.get("source", "") or row.get("sourceKind", "") or "")
+    if source in {"benchmark_artifact", "redteam_artifact"}:
+        return "generated_contract_proof"
+    if source == "benchmark_fixture":
+        return "benchmark_prior"
+    return "public_prior"
+
+
+def _route_row_promotion_status(row: dict) -> str:
+    if row.get("redTeamApplicable") and row.get("redTeamScope") not in {"synthetic_lab", "authorized_private_target"}:
+        return "blocked_by_scope"
+    if row.get("proofGaps"):
+        return "blocked_by_proof_gap"
+    if row.get("localProofRequired"):
+        return "needs_local_proof"
+    if str(row.get("decision")) == "use" and _route_row_evidence_kind(row) == "local_proof":
+        return "usable_now"
+    if _route_row_evidence_kind(row) != "local_proof":
+        return "needs_local_proof"
+    return "blocked_by_proof_gap"
+
+
+def _route_row_decision_recommendation(row: dict) -> dict:
+    evidence_kind = str(row.get("evidenceKind") or _route_row_evidence_kind(row))
+    promotion_status = str(row.get("promotionStatus") or _route_row_promotion_status(row))
+    local_proof_required = promotion_status != "usable_now"
+    if promotion_status == "usable_now":
+        summary = "Usable now for similar work because local proof and route-contract evidence are present."
+    elif evidence_kind == "benchmark_prior":
+        summary = "Benchmark prior only; keep it visible but do not promote without local proof."
+    elif evidence_kind == "generated_contract_proof":
+        summary = "Generated contract proof is present, but it is not a live model benchmark result."
+    else:
+        summary = "Route needs more verifier or artifact evidence before default promotion."
+    return {
+        "evidenceKind": evidence_kind,
+        "promotionStatus": promotion_status,
+        "localProofRequired": local_proof_required,
+        "summary": summary,
+        "nextAction": (
+            "Keep recording outcome scorecards after each mission."
+            if promotion_status == "usable_now"
+            else "python scripts/runtime_lane_proof_harness.py --run-id benchmark-decision-proof"
+        ),
+    }
+
+
 def _route_tier_value(route_tier: str) -> int:
     tier = str(route_tier or "").strip().upper()
     if tier.startswith("F"):
@@ -6819,6 +6869,24 @@ def _route_decision_summary(
         for item in all_rows
         if item.get("decision") == "use" or "recommended" in str(item.get("label", "")).lower()
     ]
+    practical_rows = [
+        item
+        for item in all_rows
+        if str(item.get("promotionStatus") or _route_row_promotion_status(item)) == "usable_now"
+    ]
+    best_practical_row = sorted(
+        practical_rows,
+        key=lambda item: (
+            0 if str(item.get("decision")) == "use" else 1,
+            -int(item.get("completedRuns", 0) or 0),
+            -int(item.get("routeContractProofCount", 0) or 0),
+        ),
+    )[0] if practical_rows else {}
+    highest_hardness_is_only_prior = bool(
+        highest_tier_row
+        and _route_row_evidence_kind(highest_tier_row) != "local_proof"
+        and highest_tier_row.get("localProofRequired")
+    )
     return {
         "localCount": local_count,
         "benchmarkCount": benchmark_count,
@@ -6840,7 +6908,103 @@ def _route_decision_summary(
         "highestRouteWallTimeBand": str(highest_tier_row.get("expectedWallTimeBand", "") or "unknown"),
         "highestRouteProvider": str(highest_tier_row.get("provider", "") or ""),
         "highestRouteModel": str(highest_tier_row.get("model", "") or ""),
+        "highestHardnessTier": str(highest_tier_row.get("routeTier", "") or "F0"),
+        "highestHardnessIsOnlyPrior": highest_hardness_is_only_prior,
+        "bestPracticalRouteId": str(best_practical_row.get("id", "") or ""),
+        "bestPracticalDecision": str(best_practical_row.get("decision", "") or "needs_evidence"),
+        "bestPracticalEvidenceKind": str(best_practical_row.get("evidenceKind", "") or "none"),
+        "bestPracticalPromotionStatus": str(best_practical_row.get("promotionStatus", "") or "needs_local_proof"),
         "needsLocalProof": any(item.get("localProofRequired") for item in all_rows),
+    }
+
+
+def _route_decision_guide(
+    *,
+    route_decision_rows: list[dict],
+    route_decision_summary: dict,
+) -> dict:
+    best_practical_id = str(route_decision_summary.get("bestPracticalRouteId", "") or "")
+    if best_practical_id:
+        primary = next(
+            (item for item in route_decision_rows if item.get("id") == best_practical_id),
+            {},
+        )
+    else:
+        ranked_rows = sorted(
+            route_decision_rows,
+            key=lambda item: (
+                0 if _route_row_evidence_kind(item) == "local_proof" else 1,
+                {"use": 0, "watch": 1, "needs_evidence": 2, "avoid_for_now": 3}.get(
+                    str(item.get("decision", "")),
+                    4,
+                ),
+                0 if not item.get("localProofRequired") else 1,
+                -_route_tier_value(str(item.get("routeTier", "") or "")),
+            ),
+        )
+        primary = ranked_rows[0] if ranked_rows else {}
+    source_mode = (
+        "local_proof"
+        if primary and not primary.get("benchmarkCandidate")
+        else "benchmark_prior"
+        if primary
+        else "no_candidate"
+    )
+    route_tier = str(primary.get("routeTier") or route_decision_summary.get("highestRouteTier") or "F0")
+    redteam_scope = str(primary.get("redTeamScope") or "not_applicable")
+    local_proof_required = bool(
+        primary.get("localProofRequired")
+        or route_decision_summary.get("needsLocalProof")
+    )
+    if not primary:
+        status = "no_candidate"
+        recommendation = "No model plus harness route candidates are loaded yet."
+        next_action = "Run a Fluxio mission or runtime lane proof harness to create route evidence."
+    elif local_proof_required:
+        status = "proof_required"
+        recommendation = (
+            "Use this benchmark as a prior only; do not promote it until local proof is attached."
+        )
+        next_action = "python scripts/runtime_lane_proof_harness.py --run-id benchmark-decision-proof"
+    elif str(primary.get("decision")) == "use":
+        status = "ready"
+        recommendation = "Use this route for similar work; local completion and route proof are present."
+        next_action = "Keep recording outcome scorecards after each mission."
+    else:
+        status = "review"
+        recommendation = primary.get("recommendation") or "Review route evidence before using this lane."
+        next_action = "Run a narrow verifier or browser proof before assigning more work."
+    if primary.get("redTeamApplicable"):
+        recommendation = (
+            "Keep this candidate inside synthetic or explicitly authorized red-team scope. "
+            + recommendation
+        )
+    return {
+        "schemaVersion": "benchmark-route-decision-guide.v1",
+        "status": status,
+        "sourceMode": source_mode,
+        "primaryRouteId": primary.get("id", ""),
+        "primaryCandidateId": primary.get("candidateId", ""),
+        "provider": primary.get("provider", ""),
+        "model": primary.get("model", ""),
+        "runtimeId": primary.get("runtimeId", ""),
+        "harnessId": primary.get("harnessId", ""),
+        "routeTier": route_tier,
+        "workClass": primary.get("workClass", route_decision_summary.get("highestRouteWorkClass", "")),
+        "costBand": primary.get("costBand", route_decision_summary.get("highestRouteCostBand", "unknown")),
+        "expectedWallTimeBand": primary.get(
+            "expectedWallTimeBand",
+            route_decision_summary.get("highestRouteWallTimeBand", "unknown"),
+        ),
+        "localProofRequired": local_proof_required,
+        "proofGapCount": route_decision_summary.get("proofGapCount", 0),
+        "redTeamApplicable": bool(primary.get("redTeamApplicable")),
+        "redTeamScope": redteam_scope,
+        "recommendation": recommendation,
+        "nextAction": next_action,
+        "useWhen": primary.get("useWhen", [])[:2] if isinstance(primary.get("useWhen"), list) else [],
+        "doNotUseWhen": primary.get("doNotUseWhen", [])[:2] if isinstance(primary.get("doNotUseWhen"), list) else [],
+        "proofGaps": primary.get("proofGaps", [])[:3] if isinstance(primary.get("proofGaps"), list) else [],
     }
 
 
@@ -7169,7 +7333,7 @@ def _benchmark_route_row_from_candidate(
         recommendation = str(use_when[0]) if isinstance(use_when, list) and use_when else (
             "Benchmark candidate loaded from route scorecard metadata."
         )
-    return {
+    row = {
         "id": f"benchmark::{board.get('boardId', 'scorecard')}::{candidate_id}",
         "source": source,
         "sourceLabel": source_label,
@@ -7224,6 +7388,10 @@ def _benchmark_route_row_from_candidate(
         "localProofRequired": True,
         "proofGaps": ["Benchmark candidate needs a local proof run before default promotion."],
     }
+    row["evidenceKind"] = _route_row_evidence_kind(row)
+    row["promotionStatus"] = _route_row_promotion_status(row)
+    row["decisionRecommendation"] = _route_row_decision_recommendation(row)
+    return row
 
 
 def _load_benchmark_route_decision_rows(root: Path) -> list[dict]:
@@ -7509,6 +7677,9 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
         row["redTeamApplicable"] = False
         row["redTeamScope"] = "not_applicable"
         row["proofGaps"] = sorted(set(row["proofGaps"]))[:3]
+        row["evidenceKind"] = _route_row_evidence_kind(row)
+        row["promotionStatus"] = _route_row_promotion_status(row)
+        row["decisionRecommendation"] = _route_row_decision_recommendation(row)
         decision_rows.append(row)
 
     return sorted(
@@ -7795,16 +7966,21 @@ def build_harness_lab_snapshot(root: Path) -> dict:
             if item.get("id") not in route_row_ids
         ],
     ][:6]
+    route_decision_summary = _route_decision_summary(
+        local_route_decision_rows=local_route_decision_rows,
+        benchmark_route_rows=benchmark_route_rows,
+        route_decision_rows=route_decision_rows,
+    )
     return {
         "productionHarness": "fluxio_hybrid",
         "shadowCandidates": ["legacy_autonomous_engine"],
         "fusedRuntime": fused_runtime,
         "routeDecisionRows": route_decision_rows,
         "benchmarkRouteRows": benchmark_route_rows,
-        "routeDecisionSummary": _route_decision_summary(
-            local_route_decision_rows=local_route_decision_rows,
-            benchmark_route_rows=benchmark_route_rows,
+        "routeDecisionSummary": route_decision_summary,
+        "routeDecisionGuide": _route_decision_guide(
             route_decision_rows=route_decision_rows,
+            route_decision_summary=route_decision_summary,
         ),
         "recentRuns": recent_runs,
         "harnessCounts": harness_counts,

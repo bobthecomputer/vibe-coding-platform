@@ -165,7 +165,11 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "routeDecisionRows" in source
     assert "benchmarkRouteRows" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
     assert "_route_decision_summary" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
-    assert "Local route decision scorecards" in source
+    assert "Model and harness route decision scorecards" in source
+    assert "routeDecisionGuide" in source
+    assert "routeDecisionDisplayRows" in source
+    assert "Benchmark route decision guide" in source
+    assert "Decision guide" in source
     assert "Harness benchmark board" in source
     assert "benchmark-route-board" in source
     assert "Provider update flight check" in source
@@ -174,13 +178,25 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "Source gate" in source
     assert "Default changes blocked" in source
     assert "provider-flight-check" in (ROOT / "scripts" / "provider_flight_visual_smoke.py").read_text(encoding="utf-8")
+    benchmark_smoke = (ROOT / "scripts" / "benchmark_board_visual_smoke.py").read_text(encoding="utf-8")
+    assert "benchmark-route-board" in benchmark_smoke
+    assert "DECISION GUIDE" in benchmark_smoke
+    assert "FLUXIO_BENCHMARK_BOARD_OUT_DIR" in benchmark_smoke
     assert "routeDecisionSummary" in source
     assert "highestRouteTier" in source
+    assert "highestHardnessTier" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
+    assert "bestPracticalRouteId" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
     assert "highestRouteWorkClass" in source
     assert "localProofRequiredCount" in source
     assert "needsLocalProof" in source
     assert "route-decision-card" in source
     assert "route-decision-meta" in source
+    assert "route-decision-rules" in source
+    assert "Source:" in source
+    assert "Use:" in source
+    assert "Do not:" in source
+    assert "promotionStatus" in source
+    assert "evidenceKind" in source
     assert "route-outcome-scorecard" in source
     assert "outcomeScorecard" in source
     assert "Harness:" in source
@@ -189,12 +205,19 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert ".route-outcome-scorecard" in styles
     assert ".benchmark-route-board" in styles
     assert ".benchmark-route-grid" in styles
+    assert ".benchmark-decision-guide" in styles
+    assert ".route-decision-rules" in styles
     assert ".provider-flight-check" in styles
     assert ".provider-flight-grid" in styles
     assert ".provider-source-verification-gate" in styles
     assert ".provider-source-gate-grid" in styles
     assert "harnessId" in fixtures
     assert "routeDecisionSummary" in fixtures
+    assert "routeDecisionGuide" in fixtures
+    assert "benchmark-route-decision-guide.v1" in fixtures
+    assert "benchmark_prior" in fixtures
+    assert "usable_now" in fixtures
+    assert "bestPracticalRouteId" in fixtures
     assert "sourceFreshness" in fixtures
     assert "sourceVerificationGate" in fixtures
     assert "provider-source-verification-gate.v1" in fixtures

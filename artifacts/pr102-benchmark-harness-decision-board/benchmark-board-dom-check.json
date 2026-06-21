@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-06-21T10:35:57.405640+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&proofReload=pr102-benchmark-board-dom",
+  "locationHref": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&proofReload=pr102-benchmark-board-dom",
+  "gitHead": "66e8690d4aaa4be0e4ba319299939cd04344a6dd",
+  "viewport": {
+    "width": 1440,
+    "height": 1400
+  },
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr102-benchmark-harness-decision-board\\benchmark-board-dom.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr102-benchmark-harness-decision-board\\benchmark-board-dom.html",
+  "expectedFragments": [
+    "Harness benchmark board",
+    "Decision guide",
+    "Model and harness route decision scorecards",
+    "Source:",
+    "Local proof"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "proofSelectors": {
+    "fluxioBuilderRoot": true,
+    "visualProofPacket": true,
+    "visualProofReadiness": true,
+    "visualProofMapCanvas": true,
+    "visualProofReceipts": true,
+    "currentAppProof": true
+  },
+  "placeholderFramePaths": [],
+  "image": {
+    "width": 1440,
+    "height": 1400,
+    "sampleCount": 8460,
+    "uniqueSampleColors": 735,
+    "averageLuma": 33.88,
+    "nonBlank": true
+  },
+  "passed": true
+}

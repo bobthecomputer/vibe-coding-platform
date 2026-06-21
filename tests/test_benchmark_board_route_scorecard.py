@@ -117,9 +117,24 @@ def test_harness_lab_uses_fixture_benchmark_candidates_when_local_runs_are_missi
     }
     assert snapshot["routeDecisionSummary"]["highestRouteCostBand"] in {"low", "balanced", "high", "unknown"}
     assert snapshot["routeDecisionSummary"]["needsLocalProof"] is True
+    assert snapshot["routeDecisionSummary"]["highestHardnessTier"].startswith("F")
+    assert snapshot["routeDecisionSummary"]["highestHardnessIsOnlyPrior"] is True
+    assert snapshot["routeDecisionSummary"]["bestPracticalDecision"] in {"needs_evidence", "use", "watch"}
+    assert snapshot["routeDecisionSummary"]["bestPracticalEvidenceKind"] in {"none", "local_proof"}
+    assert snapshot["routeDecisionSummary"]["bestPracticalPromotionStatus"] in {
+        "needs_local_proof",
+        "blocked_by_proof_gap",
+        "usable_now",
+    }
+    assert snapshot["routeDecisionGuide"]["schemaVersion"] == "benchmark-route-decision-guide.v1"
+    assert snapshot["routeDecisionGuide"]["sourceMode"] in {"benchmark_prior", "local_proof", "no_candidate"}
+    assert snapshot["routeDecisionGuide"]["nextAction"]
     assert rows
     assert benchmark_rows
     assert rows[0]["benchmarkCandidate"] is True
+    assert rows[0]["evidenceKind"] == "benchmark_prior"
+    assert rows[0]["promotionStatus"] in {"blocked_by_proof_gap", "needs_local_proof"}
+    assert rows[0]["decisionRecommendation"]["localProofRequired"] is True
     assert rows[0]["sourceLabel"] == "JBHEAVEN benchmark fixture"
     assert rows[0]["provider"] != rows[0]["runtimeId"]
     assert rows[0]["outcomeScorecard"]["latestTestResult"] == "benchmark"
@@ -162,6 +177,8 @@ def test_harness_lab_loads_generated_runtime_lane_scorecard_artifacts() -> None:
     assert artifact_rows
     assert artifact_rows[0]["benchmarkBoardId"] == "runtime-lane-proof-test-artifact"
     assert artifact_rows[0]["candidateId"] == "artifact-openclaw-candidate"
+    assert artifact_rows[0]["evidenceKind"] == "generated_contract_proof"
+    assert artifact_rows[0]["promotionStatus"] in {"blocked_by_proof_gap", "needs_local_proof"}
     assert artifact_rows[0]["sourceLabel"] == "Generated benchmark artifact"
     assert artifact_rows[0]["useWhen"]
     assert artifact_rows[0]["doNotUseWhen"]
