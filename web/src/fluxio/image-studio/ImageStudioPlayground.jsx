@@ -414,6 +414,104 @@ function ProviderRunResult({ result, error }) {
   );
 }
 
+function buildOperationTimeline({ draft, draftValidation, routeAvailability, runState, project }) {
+  const result = runState?.result || {};
+  const hasResult = Boolean(result && Object.keys(result).length > 0);
+  const runStatus = runState?.status || "idle";
+  const hasBlockingRun = Boolean(runState?.error) || runStatus === "blocked" || runStatus === "error";
+  const hasArtifact = Boolean(
+    result.outputArtifactPath ||
+      result.imagePath ||
+      result.previewUrl ||
+      result.artifactId ||
+      result.receipt?.artifactSha256 ||
+      project?.history?.some(item => item.requestId === (result.requestId || draft?.id)),
+  );
+  const hasLayer = Boolean(result.layer || project?.layers?.some(layer => layer.id === result.layer?.id));
+  return [
+    {
+      id: "draft",
+      label: "Draft prepared",
+      status: draft
+        ? draftValidation?.ok
+          ? "complete"
+          : "blocked"
+        : "waiting",
+      detail: draft
+        ? draftValidation?.ok
+          ? `${draft.operation || "edit"} payload ${draft.id || "prepared"}`
+          : draftValidation?.issues?.join("; ") || "Draft needs review."
+        : "Prepare a request draft before claiming provider readiness.",
+    },
+    {
+      id: "route",
+      label: "Provider route",
+      status: routeAvailability?.readyForRealRun ? "complete" : hasBlockingRun ? "blocked" : "waiting",
+      detail: routeAvailability?.readyForRealRun
+        ? `${routeAvailability.model} can run when confirmed.`
+        : routeAvailability?.blockedReason || routeAvailability?.proofLimit || "Provider route needs capability proof.",
+    },
+    {
+      id: "receipt",
+      label: "Provider receipt",
+      status:
+        runStatus === "running"
+          ? "active"
+          : hasResult && !hasBlockingRun && result.providerStatus !== "blocked"
+            ? "complete"
+            : hasBlockingRun
+              ? "blocked"
+              : "waiting",
+      detail:
+        runStatus === "running"
+          ? "Waiting for backend receipt."
+          : runState?.error || result.receipt?.promptHash || "No provider receipt has been returned yet.",
+    },
+    {
+      id: "artifact",
+      label: "Artifact written",
+      status: hasArtifact ? "complete" : hasBlockingRun ? "blocked" : "waiting",
+      detail: hasArtifact
+        ? result.outputArtifactPath || result.imagePath || result.previewUrl || result.artifactId || "Artifact is recorded in history."
+        : "Requires provider output manifest, image path, and hash.",
+    },
+    {
+      id: "layer",
+      label: "Layer handoff",
+      status: hasLayer ? "complete" : hasArtifact ? "waiting" : hasBlockingRun ? "blocked" : "waiting",
+      detail: hasLayer ? "Generated layer was attached to the canvas model." : "Attach the generated artifact as a reviewable layer.",
+    },
+  ];
+}
+
+function OperationTimeline({ timeline }) {
+  if (!Array.isArray(timeline) || timeline.length === 0) return null;
+  const completeCount = timeline.filter(item => item.status === "complete").length;
+  return (
+    <section className="image-studio-operation-timeline" aria-label="Image operation timeline">
+      <div className="image-studio-operation-timeline-head">
+        <div>
+          <span>Operation timeline</span>
+          <strong>{completeCount}/{timeline.length} complete</strong>
+        </div>
+        <b>{timeline.some(item => item.status === "blocked") ? "Blocked honestly" : "Ready for proof"}</b>
+      </div>
+      <ol>
+        {timeline.map((item, index) => (
+          <li className={`is-${item.status}`} key={item.id} style={{ "--image-studio-timeline-index": index }}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <strong>{item.label}</strong>
+              <p>{item.detail}</p>
+            </div>
+            <em>{item.status.replace(/_/g, " ")}</em>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function ProofReviewSummary({ review }) {
   if (!review) return null;
   return (
@@ -607,6 +705,10 @@ export function ImageStudioPlayground({
   );
   const routeAvailability = proofReview.imageGenerationRouteStatus;
   const chromaProof = proofReview.chromaKey;
+  const operationTimeline = useMemo(
+    () => buildOperationTimeline({ draft, draftValidation, routeAvailability, runState, project }),
+    [draft, draftValidation, routeAvailability, runState, project],
+  );
   const servedGeneratedArtifacts = Array.isArray(generatedArtifacts) ? generatedArtifacts : [];
   const matteSources = useMemo(() => {
     const referenceSources = (session.referenceAssets || [])
@@ -1331,6 +1433,7 @@ export function ImageStudioPlayground({
           </button>
         </div>
         <ProviderRunResult result={runState.result} error={runState.error} />
+        <OperationTimeline timeline={operationTimeline} />
         <ProofReviewSummary review={proofReview} />
         <div className="image-studio-route-proof-note">
           <strong>{proofReview.imageGenerationRouteStatus.model}</strong>

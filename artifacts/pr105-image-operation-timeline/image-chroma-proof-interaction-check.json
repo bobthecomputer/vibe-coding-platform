@@ -1,0 +1,68 @@
+{
+  "checkedAt": "2026-06-21T10:59:36.945506+00:00",
+  "url": "http://127.0.0.1:1424/control?preview-control=1&surface=images&fixture=live_review&mode=builder",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "clicked": {
+    "clicked": true,
+    "text": "Preview matte"
+  },
+  "drafted": {
+    "clicked": true,
+    "text": "Prepare request draft"
+  },
+  "timelineView": {
+    "scrolled": true,
+    "text": "OPERATION TIMELINE\n1/5 complete\nReady for proof\n01\nDraft prepared\n\ngenerate payload image-request-mqnocp86-qi2t4u\n\nCOMPLETE\n02\nProvider route\n\nThis local surface can prepare and validate a request draft, but it has not completed a provider image run.\n\nWAITING\n03\nProvider receipt\n\nNo provider receipt has been returned yet.\n\nWAITING\n04\nArtifact written\n\nRequires provider output manifest, image path, and hash.\n\nWAITING\n05\nLayer handoff\n\nAttach the generated artifact as a reviewable layer.\n\nWAITING",
+    "rect": {
+      "x": 335,
+      "y": 377.125,
+      "width": 1034,
+      "height": 380.6875,
+      "top": 377.125,
+      "right": 1369,
+      "bottom": 757.8125,
+      "left": 335
+    }
+  },
+  "selected": {
+    "selected": true,
+    "label": "Synthetic green-screen sample",
+    "value": "synthetic:green-screen-sample"
+  },
+  "before": {
+    "hasShell": true,
+    "hasStudio": true,
+    "hasBreakdown": true,
+    "breakdownSteps": 6,
+    "hasDiagnostics": true,
+    "hasLocalProof": false,
+    "hasOperationTimeline": true,
+    "timelineSteps": 5,
+    "timelineText": "OPERATION TIMELINE\n0/5 complete\nReady for proof\n01\nDraft prepared\n\nPrepare a request draft before claiming provider readiness.\n\nWAITING\n02\nProvider route\n\nThis local surface can prepare and validate a request draft, but it has not completed a provider image run.\n\nWAITING\n03\nProvider receipt\n\nNo provider receipt has been returned yet.\n\nWAITING\n04\nArtifact written\n\nRequires provider output manifest, image path, and hash.\n\nWAITING\n05\nLayer handoff\n\nAttach the generated artifact as a reviewable layer.\n\nWAITING",
+    "runButtonText": "Run provider image",
+    "runButtonDisabled": true,
+    "proofImages": 0,
+    "proofSource": "synthetic:green-screen-sample",
+    "text": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\n+\nFile\nEdit\nView\nWindow\nHelp\nStabilize skill studio management\nSyntelos Workspace\nCopy workspace ID\nCopy mission ID\nAgent\nBuilder\nWEB\nBrowser shell\nLOCAL\nRead-only preview\nMOUSE\nDesktop \u00b7 100%\nOpen panel\nBUILDER FOCUS\n3 active conversations\nOpen proof\n\u25ce\nAgent\n\u2318\nBuilder\n\u2726\nSkills\n\u25c7\nRuntime\n\u25a7\nImages\n\u25c9\nVoice\n\u25eb\nProfiles\n\nQUICK CONTROLS\n\n\u26e8\nAccess\nread-only\n\nRead-only preview\n\nFixture mode keeps actions read-only.\n\nCopy\n\u2302\nLocal\nvibe-coding-platform\n\nSyntelos Workspace\n\nC:/Users/paul/Projects/vibe-coding-platform\n\nCopy\n\u25a4\nFolders\n1 root\n\nweb\n\nC:/Users/paul/Projects/vibe-coding-platform/web\n\nCopy\n\u2442\nBranch\nmain\n\nGit branch controls\n\ntracking origin/main \u00b7 2 staged \u00b7 1 unstaged \u00b7 0 untracked\n\nCopy\nInspect branch\nPush\n\nBOARD\n\nLaunch\nACTIVE CONVERSATIONS\n3\n\nVisible in the control board\n\nNEED ATTENTION\n2\n\nApprovals, queue, or verification boundaries are open\n\nDELEGATED LANES\n2\n\nHermes/OpenClaw sessions in flight\n\nROOTS\n\n\u25a3\nSyntelos Workspace\nvibe-coding-platform\n\nConversation root\n\nC:/Users/paul/Projects/vibe-coding-platform\n\nCopy\n3\nTHREADS\n2\nBLOCKED\n2\nLANES\n\nNEXUSES\n\nOpen\nPLAN NEXUS\nStabilize skill studio management\n\nInspect installed skills, sort by quality, and queue improvements.\n\nweb\nOPERATOR NEXUS\nMap bridge context and app follow-up surfaces\n\nThis thread is queued behind the main workbench mission and is waiting for workspace access.\n\ndesktop-ui\nAPPROVAL NEXUS\nRedesign delegated approval workbench\n\nApprove delegated deploy simulation?\n\nlive-review\n\nBRIDGE\n\nInspect\nRUNTIME AND NAS BRIDGES\n1 live bridge\n\nOratioViva, Synology Fast Sync, and Cloud Drive are the active reference integrations. Solantir remains in manifest-only follow-on review.\n\n0\nCALLBACKS\n4\nAPPS\n2\nMOBILE\n3\nFUSION\n\u2699\nSettings\n\nIMAGE STUDIO\n\nProvider-ready image playground\n\nCompose prompts, reference assets, mask geometry, route metadata, and proof records before a real provider run.\n\nO",
+    "url": "http://127.0.0.1:1424/control?preview-control=1&surface=images&fixture=live_review&mode=builder"
+  },
+  "after": {
+    "hasShell": true,
+    "hasStudio": true,
+    "hasBreakdown": true,
+    "breakdownSteps": 6,
+    "hasDiagnostics": true,
+    "hasLocalProof": true,
+    "hasOperationTimeline": true,
+    "timelineSteps": 5,
+    "timelineText": "OPERATION TIMELINE\n1/5 complete\nReady for proof\n01\nDraft prepared\n\ngenerate payload image-request-mqnocp86-qi2t4u\n\nCOMPLETE\n02\nProvider route\n\nThis local surface can prepare and validate a request draft, but it has not completed a provider image run.\n\nWAITING\n03\nProvider receipt\n\nNo provider receipt has been returned yet.\n\nWAITING\n04\nArtifact written\n\nRequires provider output manifest, image path, and hash.\n\nWAITING\n05\nLayer handoff\n\nAttach the generated artifact as a reviewable layer.\n\nWAITING",
+    "runButtonText": "Run provider image",
+    "runButtonDisabled": true,
+    "proofImages": 2,
+    "proofSource": "synthetic:green-screen-sample",
+    "text": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\n+\nFile\nEdit\nView\nWindow\nHelp\nStabilize skill studio management\nSyntelos Workspace\nCopy workspace ID\nCopy mission ID\nAgent\nBuilder\nWEB\nBrowser shell\nLOCAL\nRead-only preview\nMOUSE\nDesktop \u00b7 100%\nOpen panel\nBUILDER FOCUS\n3 active conversations\nOpen proof\n\u25ce\nAgent\n\u2318\nBuilder\n\u2726\nSkills\n\u25c7\nRuntime\n\u25a7\nImages\n\u25c9\nVoice\n\u25eb\nProfiles\n\nQUICK CONTROLS\n\n\u26e8\nAccess\nread-only\n\nRead-only preview\n\nFixture mode keeps actions read-only.\n\nCopy\n\u2302\nLocal\nvibe-coding-platform\n\nSyntelos Workspace\n\nC:/Users/paul/Projects/vibe-coding-platform\n\nCopy\n\u25a4\nFolders\n1 root\n\nweb\n\nC:/Users/paul/Projects/vibe-coding-platform/web\n\nCopy\n\u2442\nBranch\nmain\n\nGit branch controls\n\ntracking origin/main \u00b7 2 staged \u00b7 1 unstaged \u00b7 0 untracked\n\nCopy\nInspect branch\nPush\n\nBOARD\n\nLaunch\nACTIVE CONVERSATIONS\n3\n\nVisible in the control board\n\nNEED ATTENTION\n2\n\nApprovals, queue, or verification boundaries are open\n\nDELEGATED LANES\n2\n\nHermes/OpenClaw sessions in flight\n\nROOTS\n\n\u25a3\nSyntelos Workspace\nvibe-coding-platform\n\nConversation root\n\nC:/Users/paul/Projects/vibe-coding-platform\n\nCopy\n3\nTHREADS\n2\nBLOCKED\n2\nLANES\n\nNEXUSES\n\nOpen\nPLAN NEXUS\nStabilize skill studio management\n\nInspect installed skills, sort by quality, and queue improvements.\n\nweb\nOPERATOR NEXUS\nMap bridge context and app follow-up surfaces\n\nThis thread is queued behind the main workbench mission and is waiting for workspace access.\n\ndesktop-ui\nAPPROVAL NEXUS\nRedesign delegated approval workbench\n\nApprove delegated deploy simulation?\n\nlive-review\n\nBRIDGE\n\nInspect\nRUNTIME AND NAS BRIDGES\n1 live bridge\n\nOratioViva, Synology Fast Sync, and Cloud Drive are the active reference integrations. Solantir remains in manifest-only follow-on review.\n\n0\nCALLBACKS\n4\nAPPS\n2\nMOBILE\n3\nFUSION\n\u2699\nSettings\n\nIMAGE STUDIO\n\nProvider-ready image playground\n\nCompose prompts, reference assets, mask geometry, route metadata, and proof records before a real provider run.\n\nO",
+    "url": "http://127.0.0.1:1424/control?preview-control=1&surface=images&fixture=live_review&mode=builder"
+  },
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr105-image-operation-timeline\\image-chroma-proof-interaction.png",
+  "passed": true
+}
