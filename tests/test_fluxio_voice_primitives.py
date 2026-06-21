@@ -73,6 +73,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             const approval = parseVoiceCommand('approve request', { confidence: 0.96 });
             const unknown = parseVoiceCommand('open nebula', { confidence: 0.96 });
             const send = parseVoiceCommand('send message', { confidence: 0.96 });
+            const clear = parseVoiceCommand('clear transcript', { confidence: 0.96 });
             const guarded = buildAccidentalSendGuard({
               command: send,
               transcript: {
@@ -85,7 +86,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               command: send,
               transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [] },
             });
-            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, guarded, confirmationGuard }));
+            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, send, clear, guarded, confirmationGuard }));
             """
         )
 
@@ -97,6 +98,8 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertTrue(payload["approval"]["requiresConfirmation"])
         self.assertEqual(payload["approval"]["parameters"]["decision"], "approved")
         self.assertEqual(payload["unknown"]["blockedReason"], "unknown_surface")
+        self.assertEqual(payload["clear"]["action"], "voice.clearTranscript")
+        self.assertTrue(payload["clear"]["requiresConfirmation"])
         self.assertEqual(payload["guarded"]["status"], "review_required")
         self.assertEqual(payload["guarded"]["reason"], "transcript_quality")
         self.assertEqual(payload["confirmationGuard"]["status"], "confirmation_required")

@@ -410,6 +410,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("onStop", voice_controller)
         self.assertIn("capture.stopped", voice_controller)
         self.assertIn("captureLifecycle", voice_controller)
+        self.assertIn('state.pendingCommand.action === "voice.clearTranscript"', voice_controller)
+        self.assertIn('reason: "voice_command"', voice_controller)
         self.assertIn("replaceTranscriptSegment", voice_controller)
         self.assertIn("createBrowserSpeechAdapter", voice_adapters)
         self.assertIn("createBridgeSpeechAdapter", voice_adapters)

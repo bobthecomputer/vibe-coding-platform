@@ -358,6 +358,11 @@ export function useVoiceInteractionController({
     if (!state.pendingCommand) {
       return null;
     }
+    if (state.pendingCommand.action === "voice.clearTranscript") {
+      await onVoiceCommand?.(state.pendingCommand);
+      dispatch({ type: "transcript.clear", reason: "voice_command" });
+      return state.pendingCommand;
+    }
     await onVoiceCommand?.(state.pendingCommand);
     dispatch({
       type: "command.complete",
