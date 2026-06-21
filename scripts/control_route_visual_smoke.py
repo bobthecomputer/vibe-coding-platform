@@ -179,6 +179,10 @@ def main() -> int:
     if dom_supported:
         if 'class="fluxio-shell' not in dom_text:
             skin_errors.append("missing .fluxio-shell current app root")
+        if 'class="fluxio-error-screen' in dom_text:
+            skin_errors.append("rendered Fluxio recoverable error screen")
+        if "Fluxio hit a render failure" in dom_text:
+            skin_errors.append("rendered Fluxio render failure message")
         if 'class="fluxos-shell' in dom_text:
             skin_errors.append("rendered removed .fluxos-shell reference skin")
         if 'class="grand-public-page' in dom_text:

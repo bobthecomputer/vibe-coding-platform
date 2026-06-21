@@ -157,6 +157,8 @@ class DesktopUiContractTests(unittest.TestCase):
             self.assertIn("fluxio-shell", source)
             self.assertIn("fluxos-shell", source)
             self.assertIn("grand-public-page", source)
+        self.assertIn("fluxio-error-screen", visual)
+        self.assertIn("Fluxio hit a render failure", visual)
 
     def test_slash_panel_surfaces_comments_skills_and_cleanup_command(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
