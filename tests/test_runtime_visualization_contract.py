@@ -175,6 +175,7 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     source = SHELL.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
     fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
+    provider_panel = (ROOT / "web" / "src" / "fluxio" / "provider" / "ProviderEcosystemPanel.jsx").read_text(encoding="utf-8")
 
     assert "routeDecisionRows" in source
     assert "benchmarkRouteRows" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
@@ -188,6 +189,11 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "benchmark-route-board" in source
     assert "Provider update flight check" in source
     assert "provider-flight-check" in source
+    assert "Provider route decision matrix" in provider_panel
+    assert "provider-route-decision-matrix" in provider_panel
+    assert "providerRouteDecision" in provider_panel
+    assert "Source-backed model capability catalog" in provider_panel
+    assert "provider-model-catalog" in provider_panel
     assert "Open provider ecosystem" in source
     assert "Source gate" in source
     assert "Default changes blocked" in source
@@ -225,6 +231,11 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert ".provider-flight-grid" in styles
     assert ".provider-source-verification-gate" in styles
     assert ".provider-source-gate-grid" in styles
+    assert ".provider-route-decision-matrix" in styles
+    assert ".provider-route-decision-card" in styles
+    assert ".provider-model-catalog" in styles
+    assert ".provider-model-catalog-policy" in styles
+    assert ".provider-model-catalog-card" in styles
     assert "harnessId" in fixtures
     assert "routeDecisionSummary" in fixtures
     assert "routeDecisionGuide" in fixtures
@@ -238,6 +249,9 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "https://ai-gateway.vercel.sh/v1/models" in fixtures
     assert "routeExposure" in fixtures
     assert "routeSmokeStatus" in fixtures
+    assert "routeDecision" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
+    assert "provider-route-decision.v1" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
+    assert "PROVIDER_MODEL_CATALOG" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
     assert "provider-catalog-refresh/v1" in fixtures
     assert "Benchmark F7" in fixtures
     assert "MiniMax-M3" in fixtures

@@ -116,11 +116,20 @@ PROVIDER_ENV_HINTS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
     "minimax": "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_API_KEY",
     "minimax-portal": "MINIMAX_OAUTH_TOKEN",
+    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
 }
 PROVIDER_ECOSYSTEM_SOURCES = [
+    {
+        "sourceId": "openai_models",
+        "label": "OpenAI model catalog",
+        "url": "https://developers.openai.com/api/docs/models",
+        "verifiedAt": "2026-06-21",
+        "signal": "OpenAI lists GPT-5.5 for complex reasoning/coding and GPT-5.4 mini for lower-cost work.",
+    },
     {
         "sourceId": "opencode_models",
         "label": "OpenCode models",
@@ -199,6 +208,16 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "supports": ["multi-provider", "fallback", "benchmarking"],
     },
     {
+        "providerId": "deepseek",
+        "label": "DeepSeek",
+        "status": "credential_ready",
+        "routeRole": "low_cost_model_route",
+        "authPath": "DeepSeek API key or AI Gateway key",
+        "sourceId": "vercel_ai_gateway_models",
+        "updateSource": "AI Gateway model catalog and OpenCode provider registry",
+        "supports": ["chat", "coding", "tool-use", "cheap-probes", "red-team-lab"],
+    },
+    {
         "providerId": "google",
         "label": "Google Gemini / Vertex",
         "status": "planned_adapter",
@@ -237,6 +256,120 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "sourceId": "litellm_providers",
         "updateSource": "LiteLLM provider docs",
         "supports": ["many-providers", "speech", "image", "fallback"],
+    },
+]
+PROVIDER_MODEL_CATALOG = [
+    {
+        "providerId": "openai",
+        "modelId": "gpt-5.5",
+        "displayName": "GPT-5.5",
+        "contextWindowTokens": 1_000_000,
+        "costBand": "premium",
+        "speedBand": "fast",
+        "toolUse": "supported",
+        "vision": True,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "openai_models",
+        "reviewStatus": "current_frontier",
+    },
+    {
+        "providerId": "openai",
+        "modelId": "gpt-5.4",
+        "displayName": "GPT-5.4",
+        "contextWindowTokens": 1_000_000,
+        "costBand": "premium",
+        "speedBand": "fast",
+        "toolUse": "supported",
+        "vision": True,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "openai_models",
+        "reviewStatus": "current_reviewed",
+    },
+    {
+        "providerId": "openai",
+        "modelId": "gpt-5.4-mini",
+        "displayName": "GPT-5.4 mini",
+        "contextWindowTokens": 400_000,
+        "costBand": "efficient",
+        "speedBand": "faster",
+        "toolUse": "supported",
+        "vision": True,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "openai_models",
+        "reviewStatus": "current_efficient",
+    },
+    {
+        "providerId": "openai",
+        "modelId": "gpt-5.3-codex",
+        "displayName": "GPT-5.3 Codex",
+        "contextWindowTokens": 400_000,
+        "costBand": "efficient",
+        "speedBand": "fast",
+        "toolUse": "supported",
+        "vision": False,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "openai_models",
+        "reviewStatus": "codex_api_route",
+    },
+    {
+        "providerId": "deepseek",
+        "modelId": "deepseek/deepseek-v4-flash",
+        "displayName": "DeepSeek V4 Flash",
+        "contextWindowTokens": 1_000_000,
+        "costBand": "low",
+        "speedBand": "fast",
+        "toolUse": "supported",
+        "vision": False,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "vercel_ai_gateway_models",
+        "reviewStatus": "low_cost_redteam_candidate",
+    },
+    {
+        "providerId": "minimax",
+        "modelId": "MiniMax-M3",
+        "displayName": "MiniMax M3",
+        "contextWindowTokens": None,
+        "costBand": "low",
+        "speedBand": "fast",
+        "toolUse": "supported",
+        "vision": False,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "openclaw_model_providers",
+        "reviewStatus": "bounded_route",
+    },
+    {
+        "providerId": "local",
+        "modelId": "local/default",
+        "displayName": "Local default",
+        "contextWindowTokens": None,
+        "costBand": "low",
+        "speedBand": "varies",
+        "toolUse": "planned",
+        "vision": False,
+        "image": False,
+        "localPrivate": True,
+        "sourceId": "crush_local_models",
+        "reviewStatus": "adapter_planned",
+    },
+    {
+        "providerId": "vercel-ai-gateway",
+        "modelId": "gateway/reviewed-model",
+        "displayName": "Gateway reviewed model",
+        "contextWindowTokens": None,
+        "costBand": "unknown",
+        "speedBand": "unknown",
+        "toolUse": "unknown",
+        "vision": False,
+        "image": False,
+        "localPrivate": False,
+        "sourceId": "vercel_ai_gateway_models",
+        "reviewStatus": "catalog_only",
     },
 ]
 
@@ -391,14 +524,14 @@ def _provider_model_capabilities(row: dict) -> dict:
     planned = str(row.get("status", "")).startswith("planned")
     return {
         "chat": "chat" in supports or "multi-provider" in supports or "many-providers" in supports,
-        "coding": "coding" in supports or "benchmarking" in supports or provider_id in {"openai", "minimax", "anthropic"},
-        "toolUse": "supported" if provider_id in {"openai", "anthropic", "minimax"} else "planned" if planned else "unknown",
+        "coding": "coding" in supports or "benchmarking" in supports or provider_id in {"openai", "minimax", "anthropic", "deepseek"},
+        "toolUse": "supported" if provider_id in {"openai", "anthropic", "minimax", "deepseek"} else "planned" if planned else "unknown",
         "vision": "vision" in supports or "image" in supports,
         "image": "image" in supports or "image-route-check" in supports,
         "localPrivate": provider_id == "local",
         "contextWindowTokens": None,
-        "costBand": "low" if provider_id in {"minimax", "local"} else "balanced" if provider_id in {"openai", "anthropic"} else "unknown",
-        "speedBand": "fast" if provider_id in {"minimax", "local"} else "balanced" if provider_id in {"openai", "anthropic"} else "unknown",
+        "costBand": "low" if provider_id in {"minimax", "local", "deepseek"} else "balanced" if provider_id in {"openai", "anthropic"} else "unknown",
+        "speedBand": "fast" if provider_id in {"minimax", "local", "deepseek"} else "balanced" if provider_id in {"openai", "anthropic"} else "unknown",
     }
 
 
@@ -414,6 +547,32 @@ def _provider_capability_chips(capabilities: dict) -> list[str]:
         f"speed {capabilities.get('speedBand')}" if capabilities.get("speedBand") else "",
     ]
     return [chip for chip in chips if chip][:8]
+
+
+def _provider_model_catalog_rows(
+    *,
+    sources_by_id: dict[str, dict],
+    route_ready_provider_ids: set[str],
+) -> list[dict]:
+    rows: list[dict] = []
+    for item in PROVIDER_MODEL_CATALOG:
+        source = sources_by_id.get(str(item.get("sourceId", "")).strip(), {})
+        rows.append(
+            {
+                **item,
+                "sourceFreshness": {
+                    "sourceId": item.get("sourceId", ""),
+                    "status": source.get("freshnessStatus", "review"),
+                    "verifiedAt": source.get("verifiedAt", ""),
+                    "reviewOnly": bool(source.get("reviewOnly", True)),
+                },
+                "routeReady": item.get("providerId") in route_ready_provider_ids,
+                "defaultChangeAllowed": False,
+                "requiresApproval": True,
+                "metadataUse": "review_only",
+            }
+        )
+    return rows
 
 
 def _provider_health_check(
@@ -470,6 +629,78 @@ def _provider_health_check(
         "evidence": evidence,
         "safeNextStep": safe_next_step,
         "warnings": compatibility_warnings,
+    }
+
+
+def _provider_route_decision(
+    row: dict,
+    *,
+    route_exposure: dict,
+    health_check: dict,
+    model_capabilities: dict,
+    auth_present: bool,
+    credential_ready: bool,
+    can_route_now: bool,
+) -> dict:
+    provider_id = str(row.get("providerId", "")).strip().lower()
+    status = str(row.get("status", "")).strip().lower()
+    health_status = str(health_check.get("status", "")).strip().lower()
+    if can_route_now:
+        decision = "ready_controlled_route"
+        label = "Ready after smoke proof"
+        tone = "good"
+        reason = "Credentials, route observation, and provider metadata are present."
+    elif credential_ready:
+        decision = "route_smoke_required"
+        label = "Smoke proof required"
+        tone = "warn"
+        reason = "Credentials are present, but the route still needs a cheap smoke check."
+    elif status in {"repo_supported", "credential_ready"} and not auth_present:
+        decision = "auth_required"
+        label = "Auth required"
+        tone = "warn"
+        reason = "The repo knows this provider route, but credentials are not configured."
+    elif route_exposure.get("level") == "catalog_source_only":
+        decision = "catalog_only"
+        label = "Catalog only"
+        tone = "neutral"
+        reason = "This provider currently informs catalog metadata and cannot route work yet."
+    elif health_status == "runtime_missing":
+        decision = "runtime_required"
+        label = "Runtime required"
+        tone = "warn"
+        reason = "A required Hermes/OpenClaw runtime lane is missing before this route can be used."
+    elif status.startswith("planned"):
+        decision = "adapter_planned"
+        label = "Adapter planned"
+        tone = "neutral"
+        reason = "Adapter work is tracked, but no live provider route is implemented yet."
+    else:
+        decision = "review_required"
+        label = "Review required"
+        tone = "warn"
+        reason = "Provider routing needs manual review before it can be selected."
+    capability_summary = [
+        "chat" if model_capabilities.get("chat") else "",
+        "coding" if model_capabilities.get("coding") else "",
+        "vision" if model_capabilities.get("vision") else "",
+        "image" if model_capabilities.get("image") else "",
+        f"tools {model_capabilities.get('toolUse')}" if model_capabilities.get("toolUse") else "",
+        f"cost {model_capabilities.get('costBand')}" if model_capabilities.get("costBand") else "",
+        f"speed {model_capabilities.get('speedBand')}" if model_capabilities.get("speedBand") else "",
+    ]
+    return {
+        "schemaVersion": "provider-route-decision.v1",
+        "decision": decision,
+        "label": label,
+        "tone": tone,
+        "reason": reason,
+        "safeNextStep": health_check.get("safeNextStep", "Run provider health before live work."),
+        "proof": health_check.get("evidence", []),
+        "capabilitySummary": [item for item in capability_summary if item],
+        "defaultChangeAllowed": False,
+        "requiresApproval": True,
+        "providerId": provider_id,
     }
 
 
@@ -705,6 +936,14 @@ def _build_provider_ecosystem_snapshot(
         )
         model_capabilities = _provider_model_capabilities(row)
         route_exposure = _provider_route_exposure(row, can_route_now=can_route_now)
+        health_check = _provider_health_check(
+            row,
+            auth_present=auth_present,
+            can_route_now=can_route_now,
+            observed_route_count=observed_route_count,
+            runtime_ids=runtime_ids,
+            compatibility_warnings=compatibility_warnings,
+        )
         row_source = sources_by_id.get(str(row.get("sourceId", "")).strip(), {})
         rows.append(
             {
@@ -723,13 +962,15 @@ def _build_provider_ecosystem_snapshot(
                 },
                 "setup": setup,
                 "compatibilityWarnings": compatibility_warnings,
-                "healthCheck": _provider_health_check(
+                "healthCheck": health_check,
+                "routeDecision": _provider_route_decision(
                     row,
+                    route_exposure=route_exposure,
+                    health_check=health_check,
+                    model_capabilities=model_capabilities,
                     auth_present=auth_present,
+                    credential_ready=credential_ready,
                     can_route_now=can_route_now,
-                    observed_route_count=observed_route_count,
-                    runtime_ids=runtime_ids,
-                    compatibility_warnings=compatibility_warnings,
                 ),
                 "modelCapabilities": model_capabilities,
                 "capabilityChips": _provider_capability_chips(model_capabilities),
@@ -744,6 +985,11 @@ def _build_provider_ecosystem_snapshot(
         )
     implemented = [item for item in rows if item["status"] in {"repo_supported", "credential_ready"}]
     route_ready = [item for item in rows if item["canRouteNow"]]
+    route_ready_provider_ids = {item["providerId"] for item in route_ready}
+    model_catalog = _provider_model_catalog_rows(
+        sources_by_id=sources_by_id,
+        route_ready_provider_ids=route_ready_provider_ids,
+    )
     missing_auth = [
         item["providerId"]
         for item in rows
@@ -848,6 +1094,10 @@ def _build_provider_ecosystem_snapshot(
     for item in rows:
         level = str(item.get("routeExposure", {}).get("level", "review_required"))
         exposure_counts[level] = exposure_counts.get(level, 0) + 1
+    decision_counts: dict[str, int] = {}
+    for item in rows:
+        decision = str(item.get("routeDecision", {}).get("decision", "review_required"))
+        decision_counts[decision] = decision_counts.get(decision, 0) + 1
     return {
         "schemaVersion": "provider-ecosystem.v1",
         "lastVerifiedAt": source_freshness["latestVerifiedAt"],
@@ -872,8 +1122,21 @@ def _build_provider_ecosystem_snapshot(
             "boundedRouteCount": exposure_counts.get("bounded_openclaw_route", 0),
             "catalogOnlyCount": exposure_counts.get("catalog_source_only", 0),
             "plannedAdapterCount": exposure_counts.get("planned_adapter", 0),
+            "routeDecisionReadyCount": decision_counts.get("ready_controlled_route", 0),
+            "routeDecisionAuthRequiredCount": decision_counts.get("auth_required", 0),
+            "routeDecisionSmokeRequiredCount": decision_counts.get("route_smoke_required", 0),
+            "routeDecisionCatalogOnlyCount": decision_counts.get("catalog_only", 0),
+            "routeDecisionPlannedCount": decision_counts.get("adapter_planned", 0),
+            "modelCatalogCount": len(model_catalog),
+            "modelCatalogReviewOnlyCount": len(
+                [item for item in model_catalog if item["metadataUse"] == "review_only"]
+            ),
+            "modelCatalogRouteReadyCount": len(
+                [item for item in model_catalog if item["routeReady"]]
+            ),
         },
         "providers": rows,
+        "modelCatalog": model_catalog,
         "sources": source_freshness["sources"],
         "updatePolicy": {
             "mode": "safe_refresh",

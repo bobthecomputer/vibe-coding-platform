@@ -13,6 +13,46 @@ function toneClass(tone) {
   return tone ? `tone-${tone}` : "";
 }
 
+function providerRouteDecision(provider = {}) {
+  const explicit = asRecord(provider.routeDecision);
+  if (explicit.decision || explicit.label) {
+    return explicit;
+  }
+  const health = asRecord(provider.healthCheck);
+  const exposure = asRecord(provider.routeExposure);
+  if (provider.canRouteNow) {
+    return {
+      decision: "ready_controlled_route",
+      label: "Ready after smoke proof",
+      tone: "good",
+      reason: "Credentials and route observations are present.",
+      safeNextStep: health.safeNextStep || "Run a provider smoke test before live work.",
+      proof: asList(health.evidence),
+      capabilitySummary: asList(provider.capabilityChips),
+    };
+  }
+  if (provider.credentialReady) {
+    return {
+      decision: "route_smoke_required",
+      label: "Smoke proof required",
+      tone: "warn",
+      reason: "Credentials are present, but route proof is missing.",
+      safeNextStep: health.safeNextStep || "Run a cheap provider smoke test.",
+      proof: asList(health.evidence),
+      capabilitySummary: asList(provider.capabilityChips),
+    };
+  }
+  return {
+    decision: exposure.level === "catalog_source_only" ? "catalog_only" : "review_required",
+    label: exposure.label || "Review required",
+    tone: exposure.level === "catalog_source_only" ? "neutral" : "warn",
+    reason: exposure.summary || health.summary || "Provider route needs review before use.",
+    safeNextStep: health.safeNextStep || "Review source metadata and provider health.",
+    proof: asList(health.evidence),
+    capabilitySummary: asList(provider.capabilityChips),
+  };
+}
+
 export function ProviderEcosystemPanel({
   providerEcosystem = {},
   providers = [],
@@ -26,6 +66,7 @@ export function ProviderEcosystemPanel({
   const refreshProof = asRecord(updatePolicy.refreshProof);
   const sourceVerificationGate = asRecord(updatePolicy.sourceVerificationGate);
   const sourceVerificationSources = asList(sourceVerificationGate.primarySources);
+  const modelCatalog = asList(providerEcosystem.modelCatalog);
   const readinessChecklist =
     providedReadinessChecklist.length > 0
       ? providedReadinessChecklist
@@ -59,6 +100,10 @@ export function ProviderEcosystemPanel({
     Number(readinessSummary.readyCount || 0) ||
     readinessChecklist.filter(item => item.status === "ready").length;
   const totalCount = Number(readinessSummary.totalCount || 0) || readinessChecklist.length;
+  const routeDecisionRows = providers.map(provider => ({
+    provider,
+    decision: providerRouteDecision(provider),
+  }));
   return (
     <section className="provider-ecosystem-panel" aria-label="Provider ecosystem and model catalog status">
       <div className="section-header">
@@ -90,6 +135,11 @@ export function ProviderEcosystemPanel({
           <span>Source freshness</span>
           <strong>{sourceFreshness.freshSourceCount || 0}/{sourceFreshness.sourceCount || sources.length || 0}</strong>
           <p>{sourceFreshness.reviewOnly ? "Review-only catalog refresh; no default changes." : "Refresh proof pending."}</p>
+        </article>
+        <article className="context-item">
+          <span>Models</span>
+          <strong>{summary.modelCatalogCount || modelCatalog.length || 0}</strong>
+          <p>{summary.modelCatalogReviewOnlyCount || modelCatalog.length || 0} review-only metadata rows.</p>
         </article>
       </div>
       <div className="provider-refresh-proof" aria-label="Provider catalog refresh proof">
@@ -182,6 +232,79 @@ export function ProviderEcosystemPanel({
                 </div>
                 <p>{item.safeAction}</p>
                 <small>{item.proof}</small>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {routeDecisionRows.length > 0 ? (
+        <div className="provider-route-decision-matrix" aria-label="Provider route decision matrix">
+          <div className="section-header compact">
+            <div className="section-title-block">
+              <p className="eyebrow">Route decisions</p>
+              <h4>Provider route decision matrix</h4>
+            </div>
+            <StatusPill tone={Number(summary.routeDecisionReadyCount || summary.routeReadyCount || 0) > 0 ? "good" : "warn"}>
+              {summary.routeDecisionReadyCount || summary.routeReadyCount || 0} ready
+            </StatusPill>
+          </div>
+          <div className="provider-route-decision-list">
+            {routeDecisionRows.map(({ provider, decision }) => (
+              <article
+                className={`provider-route-decision-card ${toneClass(decision.tone || "neutral")}`}
+                key={`provider-route-decision-${provider.providerId}`}
+              >
+                <div>
+                  <span>{decision.decision || "review_required"}</span>
+                  <strong>{provider.label || provider.providerId}</strong>
+                  <p>{decision.reason}</p>
+                </div>
+                <b>{decision.label || "Review required"}</b>
+                <div className="provider-route-decision-proof">
+                  {asList(decision.proof).slice(0, 4).map(item => (
+                    <span key={`${provider.providerId}-decision-proof-${item}`}>{item}</span>
+                  ))}
+                  {asList(decision.capabilitySummary).slice(0, 5).map(item => (
+                    <span key={`${provider.providerId}-decision-capability-${item}`}>{item}</span>
+                  ))}
+                </div>
+                <p>{decision.safeNextStep}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {modelCatalog.length > 0 ? (
+        <div className="provider-model-catalog" aria-label="Source-backed model capability catalog">
+          <div className="section-header compact">
+            <div className="section-title-block">
+              <p className="eyebrow">Model catalog</p>
+              <h4>Source-backed model capability catalog</h4>
+              <small className="provider-model-catalog-policy">defaultChangeAllowed=false · requiresApproval=true</small>
+            </div>
+            <StatusPill tone="warn">
+              review-only
+            </StatusPill>
+          </div>
+          <div className="provider-model-catalog-list">
+            {modelCatalog.slice(0, 8).map(model => (
+              <article className="provider-model-catalog-card" key={`${model.providerId}-${model.modelId}`}>
+                <span>{model.providerId} · {model.reviewStatus || "review"}</span>
+                <strong>{model.displayName || model.modelId}</strong>
+                <div className="pill-row">
+                  <span className="mini-pill">{model.costBand || "cost unknown"}</span>
+                  <span className="mini-pill muted">{model.speedBand || "speed unknown"}</span>
+                  <span className="mini-pill muted">tools {model.toolUse || "unknown"}</span>
+                  <span className="mini-pill muted">{model.routeReady ? "route proven" : "route not proven"}</span>
+                </div>
+                <p>
+                  {model.contextWindowTokens ? `${model.contextWindowTokens} tokens` : "Context size not asserted"} ·{" "}
+                  {model.vision ? "vision" : "no vision claim"} · {model.image ? "image" : "no image claim"} ·{" "}
+                  {model.localPrivate ? "local private" : "remote or gateway"}
+                </p>
+                <small>
+                  {model.sourceId || "source pending"} · {model.sourceFreshness?.status || "review"} · defaultChangeAllowed=false
+                </small>
               </article>
             ))}
           </div>

@@ -9,13 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from control_route_interaction_smoke import (
-    BASE_URL,
     CHROME,
     ROOT,
     Cdp,
     DevToolsSocket,
     assert_current_control_shell,
     capture,
+    click_button,
     free_port,
     wait_for_control_shell,
     wait_for_devtools,
@@ -26,6 +26,13 @@ from control_route_interaction_smoke import (
 
 OUT_DIR = Path(os.environ.get("FLUXIO_PROVIDER_FLIGHT_OUT_DIR", "")).resolve() if os.environ.get("FLUXIO_PROVIDER_FLIGHT_OUT_DIR") else ROOT / "artifacts" / "pr100-provider-source-verification-gate"
 CHECK_PATH = OUT_DIR / "provider-flight-focused-check.json"
+PROVIDER_FLIGHT_URL = os.environ.get(
+    "FLUXIO_PROVIDER_FLIGHT_URL",
+    os.environ.get(
+        "FLUXIO_CONTROL_URL",
+        "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+    ),
+)
 
 
 def main() -> int:
@@ -55,7 +62,7 @@ def main() -> int:
         cdp = Cdp(ws)
         cdp.send("Page.enable")
         cdp.send("Runtime.enable")
-        cdp.send("Page.navigate", {"url": BASE_URL})
+        cdp.send("Page.navigate", {"url": PROVIDER_FLIGHT_URL})
         time.sleep(1.5)
         wait_for_ready(cdp)
         wait_for_control_shell(cdp)
@@ -77,34 +84,80 @@ def main() -> int:
         time.sleep(0.4)
         assert_current_control_shell(cdp)
         wait_for_text(cdp, "Open provider ecosystem")
-        screenshot_path = Path(capture(cdp, "provider-flight-focused")).resolve()
-        final_path = OUT_DIR / "provider-flight-focused.png"
-        if screenshot_path != final_path:
-            screenshot_path.replace(final_path)
-        visible_text = str(cdp.eval('document.querySelector(".provider-flight-check")?.innerText || ""'))
+        click_button(cdp, "Open provider ecosystem")
+        wait_for_text(cdp, "Provider route decision matrix")
+        wait_for_text(cdp, "Source-backed model capability catalog")
+        wait_for_text(cdp, "DeepSeek V4 Flash")
+        cdp.eval(
+            """
+            document.querySelector(".provider-route-decision-matrix")
+              ?.scrollIntoView({ block: "start", inline: "nearest" });
+            """
+        )
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            drawer_ready = cdp.eval(
+                """
+(() => Boolean(
+  document.querySelector(".provider-ecosystem-panel")
+  && document.querySelector(".provider-route-decision-matrix")
+  && document.querySelector(".provider-model-catalog")
+))()
+"""
+            )
+            if drawer_ready:
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("Provider ecosystem drawer did not expose route matrix and model catalog.")
+        route_screenshot_path = Path(capture(cdp, "provider-ecosystem-route-matrix")).resolve()
+        route_final_path = OUT_DIR / "provider-ecosystem-route-matrix.png"
+        if route_screenshot_path != route_final_path:
+            route_screenshot_path.replace(route_final_path)
+        cdp.eval(
+            """
+            document.querySelector(".provider-model-catalog")
+              ?.scrollIntoView({ block: "start", inline: "nearest" });
+            """
+        )
+        time.sleep(0.35)
+        model_screenshot_path = Path(capture(cdp, "provider-ecosystem-model-catalog")).resolve()
+        model_final_path = OUT_DIR / "provider-ecosystem-model-catalog.png"
+        if model_screenshot_path != model_final_path:
+            model_screenshot_path.replace(model_final_path)
+        visible_text = str(cdp.eval('document.querySelector(".provider-ecosystem-panel")?.innerText || ""'))
         report = {
             "checkedAt": datetime.now(timezone.utc).isoformat(),
-            "url": BASE_URL,
+            "url": PROVIDER_FLIGHT_URL,
             "browser": str(CHROME),
-            "screenshotPath": str(final_path.resolve()),
+            "screenshotPath": str(model_final_path.resolve()),
+            "screenshotPaths": {
+                "routeMatrix": str(route_final_path.resolve()),
+                "modelCatalog": str(model_final_path.resolve()),
+            },
             "expectedFragments": [
-                "PROVIDER UPDATE FLIGHT CHECK",
-                "Open provider ecosystem",
-                "Review-only artifact",
-                "Source gate",
-                "Default changes blocked",
+                "Provider route decision matrix",
+                "Source-backed model capability catalog",
+                "GPT-5.5",
+                "DeepSeek V4 Flash",
+                "defaultChangeAllowed=false",
             ],
             "missingFragments": [
                 fragment
                 for fragment in [
-                    "PROVIDER UPDATE FLIGHT CHECK",
-                    "Open provider ecosystem",
-                    "Review-only artifact",
-                    "Source gate",
-                    "Default changes blocked",
+                    "Provider route decision matrix",
+                    "Source-backed model capability catalog",
+                    "GPT-5.5",
+                    "DeepSeek V4 Flash",
+                    "defaultChangeAllowed=false",
                 ]
                 if fragment not in visible_text
             ],
+        }
+        report["selectors"] = {
+            "providerEcosystemPanel": bool(cdp.eval('Boolean(document.querySelector(".provider-ecosystem-panel"))')),
+            "routeDecisionMatrix": bool(cdp.eval('Boolean(document.querySelector(".provider-route-decision-matrix"))')),
+            "modelCatalog": bool(cdp.eval('Boolean(document.querySelector(".provider-model-catalog"))')),
         }
         report["passed"] = not report["missingFragments"]
         CHECK_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")

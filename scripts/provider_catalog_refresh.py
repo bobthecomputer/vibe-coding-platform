@@ -17,6 +17,7 @@ if str(SRC) not in sys.path:
 from grant_agent.mission_control import (  # noqa: E402
     PROVIDER_ECOSYSTEM_ROWS,
     PROVIDER_ECOSYSTEM_SOURCES,
+    PROVIDER_MODEL_CATALOG,
     _provider_source_freshness,
     _provider_source_verification_gate,
 )
@@ -74,7 +75,11 @@ def _dynamic_source_snapshot(fetch_ai_gateway: bool) -> list[dict]:
             }
         ]
 
-    models = payload.get("models") if isinstance(payload, dict) else None
+    models = None
+    if isinstance(payload, dict):
+        models = payload.get("data")
+        if not isinstance(models, list):
+            models = payload.get("models")
     if not isinstance(models, list):
         models = payload if isinstance(payload, list) else []
     sample = []
@@ -138,6 +143,15 @@ def build_catalog_refresh_report(
         },
         "sourceVerificationGate": source_verification_gate,
         "trackedProviders": tracked_providers,
+        "modelCatalog": [
+            {
+                **model,
+                "metadataUse": "review_only",
+                "defaultChangeAllowed": False,
+                "requiresApproval": True,
+            }
+            for model in PROVIDER_MODEL_CATALOG
+        ],
         "sourceSnapshots": [
             {
                 **source,

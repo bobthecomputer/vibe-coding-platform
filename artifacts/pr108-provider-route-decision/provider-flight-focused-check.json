@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-06-21T11:39:10.381644+00:00",
+  "url": "http://127.0.0.1:1427/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr108-provider-route-decision\\provider-ecosystem-model-catalog.png",
+  "screenshotPaths": {
+    "routeMatrix": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr108-provider-route-decision\\provider-ecosystem-route-matrix.png",
+    "modelCatalog": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr108-provider-route-decision\\provider-ecosystem-model-catalog.png"
+  },
+  "expectedFragments": [
+    "Provider route decision matrix",
+    "Source-backed model capability catalog",
+    "GPT-5.5",
+    "DeepSeek V4 Flash",
+    "defaultChangeAllowed=false"
+  ],
+  "missingFragments": [],
+  "selectors": {
+    "providerEcosystemPanel": true,
+    "routeDecisionMatrix": true,
+    "modelCatalog": true
+  },
+  "passed": true
+}

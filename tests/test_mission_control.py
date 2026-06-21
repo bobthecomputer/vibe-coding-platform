@@ -621,6 +621,52 @@ class MissionControlTests(unittest.TestCase):
                 "updateReadinessReadyCount",
                 snapshot["providerEcosystem"]["summary"],
             )
+            self.assertIn(
+                "routeDecisionAuthRequiredCount",
+                snapshot["providerEcosystem"]["summary"],
+            )
+            self.assertIn(
+                "routeDecisionCatalogOnlyCount",
+                snapshot["providerEcosystem"]["summary"],
+            )
+            self.assertIn(
+                "routeDecisionPlannedCount",
+                snapshot["providerEcosystem"]["summary"],
+            )
+            self.assertIn(
+                "modelCatalogCount",
+                snapshot["providerEcosystem"]["summary"],
+            )
+            self.assertIn("modelCatalog", snapshot["providerEcosystem"])
+            self.assertGreaterEqual(
+                snapshot["providerEcosystem"]["summary"]["modelCatalogCount"],
+                4,
+            )
+            model_ids = {
+                item["modelId"]
+                for item in snapshot["providerEcosystem"]["modelCatalog"]
+            }
+            self.assertIn("gpt-5.5", model_ids)
+            self.assertIn("gpt-5.4", model_ids)
+            self.assertIn("gpt-5.4-mini", model_ids)
+            self.assertIn("gpt-5.3-codex", model_ids)
+            self.assertIn("deepseek/deepseek-v4-flash", model_ids)
+            self.assertIn("MiniMax-M3", model_ids)
+            for model_row in snapshot["providerEcosystem"]["modelCatalog"]:
+                self.assertEqual(model_row["metadataUse"], "review_only")
+                self.assertFalse(model_row["defaultChangeAllowed"])
+                self.assertTrue(model_row["requiresApproval"])
+                self.assertIn("sourceFreshness", model_row)
+                self.assertIn(model_row["reviewStatus"], {
+                    "current_frontier",
+                    "current_reviewed",
+                    "current_efficient",
+                    "codex_api_route",
+                    "low_cost_redteam_candidate",
+                    "bounded_route",
+                    "adapter_planned",
+                    "catalog_only",
+                })
             self.assertIn("sourceFreshness", snapshot["providerEcosystem"])
             self.assertEqual(
                 snapshot["providerEcosystem"]["sourceFreshness"]["status"],
@@ -675,7 +721,26 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("updateSafety", openai_provider)
             self.assertIn("compatibilityWarnings", openai_provider)
             self.assertIn("healthCheck", openai_provider)
+            self.assertIn("routeDecision", openai_provider)
             self.assertIn("modelCapabilities", openai_provider)
+            self.assertEqual(
+                openai_provider["routeDecision"]["schemaVersion"],
+                "provider-route-decision.v1",
+            )
+            self.assertIn(
+                openai_provider["routeDecision"]["decision"],
+                {
+                    "ready_controlled_route",
+                    "route_smoke_required",
+                    "auth_required",
+                    "runtime_required",
+                    "review_required",
+                },
+            )
+            self.assertFalse(openai_provider["routeDecision"]["defaultChangeAllowed"])
+            self.assertTrue(openai_provider["routeDecision"]["requiresApproval"])
+            self.assertGreaterEqual(len(openai_provider["routeDecision"]["capabilitySummary"]), 2)
+            self.assertIn("safeNextStep", openai_provider["routeDecision"])
             self.assertIn(
                 openai_provider["healthCheck"]["status"],
                 {"ready", "missing_auth", "runtime_missing", "unverified"},
@@ -927,7 +992,13 @@ class MissionControlTests(unittest.TestCase):
             )
             self.assertEqual(
                 snapshot["providerEcosystem"]["summary"]["missingAuthCount"],
-                2,
+                3,
+            )
+            self.assertFalse(providers["deepseek"]["authPresent"])
+            self.assertFalse(providers["deepseek"]["canRouteNow"])
+            self.assertEqual(
+                providers["deepseek"]["routeDecision"]["decision"],
+                "auth_required",
             )
 
     def test_create_mission_persists_and_builds_preview(self) -> None:
