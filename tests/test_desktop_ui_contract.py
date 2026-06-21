@@ -2628,7 +2628,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("verify:long-history", package["scripts"])
         self.assertIn("verify:live-detail-performance", package["scripts"])
         self.assertIn("--long-history-fixture", package["scripts"]["verify:long-history"])
-        self.assertIn("Side-by-side proof diff", package["scripts"]["verify:long-history"])
+        self.assertIn("Fixture readiness proof", package["scripts"]["verify:long-history"])
+        self.assertNotIn("Side-by-side proof diff", package["scripts"]["verify:long-history"])
         self.assertIn("verify:beginner-launch", package["scripts"])
         self.assertIn(
             "--assert-launch-interactions",
