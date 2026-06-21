@@ -50,6 +50,7 @@ const RedTeamProofBoard = lazy(() =>
 );
 const VisualProofReceiptGallery = lazy(() => import("./proof/VisualProofReceiptGallery.jsx"));
 const SubagentReadinessPanel = lazy(() => import("./subagents/SubagentReadinessPanel.jsx"));
+const RuntimeTruth = lazy(() => import("./runtime/RuntimeTruthContract.jsx"));
 const VoiceCommandPanel = lazy(() =>
   import("./voice/index.js").then(module => ({
     default: module.VoiceCommandPanel,
@@ -15582,9 +15583,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Runtime leaders</p>
-                    <h3>{builderBoard.winningRoutes?.length || 0} active route pattern{(builderBoard.winningRoutes?.length || 0) === 1 ? "" : "s"}</h3>
-                    <p>Builder tracks which runtime/provider/model combinations are clearing threads versus getting stuck.</p>
+                    <p className="eyebrow">Routes</p>
+                    <h3>{builderBoard.winningRoutes?.length || 0} pattern{(builderBoard.winningRoutes?.length || 0) === 1 ? "" : "s"}</h3>
+                    <p>Outcomes.</p>
                     <div className="builder-thread-list">
                       {asList(builderBoard.winningRoutes).slice(0, 3).map(item => (
                         <article className={`builder-thread-item ${toneClass(item.tone)}`} key={`winning-route-${item.key || item.label}`}>
@@ -15667,20 +15668,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     <p className="eyebrow">Runtimes</p>
                     <h3>{titleizeToken(snapshot.harnessLab?.fusedRuntime?.status || workspaceProfileForm.preferredHarness)}</h3>
                     <div className="builder-inline-list">
-                      <span>Production: {titleizeToken(snapshot.harnessLab?.productionHarness || workspaceProfileForm.preferredHarness)}</span>
+                      <span>Prod: {titleizeToken(snapshot.harnessLab?.productionHarness || workspaceProfileForm.preferredHarness)}</span>
                       <span>
                         Shadow: {snapshot.harnessLab?.shadowCandidates?.length > 0
                           ? snapshot.harnessLab.shadowCandidates.map(item => titleizeToken(item)).join(", ")
                           : "None"}
                       </span>
-                      <span>{snapshot.harnessLab?.fusedRuntime?.summary || snapshot.harnessLab?.recommendation || "Builder keeps the production and shadow runtimes visible here."}</span>
+                      <span>{snapshot.harnessLab?.fusedRuntime?.summary || snapshot.harnessLab?.recommendation || "Runtime truth visible."}</span>
                       <span>
-                        Supervisor: {snapshot.harnessLab?.fusedRuntime?.supervisor?.activeSessionCount || 0} active / {snapshot.harnessLab?.fusedRuntime?.supervisor?.waitingApprovalCount || 0} waiting
+                        Sup: {snapshot.harnessLab?.fusedRuntime?.supervisor?.activeSessionCount || 0} active / {snapshot.harnessLab?.fusedRuntime?.supervisor?.waitingApprovalCount || 0} waiting
                       </span>
                       <span>
                         Proof: {snapshot.harnessLab?.fusedRuntime?.proofSignals?.delegatedRunCount || 0} delegated / {snapshot.harnessLab?.fusedRuntime?.proofSignals?.routeContractRunCount || 0} route contract
                       </span>
                     </div>
+                    <Suspense fallback={null}>
+                      <RuntimeTruth fusedRuntime={snapshot.harnessLab?.fusedRuntime} />
+                    </Suspense>
                     <div className="builder-thread-list">
                       {asList(snapshot.harnessLab?.fusedRuntime?.runtimeLanes).map(item => (
                         <article
@@ -15689,7 +15693,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         >
                           <span>{item.role === "executable_runtime_lane" ? "Runtime lane" : titleizeToken(item.role)}</span>
                           <strong>{item.label || runtimeLabel(item.runtimeId)}</strong>
-                          <p>{item.observedCount || 0} observed local proof run{(item.observedCount || 0) === 1 ? "" : "s"}</p>
+                          <p>{item.observedCount || 0} proof run{(item.observedCount || 0) === 1 ? "" : "s"}</p>
                         </article>
                       ))}
                       {asList(snapshot.harnessLab?.fusedRuntime?.modelProviderRoutes).slice(0, 2).map(item => (
@@ -15700,20 +15704,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           <span>Provider route</span>
                           <strong>{item.label}</strong>
                           <p>
-                            {item.suggestedModel || "Workspace selected model"} · {item.observedCount || 0} observed route use{(item.observedCount || 0) === 1 ? "" : "s"}
+                            {item.suggestedModel || "Selected model"} · {item.observedCount || 0} observed use{(item.observedCount || 0) === 1 ? "" : "s"}
                           </p>
                         </article>
                       ))}
                     </div>
                     <div className="drawer-actions">
                       <ActionButton onClick={() => void applyPreferredHarness("fluxio_hybrid")} variant="primary">
-                        Use Syntelos Hybrid
+                        Use Hybrid
                       </ActionButton>
                       <ActionButton onClick={() => void applyPreferredHarness("legacy_autonomous_engine")}>
-                        Use Legacy Runtime
+                        Use Legacy
                       </ActionButton>
                       <ActionButton onClick={() => setActiveDrawer("runtime")} type="button">
-                        Compare both
+                        Compare
                       </ActionButton>
                     </div>
                   </article>

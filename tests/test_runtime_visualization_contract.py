@@ -62,12 +62,19 @@ def test_service_model_preserves_auto_run_verify_for_runtime_actions() -> None:
 
 def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_to_runtime() -> None:
     source = SHELL.read_text(encoding="utf-8")
+    runtime_contract = (ROOT / "web" / "src" / "fluxio" / "runtime" / "RuntimeTruthContract.jsx").read_text(encoding="utf-8")
     fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
 
     assert "fusedRuntime" in source
+    assert 'import("./runtime/RuntimeTruthContract.jsx")' in source
     assert "Runtime lane" in source
     assert "Provider route" in source
     assert "modelProviderRoutes" in source
+    assert "Fused runtime truth contract" in runtime_contract
+    assert "Runtime adapter added" in runtime_contract
+    assert "Providers stay model routes, not runtime lanes" in runtime_contract
+    assert "runtime-truth-contract" in runtime_contract
+    assert ".runtime-truth-contract" in STYLES.read_text(encoding="utf-8")
     assert "supervisor_not_runtime_adapter" in fixtures
     assert "provider_model_route" in fixtures
 

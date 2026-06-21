@@ -1081,6 +1081,32 @@ button.builder-sidebar-nexus:hover {
   font-style: normal;
 }
 
+.runtime-truth-contract {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(86, 174, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(86, 174, 255, 0.055);
+  padding: 10px;
+}
+
+.runtime-truth-contract span,
+.runtime-truth-contract small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.runtime-truth-contract span {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.runtime-truth-contract p,
+.runtime-truth-contract small {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .builder-metric-card {
   display: grid;
   gap: 4px;

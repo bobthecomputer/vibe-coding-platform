@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T03:16:00.970743+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-fused-runtime-truth-contract-20260621\\fused-runtime-truth-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-fused-runtime-truth-contract-20260621\\fused-runtime-truth-current.html",
+  "expectedFragments": [
+    "Fused runtime truth contract",
+    "Runtime adapter added",
+    "Providers stay model routes",
+    "Executable lanes"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 4300,
+    "sampleCount": 8280,
+    "uniqueSampleColors": 477,
+    "averageLuma": 27.58,
+    "nonBlank": true
+  },
+  "passed": true
+}
