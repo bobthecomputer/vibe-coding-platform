@@ -13,12 +13,14 @@ on:
     paths:
       - "scripts/pr_stack_health.py"
       - "tests/test_pr_stack_health.py"
+      - "docs/PR_STACK_HEALTH.md"
       - ".github/workflows/pr-stack-health.yml"
   push:
     branches: ["master", "main"]
     paths:
       - "scripts/pr_stack_health.py"
       - "tests/test_pr_stack_health.py"
+      - "docs/PR_STACK_HEALTH.md"
       - ".github/workflows/pr-stack-health.yml"
 
 permissions:
