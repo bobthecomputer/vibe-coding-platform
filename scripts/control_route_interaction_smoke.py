@@ -264,12 +264,20 @@ def assert_no_horizontal_overflow(cdp: Cdp) -> dict[str, object]:
 def click_button(cdp: Cdp, label: str) -> None:
     expression = f"""
 (() => {{
+  const normalize = value => (value || '').trim().replace(/\\s+/g, ' ');
+  const railButtons = Array.from(document.querySelectorAll('.global-rail-button'));
+  const railTarget = railButtons.find(button => normalize(button.innerText) === {json.dumps(label)});
+  if (railTarget) {{
+    railTarget.scrollIntoView({{ block: 'center', inline: 'center' }});
+    railTarget.click();
+    return {{ clicked: true, text: railTarget.innerText.trim(), selector: '.global-rail-button' }};
+  }}
   const buttons = Array.from(document.querySelectorAll('button'));
-  const target = buttons.find(button => button.innerText.trim().includes({json.dumps(label)}));
+  const target = buttons.find(button => normalize(button.innerText).includes({json.dumps(label)}));
   if (!target) return {{ clicked: false, reason: 'button not found' }};
   target.scrollIntoView({{ block: 'center', inline: 'center' }});
   target.click();
-  return {{ clicked: true, text: target.innerText.trim() }};
+  return {{ clicked: true, text: target.innerText.trim(), selector: 'button' }};
 }})()
 """
     result = cdp.eval(expression)
@@ -326,7 +334,16 @@ def main() -> int:
         steps = []
         for label, expected in [
             ("Builder", ["CONVERSATION COMMAND BOARD", "Launch mission"]),
-            ("Skills", ["Skills"]),
+            (
+                "Skills",
+                [
+                    "Skills",
+                    "Skill recovery",
+                    "RECOMMENDED SKILLS",
+                    "RUNTIME LANE",
+                    "Recovery actions and route separation",
+                ],
+            ),
             ("Runtime", ["Runtime", "OpenClaw", "Work engines"]),
             ("Settings", ["Settings", "Workspace"]),
             ("Agent", ["Agent", "Syntelos"]),

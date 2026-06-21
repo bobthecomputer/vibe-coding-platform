@@ -161,10 +161,15 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Fluxio hit a render failure", visual)
         self.assertIn("FLUXIO_VIEWPORT_WIDTH", interaction)
         self.assertIn("FLUXIO_VIEWPORT_HEIGHT", interaction)
+        self.assertIn(".global-rail-button", interaction)
         self.assertIn("assert_no_horizontal_overflow", interaction)
         self.assertIn("wait_for_control_shell", interaction)
         self.assertIn("hasErrorScreen", interaction)
         self.assertIn("Horizontal overflow detected", interaction)
+        self.assertIn("Skill recovery", interaction)
+        self.assertIn("RECOMMENDED SKILLS", interaction)
+        self.assertIn("RUNTIME LANE", interaction)
+        self.assertIn("Recovery actions and route separation", interaction)
 
     def test_slash_panel_surfaces_comments_skills_and_cleanup_command(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
