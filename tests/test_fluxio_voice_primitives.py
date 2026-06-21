@@ -150,6 +150,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             """
             import {
               buildKeyboardParityLabel,
+              describeVoiceCaptureStatus,
               detectVoiceInputSupport,
               getVoiceMotionAffordance,
               getVoiceStatusCopy,
@@ -160,10 +161,18 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             const bridge = detectVoiceInputSupport({
               window: { __FLUXIO_VOICE_BRIDGE__: { startDictation() {}, stopDictation() {} } }
             });
+            const browserWithoutAdapter = describeVoiceCaptureStatus({ support: browser });
+            const browserWithAdapter = describeVoiceCaptureStatus({
+              support: browser,
+              speechAdapter: { label: 'Browser speech adapter', start() {}, stop() {} }
+            });
             console.log(JSON.stringify({
               unsupported,
               browser,
               bridge,
+              browserWithoutAdapter,
+              browserWithAdapter,
+              unwiredStatus: getVoiceStatusCopy({ support: browser, capture: browserWithoutAdapter }),
               unsupportedStatus: getVoiceStatusCopy({ support: unsupported }),
               label: buildKeyboardParityLabel({
                 label: 'Send message',
@@ -182,6 +191,10 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["browser"]["mode"], "browser-speech-api")
         self.assertTrue(payload["bridge"]["supported"])
         self.assertEqual(payload["bridge"]["mode"], "bridge")
+        self.assertFalse(payload["browserWithoutAdapter"]["canStartLiveCapture"])
+        self.assertEqual(payload["browserWithoutAdapter"]["label"], "Adapter not wired")
+        self.assertTrue(payload["browserWithAdapter"]["canStartLiveCapture"])
+        self.assertIn("no active capture adapter", payload["unwiredStatus"])
         self.assertIn("Keyboard: Ctrl+Enter", payload["label"])
         self.assertEqual(payload["reduced"]["data-motion"], "reduced")
 

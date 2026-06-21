@@ -15,6 +15,7 @@ import {
 } from "./voiceCommandGrammar.js";
 import {
   buildVoiceErrorRecovery,
+  describeVoiceCaptureStatus,
   detectVoiceInputSupport,
   getVoiceStatusCopy,
 } from "./voiceAccessibility.js";
@@ -190,6 +191,10 @@ export function useVoiceInteractionController({
   onVoiceCommand,
 } = {}) {
   const [state, dispatch] = useReducer(reducer, null, () => createInitialState({ runtime }));
+  const capture = useMemo(
+    () => describeVoiceCaptureStatus({ support: state.support, speechAdapter }),
+    [speechAdapter, state.support],
+  );
 
   const refreshSupport = useCallback(() => {
     dispatch({ type: "support", support: detectVoiceInputSupport(runtime || globalThis) });
@@ -197,14 +202,18 @@ export function useVoiceInteractionController({
 
   const startListening = useCallback(async () => {
     refreshSupport();
-    if (!state.support.supported && !speechAdapter?.start) {
-      dispatch({ type: "error", code: "unsupported" });
+    const refreshedSupport = detectVoiceInputSupport(runtime || globalThis);
+    const refreshedCapture = describeVoiceCaptureStatus({ support: refreshedSupport, speechAdapter });
+    if (!refreshedCapture.canStartLiveCapture) {
+      dispatch({
+        type: "error",
+        code: refreshedSupport.supported ? "adapter_unwired" : "unsupported",
+        message: refreshedCapture.recovery || refreshedCapture.status,
+      });
       return false;
     }
     try {
-      if (speechAdapter?.start) {
-        await speechAdapter.start();
-      }
+      await speechAdapter.start();
       dispatch({ type: "listening", listening: true });
       return true;
     } catch (caught) {
@@ -214,7 +223,7 @@ export function useVoiceInteractionController({
       });
       return false;
     }
-  }, [refreshSupport, speechAdapter, state.support.supported]);
+  }, [refreshSupport, runtime, speechAdapter]);
 
   const stopListening = useCallback(async () => {
     try {
@@ -299,6 +308,8 @@ export function useVoiceInteractionController({
   return useMemo(
     () => ({
       ...state,
+      capture,
+      status: getVoiceStatusCopy({ ...state, capture }),
       refreshSupport,
       startListening,
       stopListening,
@@ -314,6 +325,7 @@ export function useVoiceInteractionController({
       clearTranscript,
       confirmPendingCommand,
       correctTranscriptSegment,
+      capture,
       finalizeTranscript,
       refreshSupport,
       runTranscriptCommand,

@@ -33,6 +33,13 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
         : voice.pendingCommand
           ? "Waiting for confirmation"
           : "Safe to review";
+  const capture = voice.capture || {
+    canStartLiveCapture: Boolean(voice.support.supported),
+    label: voice.support.label,
+    source: voice.support.label,
+    status: voice.support.status,
+  };
+  const startDisabled = !capture.canStartLiveCapture && !voice.listening;
 
   return (
     <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
@@ -41,8 +48,8 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
           <p className="eyebrow">Voice input</p>
           <h2>Dictation review</h2>
         </div>
-        <span className="fluxio-voice-status-pill" data-supported={voice.support.supported}>
-          {voice.support.label}
+        <span className="fluxio-voice-status-pill" data-supported={capture.canStartLiveCapture}>
+          {capture.label}
         </span>
       </div>
 
@@ -67,6 +74,22 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
           <span>Pre-send gate</span>
           <strong>{sendGateLabel}</strong>
         </div>
+        <div className="fluxio-voice-quality-card">
+          <span>Capture source</span>
+          <strong>{capture.source || capture.label}</strong>
+        </div>
+      </div>
+
+      <div
+        className="fluxio-voice-capture-diagnostics"
+        data-ready={capture.canStartLiveCapture}
+        aria-label="Voice capture diagnostics"
+      >
+        <div>
+          <strong>{capture.canStartLiveCapture ? "Live capture ready" : "Live capture not wired"}</strong>
+          <p>{capture.status}</p>
+        </div>
+        {capture.recovery ? <span>{capture.recovery}</span> : null}
       </div>
 
       <div className="fluxio-voice-transcript" aria-label="Current voice transcript">
@@ -126,7 +149,9 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
           </ol>
         ) : (
           <p className="fluxio-voice-empty">
-            Dictated text will appear here after browser or bridge support is available.
+            {capture.canStartLiveCapture
+              ? "Dictated text will appear here after capture starts."
+              : "Use system dictation, paste text, or connect the voice adapter before starting live capture."}
           </p>
         )}
         {voice.transcript.interimText ? (
@@ -156,9 +181,10 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
             shortcut: "Ctrl+Shift+V",
             voice: voice.listening ? "stop dictation" : "start dictation",
           })}
-          disabled={!voice.support.supported && !voice.listening}
+          disabled={startDisabled}
           onClick={() => (voice.listening ? voice.stopListening() : voice.startListening())}
           type="button"
+          title={startDisabled ? capture.recovery || capture.status : undefined}
         >
           <MicIcon aria-hidden="true" size={17} weight="duotone" />
           <span>{voice.listening ? "Stop" : "Start"}</span>
