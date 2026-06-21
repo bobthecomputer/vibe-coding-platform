@@ -107,9 +107,34 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn('className="fluxio-shell"', shell)
         self.assertIn("data-mode={uiMode}", shell)
         self.assertIn("control-preview-refresh", shell)
+        self.assertIn("interactionModeOptions", shell)
+        self.assertIn('aria-label="Interaction modes"', shell)
+        self.assertIn("interaction:${item.id}", shell)
+        self.assertIn('role="button"', shell)
+        self.assertIn("onKeyDown={handleKeyDown}", shell)
+        self.assertNotIn('<button\n      className={`fluxio-nav-item', shell)
         self.assertNotIn("reference-preview-refresh", shell)
         self.assertNotIn("showBlockingSnapshotLoader", shell)
         self.assertNotIn("Loading live control-room state", shell)
+
+    def test_current_shell_motion_layer_has_accessible_interaction_polish(self) -> None:
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+
+        for fragment in [
+            ".interaction-mode-rail",
+            ".fluxio-mode::before",
+            ".fluxio-shell[data-mode=\"builder\"] .fluxio-mode::before",
+            ".app-menu::-webkit-scrollbar",
+            "grid-template-columns: repeat(3, minmax(0, 1fr))",
+            "control-topbar-scan",
+            "control-micro-line",
+            ".builder-panel:hover::after",
+            ".fluxio-nav-item:focus-visible::after",
+            "@media (prefers-reduced-motion: reduce)",
+        ]:
+            self.assertIn(fragment, styles)
+        self.assertNotIn("control-micro-line 3.6s", styles)
+        self.assertNotIn("control-line-draw 4.8s", styles)
 
     def test_browser_proof_scripts_reject_wrong_skins(self) -> None:
         smoke = CONTROL_SMOKE.read_text(encoding="utf-8")

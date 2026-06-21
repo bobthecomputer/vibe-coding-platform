@@ -151,7 +151,7 @@ textarea {
 
 .fluxio-shell {
   display: grid;
-  grid-template-rows: 68px auto minmax(0, 1fr);
+  grid-template-rows: 88px auto minmax(0, 1fr);
   height: 100%;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 18%),
@@ -160,10 +160,11 @@ textarea {
 
 .fluxio-topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
+  min-height: 88px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--line);
   background: rgba(25, 25, 28, 0.96);
 }
@@ -301,6 +302,51 @@ textarea {
 .fluxio-mode button.active {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
+}
+
+.interaction-mode-rail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: end;
+}
+
+.interaction-mode-rail button {
+  min-height: 36px;
+  min-width: 76px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  padding: 6px 9px;
+  text-align: left;
+}
+
+.interaction-mode-rail span,
+.interaction-mode-rail small {
+  display: block;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.interaction-mode-rail span {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.interaction-mode-rail small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.interaction-mode-rail button.active {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.065);
 }
 
 .fluxio-body {
@@ -5347,6 +5393,32 @@ button.builder-review-target:hover {
     z-index: 20;
   }
 
+  .fluxio-mode,
+  .interaction-mode-rail,
+  .topbar-shortcuts {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .fluxio-mode {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .interaction-mode-rail {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .interaction-mode-rail button {
+    min-width: 0;
+  }
+
+  .interaction-mode-rail span,
+  .interaction-mode-rail small {
+    max-width: 100%;
+  }
+
   .fluxio-body {
     display: flex;
     flex-direction: column;
@@ -6355,6 +6427,110 @@ body::-webkit-scrollbar-thumb {
     #0f1111;
 }
 
+.fluxio-topbar {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  overflow: hidden;
+}
+
+.fluxio-topbar::after {
+  content: "";
+  position: absolute;
+  inset: auto 16px 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(238, 242, 236, 0.42), transparent);
+  opacity: 0.46;
+  transform: translateX(-32%);
+}
+
+.fluxio-mode {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-color: var(--control-line);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.044), rgba(238, 242, 236, 0.012)),
+    #0d1010;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.fluxio-mode::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 2);
+  border: 1px solid rgba(238, 242, 236, 0.18);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.13), rgba(238, 242, 236, 0.04)),
+    #171a19;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 24px rgba(0, 0, 0, 0.2);
+  transform: translateX(0);
+  transition: transform 220ms var(--motion-ease-premium);
+}
+
+.fluxio-shell[data-mode="builder"] .fluxio-mode::before {
+  transform: translateX(100%);
+}
+
+.fluxio-mode button {
+  position: relative;
+  z-index: 1;
+  min-width: 76px;
+}
+
+.fluxio-mode button.active {
+  background: transparent;
+}
+
+.interaction-mode-rail {
+  position: relative;
+  border: 1px solid var(--control-line);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.034), rgba(238, 242, 236, 0.01)),
+    #0d1010;
+  padding: 3px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.interaction-mode-rail button {
+  position: relative;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+}
+
+.interaction-mode-rail button::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 54%;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(238, 242, 236, 0.56), transparent);
+  opacity: 0;
+  transform: translateX(-28%);
+}
+
+.interaction-mode-rail button:hover,
+.interaction-mode-rail button.active {
+  border-color: rgba(238, 242, 236, 0.14);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.07), rgba(238, 242, 236, 0.016)),
+    #141717;
+}
+
+.interaction-mode-rail button.active span {
+  color: #f4f8f1;
+}
+
 .builder-panel,
 .builder-head,
 .agent-compartment-box,
@@ -6481,6 +6657,7 @@ body::-webkit-scrollbar-thumb {
 .action-btn,
 .topbar-shortcut,
 .fluxio-mode button,
+.interaction-mode-rail button,
 .app-menu-glyph,
 .app-menu-button,
 .builder-browser-toolbar select,
@@ -6686,29 +6863,48 @@ button.builder-digest-item:active {
     animation-delay: 135ms;
   }
 
-  .builder-panel::after,
-  .builder-head::after,
-  .agent-compartment-box::after,
-  .agent-compartment-lane::after,
-  .runtime-account-card::after,
-  .drawer-block::after {
-    animation: control-line-draw 4.8s var(--motion-ease-premium) infinite;
+  .builder-panel:hover::after,
+  .builder-panel:focus-within::after,
+  .builder-head:hover::after,
+  .builder-head:focus-within::after,
+  .agent-compartment-box:hover::after,
+  .agent-compartment-box:focus-within::after,
+  .agent-compartment-lane:hover::after,
+  .agent-compartment-lane:focus-within::after,
+  .runtime-account-card:hover::after,
+  .runtime-account-card:focus-within::after,
+  .drawer-block:hover::after,
+  .drawer-block:focus-within::after {
+    animation: control-line-draw 1.9s var(--motion-ease-premium) 1;
   }
 
-  .builder-metric-card::after,
-  .builder-summary-card::after,
-  .builder-conversation-card::after,
-  .builder-digest-item::after,
-  .builder-thread-item::after,
-  .builder-step-card::after,
-  .builder-review-target::after,
-  .builder-inline-action::after,
-  .agent-runtime-lane::after,
-  .agent-compartment-event::after,
-  .agent-nas-check::after,
-  .fluxio-nav-item::after,
-  .global-rail-button::after {
-    animation: control-micro-line 3.6s var(--motion-ease-premium) infinite;
+  .builder-metric-card:hover::after,
+  .builder-metric-card:focus-within::after,
+  .builder-summary-card:hover::after,
+  .builder-summary-card:focus-within::after,
+  .builder-conversation-card:hover::after,
+  .builder-conversation-card:focus-within::after,
+  .builder-digest-item:hover::after,
+  .builder-digest-item:focus-within::after,
+  .builder-thread-item:hover::after,
+  .builder-thread-item:focus-visible::after,
+  .builder-step-card:hover::after,
+  .builder-step-card:focus-visible::after,
+  .builder-review-target:hover::after,
+  .builder-review-target:focus-visible::after,
+  .builder-inline-action:hover::after,
+  .builder-inline-action:focus-visible::after,
+  .agent-runtime-lane:hover::after,
+  .agent-runtime-lane:focus-within::after,
+  .agent-compartment-event:hover::after,
+  .agent-compartment-event:focus-within::after,
+  .agent-nas-check:hover::after,
+  .agent-nas-check:focus-within::after,
+  .fluxio-nav-item:hover::after,
+  .fluxio-nav-item:focus-visible::after,
+  .global-rail-button:hover::after,
+  .global-rail-button:focus-visible::after {
+    animation: control-micro-line 1.6s var(--motion-ease-premium) 1;
   }
 
   .agent-runtime-lane.active,
@@ -6721,6 +6917,15 @@ button.builder-digest-item:active {
   .builder-live-review-image-missing,
   .agent-compartment-empty {
     animation: control-soft-pulse 2.4s var(--motion-ease-premium) infinite;
+  }
+
+  .fluxio-topbar::after {
+    animation: control-topbar-scan 5.6s var(--motion-ease-premium) infinite;
+  }
+
+  .interaction-mode-rail button.active::after,
+  .interaction-mode-rail button:hover::after {
+    animation: control-micro-line 3.2s var(--motion-ease-premium) infinite;
   }
 }
 
@@ -6807,7 +7012,97 @@ button.builder-digest-item:active {
   }
 }
 
+@keyframes control-topbar-scan {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: translateX(-42%);
+  }
+  46%,
+  58% {
+    opacity: 0.58;
+    transform: translateX(42%);
+  }
+}
+
 @media (max-width: 860px) {
+  .fluxio-topbar {
+    width: 100%;
+    max-width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 8px;
+    min-height: 0;
+    padding: 8px 10px;
+  }
+
+  .topbar-app {
+    gap: 8px;
+  }
+
+  .app-menu {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-menu-glyph,
+  .app-menu-button {
+    flex: 0 0 auto;
+    min-width: max-content;
+  }
+
+  .topbar-context {
+    gap: 5px;
+  }
+
+  .topbar-context strong {
+    font-size: 13px;
+  }
+
+  .topbar-context-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .topbar-context-actions .action-btn {
+    min-height: 34px;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .fluxio-mode {
+    min-width: 0;
+  }
+
+  .fluxio-mode button {
+    min-width: 0;
+    padding: 8px 10px;
+  }
+
+  .topbar-shortcut {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .topbar-confidence {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .topbar-confidence strong {
+    max-width: 100%;
+    font-size: 14px;
+  }
+
   .builder-head,
   .builder-command-deck,
   .builder-command-head,

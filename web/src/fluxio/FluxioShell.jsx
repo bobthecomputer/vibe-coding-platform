@@ -1887,15 +1887,28 @@ function NavItem({
   icon = null,
   onCopy = () => {},
 }) {
+  const handleKeyDown = event => {
+    if (event.defaultPrevented || !onClick) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick(event);
+    }
+  };
+
   return (
-    <button
+    <div
+      aria-current={active ? "page" : undefined}
       className={`fluxio-nav-item ${active ? "active" : ""}`.trim()}
       draggable={draggable}
       onClick={onClick}
       onDragOver={onDragOver}
       onDragStart={onDragStart}
       onDrop={onDrop}
-      type="button"
+      onKeyDown={handleKeyDown}
+      role="button"
+      tabIndex={0}
     >
       <div className="fluxio-nav-item-top">
         <div className="fluxio-nav-item-title">
@@ -1929,7 +1942,7 @@ function NavItem({
           ))}
         </div>
       ) : null}
-    </button>
+    </div>
   );
 }
 
@@ -6932,6 +6945,26 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     viewModel.topBar.liveStatus.label,
     viewModel.topBar.liveStatus.tone,
   ]);
+  const interactionModeOptions = [
+    {
+      id: "app",
+      label: hasTauriBackend() ? "App" : "Web",
+      detail: hasTauriBackend() ? "Desktop shell" : "Browser shell",
+      active: hasTauriBackend(),
+    },
+    {
+      id: "local",
+      label: "Local",
+      detail: previewMode === "live" ? "Live backend" : "Read-only preview",
+      active: previewMode === "live",
+    },
+    {
+      id: "mouse",
+      label: "Mouse",
+      detail: `${browserToolbarState.device || "Desktop"} · ${browserToolbarState.zoom || "100%"}`,
+      active: uiMode === "builder" && surface === "workbench",
+    },
+  ];
   const runtimeOptions = useMemo(
     () =>
       asList(snapshot?.runtimes).map(item => ({
@@ -13284,6 +13317,32 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               type="button"
             >
               {titleizeToken(mode)}
+            </button>
+          ))}
+        </div>
+
+        <div aria-label="Interaction modes" className="interaction-mode-rail">
+          {interactionModeOptions.map(item => (
+            <button
+              aria-pressed={item.active}
+              className={item.active ? "active" : ""}
+              key={item.id}
+              onClick={() => {
+                markAction(`interaction:${item.id}`);
+                if (item.id === "mouse") {
+                  setUiMode("builder");
+                  setSurface("workbench");
+                  setActiveDrawer("builder");
+                  return;
+                }
+                setPreviewMode("live");
+                setActiveDrawer(item.id === "local" ? "runtime" : null);
+              }}
+              title={`${item.label}: ${item.detail}`}
+              type="button"
+            >
+              <span>{item.label}</span>
+              <small>{item.detail}</small>
             </button>
           ))}
         </div>
