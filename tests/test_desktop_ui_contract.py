@@ -92,6 +92,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("data-mode={uiMode}", shell)
         self.assertIn("control-preview-refresh", shell)
         self.assertNotIn("reference-preview-refresh", shell)
+        self.assertNotIn("showBlockingSnapshotLoader", shell)
+        self.assertNotIn("Loading live control-room state", shell)
 
     def test_browser_proof_scripts_reject_wrong_skins(self) -> None:
         smoke = CONTROL_SMOKE.read_text(encoding="utf-8")
