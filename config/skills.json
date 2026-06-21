@@ -222,6 +222,139 @@
     ]
   },
   {
+    "name": "image_vision_breakdown",
+    "description": "Break down a current app screenshot or preview frame into concrete UI findings for the Image/Vision self-repair loop without claiming pixel-level vision when the selected route cannot read images.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "screenshot_path": { "type": "string" },
+        "surface": { "type": "string" },
+        "questions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["screenshot_path", "surface"]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "findings": { "type": "array" },
+        "remove_or_merge": { "type": "array" },
+        "first_focus": { "type": "string" },
+        "real_controls": { "type": "array" },
+        "decorative_controls": { "type": "array" },
+        "route_capability": { "type": "string" },
+        "proof_artifact": { "type": "string" }
+      },
+      "required": ["findings", "first_focus", "route_capability", "proof_artifact"]
+    },
+    "route": {
+      "runtime": "opencode",
+      "preferred_provider": "zai",
+      "preferred_model": "glm-5.2",
+      "fallback_provider": "available-opencode-or-local",
+      "fallback_model": "documented-at-runtime",
+      "fallback_rule": "Record provider discovery and image-reading capability. If the fallback cannot inspect pixels directly, label findings as DOM/code-assisted instead of vision-read."
+    },
+    "permissions": ["file_read", "browser_preview"],
+    "action_kinds": ["image_breakdown", "vision_review", "ui_redesign", "proof_collection"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "proof_artifacts": ["vision_breakdown.json", "vision_breakdown.md", "before screenshot"],
+    "examples": [
+      "Run a screenshot breakdown on the current Image Playground preview",
+      "Identify clutter, weak hierarchy, fake proof surfaces, and controls that should be removed or merged"
+    ]
+  },
+  {
+    "name": "ui_self_repair_planner",
+    "description": "Turn a screenshot breakdown into one scoped UI repair that the app can implement and verify through the current runtime surface.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "breakdown_artifact": { "type": "string" },
+        "target_files": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "route": { "type": "object" }
+      },
+      "required": ["breakdown_artifact", "target_files"]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "plan": { "type": "array" },
+        "selected_change": { "type": "string" },
+        "expected_user_visible_change": { "type": "string" },
+        "proof_requirement": { "type": "string" },
+        "proof_artifact": { "type": "string" }
+      },
+      "required": ["plan", "selected_change", "expected_user_visible_change", "proof_artifact"]
+    },
+    "route": {
+      "runtime": "opencode",
+      "preferred_provider": "zai",
+      "preferred_model": "glm-5.2",
+      "fallback_provider": "available-opencode-or-local",
+      "fallback_model": "documented-at-runtime",
+      "fallback_rule": "Use the best verified coding route after image_vision_breakdown records route capability and limitations."
+    },
+    "permissions": ["file_read", "file_write", "browser_preview"],
+    "action_kinds": ["ui_redesign", "implementation_plan", "runtime_routing"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "proof_artifacts": ["ui_repair_plan.json", "runtime_compartment_proof"],
+    "examples": [
+      "Plan one visible Image Playground repair from a screenshot breakdown",
+      "Use a model route receipt to justify the next UI implementation step"
+    ]
+  },
+  {
+    "name": "self_repair_verifier",
+    "description": "Verify that an app-driven UI repair has before/after preview proof, a route receipt, and no fake success state.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "before_screenshot": { "type": "string" },
+        "after_screenshot": { "type": "string" },
+        "runtime_proof": { "type": "string" },
+        "changed_files": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["before_screenshot", "after_screenshot", "runtime_proof", "changed_files"]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "boolean" },
+        "checks": { "type": "array" },
+        "proof_artifact": { "type": "string" }
+      },
+      "required": ["passed", "checks", "proof_artifact"]
+    },
+    "route": {
+      "runtime": "local",
+      "preferred_provider": "deterministic",
+      "preferred_model": "n/a"
+    },
+    "permissions": ["file_read", "browser_preview"],
+    "action_kinds": ["verification", "proof_collection", "ui_regression"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
+    "proof_artifacts": ["self_repair_verifier.json", "after screenshot"],
+    "examples": [
+      "Verify the self-repair loop consumed a finding and changed the UI",
+      "Check that route proof and before/after screenshots exist before reporting success"
+    ]
+  },
+  {
     "name": "industrial_brutalist_ui",
     "description": "Apply raw mechanical UI direction for analyst/operator surfaces: Swiss grids, dense evidence, sharp divisions, and terminal-grade clarity.",
     "schema": {
