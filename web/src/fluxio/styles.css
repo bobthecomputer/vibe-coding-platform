@@ -863,6 +863,19 @@ button.builder-sidebar-nexus:hover {
   padding: 10px;
 }
 
+.supervisor-intervention-strip {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 14px;
+  background:
+    linear-gradient(90deg, rgba(245, 158, 11, 0.07), transparent 56%),
+    rgba(255, 255, 255, 0.025);
+  padding: 10px;
+}
+
 .monitor-loop-strip span {
   display: block;
   color: var(--muted);
@@ -872,6 +885,19 @@ button.builder-sidebar-nexus:hover {
 }
 
 .monitor-loop-strip strong {
+  display: block;
+  margin-top: 2px;
+}
+
+.supervisor-intervention-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.supervisor-intervention-strip strong {
   display: block;
   margin-top: 2px;
 }
@@ -7424,6 +7450,42 @@ button.builder-review-target:hover {
   color: var(--muted);
 }
 
+.supervisor-intervention-queue {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.045);
+  padding: 10px;
+}
+
+.supervisor-intervention-queue h4,
+.supervisor-intervention-queue p {
+  margin: 0;
+}
+
+.supervisor-intervention-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 9px;
+}
+
+.supervisor-intervention-card span,
+.supervisor-intervention-card small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.supervisor-intervention-card p,
+.supervisor-intervention-card small {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .subagent-command-panel {
   border-color: rgba(153, 235, 185, 0.18);
 }
@@ -7473,6 +7535,27 @@ button.builder-review-target:hover {
   color: var(--muted);
 }
 
+.subagent-supervisor-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  border: 1px solid rgba(245, 158, 11, 0.16);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.05);
+  padding: 8px;
+}
+
+.subagent-supervisor-note span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.subagent-supervisor-note p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .subagent-lane-card dl {
   display: grid;
   gap: 6px;
@@ -7506,6 +7589,7 @@ button.builder-review-target:hover {
   .skill-recovery-strip,
   .skill-recovery-list,
   .monitor-loop-strip,
+  .supervisor-intervention-strip,
   .monitor-loop-list,
   .subagent-command-strip,
   .subagent-board-stack,

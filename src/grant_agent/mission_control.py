@@ -2225,6 +2225,109 @@ def build_skill_recovery_snapshot(
     }
 
 
+def _build_supervisor_interventions(mission: Mission, skill_recovery: dict) -> list[dict]:
+    severity_rank = {"high": 0, "medium": 1, "low": 2}
+    interventions: list[dict] = []
+
+    def add(
+        intervention_id: str,
+        *,
+        source: str,
+        severity: str,
+        label: str,
+        reason: str,
+        next_action: str,
+        target_drawer: str,
+        runtime_lane: dict | None = None,
+        provider_route: dict | None = None,
+        lane_id: str = "",
+        proof_required: bool = True,
+    ) -> None:
+        if any(item["interventionId"] == intervention_id for item in interventions):
+            return
+        interventions.append(
+            {
+                "interventionId": intervention_id,
+                "source": source,
+                "severity": severity,
+                "label": label,
+                "reason": reason,
+                "nextAction": next_action,
+                "targetDrawer": target_drawer,
+                "runtimeLane": runtime_lane or {},
+                "providerRoute": provider_route or {},
+                "laneId": lane_id,
+                "proofRequired": proof_required,
+            }
+        )
+
+    for trigger in skill_recovery.get("triggers", []) if isinstance(skill_recovery, dict) else []:
+        if not isinstance(trigger, dict):
+            continue
+        trigger_id = str(trigger.get("triggerId") or trigger.get("kind") or "skill_recovery")
+        add(
+            f"skill:{trigger_id}",
+            source="skill_recovery",
+            severity=str(trigger.get("severity") or "medium"),
+            label=str(trigger.get("label") or "Skill recovery needed"),
+            reason=str(trigger.get("reason") or "Mission recovery trigger is active."),
+            next_action=str(trigger.get("recoveryAction") or "Select a relevant skill and rerun the smallest verification step."),
+            target_drawer="skills" if trigger_id in {"context_missing", "weak_provider_route"} else "queue",
+            runtime_lane=trigger.get("runtimeLane") if isinstance(trigger.get("runtimeLane"), dict) else {},
+            provider_route=trigger.get("providerRoute") if isinstance(trigger.get("providerRoute"), dict) else {},
+        )
+
+    for index, approval in enumerate(mission.proof.pending_approvals or []):
+        add(
+            f"approval:{index}",
+            source="approval",
+            severity="high",
+            label="Approval boundary waiting",
+            reason=str(approval or "A mission approval must be resolved before continuing this lane."),
+            next_action="Open the queue, resolve the approval, then resume the smallest independent task.",
+            target_drawer="queue",
+            proof_required=False,
+        )
+
+    failures = [*list(mission.state.verification_failures or []), *list(mission.proof.failed_checks or [])]
+    if failures:
+        add(
+            "verification:failed-proof",
+            source="verification",
+            severity="high",
+            label="Verification proof failed",
+            reason="; ".join(str(item) for item in failures[:3]),
+            next_action="Run the smallest failing check, attach output, and repair before expanding scope.",
+            target_drawer="proof",
+        )
+
+    for session in mission.delegated_runtime_sessions or []:
+        row = asdict(session) if hasattr(session, "__dataclass_fields__") else dict(session)
+        status = str(row.get("status", "") or "").strip().lower()
+        heartbeat = str(row.get("heartbeat_status", "") or "").strip().lower()
+        pending_approval = bool(row.get("pending_approval"))
+        if status in {"failed", "blocked", "waiting_for_approval", "stopped"} or heartbeat == "stale" or pending_approval:
+            lane_id = str(row.get("delegated_id") or row.get("session_id") or row.get("runtime_id") or "runtime-lane")
+            add(
+                f"runtime:{lane_id}",
+                source="delegated_runtime",
+                severity="high" if status in {"failed", "blocked"} or heartbeat == "stale" else "medium",
+                label="Delegated runtime lane needs review",
+                reason=f"{row.get('runtime_id') or 'runtime'} lane {status or 'unknown'}; heartbeat {heartbeat or 'unknown'}",
+                next_action="Inspect runtime events, resolve approvals or stale heartbeat, then verify proof before merging.",
+                target_drawer="runtime",
+                runtime_lane={
+                    "runtime": row.get("runtime_id") or "",
+                    "status": status,
+                    "heartbeatStatus": heartbeat,
+                },
+                lane_id=lane_id,
+            )
+
+    interventions.sort(key=lambda item: (severity_rank.get(item["severity"], 3), item["source"], item["interventionId"]))
+    return interventions[:6]
+
+
 def build_mission_loop_snapshot(mission: Mission) -> dict:
     plan_revisions = mission.plan_revisions or []
     latest_revision = plan_revisions[-1] if plan_revisions else None
@@ -2252,6 +2355,7 @@ def build_mission_loop_snapshot(mission: Mission) -> dict:
 
     continuity_state, continuity_detail = _continuity_state_for_mission(mission, delegated)
     time_budget = _time_budget_snapshot_for_mission(mission)
+    skill_recovery = mission.state.skill_recovery or build_skill_recovery_snapshot(mission)
 
     return {
         "currentCyclePhase": phase,
@@ -2287,8 +2391,8 @@ def build_mission_loop_snapshot(mission: Mission) -> dict:
         "blocker": mission.state.blocker_classification,
         "providerTruth": mission.state.provider_runtime_truth,
         "codeExecution": mission.state.code_execution,
-        "skillRecovery": mission.state.skill_recovery
-        or build_skill_recovery_snapshot(mission),
+        "skillRecovery": skill_recovery,
+        "supervisorInterventions": _build_supervisor_interventions(mission, skill_recovery),
     }
 
 

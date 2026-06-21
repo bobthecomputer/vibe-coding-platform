@@ -6467,6 +6467,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
   const monitoringLoopStudio = viewModel.drawers.builder.monitoringLoopStudio || {};
   const monitoringLoops = asList(monitoringLoopStudio.loops);
+  const supervisorInterventionQueue = asList(monitoringLoopStudio.interventionQueue);
   const subagentOrchestrationStudio = viewModel.drawers.builder.subagentOrchestrationStudio || {};
   const subagentLanes = asList(subagentOrchestrationStudio.lanes);
   const subagentScoreboard = asList(subagentOrchestrationStudio.scoreboard);
@@ -12240,6 +12241,36 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </article>
               ))}
             </div>
+            <div className="supervisor-intervention-queue" aria-label="Supervisor intervention queue">
+              <div className="builder-live-review-panel-head compact">
+                <div>
+                  <h4>Supervisor intervention queue</h4>
+                  <p>
+                    {supervisorInterventionQueue.length > 0
+                      ? `${supervisorInterventionQueue.length} ranked action${supervisorInterventionQueue.length === 1 ? "" : "s"} before the next autonomous step.`
+                      : "No supervisor intervention is queued."}
+                  </p>
+                </div>
+                <span className={`mini-pill ${toneClass((monitoringLoopStudio.criticalCount || 0) > 0 ? "warn" : "good")}`}>
+                  {monitoringLoopStudio.criticalCount || 0} high
+                </span>
+              </div>
+              {supervisorInterventionQueue.length > 0 ? (
+                supervisorInterventionQueue.map(item => (
+                  <article className={`supervisor-intervention-card ${toneClass(item.severity === "high" ? "warn" : "neutral")}`} key={item.interventionId}>
+                    <span>{titleizeToken(item.source)} · {titleizeToken(item.severity)}</span>
+                    <strong>{item.label}</strong>
+                    <p>{item.reason}</p>
+                    <small>{item.nextAction}</small>
+                  </article>
+                ))
+              ) : (
+                <article className="supervisor-intervention-card">
+                  <strong>Continue normal verification cadence</strong>
+                  <p>Monitor loops will queue an action when the mission is blocked, drifting, or missing proof.</p>
+                </article>
+              )}
+            </div>
             <div className="drawer-actions">
               <ActionButton onClick={() => setActiveDrawer("queue")} type="button">
                 Review blockers
@@ -12300,6 +12331,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         <dd>{item.proof}</dd>
                       </div>
                     </dl>
+                    {item.blockReason || item.supervisorAction ? (
+                      <div className="subagent-supervisor-note">
+                        <span>Why</span>
+                        <p>{item.blockReason || "Supervisor has no lane-specific blocker."}</p>
+                        <span>Next</span>
+                        <p>{item.supervisorAction || item.nextAction}</p>
+                      </div>
+                    ) : null}
                     <small>{item.nextAction}</small>
                   </article>
                 ))
@@ -14261,6 +14300,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                   </button>
                                 ))}
                               </div>
+                            </div>
+                            <div className="supervisor-intervention-strip" aria-label="Supervisor intervention queue">
+                              <div>
+                                <span>Supervisor intervention queue</span>
+                                <strong>
+                                  {monitoringLoopStudio.topIntervention?.label || "No queued intervention"}
+                                </strong>
+                              </div>
+                              <button
+                                className={`mini-pill ${toneClass((monitoringLoopStudio.criticalCount || 0) > 0 ? "warn" : "good")}`}
+                                onClick={() => setActiveDrawer(monitoringLoopStudio.topIntervention?.targetDrawer || "builder")}
+                                type="button"
+                              >
+                                {(monitoringLoopStudio.criticalCount || 0) > 0
+                                  ? `${monitoringLoopStudio.criticalCount} high priority`
+                                  : "Clear"}
+                              </button>
                             </div>
                             <div className="subagent-command-strip" aria-label="Subagent command center">
                               <div>

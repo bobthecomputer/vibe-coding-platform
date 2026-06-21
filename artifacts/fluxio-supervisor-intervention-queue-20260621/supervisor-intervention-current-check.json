@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T01:57:49.312997+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&proofReload=supervisor-intervention-queue",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-supervisor-intervention-queue-20260621\\supervisor-intervention-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-supervisor-intervention-queue-20260621\\supervisor-intervention-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Supervisor intervention queue",
+    "Subagent command center",
+    "External monitor loops"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1800,
+    "sampleCount": 8100,
+    "uniqueSampleColors": 606,
+    "averageLuma": 33.72,
+    "nonBlank": true
+  },
+  "passed": true
+}

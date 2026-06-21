@@ -2590,6 +2590,9 @@ function deriveMissionActivityPulse({ mission, workspace, snapshot, pendingQuest
 }
 
 function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQuestions, pendingApprovals }) {
+  const interventionQueue = asList(mission?.missionLoop?.supervisorInterventions).slice(0, 3);
+  const topIntervention = interventionQueue[0] || null;
+  const criticalCount = interventionQueue.filter(item => item.severity === "high").length;
   const activeConversations = asList(builderBoard?.activeConversations);
   const stuckThreads = asList(builderBoard?.stuckThreads);
   const latestActivity = asList(snapshot?.activity)[0] || {};
@@ -2691,6 +2694,9 @@ function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQu
     defaultState: "off_until_enabled_or_blocked",
     activeCount,
     warningCount,
+    interventionQueue,
+    topIntervention,
+    criticalCount,
     loops,
   };
 }
@@ -2717,6 +2723,7 @@ function delegatedLaneTone(status, pendingApproval = false, heartbeatStatus = ""
 
 function deriveSubagentOrchestrationStudio({ mission, workspace }) {
   const sessions = asList(mission?.delegated_runtime_sessions);
+  const interventionQueue = asList(mission?.missionLoop?.supervisorInterventions);
   const routeTruth = mission?.state?.provider_runtime_truth || mission?.provider_runtime_truth || {};
   const activeRoute =
     routeTruth?.activeRoute ||
@@ -2780,8 +2787,13 @@ function deriveSubagentOrchestrationStudio({ mission, workspace }) {
       session?.last_event ||
       session?.detail ||
       "No live event recorded yet.";
+    const laneId = session?.delegated_id || `delegated-lane-${index + 1}`;
+    const laneIntervention =
+      interventionQueue.find(item => item.laneId && item.laneId === laneId) ||
+      interventionQueue.find(item => item.source === "delegated_runtime") ||
+      null;
     return {
-      id: session?.delegated_id || `delegated-lane-${index + 1}`,
+      id: laneId,
       label: session?.label || `Lane ${index + 1}`,
       role:
         routeData.role ||
@@ -2815,6 +2827,8 @@ function deriveSubagentOrchestrationStudio({ mission, workspace }) {
           : ["completed", "stopped"].includes(String(status).toLowerCase())
             ? "Review proof and merge or archive the lane result."
             : "Inspect runtime events before assigning more work.",
+      blockReason: laneIntervention?.reason || "",
+      supervisorAction: laneIntervention?.nextAction || "",
     };
   });
   const scoreboard = asList(latestMerge?.scoreboard).slice(0, 4).map(item => ({
@@ -2838,6 +2852,7 @@ function deriveSubagentOrchestrationStudio({ mission, workspace }) {
     lastHandoffReason: mission?.state?.last_handoff_reason || mission?.handoff_reason || "No handoff pressure recorded.",
     lanes,
     scoreboard,
+    interventionQueue: interventionQueue.slice(0, 3),
     recommendedAction:
       blockedCount > 0
         ? "Resolve blocked delegated lanes before spawning more workers."

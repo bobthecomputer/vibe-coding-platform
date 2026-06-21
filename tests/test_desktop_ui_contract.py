@@ -248,6 +248,10 @@ class DesktopUiContractTests(unittest.TestCase):
 
         for fragment in [
             "deriveMonitoringLoopStudio",
+            "supervisorInterventions",
+            "interventionQueue",
+            "topIntervention",
+            "criticalCount",
             "blocked-state-sentry",
             "intent-drift-sentry",
             "silence-watchdog",
@@ -263,11 +267,16 @@ class DesktopUiContractTests(unittest.TestCase):
             "Review proof",
             "Review context",
             "monitor-loop-strip",
+            "Supervisor intervention queue",
+            "supervisor-intervention-strip",
+            "supervisor-intervention-queue",
             "monitor-loop-panel",
         ]:
             self.assertIn(fragment, shell)
         self.assertIn(".monitor-loop-card", styles)
         self.assertIn(".monitor-loop-strip", styles)
+        self.assertIn(".supervisor-intervention-card", styles)
+        self.assertIn(".supervisor-intervention-strip", styles)
 
     def test_builder_surfaces_subagent_command_center(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
@@ -281,6 +290,8 @@ class DesktopUiContractTests(unittest.TestCase):
             "configuredWorkers",
             "mergePolicy",
             "worker_merge_events",
+            "supervisorAction",
+            "blockReason",
             "Resolve blocked delegated lanes",
         ]:
             self.assertIn(fragment, model)
@@ -293,9 +304,11 @@ class DesktopUiContractTests(unittest.TestCase):
             "Resolve lane blocks",
             "Verify merge proof",
             "Delegated lane roster",
+            "subagent-supervisor-note",
         ]:
             self.assertIn(fragment, shell)
         self.assertIn(".subagent-lane-card", styles)
+        self.assertIn(".subagent-supervisor-note", styles)
         self.assertIn(".subagent-command-strip", styles)
         self.assertIn(".subagent-board-card", styles)
 

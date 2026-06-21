@@ -1015,6 +1015,15 @@ class MissionControlTests(unittest.TestCase):
                 mission_payload["state"]["skill_recovery"]["schemaVersion"],
                 "mission-skill-recovery.v1",
             )
+            interventions = mission_payload["missionLoop"]["supervisorInterventions"]
+            self.assertGreaterEqual(len(interventions), 3)
+            intervention_sources = {item["source"] for item in interventions}
+            self.assertIn("skill_recovery", intervention_sources)
+            self.assertIn("verification", intervention_sources)
+            self.assertIn("delegated_runtime", intervention_sources)
+            self.assertEqual(interventions[0]["severity"], "high")
+            self.assertIn("nextAction", interventions[0])
+            self.assertTrue(interventions[0]["proofRequired"])
 
     def test_second_mission_is_queued_behind_active_workspace_mission(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
