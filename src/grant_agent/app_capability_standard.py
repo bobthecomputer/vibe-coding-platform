@@ -857,6 +857,7 @@ def _synology_bridge_plan(
         or manifest.bridge.get("target_root")
         or ""
     ) if status_payload or manifest.bridge else ""
+    workspace_root = str(manifest.bridge.get("workspace_root") or "").strip()
     remote_project_root = str(
         manifest.bridge.get("remote_project_root")
         or manifest.bridge.get("remote_root")
@@ -865,8 +866,10 @@ def _synology_bridge_plan(
     if remote_project_root:
         if not target_root:
             target_root = remote_project_root
+        elif workspace_root and not Path(workspace_root).expanduser().exists():
+            target_root = remote_project_root
         elif _looks_unavailable_mapped_drive_path(target_root, source_root):
-            if not Path(target_root).expanduser().exists():
+            if not status_payload or not Path(target_root).expanduser().exists():
                 target_root = remote_project_root
     active_direction = str(job_payload.get("direction") or "").strip().lower()
     target_path_exists = bool(target_root and Path(target_root).expanduser().exists())
