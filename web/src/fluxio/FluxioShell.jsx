@@ -11107,6 +11107,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         <span className="mini-pill muted">{item.updateSource || "manual"}</span>
                         <span className="mini-pill muted">{item.observedRouteCount || 0} observed</span>
                       </div>
+                      {item.updateSafety?.summary || asList(item.compatibilityWarnings).length > 0 ? (
+                        <div className="update-safety-note" aria-label={`${item.label || item.providerId} compatibility warnings`}>
+                          <strong>{item.updateSafety?.label || "Compatibility warning"}</strong>
+                          <p>{item.updateSafety?.summary || asList(item.compatibilityWarnings)[0]}</p>
+                          {asList(item.compatibilityWarnings).slice(0, 2).map(warning => (
+                            <span key={`${item.providerId}-${warning}`}>{warning}</span>
+                          ))}
+                        </div>
+                      ) : null}
                     </article>
                   ))
                 ) : (
@@ -11137,6 +11146,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       : "OpenCode, OpenClaw, LiteLLM, AI Gateway, and local model catalogs appear after a live snapshot."}
                   </p>
                 </div>
+                {asList(providerEcosystemUpdatePolicy.compatibilityWarnings).length > 0 ? (
+                  <div className="bridge-context-item update-policy-warnings">
+                    <span>Compatibility warnings</span>
+                    <p>{providerEcosystemUpdatePolicy.compatibilityWarnings.slice(0, 3).join(" ")}</p>
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -11330,6 +11345,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       {service.latestVersion ? ` → ${service.latestVersion}` : ""}
                     </p>
                     <p>{service.details || service.managementMode}</p>
+                    {service.updateSafety?.summary ? (
+                      <div className="update-safety-note" aria-label={`${service.label} update safety`}>
+                        <strong>{service.updateSafety.label || "Review before updating"}</strong>
+                        <p>{service.updateSafety.summary}</p>
+                        <span>{service.updateSafety.safeNextStep}</span>
+                        {service.updateSafety.verifyAfterUpdate ? <span>Fluxio will re-check setup after the update.</span> : null}
+                      </div>
+                    ) : null}
                     {service.actions.length > 0 ? (
                       <div className="drawer-actions">
                         {service.actions.slice(0, 3).map(action => (
@@ -12642,6 +12665,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     {service.required ? " · required" : " · optional"}
                   </p>
                   {service.details ? <p>{service.details}</p> : null}
+                  {service.updateSafety?.summary ? (
+                    <div className="update-safety-note" aria-label={`${service.label} update safety`}>
+                      <strong>{service.updateSafety.label || "Review before updating"}</strong>
+                      <p>{service.updateSafety.summary}</p>
+                      <span>{service.updateSafety.safeNextStep}</span>
+                      {service.updateSafety.verifyAfterUpdate ? <span>Fluxio will re-check setup after the update.</span> : null}
+                    </div>
+                  ) : null}
                   {service.actions.length > 0 ? (
                     <div className="drawer-actions">
                       {service.actions.slice(0, 3).map(action => (

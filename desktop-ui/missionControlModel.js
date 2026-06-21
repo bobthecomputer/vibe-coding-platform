@@ -742,6 +742,8 @@ function deriveServiceStudio(workspace, setupHealth) {
         version: item?.version || "",
         latestVersion: item?.latestVersion || "",
         updateAvailable: Boolean(item?.updateAvailable),
+        updateSafety: item?.updateSafety && typeof item.updateSafety === "object" ? item.updateSafety : {},
+        compatibilityWarnings: asList(item?.compatibilityWarnings),
         actions,
       };
     })

@@ -907,6 +907,32 @@ def _management_mode_for_dependency(dependency: dict) -> str:
     return "externally_managed"
 
 
+def _update_safety_for_dependency(dependency: dict) -> dict:
+    if not dependency.get("updateAvailable"):
+        return {}
+    label = str(dependency.get("label") or dependency.get("dependencyId") or "Runtime")
+    version = str(dependency.get("version") or "current installed version")
+    latest = str(dependency.get("latestVersion") or "latest available version")
+    actions = dependency.get("repairActions", [])
+    auto_verify = any(bool(action.get("autoRunVerify")) for action in actions)
+    has_command = any(
+        bool(action.get("command") or action.get("followUp") or action.get("batchCommands"))
+        for action in actions
+    )
+    return {
+        "label": "Review before updating",
+        "summary": f"{label} has an update available. Finish or pause active runs before changing runtime binaries.",
+        "impact": f"{label} will move from {version} to {latest}.",
+        "safeNextStep": (
+            "Use the existing update action, then let Fluxio re-check setup health."
+            if has_command
+            else "Review the upstream release and run setup verification before using it for missions."
+        ),
+        "verifyAfterUpdate": auto_verify,
+        "requiresActiveRunPause": True,
+    }
+
+
 def _service_actions_for_dependency(dependency: dict) -> list[dict]:
     actions = []
     for action in dependency.get("repairActions", []):
@@ -1598,6 +1624,7 @@ def _build_setup_health(
             "version": dependency.get("version", ""),
             "latestVersion": dependency.get("latestVersion", ""),
             "updateAvailable": dependency.get("updateAvailable", False),
+            "updateSafety": _update_safety_for_dependency(dependency),
             "details": dependency.get("details", ""),
             "required": dependency.get("required", False),
             "serviceActions": _service_actions_for_dependency(dependency),

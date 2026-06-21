@@ -192,8 +192,12 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Routes, catalogs, and safe updates", shell)
         self.assertIn("Default route changes require approval", shell)
         self.assertIn("User-defined models are never overwritten", shell)
+        self.assertIn("Compatibility warnings", shell)
+        self.assertIn("Fluxio will re-check setup after the update.", shell)
+        self.assertIn("update-safety-note", shell)
         self.assertIn("provider-ecosystem-panel", styles)
         self.assertIn("provider-ecosystem-list", styles)
+        self.assertIn(".update-safety-note", styles)
 
     def test_tauri_registers_live_review_structured_feedback_command(self) -> None:
         tauri = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")

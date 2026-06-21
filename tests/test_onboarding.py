@@ -212,6 +212,14 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(hermes["currentHealthStatus"], "update_available")
         self.assertEqual(hermes["lastVerificationResult"], "outdated")
         self.assertEqual(hermes["managementMode"], "fluxio_managed")
+        openclaw_service = next(
+            item
+            for item in status["setupHealth"]["serviceManagement"]
+            if item["serviceId"] == "openclaw"
+        )
+        self.assertIn("updateSafety", openclaw_service)
+        self.assertIn("Finish or pause active runs", openclaw_service["updateSafety"]["summary"])
+        self.assertTrue(openclaw_service["updateSafety"]["verifyAfterUpdate"])
         runtime_stack = next(
             item
             for item in status["setupHealth"]["repairActions"]

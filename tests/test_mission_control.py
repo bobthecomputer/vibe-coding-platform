@@ -514,6 +514,21 @@ class MissionControlTests(unittest.TestCase):
                     "requiresApprovalForDefaultChanges"
                 ]
             )
+            self.assertIn(
+                "compatibilityWarnings",
+                snapshot["providerEcosystem"]["updatePolicy"],
+            )
+            openai_provider = next(
+                item
+                for item in snapshot["providerEcosystem"]["providers"]
+                if item["providerId"] == "openai"
+            )
+            self.assertIn("updateSafety", openai_provider)
+            self.assertIn("compatibilityWarnings", openai_provider)
+            self.assertIn(
+                "Review refreshed catalog metadata",
+                openai_provider["compatibilityWarnings"][0],
+            )
             self.assertFalse(snapshot["efficiencyAutotune"]["eligible"])
             workflow = snapshot["workflowStudio"]["recipes"][0]
             self.assertIn("reviewStatus", workflow)

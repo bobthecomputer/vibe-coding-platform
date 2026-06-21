@@ -230,6 +230,34 @@ PROVIDER_ECOSYSTEM_ROWS = [
 ]
 
 
+def _provider_compatibility_warnings(row: dict, *, auth_present: bool, can_route_now: bool) -> list[str]:
+    warnings = [
+        "Review refreshed catalog metadata before changing default model IDs.",
+        "Keep user-defined models unchanged until a route smoke test passes.",
+    ]
+    if row.get("status") in {"repo_supported", "credential_ready"} and not auth_present:
+        warnings.append("Credentials are missing, so this provider cannot be selected for live routes yet.")
+    if not can_route_now and str(row.get("status", "")).startswith("planned"):
+        warnings.append("Adapter work is planned; use this row as a catalog signal only.")
+    return warnings
+
+
+def _runtime_update_safety(service: dict) -> dict:
+    if not service.get("updateAvailable"):
+        return dict(service.get("updateSafety") or {})
+    label = str(service.get("label") or service.get("serviceId") or service.get("runtime_id") or "Runtime")
+    version = str(service.get("version") or "current installed version")
+    latest = str(service.get("latestVersion") or service.get("latest_version") or "latest available version")
+    return {
+        "label": "Review before updating",
+        "summary": f"{label} has an update available. Finish or pause active runs before changing runtime binaries.",
+        "impact": f"{label} will move from {version} to {latest}.",
+        "safeNextStep": "Run the existing update action, then rerun setup verification before assigning new work.",
+        "verifyAfterUpdate": True,
+        "requiresActiveRunPause": True,
+    }
+
+
 def normalize_route_overrides(route_overrides: object) -> list[dict]:
     if not isinstance(route_overrides, list):
         return []
@@ -430,6 +458,11 @@ def _build_provider_ecosystem_snapshot(
             or provider_auth_presence.get(provider_id, False)
         )
         can_route_now = row["status"] in {"repo_supported", "credential_ready"} and auth_present
+        compatibility_warnings = _provider_compatibility_warnings(
+            row,
+            auth_present=auth_present,
+            can_route_now=can_route_now,
+        )
         rows.append(
             {
                 **row,
@@ -437,6 +470,14 @@ def _build_provider_ecosystem_snapshot(
                 "canRouteNow": can_route_now,
                 "observedRouteCount": observed_routes.get(provider_id, 0),
                 "setup": setup,
+                "compatibilityWarnings": compatibility_warnings,
+                "updateSafety": {
+                    "label": "Safe catalog refresh",
+                    "summary": "Refresh provider catalogs before changing defaults or routing expensive work.",
+                    "safeNextStep": compatibility_warnings[0],
+                    "requiresApprovalForDefaultChanges": True,
+                    "neverOverwriteUserModels": True,
+                },
             }
         )
     implemented = [item for item in rows if item["status"] in {"repo_supported", "credential_ready"}]
@@ -474,6 +515,17 @@ def _build_provider_ecosystem_snapshot(
             "cadence": "manual_or_weekly",
             "requiresApprovalForDefaultChanges": True,
             "neverOverwriteUserModels": True,
+            "compatibilityWarnings": [
+                "Review refreshed catalog metadata before changing default model IDs.",
+                "Keep user-defined models unchanged until a route smoke test passes.",
+                "Run a provider health check after catalog updates and before assigning live work.",
+            ],
+            "safeWorkflow": [
+                "Refresh catalog metadata.",
+                "Review default model changes.",
+                "Run provider health checks.",
+                "Keep prior routes available until verification passes.",
+            ],
             "dynamicSources": [
                 "https://ai-gateway.vercel.sh/v1/models",
                 "OpenClaw provider directory",
@@ -3340,6 +3392,16 @@ def _build_workspace_service_management(
             "version": runtime_status.get("version") or existing.get("version", ""),
             "latestVersion": runtime_status.get("latest_version") or existing.get("latestVersion", ""),
             "updateAvailable": runtime_status.get("update_available", existing.get("updateAvailable", False)),
+            "updateSafety": _runtime_update_safety(
+                {
+                    **existing,
+                    "serviceId": runtime_id,
+                    "label": runtime_status.get("label", runtime_id),
+                    "version": runtime_status.get("version") or existing.get("version", ""),
+                    "latestVersion": runtime_status.get("latest_version") or existing.get("latestVersion", ""),
+                    "updateAvailable": runtime_status.get("update_available", existing.get("updateAvailable", False)),
+                }
+            ),
             "details": runtime_status.get("doctor_summary") or existing.get("details", ""),
             "serviceActions": existing.get("serviceActions", []),
             "verifyAction": existing.get("verifyAction", {}),

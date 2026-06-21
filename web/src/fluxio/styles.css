@@ -7532,7 +7532,34 @@ button.builder-review-target:hover {
 }
 
 .provider-ecosystem-list {
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.update-safety-note {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.07);
+  margin-top: 8px;
+  padding: 8px;
+}
+
+.update-safety-note strong,
+.update-safety-note p {
+  margin: 0;
+}
+
+.update-safety-note p,
+.update-safety-note span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.update-policy-warnings {
+  border-color: rgba(245, 158, 11, 0.24);
+  background: rgba(245, 158, 11, 0.06);
 }
 
 .bridge-context-item p {
@@ -7781,6 +7808,10 @@ button.builder-review-target:hover {
 
 .drawer-list.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.drawer-list.compact.provider-ecosystem-list {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .route-override-grid {
