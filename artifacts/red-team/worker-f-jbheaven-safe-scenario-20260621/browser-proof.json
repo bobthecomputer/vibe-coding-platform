@@ -1,6 +1,6 @@
 {
-  "checkedAt": "2026-06-21T08:25:07.377034+00:00",
-  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+  "checkedAt": "2026-06-21T11:08:11.355029+00:00",
+  "url": "http://127.0.0.1:1425/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
   "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "runs": [
     {
@@ -14,12 +14,15 @@
         "promotionGates": true,
         "taxonomyMap": true,
         "coverageMatrix": true,
-        "probeTranscripts": true
+        "probeTranscripts": true,
+        "transcriptParity": true
       },
       "expectedFragments": [
-        "JBH-EAVEN controlled safe red-team probe set",
-        "LLM01:2025 Prompt Injection",
-        "PROMOTION GATE SUMMARY",
+        "jbh-eaven controlled safe red-team probe set",
+        "llm01:2025 prompt injection",
+        "promotion gate summary",
+        "transcript parity",
+        "4/4 matched",
         "browser-proof.json",
         "sample_transcript.json"
       ],
@@ -36,12 +39,15 @@
         "promotionGates": true,
         "taxonomyMap": true,
         "coverageMatrix": true,
-        "probeTranscripts": true
+        "probeTranscripts": true,
+        "transcriptParity": true
       },
       "expectedFragments": [
-        "JBH-EAVEN controlled safe red-team probe set",
-        "LLM01:2025 Prompt Injection",
-        "PROMOTION GATE SUMMARY",
+        "jbh-eaven controlled safe red-team probe set",
+        "llm01:2025 prompt injection",
+        "promotion gate summary",
+        "transcript parity",
+        "4/4 matched",
         "browser-proof.json",
         "sample_transcript.json"
       ],

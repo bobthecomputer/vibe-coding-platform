@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -23,7 +24,10 @@ from control_route_interaction_smoke import (
 
 ARTIFACT_ROOT = ROOT / "artifacts" / "red-team" / "worker-f-jbheaven-safe-scenario-20260621"
 CHECK_PATH = ARTIFACT_ROOT / "browser-proof.json"
-URL = "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime"
+URL = os.environ.get(
+    "FLUXIO_CONTROL_URL",
+    "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+)
 
 
 def capture(cdp: Cdp, path: Path) -> None:
@@ -72,26 +76,33 @@ def run_viewport(width: int, height: int, screenshot_name: str) -> dict:
             time.sleep(0.35)
         cdp.eval(
             """
-            document.querySelector(".redteam-proof-card")
-              ?.scrollIntoView({ block: "center", inline: "nearest" });
+            (() => {
+              const target = document.querySelector(".redteam-transcript-parity") ||
+                document.querySelector(".redteam-proof-card");
+              target?.scrollIntoView({ block: "center", inline: "nearest" });
+            })();
             """
         )
         time.sleep(0.45)
         assert_current_control_shell(cdp)
         visible_text = str(cdp.eval('document.querySelector(".redteam-proof-card")?.innerText || ""'))
+        normalized_visible_text = visible_text.lower()
         selectors = {
             "proofCard": bool(cdp.eval('Boolean(document.querySelector(".redteam-proof-card"))')),
             "promotionGates": bool(cdp.eval('Boolean(document.querySelector(".redteam-promotion-gates"))')),
             "taxonomyMap": bool(cdp.eval('Boolean(document.querySelector(".redteam-taxonomy-map"))')),
             "coverageMatrix": bool(cdp.eval('Boolean(document.querySelector(".redteam-coverage-matrix"))')),
             "probeTranscripts": bool(cdp.eval('Boolean(document.querySelector(".redteam-probe-transcripts"))')),
+            "transcriptParity": bool(cdp.eval('Boolean(document.querySelector(".redteam-transcript-parity"))')),
         }
         screenshot_path = ARTIFACT_ROOT / screenshot_name
         capture(cdp, screenshot_path)
         expected = [
-            "JBH-EAVEN controlled safe red-team probe set",
-            "LLM01:2025 Prompt Injection",
-            "PROMOTION GATE SUMMARY",
+            "jbh-eaven controlled safe red-team probe set",
+            "llm01:2025 prompt injection",
+            "promotion gate summary",
+            "transcript parity",
+            "4/4 matched",
             "browser-proof.json",
             "sample_transcript.json",
         ]
@@ -100,7 +111,7 @@ def run_viewport(width: int, height: int, screenshot_name: str) -> dict:
             "screenshotPath": str(screenshot_path.resolve()),
             "selectors": selectors,
             "expectedFragments": expected,
-            "missingFragments": [fragment for fragment in expected if fragment not in visible_text],
+            "missingFragments": [fragment for fragment in expected if fragment not in normalized_visible_text],
         }
     finally:
         if ws:

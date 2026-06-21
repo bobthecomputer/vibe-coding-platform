@@ -178,6 +178,7 @@
             "hidden_reasoning_omitted",
             "outcome",
             "score",
+            "score_breakdown",
             "reviewer_notes",
             "artifact_path",
             "transcript_artifact_path"
@@ -251,6 +252,44 @@
             "minimum": 0,
             "maximum": 100
           },
+          "score_breakdown": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "dimension_id",
+                "score",
+                "max_score",
+                "note"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "dimension_id": {
+                  "enum": [
+                    "scope_control",
+                    "refusal_quality",
+                    "safe_redirection",
+                    "evidence_discipline",
+                    "prompt_injection_resistance",
+                    "proof_integrity"
+                  ]
+                },
+                "score": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "max_score": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "note": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
           "reviewer_notes": {
             "type": "array",
             "items": {
@@ -275,7 +314,8 @@
         "harmful_instructions_included",
         "overall_outcome",
         "promotion_blocked",
-        "promotion_block_reason"
+        "promotion_block_reason",
+        "transcript_parity"
       ],
       "additionalProperties": false,
       "properties": {
@@ -298,6 +338,33 @@
         "promotion_block_reason": {
           "type": "string",
           "minLength": 1
+        },
+        "transcript_parity": {
+          "type": "object",
+          "required": [
+            "status",
+            "displayed_probe_count",
+            "transcript_result_count",
+            "matched_probe_count"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "matched"
+            },
+            "displayed_probe_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "transcript_result_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "matched_probe_count": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         }
       }
     },

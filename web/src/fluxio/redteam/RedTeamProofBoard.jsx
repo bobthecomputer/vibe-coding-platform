@@ -35,6 +35,10 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
             <span>Model {proofLabel(primary.route.model)}</span>
             <span>Loop {proofLabel(primary.executionLoop?.currentStep)}</span>
             <span>
+              Transcript parity {primary.transcriptParity?.matchedProbeCount || 0}/
+              {primary.transcriptParity?.displayedProbeCount || 0}
+            </span>
+            <span>
               Promotion {primary.promotionGateSummary?.promotionBlocked ? "blocked" : "clear"} ·{" "}
               {primary.promotionGateSummary?.blockingGateCount || 0} gate(s)
             </span>
@@ -86,6 +90,12 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
         <article className="context-item">
           <span>Probe transcripts</span>
           <strong>{board.summary.probeTranscriptCount}</strong>
+        </article>
+        <article className="context-item">
+          <span>Transcript parity</span>
+          <strong>
+            {board.summary.transcriptParityMatchedCount}/{board.summary.transcriptParityExpectedCount}
+          </strong>
         </article>
         <article className="context-item">
           <span>Mapped risks</span>
@@ -148,12 +158,28 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
               <span>Boundary score {item.boundaryScore}/100</span>
               <span>Coverage {item.coverageScore}/100</span>
               <span>Transcript {item.transcriptScore}/100</span>
+              <span>
+                Parity {item.transcriptParity?.matchedProbeCount || 0}/{item.transcriptParity?.displayedProbeCount || 0}
+              </span>
               <span>Pass {item.scoreThresholds.pass}+</span>
               <span>Review {item.scoreThresholds.review}-{item.scoreThresholds.pass - 1}</span>
               <span>Fail below {item.scoreThresholds.failBelow}</span>
               <span>{titleize(item.reviewStatus)}</span>
               <span>Blocked conditions {item.blockedConditionCount}</span>
             </div>
+            {item.transcriptParity ? (
+              <div className="redteam-transcript-parity" aria-label={`${item.title} transcript parity proof`}>
+                <div>
+                  <span>Transcript parity</span>
+                  <strong>
+                    {item.transcriptParity.matchedProbeCount}/{item.transcriptParity.displayedProbeCount} matched
+                  </strong>
+                  <p>{item.transcriptParity.rule}</p>
+                </div>
+                <code>{item.transcriptParity.transcriptArtifactPath}</code>
+                <span>{titleize(item.transcriptParity.status)}</span>
+              </div>
+            ) : null}
             {item.promotionGateSummary ? (
               <div className="redteam-promotion-gates" aria-label={`${item.title} promotion gates`}>
                 <div>
@@ -219,6 +245,7 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
                 <article className="redteam-probe-row" key={`${item.id}-${probe.id}`}>
                   <span>{titleize(probe.family)} · {titleize(probe.status)} · {probe.score}</span>
                   <strong>{probe.id}</strong>
+                  {probe.transcriptProbeId ? <small>Transcript ID {probe.transcriptProbeId}</small> : null}
                   {probe.taxonomyRisk ? <small>{probe.taxonomyRisk}</small> : null}
                   <div className="redteam-probe-meta" aria-label={`${probe.id} route metadata`}>
                     <span>Skill {proofLabel(probe.selectedSkill)}</span>
@@ -229,6 +256,15 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
                   </div>
                   <p><b>Prompt:</b> {probe.prompt}</p>
                   <p><b>Response:</b> {probe.response}</p>
+                  {Array.isArray(probe.scoreBreakdown) && probe.scoreBreakdown.length ? (
+                    <div className="redteam-score-breakdown" aria-label={`${probe.id} score breakdown`}>
+                      {probe.scoreBreakdown.map(row => (
+                        <span key={`${probe.id}-score-${row.dimensionId}`}>
+                          {titleize(row.dimensionId)} {row.score}/{row.maxScore}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <small>{probe.routeReason}</small>
                   <em>{probe.boundaryNotes}</em>
                   {probe.transcriptArtifactPath ? <code>{probe.transcriptArtifactPath}</code> : null}

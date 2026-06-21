@@ -5129,6 +5129,64 @@ button.builder-review-target:hover {
   padding: 4px 8px;
 }
 
+.redteam-transcript-parity {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  border: 1px solid rgba(142, 203, 111, 0.2);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(142, 203, 111, 0.07), transparent 62%),
+    rgba(255, 255, 255, 0.026);
+  padding: 10px;
+}
+
+.redteam-transcript-parity div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.redteam-transcript-parity span,
+.redteam-transcript-parity p,
+.redteam-transcript-parity code {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.redteam-transcript-parity strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.redteam-transcript-parity p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.redteam-transcript-parity code {
+  display: block;
+  max-width: 100%;
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.14);
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+}
+
+.redteam-transcript-parity > span {
+  width: max-content;
+  max-width: 100%;
+  border: 1px solid rgba(142, 203, 111, 0.22);
+  border-radius: 999px;
+  background: rgba(142, 203, 111, 0.08);
+  color: var(--text);
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
 .redteam-promotion-gates {
   display: grid;
   gap: 8px;
@@ -5307,6 +5365,19 @@ button.builder-review-target:hover {
 
 .redteam-probe-row code {
   overflow-wrap: anywhere;
+}
+
+.redteam-score-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.redteam-score-breakdown span {
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 4px 7px;
 }
 
 .redteam-artifact-map {

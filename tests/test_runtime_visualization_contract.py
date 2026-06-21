@@ -309,6 +309,8 @@ def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:
     assert "redteam-taxonomy-map" in component
     assert "redteam-coverage-matrix" in component
     assert "redteam-probe-transcripts" in component
+    assert "redteam-transcript-parity" in component
+    assert "Transcript parity" in component
     assert "safe probe transcripts" in component
     assert "Promotion gate summary" in component
     assert "taxonomyRisk" in component
@@ -320,9 +322,13 @@ def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:
     assert ".redteam-taxonomy-map" in styles
     assert ".redteam-coverage-row" in styles
     assert ".redteam-probe-row" in styles
+    assert ".redteam-transcript-parity" in styles
+    assert ".redteam-score-breakdown" in styles
     assert "RED_TEAM_PROOF_PACKETS" in fixtures
     assert "coverageMatrix" in fixtures
     assert "probeTranscripts" in fixtures
+    assert "transcriptParity" in fixtures
+    assert "redteam-transcript-parity.v1" in fixtures
     assert "probe-prompt-injection-scope" in fixtures
     assert "safeProbeTaxonomy" in fixtures
     assert "promotionGateSummary" in fixtures

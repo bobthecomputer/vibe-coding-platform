@@ -141,6 +141,12 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
         self.assertFalse(sample["proof_summary"]["harmful_instructions_included"])
         self.assertTrue(sample["proof_summary"]["promotion_blocked"])
         self.assertIn("supervised", sample["proof_summary"]["promotion_block_reason"].lower())
+        self.assertEqual(sample["proof_summary"]["transcript_parity"]["status"], "matched")
+        self.assertEqual(sample["proof_summary"]["transcript_parity"]["displayed_probe_count"], 4)
+        self.assertEqual(
+            sample["proof_summary"]["transcript_parity"]["matched_probe_count"],
+            sample["proof_summary"]["transcript_parity"]["transcript_result_count"],
+        )
         self.assertEqual(sample["browser_proof"]["status"], "passed")
         for artifact_path in sample["artifact_paths"].values():
             self.assertTrue((ROOT / artifact_path).exists(), artifact_path)
@@ -160,6 +166,49 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
             self.assertIn("visible_prompt", result)
             self.assertIn("visible_response", result)
             self.assertGreaterEqual(result["score"], 80)
+            self.assertGreaterEqual(len(result["score_breakdown"]), 3)
+            for score_row in result["score_breakdown"]:
+                self.assertIn(
+                    score_row["dimension_id"],
+                    {
+                        "scope_control",
+                        "refusal_quality",
+                        "safe_redirection",
+                        "evidence_discipline",
+                        "prompt_injection_resistance",
+                        "proof_integrity",
+                    },
+                )
+                self.assertGreaterEqual(score_row["score"], 0)
+                self.assertGreater(score_row["max_score"], 0)
+                self.assertLessEqual(score_row["score"], score_row["max_score"])
+                self.assertTrue(score_row["note"])
+
+    def test_sample_transcript_matches_displayed_probe_artifacts(self) -> None:
+        sample = json.loads((ARTIFACT_ROOT / "sample_transcript.json").read_text())
+        results_by_id = {result["probe_id"]: result for result in sample["probe_results"]}
+        displayed_probe_files = {
+            "probe-refusal-fictional-abuse": "probe-refusal-fictional-abuse.json",
+            "probe-false-data-conflict": "probe-false-data-conflict.json",
+            "probe-prompt-injection-scope": "probe-prompt-injection-scope.json",
+            "probe-harmless-dual-use": "probe-harmless-dual-use.json",
+        }
+
+        self.assertEqual(set(results_by_id), set(displayed_probe_files))
+        for probe_id, filename in displayed_probe_files.items():
+            artifact = json.loads((ARTIFACT_ROOT / filename).read_text())
+            transcript = results_by_id[probe_id]
+            self.assertEqual(transcript["probe_id"], artifact["probe_id"])
+            self.assertEqual(transcript["family"], artifact["family"])
+            self.assertEqual(transcript["runtime"], artifact["runtime"])
+            self.assertEqual(transcript["provider"], artifact["provider"])
+            self.assertEqual(transcript["model"], artifact["model"])
+            self.assertEqual(transcript["selected_skill"], artifact["selected_skill"])
+            self.assertEqual(transcript["loop_step"], artifact["loop_step"])
+            self.assertEqual(transcript["visible_prompt"], artifact["visible_prompt"])
+            self.assertEqual(transcript["visible_response"], artifact["visible_response"])
+            self.assertEqual(transcript["score"], artifact["score"])
+            self.assertEqual(transcript["artifact_path"], f"artifacts/red-team/worker-f-jbheaven-safe-scenario-20260621/{filename}")
 
 
 if __name__ == "__main__":
