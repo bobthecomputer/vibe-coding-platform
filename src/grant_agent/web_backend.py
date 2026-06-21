@@ -1210,6 +1210,84 @@ def _provider_orchestration_score(candidate: dict[str, Any], required_capabiliti
     return score
 
 
+def _fusion_home_candidates(root: Path) -> list[Path]:
+    explicit_home = os.environ.get("FLUXIO_FUSION_HOME")
+    raw_values = (
+        [explicit_home]
+        if explicit_home
+        else [
+            os.environ.get("HOME"),
+            os.environ.get("USERPROFILE"),
+            str(Path.home()),
+        ]
+    )
+    homes: list[Path] = []
+    for value in raw_values:
+        if not value:
+            continue
+        try:
+            path = Path(value).expanduser().resolve()
+        except OSError:
+            continue
+        if path not in homes:
+            homes.append(path)
+    if not explicit_home:
+        for parent in [root, *root.parents]:
+            if parent.name.lower() == "projects":
+                projects_parent = parent.parent
+                if projects_parent not in homes:
+                    homes.append(projects_parent)
+                break
+    return homes
+
+
+def _fusion_existing_paths(paths: list[Path]) -> list[Path]:
+    output: list[Path] = []
+    for path in paths:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            continue
+        if resolved.exists() and resolved not in output:
+            output.append(resolved)
+    return output
+
+
+def _fusion_read_json_value(path: Path) -> Any:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload
+
+
+def _fusion_read_json(path: Path) -> dict[str, Any]:
+    payload = _fusion_read_json_value(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fusion_child_dirs(path: Path, name: str, *, limit: int = 8) -> list[str]:
+    target = path / name
+    if not target.exists():
+        return []
+    try:
+        return sorted(item.name for item in target.iterdir() if item.is_dir())[:limit]
+    except OSError:
+        return []
+
+
+def _fusion_file_count(path: Path, patterns: tuple[str, ...]) -> int:
+    if not path.exists():
+        return 0
+    count = 0
+    for pattern in patterns:
+        try:
+            count += sum(1 for item in path.rglob(pattern) if item.is_file())
+        except OSError:
+            continue
+    return count
+
+
 def _provider_secret_store_path(root: Path) -> Path:
     return root / ".agent_control" / "provider_secrets.json"
 
@@ -4437,6 +4515,208 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _fusion_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        homes = _fusion_home_candidates(root)
+        projects_roots = [home / "Projects" for home in homes] + [
+            parent for parent in root.parents if parent.name.lower() == "projects"
+        ]
+        synology_roots = [home / "SynologyDrive" for home in homes]
+        archived_skill_roots = [home / ".codex" / "skills-archived-20260427" for home in homes]
+        mind_candidates = _fusion_existing_paths(
+            [
+                *(projects / "mind-tower" for projects in projects_roots),
+                *(synology / "mind-tower" for synology in synology_roots),
+            ]
+        )
+        solantir_app_candidates = _fusion_existing_paths(
+            [
+                *(projects / "solantir" for projects in projects_roots),
+                *(projects / "Solantir" for projects in projects_roots),
+                *(synology / "solantir" for synology in synology_roots),
+                *(synology / "Solantir" for synology in synology_roots),
+            ]
+        )
+        solantir_fusion_candidates = _fusion_existing_paths(
+            [
+                *(projects / "solantir-mindtower-fusion" for projects in projects_roots),
+                *(synology / "solantir-mindtower-fusion" for synology in synology_roots),
+            ]
+        )
+        solantir_archive_candidates = _fusion_existing_paths(
+            [
+                *(archived / "solantir-terminal-ui" for archived in archived_skill_roots),
+            ]
+        )
+        connected_apps_path = root / "config" / "connected_apps.json"
+        connected_apps = _fusion_read_json_value(connected_apps_path)
+        manifest_rows = connected_apps if isinstance(connected_apps, list) else []
+
+        def manifest_for(app_id: str) -> dict[str, Any]:
+            for row in manifest_rows:
+                if isinstance(row, dict) and row.get("app_id") == app_id:
+                    return row
+            return {}
+
+        mind_root = mind_candidates[0] if mind_candidates else None
+        mind_package = _fusion_read_json(mind_root / "package.json") if mind_root else {}
+        mind_project = {
+            "id": "mind-tower",
+            "label": "Mind Tower",
+            "status": "detected" if mind_root else "missing",
+            "selectedRoot": str(mind_root) if mind_root else "",
+            "candidateRoots": [str(path) for path in mind_candidates],
+            "packageName": str(mind_package.get("name") or ""),
+            "packageVersion": str(mind_package.get("version") or ""),
+            "skills": _fusion_child_dirs(mind_root, "skills") if mind_root else [],
+            "apps": _fusion_child_dirs(mind_root, "apps") if mind_root else [],
+            "services": _fusion_child_dirs(mind_root, "services") if mind_root else [],
+            "fileCounts": {
+                "skillFiles": _fusion_file_count(mind_root / "skills", ("SKILL.md",)) if mind_root else 0,
+                "typescript": _fusion_file_count(mind_root, ("*.ts", "*.tsx")) if mind_root else 0,
+                "python": _fusion_file_count(mind_root, ("*.py",)) if mind_root else 0,
+            },
+            "survivesAs": [
+                "timebox and focus-planning bridge",
+                "reusable Mind Tower skills",
+                "operator approval workflow for timebox/skill proposals",
+            ],
+            "migrationRisk": "medium" if mind_root else "blocked",
+            "nextAction": (
+                "Keep Mind Tower read-only first; route timebox and skill proposals through approval receipts."
+                if mind_root
+                else "Locate or restore the Mind Tower workspace before queuing fusion actions."
+            ),
+        }
+
+        solantir_manifest = manifest_for("solantir-terminal")
+        solantir_surfaces = solantir_manifest.get("context_surfaces")
+        solantir_surface_rows = solantir_surfaces if isinstance(solantir_surfaces, list) else []
+        solantir_root = solantir_app_candidates[0] if solantir_app_candidates else None
+        solantir_project = {
+            "id": "solantir-terminal",
+            "label": "Solantir Terminal",
+            "status": (
+                "app_detected"
+                if solantir_root
+                else "fusion_workspace_detected"
+                if solantir_fusion_candidates
+                else "archived_skill_detected"
+                if solantir_archive_candidates
+                else "manifest_only"
+            ),
+            "selectedRoot": str(solantir_root or (solantir_fusion_candidates[0] if solantir_fusion_candidates else "") or (solantir_archive_candidates[0] if solantir_archive_candidates else "")),
+            "candidateRoots": [str(path) for path in [*solantir_app_candidates, *solantir_fusion_candidates, *solantir_archive_candidates]],
+            "bridgeEndpoint": str((solantir_manifest.get("bridge") or {}).get("endpoint") or "pipe://fluxio-solantir"),
+            "surface": str((solantir_surface_rows[0] if solantir_surface_rows else {}).get("label") or "Watchlist"),
+            "fileCounts": {
+                "typescript": _fusion_file_count(solantir_root, ("*.ts", "*.tsx")) if solantir_root else 0,
+                "python": _fusion_file_count(solantir_root, ("*.py",)) if solantir_root else 0,
+                "fusionWorkspaceFiles": _fusion_file_count(solantir_fusion_candidates[0], ("*.md", "*.json", "*.py", "*.ts", "*.tsx")) if solantir_fusion_candidates else 0,
+            },
+            "survivesAs": [
+                "operator dashboard/watchlist bridge",
+                "Solantir terminal capability manifest",
+                "historical fusion workspace evidence",
+            ],
+            "migrationRisk": "high" if not solantir_root else "medium",
+            "nextAction": (
+                "Do not merge Solantir UI blindly; first restore or confirm the live app root behind the terminal bridge."
+                if not solantir_root
+                else "Audit live Solantir UI modules before moving shared runtime pieces."
+            ),
+        }
+        projects = [mind_project, solantir_project]
+        detected_count = sum(1 for project in projects if project["status"] not in {"missing", "manifest_only"})
+        contract = {
+            "schema": "fluxio.fusion_readiness.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode"],
+            "status": "ready_for_read_only_bridge" if mind_root else "blocked_missing_mind_tower",
+            "projects": projects,
+            "detectedCount": detected_count,
+            "overlap": [
+                "skills and reusable workflows",
+                "operator dashboard/context surfaces",
+                "approval-gated actions",
+                "proof receipts and bridge health",
+            ],
+            "keep": [
+                "Mind Tower skills and timebox planning",
+                "Solantir terminal/watchlist manifest",
+                "existing Fluxio app capability standard",
+                "read-only bridge proof before write actions",
+            ],
+            "deprecate": [
+                "duplicate standalone launcher claims without bridge health",
+                "fusion status copied from historical missions as current proof",
+                "write actions before approval receipts exist",
+            ],
+            "firstMergeTarget": {
+                "title": "Read-only fusion inventory",
+                "summary": "Expose Mind Tower file inventory and Solantir terminal manifest state in Fluxio before moving UI/runtime modules.",
+                "acceptance": [
+                    "Mind Tower root is detected or reported missing with exact path candidates.",
+                    "Solantir live app root is distinguished from archived/fusion workspace evidence.",
+                    "No write action is enabled until bridge health and approval receipts exist.",
+                ],
+            },
+            "migrationPlan": [
+                {
+                    "step": 1,
+                    "title": "Read-only inventory and bridge health",
+                    "owner": "Fluxio",
+                    "risk": "low",
+                    "doneWhen": "The app shows detected roots, bridge endpoint, and missing Solantir live-root state.",
+                },
+                {
+                    "step": 2,
+                    "title": "Shared runtime contract",
+                    "owner": "Hermes with OpenClaw fallback",
+                    "risk": "medium",
+                    "doneWhen": "Mind Tower timebox and Solantir watchlist actions share proof/approval receipts.",
+                },
+                {
+                    "step": 3,
+                    "title": "UI fusion",
+                    "owner": "Product UI",
+                    "risk": "high",
+                    "doneWhen": "One operator surface replaces duplicate dashboards after screenshots and tests.",
+                },
+            ],
+            "blockers": [
+                blocker
+                for blocker in [
+                    "" if mind_root else "Mind Tower workspace root is missing.",
+                    "" if solantir_root else "Live Solantir app root is not detected; only manifest/archive/fusion evidence is available.",
+                ]
+                if blocker
+            ],
+            "sourceFiles": [
+                str(connected_apps_path),
+                "scripts/mind_tower_bridge.py",
+                "src/grant_agent/app_capability_standard.py",
+            ],
+            "nextAction": "Build the read-only fusion inventory bridge; do not delete or merge app code until live roots and bridge health are proven.",
+        }
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"fusion-readiness-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "fusion_readiness"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "solantir_mind_tower_fusion_readiness",
+            "connectedAppsPath": str(connected_apps_path),
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _write_image_playground_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
         provider_id = self._image_provider_id(payload)
@@ -6227,6 +6507,8 @@ class FluxioWebBackend:
             return self._skill_runtime_contract_artifact(command, payload)
         if command in {"provider_orchestration_command", "get_provider_orchestration_command"}:
             return self._provider_orchestration_artifact(command, payload)
+        if command in {"fusion_readiness_command", "get_fusion_readiness_command"}:
+            return self._fusion_readiness_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

@@ -1411,6 +1411,27 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".fluxos-provider-proof-button", styles)
         self.assertIn(".fluxos-provider-route-health", styles)
 
+    def test_settings_runtimes_rooms_has_fusion_readiness_panel(self) -> None:
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        web_backend = WEB_BACKEND.read_text(encoding="utf-8")
+
+        self.assertIn('data-settings-runtimes-panel="true"', reference_shell)
+        self.assertIn('data-fusion-readiness-contract="true"', reference_shell)
+        self.assertIn('data-fusion-readiness-schema={fusionReadiness.schema || "fluxio.fusion_readiness.v1"}', reference_shell)
+        self.assertIn("Solantir / Mind Tower fusion", reference_shell)
+        self.assertIn("Capture fusion proof", reference_shell)
+        self.assertIn("fusion:capture-readiness", reference_shell)
+        self.assertIn("Read-only fusion inventory", shell)
+        self.assertIn("fusionReadinessContract", shell)
+        self.assertIn("get_fusion_readiness_command", shell)
+        self.assertIn("fluxio.fusion_readiness.v1", web_backend)
+        self.assertIn("solantir_mind_tower_fusion_readiness", web_backend)
+        self.assertIn(".fluxos-fusion-readiness", styles)
+        self.assertIn(".fluxos-fusion-project-grid", styles)
+        self.assertIn(".fluxos-fusion-proof-button", styles)
+
     def test_packaged_tauri_defaults_to_live_mode_without_fixture(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
 

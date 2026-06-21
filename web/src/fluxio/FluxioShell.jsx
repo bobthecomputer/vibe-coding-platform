@@ -5185,6 +5185,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
   const [providerSecretSaving, setProviderSecretSaving] = useState({});
   const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
+  const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
@@ -15200,6 +15201,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "fusion:capture-readiness") {
+        setSurface("settings");
+        setReferenceSettingsTab("runtimes");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture fusion readiness proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_fusion_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `fusion-readiness-${Date.now()}`,
+              },
+            },
+            { throwOnError: true },
+          );
+          setFusionReadinessContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Fusion readiness proof captured: ${pathLeaf(artifactPath)}.`
+              : "Fusion readiness proof captured.",
+            "info",
+          );
+          await refreshAll("fusion-readiness");
+        } catch (error) {
+          pushToast(`Fusion readiness proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "settings:run-action") {
         const action = payload?.action;
         if (!action?.actionId) {
@@ -19204,6 +19240,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     runtimes: asList(snapshot?.runtimes),
     bridgeSessions,
     storageBridge: snapshot?.storageBridge || {},
+    fusionReadiness: fusionReadinessContract || {
+      schema: "fluxio.fusion_readiness.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      detectedCount: 0,
+      projects: [
+        {
+          id: "mind-tower",
+          label: "Mind Tower",
+          status: "pending",
+          selectedRoot: "",
+          bridgeEndpoint: "http://127.0.0.1:47842/fluxio",
+          survivesAs: ["timebox bridge", "reusable skills", "approval workflow"],
+          nextAction: "Capture live readiness proof to locate the local or Synology workspace.",
+        },
+        {
+          id: "solantir-terminal",
+          label: "Solantir Terminal",
+          status: "pending",
+          selectedRoot: "",
+          bridgeEndpoint: "pipe://fluxio-solantir",
+          survivesAs: ["watchlist bridge", "terminal manifest", "historical fusion evidence"],
+          nextAction: "Capture live readiness proof to distinguish live app root from archived evidence.",
+        },
+      ],
+      firstMergeTarget: {
+        title: "Read-only fusion inventory",
+        summary: "Detect roots and bridge health before moving UI/runtime modules.",
+      },
+      blockers: ["Live capture has not run in this browser session."],
+      nextAction: "Capture fusion proof before claiming SOLANTIR/MIND TOWER fusion readiness.",
+      proof: null,
+    },
     setupServices: [
       ...asList(setupHealth?.serviceManagement),
       ...asList(workspace?.serviceManagement),

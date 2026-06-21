@@ -890,6 +890,75 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(proof["proof"]["purpose"], "provider_orchestration_model_switching_contract")
             self.assertEqual(proof["selectedRoute"]["model"], "openrouter/z-ai/glm-5.2")
 
+    def test_fusion_readiness_command_writes_detected_project_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            user_root = pathlib.Path(temp_dir) / "user"
+            projects = user_root / "Projects"
+            root = projects / "vibe-coding-platform"
+            mind_tower = projects / "mind-tower"
+            fusion_workspace = user_root / "SynologyDrive" / "solantir-mindtower-fusion"
+            root.mkdir(parents=True)
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "connected_apps.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "app_id": "solantir-terminal",
+                            "bridge": {"endpoint": "pipe://custom-solantir"},
+                            "context_surfaces": [{"label": "Terminal watchlist"}],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (mind_tower / "skills" / "mindtower-ui-craft").mkdir(parents=True)
+            (mind_tower / "services" / "bridge").mkdir(parents=True)
+            (mind_tower / "apps" / "tower").mkdir(parents=True)
+            (mind_tower / "package.json").write_text(
+                json.dumps({"name": "mind-tower", "version": "1.2.3"}),
+                encoding="utf-8",
+            )
+            (mind_tower / "skills" / "mindtower-ui-craft" / "SKILL.md").write_text(
+                "# Mind Tower UI Craft\n",
+                encoding="utf-8",
+            )
+            fusion_workspace.mkdir(parents=True)
+            (fusion_workspace / "README.md").write_text("fusion evidence\n", encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(user_root),
+                    "USERPROFILE": str(user_root),
+                    "FLUXIO_FUSION_HOME": str(user_root),
+                },
+            ):
+                contract = backend.dispatch(
+                    "get_fusion_readiness_command",
+                    {"root": str(root), "requestId": "mission7-fusion-test"},
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.fusion_readiness.v1")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertEqual(contract["status"], "ready_for_read_only_bridge")
+            projects_by_id = {item["id"]: item for item in contract["projects"]}
+            self.assertEqual(projects_by_id["mind-tower"]["status"], "detected")
+            self.assertEqual(projects_by_id["mind-tower"]["packageVersion"], "1.2.3")
+            self.assertIn("mindtower-ui-craft", projects_by_id["mind-tower"]["skills"])
+            self.assertEqual(projects_by_id["solantir-terminal"]["status"], "fusion_workspace_detected")
+            self.assertIn(str(fusion_workspace), projects_by_id["solantir-terminal"]["candidateRoots"])
+            self.assertEqual(projects_by_id["solantir-terminal"]["bridgeEndpoint"], "pipe://custom-solantir")
+            self.assertEqual(projects_by_id["solantir-terminal"]["surface"], "Terminal watchlist")
+            self.assertIn("Read-only fusion inventory", contract["firstMergeTarget"]["title"])
+            self.assertTrue(contract["blockers"])
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "solantir_mind_tower_fusion_readiness")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
