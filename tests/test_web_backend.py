@@ -2351,6 +2351,53 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(proof_path.exists())
             self.assertIn("mission_anti_drift_guard", proof_path.read_text(encoding="utf-8"))
 
+    def test_skill_runtime_contract_command_writes_runtime_proof_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "repo_scan",
+                            "description": "Ground the task in repo evidence.",
+                            "schema": {
+                                "type": "object",
+                                "properties": {"taskBrief": {"type": "string"}},
+                                "required": ["taskBrief"],
+                            },
+                            "permissions": ["file_read"],
+                            "action_kinds": ["workspace_search"],
+                            "execution_capable": True,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "get_skill_runtime_contract_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission5-test",
+                    "taskBrief": "scan the repo before editing",
+                    "skillId": "repo_scan",
+                },
+            )
+
+            self.assertEqual(result["schema"], "fluxio.skill_runtime_contract.v1")
+            self.assertEqual(result["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", result["fallbackRuntimeLanes"])
+            self.assertIn("opencode", result["fallbackRuntimeLanes"])
+            self.assertEqual(result["skills"][0]["skillId"], "repo_scan")
+            self.assertEqual(result["skills"][0]["route"]["runtimeLane"], "hermes")
+            self.assertEqual(result["skills"][0]["output"]["schema"], "fluxio.skill_runtime_result.v1")
+            proof_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(proof_path.exists())
+            self.assertIn("skills_runtime_centralization_contract", proof_path.read_text(encoding="utf-8"))
+
     def test_record_delivery_receipt_command_persists_browser_notification_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

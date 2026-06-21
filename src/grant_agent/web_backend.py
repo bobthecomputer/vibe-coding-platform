@@ -54,6 +54,8 @@ from .mission_control import (
 from .models import MissionEvent, utc_now_iso
 from .mission_watchdog import ensure_watchdog_supervisor_loop
 from .port_safety import tcp_port_accepts_connection
+from .skill_library import SkillLibrary
+from .skills import SkillRegistry
 from .subprocess_utils import hidden_windows_subprocess_kwargs
 
 
@@ -4194,6 +4196,30 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return guard
 
+    def _skill_runtime_contract_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        library = SkillLibrary(root=root, registry=SkillRegistry(root / "config" / "skills.json"))
+        contract = library.build_runtime_contract(
+            task_brief=str(payload.get("taskBrief") or payload.get("task_brief") or ""),
+            selected_skill_id=str(payload.get("skillId") or payload.get("skill_id") or ""),
+        )
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"skill-runtime-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "skill_runtime_contracts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "sourceRegistry": str(root / "config" / "skills.json"),
+            "purpose": "skills_runtime_centralization_contract",
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _write_image_playground_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
         provider_id = self._image_provider_id(payload)
@@ -5980,6 +6006,8 @@ class FluxioWebBackend:
             return self._ui_self_repair_loop_artifact(payload)
         if command in {"mission_anti_drift_guard_command", "get_mission_anti_drift_guard_command"}:
             return self._mission_anti_drift_guard_artifact(command, payload)
+        if command in {"skill_runtime_contract_command", "get_skill_runtime_contract_command"}:
+            return self._skill_runtime_contract_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

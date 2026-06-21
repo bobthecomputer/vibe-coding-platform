@@ -111,6 +111,14 @@ class FluxioHarnessTests(unittest.TestCase):
                 catalog["curatedPacks"][0]["feedbackSummary"]["trend"],
                 "reinforce",
             )
+            runtime_contract = catalog["runtimeContract"]
+            self.assertEqual(runtime_contract["schema"], "fluxio.skill_runtime_contract.v1")
+            self.assertEqual(runtime_contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", runtime_contract["fallbackRuntimeLanes"])
+            self.assertIn("opencode", runtime_contract["fallbackRuntimeLanes"])
+            self.assertEqual(runtime_contract["skills"][0]["output"]["schema"], "fluxio.skill_runtime_result.v1")
+            self.assertTrue(runtime_contract["skills"][0]["output"]["artifactRequired"])
+            self.assertIn("attach_proof_to_mission", runtime_contract["skills"][0]["guardrails"])
 
     def test_skill_retrieval_uses_slice_loss_to_route_away_from_repair_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

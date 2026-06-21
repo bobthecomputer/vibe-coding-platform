@@ -5188,6 +5188,130 @@ button.fluxos-context-root:hover {
   font-size: 15px;
 }
 
+.fluxos-skill-runtime-contract {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+  padding: 12px;
+}
+
+.fluxos-skill-runtime-contract.ready {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.fluxos-skill-runtime-contract-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.fluxos-skill-runtime-contract-head > div,
+.fluxos-skill-runtime-contract-actions,
+.fluxos-skill-runtime-lane {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fluxos-skill-runtime-contract span,
+.fluxos-skill-runtime-contract small,
+.fluxos-skill-runtime-lane em {
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fluxos-skill-runtime-contract strong {
+  color: var(--fluxos-text);
+  line-height: 1.2;
+}
+
+.fluxos-skill-runtime-contract p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxos-skill-runtime-contract-actions {
+  justify-items: end;
+  text-align: right;
+}
+
+.fluxos-skill-runtime-contract-actions button {
+  min-height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #050608;
+  font-size: 11px;
+  font-weight: 760;
+  padding: 0 14px;
+}
+
+.fluxos-skill-runtime-metrics,
+.fluxos-skill-runtime-lanes {
+  display: grid;
+  gap: 8px;
+}
+
+.fluxos-skill-runtime-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fluxos-skill-runtime-metrics article,
+.fluxos-skill-runtime-lane {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.028);
+  padding: 8px;
+}
+
+.fluxos-skill-runtime-metrics article {
+  display: grid;
+  gap: 3px;
+}
+
+.fluxos-skill-runtime-metrics strong {
+  font-family: var(--fluxos-mono);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.fluxos-skill-runtime-lanes {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.fluxos-skill-runtime-lane.held {
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.fluxos-skill-runtime-lane em {
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
+@media (max-width: 760px) {
+  .fluxos-skill-runtime-contract-head,
+  .fluxos-skill-runtime-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .fluxos-skill-runtime-contract-actions {
+    justify-items: stretch;
+    text-align: left;
+  }
+
+  .fluxos-skill-runtime-contract-actions button {
+    width: 100%;
+  }
+}
+
 .fluxos-skill-command-band {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
