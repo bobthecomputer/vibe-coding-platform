@@ -4137,6 +4137,65 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.redteam-route-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.redteam-route-strip span,
+.redteam-authorization-card span,
+.redteam-probe-meta span {
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 4px 8px;
+}
+
+.redteam-route-card {
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(125, 211, 252, 0.07), transparent 58%),
+    rgba(255, 255, 255, 0.026);
+  padding: 10px;
+}
+
+.redteam-route-card dl {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 0;
+}
+
+.redteam-route-card div {
+  min-width: 0;
+}
+
+.redteam-route-card dt {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.redteam-route-card dd {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.redteam-authorization-card,
+.redteam-probe-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .redteam-boundary-score {
   display: flex;
   flex-wrap: wrap;
@@ -4155,6 +4214,36 @@ button.builder-review-target:hover {
 .redteam-coverage-matrix {
   display: grid;
   gap: 7px;
+}
+
+.redteam-loop-trace {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.redteam-loop-trace article {
+  border: 1px solid rgba(238, 242, 236, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.13);
+  padding: 8px;
+}
+
+.redteam-loop-trace span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.redteam-loop-trace strong {
+  display: block;
+  margin-top: 2px;
+}
+
+.redteam-loop-trace p {
+  color: rgba(238, 242, 236, 0.68);
+  font-size: 11px;
+  line-height: 1.35;
+  margin: 4px 0 0;
 }
 
 .redteam-coverage-row {
@@ -4220,6 +4309,11 @@ button.builder-review-target:hover {
 
 .redteam-probe-row code {
   overflow-wrap: anywhere;
+}
+
+.redteam-artifact-map {
+  display: grid;
+  gap: 4px;
 }
 
 .fusion-source-path {

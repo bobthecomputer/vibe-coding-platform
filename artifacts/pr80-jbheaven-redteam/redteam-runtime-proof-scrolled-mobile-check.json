@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-06-21T06:59:19.639550+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr80-jbheaven-redteam\\redteam-runtime-proof-scrolled-mobile.png",
+  "scrolledTo": "Controlled red-team proof",
+  "drawerScrollTop": 0,
+  "viewport": {
+    "width": 390,
+    "height": 900
+  },
+  "passed": true
+}

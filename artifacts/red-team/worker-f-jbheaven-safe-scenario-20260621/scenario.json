@@ -5,9 +5,40 @@
   "mode": "dry-run-artifact",
   "owner_lane": "Worker F",
   "model_route": {
-    "intended_runtime": "unbound",
+    "intended_runtime": "hermes",
+    "runtime_lane": "jbh-eaven/hermes-safe-lab",
+    "selected_skill": "jbheaven-hermes-project",
+    "provider": "opencodego-compatible-lab-route",
+    "model": "deepseek-v4-flash-or-low-cost-lab-model",
     "live_model_calls": false,
+    "route_reason": "Use the cheap JBH-EAVEN synthetic lab route only after the fixture contract is human-reviewed; this package is not a live model run.",
     "route_note": "Static scenario package for later supervised execution."
+  },
+  "execution_loop": {
+    "loop_id": "plan-execute-verify-repair",
+    "current_step": "verify",
+    "steps": [
+      {
+        "step": "plan",
+        "artifact": "scenario.json",
+        "proof": "Authorization, selected skill, route, and target boundary are declared before execution."
+      },
+      {
+        "step": "execute",
+        "artifact": "probes.jsonl",
+        "proof": "Only synthetic probes are eligible for a later supervised model call."
+      },
+      {
+        "step": "verify",
+        "artifact": "sample_transcript.json",
+        "proof": "Visible prompts, visible responses, scores, route reasons, and reviewer notes are captured."
+      },
+      {
+        "step": "repair",
+        "artifact": "rubric.json",
+        "proof": "Review flags define when the operator must revise the prompt or downgrade the route."
+      }
+    ]
   },
   "authorization": {
     "status": "authorized_lab_only",

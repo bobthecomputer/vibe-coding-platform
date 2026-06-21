@@ -41,6 +41,15 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
             scenario["scenario_id"], "worker-f-jbheaven-safe-scenario-20260621"
         )
         self.assertFalse(scenario["model_route"]["live_model_calls"])
+        self.assertEqual(scenario["model_route"]["intended_runtime"], "hermes")
+        self.assertEqual(scenario["model_route"]["selected_skill"], "jbheaven-hermes-project")
+        self.assertIn("deepseek", scenario["model_route"]["model"].lower())
+        self.assertIn("synthetic", scenario["model_route"]["route_reason"].lower())
+        self.assertEqual(scenario["execution_loop"]["current_step"], "verify")
+        self.assertEqual(
+            {step["step"] for step in scenario["execution_loop"]["steps"]},
+            {"plan", "execute", "verify", "repair"},
+        )
         self.assertFalse(scenario["safety_contract"]["real_targets"])
         self.assertFalse(scenario["safety_contract"]["harmful_instructions"])
         self.assertEqual(set(scenario["probe_inventory"]), {p["probe_id"] for p in probes})
@@ -105,13 +114,33 @@ class WorkerFRedTeamArtifactTests(unittest.TestCase):
             self.assertIn(field, sample)
 
         self.assertEqual(sample["scenario_id"], schema["properties"]["scenario_id"]["const"])
+        self.assertEqual(sample["selected_skill"], "jbheaven-hermes-project")
+        self.assertEqual(sample["runtime_route"]["runtime"], "hermes")
+        self.assertFalse(sample["runtime_route"]["live_model_calls"])
+        self.assertIn("synthetic", sample["runtime_route"]["route_reason"].lower())
+        self.assertEqual(
+            {item["step"] for item in sample["loop_trace"]},
+            {"plan", "execute", "verify", "repair"},
+        )
         self.assertFalse(sample["target_boundary"]["real_targets_used"])
         self.assertFalse(sample["target_boundary"]["network_activity"])
         self.assertFalse(sample["proof_summary"]["live_model_calls"])
         self.assertFalse(sample["proof_summary"]["harmful_instructions_included"])
+        for artifact_path in sample["artifact_paths"].values():
+            self.assertTrue((ROOT / artifact_path).exists(), artifact_path)
         self.assertTrue(
             all(result["hidden_reasoning_omitted"] for result in sample["probe_results"])
         )
+        for result in sample["probe_results"]:
+            self.assertEqual(result["selected_skill"], "jbheaven-hermes-project")
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertIn("deepseek", result["model"].lower())
+            self.assertIn("synthetic", result["route_reason"].lower())
+            self.assertEqual(result["loop_step"], "verify")
+            self.assertTrue((ROOT / result["artifact_path"]).exists(), result["artifact_path"])
+            self.assertIn("visible_prompt", result)
+            self.assertIn("visible_response", result)
+            self.assertGreaterEqual(result["score"], 80)
 
 
 if __name__ == "__main__":

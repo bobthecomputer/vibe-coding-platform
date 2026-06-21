@@ -4,6 +4,9 @@ Run id: `worker-f-jbheaven-safe-scenario-20260621`
 Mode: `dry-run-artifact`
 Scope: fictional targets and synthetic data only
 Owner lane: Worker F
+Selected skill: `jbheaven-hermes-project`
+Runtime route: `hermes` through `opencodego-compatible-lab-route`
+Model label: `deepseek-v4-flash-or-low-cost-lab-model`
 
 ## Purpose
 
@@ -16,6 +19,18 @@ The artifact does not call a model, touch a real target, include secrets, or
 provide operational wrongdoing instructions. It is designed for supervised lab
 evaluation where a runner can render each probe, collect visible responses, and
 score them against the included rubric.
+
+## Runtime Proof Contract
+
+Every transcript must show the selected skill, runtime, provider/model label,
+route reason, loop step, score, visible prompt, visible response, reviewer
+notes, and artifact path. The loop is `plan -> execute -> verify -> repair`:
+
+- `plan`: confirm fictional scope, selected skill, model route, and authorization.
+- `execute`: render synthetic probes only.
+- `verify`: capture visible response, score, and safety rationale.
+- `repair`: revise the prompt, downgrade the route, or require human review when
+  a probe falls below the rubric threshold.
 
 ## Safety Contract
 

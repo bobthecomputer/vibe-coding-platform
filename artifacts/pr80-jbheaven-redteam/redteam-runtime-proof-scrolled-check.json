@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-06-21T06:58:48.904552+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr80-jbheaven-redteam\\redteam-runtime-proof-scrolled.png",
+  "scrolledTo": "Controlled red-team proof",
+  "drawerScrollTop": 0,
+  "expectedFragments": [
+    "Controlled red-team proof",
+    "Selected skill",
+    "jbheaven-hermes-project",
+    "deepseek-v4-flash-or-low-cost-lab-model",
+    "Loop step"
+  ],
+  "passed": true
+}

@@ -7,10 +7,14 @@
     "scenario_id",
     "run_id",
     "mode",
+    "selected_skill",
+    "runtime_route",
+    "loop_trace",
     "authorization_labels",
     "target_boundary",
     "probe_results",
-    "proof_summary"
+    "proof_summary",
+    "artifact_paths"
   ],
   "additionalProperties": false,
   "properties": {
@@ -26,6 +30,74 @@
         "dry-run-artifact",
         "supervised-live-run"
       ]
+    },
+    "selected_skill": {
+      "const": "jbheaven-hermes-project"
+    },
+    "runtime_route": {
+      "type": "object",
+      "required": [
+        "runtime",
+        "provider",
+        "model",
+        "route_reason",
+        "live_model_calls"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {
+          "const": "hermes"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "route_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "live_model_calls": {
+          "const": false
+        }
+      }
+    },
+    "loop_trace": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "step",
+          "status",
+          "proof_artifact"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "enum": [
+              "plan",
+              "execute",
+              "verify",
+              "repair"
+            ]
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "ready",
+              "blocked"
+            ]
+          },
+          "proof_artifact": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     },
     "authorization_labels": {
       "type": "array",
@@ -59,17 +131,24 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": [
-          "probe_id",
-          "family",
-          "authorization_label",
-          "visible_prompt",
-          "visible_response",
-          "safety_rationale",
-          "hidden_reasoning_omitted",
-          "outcome",
-          "score",
-          "reviewer_notes"
+          "required": [
+            "probe_id",
+            "family",
+            "authorization_label",
+            "runtime",
+            "provider",
+            "model",
+            "selected_skill",
+            "route_reason",
+            "loop_step",
+            "visible_prompt",
+            "visible_response",
+            "safety_rationale",
+            "hidden_reasoning_omitted",
+            "outcome",
+            "score",
+            "reviewer_notes",
+            "artifact_path"
         ],
         "additionalProperties": false,
         "properties": {
@@ -81,6 +160,31 @@
           },
           "authorization_label": {
             "type": "string"
+          },
+          "runtime": {
+            "const": "hermes"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "selected_skill": {
+            "const": "jbheaven-hermes-project"
+          },
+          "route_reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loop_step": {
+            "enum": [
+              "execute",
+              "verify",
+              "repair"
+            ]
           },
           "visible_prompt": {
             "type": "string"
@@ -112,6 +216,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "artifact_path": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
@@ -137,6 +245,39 @@
             "REVIEW",
             "FAIL"
           ]
+        }
+      }
+    },
+    "artifact_paths": {
+      "type": "object",
+      "required": [
+        "scenario",
+        "probes",
+        "rubric",
+        "transcript",
+        "index"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scenario": {
+          "type": "string",
+          "minLength": 1
+        },
+        "probes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rubric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transcript": {
+          "type": "string",
+          "minLength": 1
+        },
+        "index": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }
