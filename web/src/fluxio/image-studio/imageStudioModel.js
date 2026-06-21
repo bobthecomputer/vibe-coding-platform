@@ -137,6 +137,37 @@ export function summarizeReferenceAsset(asset = {}) {
   };
 }
 
+export function buildChromaKeyProof(project = {}) {
+  const chromaKey = normalizeProject(project).chromaKey || {};
+  const keyColor = String(chromaKey.keyColor || "").trim();
+  const hasColor = /^#[0-9a-f]{6}$/i.test(keyColor);
+  const tolerance = Math.max(0, Math.min(100, Number(chromaKey.tolerance) || 0));
+  const spillCleanup = Math.max(0, Math.min(100, Number(chromaKey.spillCleanup) || 0));
+  const edgeFeather = Math.max(0, Math.min(64, Number(chromaKey.edgeFeather) || 0));
+  const enabled = Boolean(chromaKey.enabled);
+  const ready = enabled && hasColor && tolerance > 0;
+  return {
+    enabled,
+    ready,
+    keyColor,
+    tolerance,
+    spillCleanup,
+    edgeFeather,
+    matteMode: String(chromaKey.matteMode || "remove_background"),
+    replacementIntent: String(chromaKey.replacementIntent || ""),
+    proofLabels: Array.isArray(chromaKey.proofLabels) ? chromaKey.proofLabels : [],
+    providerInstruction: enabled
+      ? `Use chroma key ${keyColor || "unset"} with tolerance ${tolerance}, spill cleanup ${spillCleanup}, and ${edgeFeather}px edge feather before replacement.`
+      : "Chroma-key matte preparation is disabled for this draft.",
+    status: ready ? "ready" : enabled ? "blocked" : "empty",
+    detail: ready
+      ? `${keyColor} key, ${tolerance}% tolerance, ${spillCleanup}% spill cleanup, ${edgeFeather}px feather`
+      : enabled
+        ? "Enable a valid six-digit key color and non-zero tolerance."
+        : "Chroma-key matte preparation is disabled.",
+  };
+}
+
 export function buildProofArtifactPlan(project, route, referenceAssets = [], options = {}) {
   const operation = options.operation || project?.prompt?.mode || "edit";
   const hasMask = Boolean(project?.selection?.visible);
@@ -147,6 +178,7 @@ export function buildProofArtifactPlan(project, route, referenceAssets = [], opt
     (Array.isArray(annotations.rectangles) ? annotations.rectangles.length : 0) +
     (Array.isArray(annotations.comments) ? annotations.comments.length : 0);
   const routeArtifacts = Array.isArray(route?.proofArtifacts) ? route.proofArtifacts : [];
+  const chromaKeyProof = buildChromaKeyProof(project);
 
   return [
     {
@@ -181,6 +213,12 @@ export function buildProofArtifactPlan(project, route, referenceAssets = [], opt
         annotationCount > 0
           ? `${annotationCount} annotation marker${annotationCount === 1 ? "" : "s"} captured for review`
           : "No annotation pins, rectangles, or comments are attached",
+    },
+    {
+      id: "chroma-key-matte",
+      label: "Chroma-key matte",
+      status: chromaKeyProof.status,
+      detail: chromaKeyProof.detail,
     },
     ...routeArtifacts.map((label, index) => ({
       id: `route-artifact-${index + 1}`,
@@ -218,6 +256,7 @@ export function buildImageStudioProofReview(project, draft = null, options = {})
   const realHistory = normalized.history.filter(isRealImageSession);
   const validation = draft ? validateImageStudioRequestDraft(draft) : { ok: false, issues: ["No request draft prepared"] };
   const focusedHistoryId = normalized.focusedHistoryId || realHistory[0]?.id || "";
+  const chromaKeyProof = buildChromaKeyProof(normalized);
 
   const checks = [
     {
@@ -255,6 +294,12 @@ export function buildImageStudioProofReview(project, draft = null, options = {})
           ? `${realHistory.length} real image artifact${realHistory.length === 1 ? "" : "s"} available for comparison.`
           : "No real provider artifact is available for comparison.",
     },
+    {
+      id: "chroma-key-readiness",
+      label: "Green screen matte",
+      status: chromaKeyProof.status,
+      detail: chromaKeyProof.detail,
+    },
   ];
 
   return {
@@ -282,6 +327,7 @@ export function buildImageStudioProofReview(project, draft = null, options = {})
       persistedCount: references.filter(asset => asset.persisted).length,
     },
     annotations: annotationCounts,
+    chromaKey: chromaKeyProof,
     draft: {
       id: draft?.id || "",
       status: draft?.status || "not_prepared",
@@ -335,6 +381,7 @@ export function buildImageStudioRequestDraft(project, options = {}) {
       mode: options.maskMode || "replace",
       selection: providerPayload.inputs.editRegion,
     },
+    chromaKey: buildChromaKeyProof(project),
     payload: providerPayload,
     proofArtifacts: buildProofArtifactPlan(project, route, references, { operation }),
     noGenerationReason:

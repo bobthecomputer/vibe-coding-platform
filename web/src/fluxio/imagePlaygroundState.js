@@ -54,6 +54,16 @@ export const DEFAULT_IMAGE_PROJECT = {
     quality: "high",
     size: "1024x1024",
   },
+  chromaKey: {
+    enabled: true,
+    keyColor: "#00ff66",
+    tolerance: 28,
+    spillCleanup: 44,
+    edgeFeather: 12,
+    matteMode: "remove_background",
+    replacementIntent: "transparent alpha matte with clean product edges",
+    proofLabels: ["key color sampled", "spill cleanup planned", "edge feather planned"],
+  },
   designReferences: [
     IMAGEGEN_LIBRARY_ARTIFACT,
     {
@@ -298,6 +308,12 @@ export function normalizeProject(project) {
   next.canvas = { ...base.canvas, ...(next.canvas || {}) };
   next.prompt = { ...base.prompt, ...(next.prompt || {}) };
   next.provider = { ...base.provider, ...(next.provider || {}) };
+  next.chromaKey = { ...base.chromaKey, ...(next.chromaKey || {}) };
+  next.chromaKey.enabled = Boolean(next.chromaKey.enabled);
+  next.chromaKey.keyColor = String(next.chromaKey.keyColor || base.chromaKey.keyColor);
+  next.chromaKey.tolerance = Math.max(0, Math.min(100, Number(next.chromaKey.tolerance) || 0));
+  next.chromaKey.spillCleanup = Math.max(0, Math.min(100, Number(next.chromaKey.spillCleanup) || 0));
+  next.chromaKey.edgeFeather = Math.max(0, Math.min(64, Number(next.chromaKey.edgeFeather) || 0));
   next.designReferences = Array.isArray(next.designReferences) ? next.designReferences : base.designReferences;
   for (const reference of base.designReferences) {
     if (!next.designReferences.some(item => item?.id === reference.id || item?.artifactId === reference.artifactId)) {
@@ -397,6 +413,7 @@ export function projectToProviderPayload(project, operation = "edit", options = 
     provider: normalized.provider,
     canvas: normalized.canvas,
     prompt: normalized.prompt,
+    chromaKey: normalized.chromaKey,
     selection: normalized.selection,
     layers,
     compositionIntent: normalized.prompt.preserveComposition

@@ -1,0 +1,28 @@
+{
+  "checkedAt": "2026-06-21T01:40:34.127472+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=images&proofReload=image-green-screen-keying",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-image-green-screen-keying-20260621\\image-green-screen-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-image-green-screen-keying-20260621\\image-green-screen-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Provider-ready image playground",
+    "Green screen matte",
+    "Key color",
+    "Spill cleanup",
+    "Matte proof ready"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1200,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 742,
+    "averageLuma": 29.4,
+    "nonBlank": true
+  },
+  "passed": true
+}

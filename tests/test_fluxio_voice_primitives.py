@@ -360,6 +360,9 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               hasRealArtifact: review.preview.hasRealArtifact,
               readyForProviderHandoff: review.readyForProviderHandoff,
               claim: review.noGenerationClaim,
+              chromaKey: draft.chromaKey,
+              payloadChromaKey: draft.payload.chromaKey,
+              reviewChromaKey: review.chromaKey,
               artifactIds: draft.proofArtifacts.map(item => item.id),
               openAiRouteStatus,
             }));
@@ -373,6 +376,11 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertTrue(payload["readyForProviderHandoff"])
         self.assertIn("not a provider completion receipt", payload["claim"])
         self.assertIn("annotation-review", payload["artifactIds"])
+        self.assertIn("chroma-key-matte", payload["artifactIds"])
+        self.assertTrue(payload["chromaKey"]["ready"])
+        self.assertEqual(payload["chromaKey"]["keyColor"], "#00ff66")
+        self.assertEqual(payload["payloadChromaKey"]["tolerance"], 28)
+        self.assertIn("spill cleanup", payload["reviewChromaKey"]["providerInstruction"])
         self.assertEqual(payload["openAiRouteStatus"]["model"], "gpt-image-2")
         self.assertEqual(payload["openAiRouteStatus"]["localStatus"], "connector_required")
         self.assertFalse(payload["openAiRouteStatus"]["runActionAvailable"])

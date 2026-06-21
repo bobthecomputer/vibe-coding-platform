@@ -234,6 +234,10 @@ function ProofReviewSummary({ review }) {
         <strong>{review.references.count}</strong>
       </div>
       <div>
+        <span>Matte</span>
+        <strong>{review.chromaKey.ready ? "Ready" : review.chromaKey.status.replace(/_/g, " ")}</strong>
+      </div>
+      <div>
         <span>Provider handoff</span>
         <strong>{review.readyForProviderHandoff ? "Ready" : "Needs review"}</strong>
       </div>
@@ -312,6 +316,17 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
       selection: {
         ...current.selection,
         [field]: field === "visible" ? Boolean(value) : Number(value),
+      },
+    }));
+  }
+
+  function updateChromaKey(field, value) {
+    setProject(current => ({
+      ...current,
+      updatedAt: new Date().toISOString(),
+      chromaKey: {
+        ...current.chromaKey,
+        [field]: field === "enabled" ? Boolean(value) : field === "keyColor" || field === "replacementIntent" ? value : Number(value),
       },
     }));
   }
@@ -491,6 +506,69 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
               {routeAvailability.officialSources.length > 0 ? (
                 <small>{routeAvailability.officialSources.length} official source{routeAvailability.officialSources.length === 1 ? "" : "s"} recorded for review.</small>
               ) : null}
+            </div>
+          </section>
+
+          <section className="image-studio-control-group image-studio-chroma-card" aria-labelledby="image-studio-chroma-label">
+            <div className="image-studio-section-title">
+              <SlidersHorizontal size={18} aria-hidden="true" />
+              <h3 id="image-studio-chroma-label">Green screen matte</h3>
+            </div>
+            <label className="image-studio-checkbox">
+              <input
+                type="checkbox"
+                checked={project.chromaKey.enabled}
+                onChange={event => updateChromaKey("enabled", event.target.checked)}
+              />
+              <span>Prepare chroma-key removal</span>
+            </label>
+            <div className="image-studio-color-field">
+              <label htmlFor={fieldId("chroma-key")}>Key color</label>
+              <input
+                id={fieldId("chroma-key")}
+                type="color"
+                value={project.chromaKey.keyColor}
+                onChange={event => updateChromaKey("keyColor", event.target.value)}
+                aria-label="Green screen key color"
+              />
+              <code>{project.chromaKey.keyColor}</code>
+            </div>
+            {[
+              ["tolerance", "Tolerance", 100],
+              ["spillCleanup", "Spill cleanup", 100],
+              ["edgeFeather", "Edge feather", 64],
+            ].map(([field, label, max]) => (
+              <div className="image-studio-inline-field image-studio-slider-field" key={field}>
+                <label htmlFor={fieldId(`chroma-${field}`)}>{label}</label>
+                <output>{Math.round(project.chromaKey[field])}{field === "edgeFeather" ? "px" : "%"}</output>
+                <input
+                  id={fieldId(`chroma-${field}`)}
+                  type="range"
+                  min="0"
+                  max={max}
+                  step="1"
+                  value={project.chromaKey[field]}
+                  onChange={event => updateChromaKey(field, event.target.value)}
+                />
+              </div>
+            ))}
+            <label htmlFor={fieldId("chroma-intent")}>Replacement intent</label>
+            <textarea
+              id={fieldId("chroma-intent")}
+              value={project.chromaKey.replacementIntent}
+              onChange={event => updateChromaKey("replacementIntent", event.target.value)}
+              rows={2}
+            />
+            <div className="image-studio-chroma-proof" aria-label="Chroma-key proof status">
+              <span
+                className="image-studio-chroma-swatch"
+                style={{ background: project.chromaKey.keyColor }}
+                aria-hidden="true"
+              />
+              <div>
+                <strong>{proofReview.chromaKey.ready ? "Matte proof ready" : "Matte needs review"}</strong>
+                <span>{proofReview.chromaKey.providerInstruction}</span>
+              </div>
             </div>
           </section>
         </aside>
