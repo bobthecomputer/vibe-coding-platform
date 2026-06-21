@@ -57,6 +57,10 @@ ARTIFACT_CONTENT_TYPES = {
     ".txt": "text/plain; charset=utf-8",
     ".webp": "image/webp",
 }
+SYNTHETIC_LIVE_REVIEW_FRAME_PATHS = {
+    "screenshots/latest.png",
+    "screenshots/previous.png",
+}
 PROVIDER_ENV = {
     "openai": ("OPENAI_API_KEY",),
     "openai-codex": ("OPENAI_API_KEY", "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"),
@@ -2239,6 +2243,61 @@ class FluxioWebBackend:
                 break
         return list(reversed(receipts))
 
+    def _resolve_live_review_frame_path(self, raw_path: object) -> str:
+        candidate = str(raw_path or "").strip()
+        if not candidate:
+            return ""
+        normalized = candidate.replace("\\", "/")
+        if normalized in SYNTHETIC_LIVE_REVIEW_FRAME_PATHS:
+            return ""
+        try:
+            resolved = self._resolve_artifact_path(candidate)
+        except RuntimeError:
+            return ""
+        content_type = ARTIFACT_CONTENT_TYPES.get(resolved.suffix.lower(), "")
+        return str(resolved) if content_type.startswith("image/") else ""
+
+    def _sanitize_live_review_visual_proof(
+        self,
+        visual_proof: dict[str, Any],
+        screenshots: list[str],
+        annotations: list[dict[str, Any]],
+        task_context: dict[str, Any],
+        route_context: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        proof = dict(visual_proof) if visual_proof else {}
+        frame_path = self._resolve_live_review_frame_path(proof.get("framePath")) or (screenshots[0] if screenshots else "")
+        has_real_frame = bool(frame_path)
+        if not proof:
+            proof = {
+                "previewUrl": payload.get("previewUrl") or "",
+                "annotationCount": len(annotations),
+                "annotationIds": [
+                    str(item.get("id") or "").strip()
+                    for item in annotations
+                    if str(item.get("id") or "").strip()
+                ],
+                "annotationSeverities": [
+                    str(item.get("severity") or "").strip()
+                    for item in annotations
+                    if str(item.get("severity") or "").strip()
+                ],
+                "proofTarget": task_context.get("reviewTargetId") or "",
+                "threadTarget": route_context.get("missionId") or "",
+            }
+        proof["framePath"] = frame_path
+        proof["hasRealFrame"] = has_real_frame
+        proof["frameStatus"] = "captured" if has_real_frame else "missing"
+        if has_real_frame:
+            proof.pop("frameMissingReason", None)
+        else:
+            proof["frameMissingReason"] = (
+                str(proof.get("frameMissingReason") or "").strip()
+                or "No real screenshot artifact could be resolved for this Live Review receipt."
+            )
+        return proof
+
     def _record_live_review_structured_feedback(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not payload:
             raise ValueError("Structured Live Review feedback payload is required.")
@@ -2260,33 +2319,27 @@ class FluxioWebBackend:
         visual_proof = payload.get("visualProofPacket") if isinstance(payload.get("visualProofPacket"), dict) else {}
         proof_only = bool(payload.get("proofOnly"))
         screenshots = [
-            str(item).strip()
-            for item in task_context.get("screenshots", [])
-            if str(item or "").strip()
+            resolved
+            for resolved in (
+                self._resolve_live_review_frame_path(item)
+                for item in task_context.get("screenshots", [])
+            )
+            if resolved
         ] if isinstance(task_context.get("screenshots"), list) else []
         annotations = [
             item
             for item in task_context.get("annotations", [])
             if isinstance(item, dict)
         ] if isinstance(task_context.get("annotations"), list) else []
-        if not visual_proof:
-            visual_proof = {
-                "framePath": screenshots[0] if screenshots else "",
-                "previewUrl": payload.get("previewUrl") or "",
-                "annotationCount": len(annotations),
-                "annotationIds": [
-                    str(item.get("id") or "").strip()
-                    for item in annotations
-                    if str(item.get("id") or "").strip()
-                ],
-                "annotationSeverities": [
-                    str(item.get("severity") or "").strip()
-                    for item in annotations
-                    if str(item.get("severity") or "").strip()
-                ],
-                "proofTarget": task_context.get("reviewTargetId") or "",
-                "threadTarget": route_context.get("missionId") or "",
-            }
+        visual_proof = self._sanitize_live_review_visual_proof(
+            visual_proof,
+            screenshots,
+            annotations,
+            task_context,
+            route_context,
+            payload,
+        )
+        proof_warnings = [] if visual_proof.get("hasRealFrame") else ["frame_evidence_missing"]
         now = _utc_now()
         receipt = {
             "receiptKind": "live_review_visual_proof" if proof_only else "live_review_structured_feedback",
@@ -2294,9 +2347,10 @@ class FluxioWebBackend:
             "eventId": event_id,
             "sourceEventId": _safe_identifier(payload.get("sourceEventId") or event_id, "live_review"),
             "plannerExecutorHandoffId": handoff_id,
-            "status": "received",
+            "status": "missing_frame" if proof_only and proof_warnings else "received",
             "timestamp": now,
             "source": str(payload.get("source") or "builder-live-review"),
+            "proofWarnings": proof_warnings,
             "routeContext": route_context,
             "taskContext": {
                 **task_context,
@@ -2364,6 +2418,7 @@ class FluxioWebBackend:
             self.root / ".agent_control" / "live_review_receipts",
             self.root / ".agent_control" / "mission_async",
             self.root / ".agent_runs",
+            self.root / "artifacts",
         ]
         if os.name == "nt":
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
@@ -2371,12 +2426,14 @@ class FluxioWebBackend:
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/live_review_receipts"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/artifacts"))
         else:
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/live_review_receipts"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/artifacts"))
         roots: list[Path] = []
         seen: set[str] = set()
         for candidate in candidates:
@@ -2442,11 +2499,14 @@ class FluxioWebBackend:
                     self.root / ".agent_control" / "live_review_receipts",
                     self.root / ".agent_control" / "mission_async",
                     self.root / ".agent_runs",
+                    self.root / "artifacts",
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/live_review_receipts"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"),
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/artifacts"),
+                    Path("/volume1/Saclay/projects/vibe-coding-platform/artifacts"),
                 ):
                     if search_root.exists():
                         candidates.extend(search_root.rglob(name))

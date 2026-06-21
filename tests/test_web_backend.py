@@ -285,6 +285,18 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(backend._resolve_artifact_path(str(receipt)), receipt)
             self.assertEqual(backend._resolve_artifact_id(backend._artifact_id(receipt)), receipt)
 
+    def test_artifact_resolver_serves_repo_proof_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_dir = root / "artifacts" / "live-review"
+            proof_dir.mkdir(parents=True)
+            screenshot = proof_dir / "frame.png"
+            screenshot.write_bytes(b"\x89PNG\r\n\x1a\n")
+            backend = FluxioWebBackend(root, root)
+
+            self.assertEqual(backend._resolve_artifact_path(str(screenshot)), screenshot)
+            self.assertEqual(backend._resolve_artifact_id(backend._artifact_id(screenshot)), screenshot)
+
     def test_artifact_resolver_recovers_embedded_windows_runtime_evidence_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -434,7 +446,11 @@ class FluxioWebBackendTests(unittest.TestCase):
                 "live-review:mission-1:evt-screenshot:target",
             )
             self.assertEqual(receipt["visualProofPacket"]["annotationCount"], 1)
-            self.assertEqual(receipt["taskContext"]["screenshots"], ["screenshots/latest.png"])
+            self.assertEqual(receipt["visualProofPacket"]["framePath"], "")
+            self.assertEqual(receipt["visualProofPacket"]["frameStatus"], "missing")
+            self.assertFalse(receipt["visualProofPacket"]["hasRealFrame"])
+            self.assertIn("frame_evidence_missing", receipt["proofWarnings"])
+            self.assertEqual(receipt["taskContext"]["screenshots"], [])
             self.assertEqual(receipt["taskContext"]["annotations"][0]["id"], "anno-hero")
             artifact_path = pathlib.Path(receipt["artifactPath"])
             self.assertTrue(artifact_path.exists())
@@ -450,6 +466,10 @@ class FluxioWebBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             backend = FluxioWebBackend(root, root)
+            frame_dir = root / "artifacts" / "live-review"
+            frame_dir.mkdir(parents=True)
+            frame_path = frame_dir / "frame.png"
+            frame_path.write_bytes(b"\x89PNG\r\n\x1a\n")
             payload = {
                 "proofOnly": True,
                 "eventId": "evt-proof-only",
@@ -457,11 +477,11 @@ class FluxioWebBackendTests(unittest.TestCase):
                 "routeContext": {"missionId": "mission-visual"},
                 "taskContext": {
                     "reviewTargetId": "preview-frame",
-                    "screenshots": ["screenshots/frame.png"],
+                    "screenshots": [str(frame_path)],
                     "annotations": [{"id": "anno-proof", "severity": "medium"}],
                 },
                 "visualProofPacket": {
-                    "framePath": "screenshots/frame.png",
+                    "framePath": str(frame_path),
                     "previewUrl": "http://127.0.0.1:1420/preview",
                     "annotationCount": 1,
                     "annotationIds": ["anno-proof"],
@@ -477,7 +497,12 @@ class FluxioWebBackendTests(unittest.TestCase):
 
             self.assertEqual(receipt["receiptKind"], "live_review_visual_proof")
             self.assertTrue(receipt["proofOnly"])
-            self.assertEqual(receipt["visualProofPacket"]["framePath"], "screenshots/frame.png")
+            self.assertEqual(receipt["status"], "received")
+            self.assertEqual(receipt["proofWarnings"], [])
+            self.assertEqual(receipt["visualProofPacket"]["framePath"], str(frame_path.resolve()))
+            self.assertTrue(receipt["visualProofPacket"]["hasRealFrame"])
+            self.assertEqual(receipt["visualProofPacket"]["frameStatus"], "captured")
+            self.assertEqual(receipt["taskContext"]["screenshots"], [str(frame_path.resolve())])
             self.assertEqual(receipt["taskContext"]["annotations"][0]["id"], "anno-proof")
             self.assertTrue(pathlib.Path(receipt["artifactPath"]).exists())
 
