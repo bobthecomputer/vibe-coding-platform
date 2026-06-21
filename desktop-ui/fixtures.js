@@ -4,6 +4,99 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function buildVerificationFailureSkillRecovery() {
+  const recoveryTrigger = {
+    triggerId: 'verification_failure',
+    kind: 'verification_failure',
+    label: 'Verification failed',
+    severity: 'high',
+    reason: 'Verification proof has failed checks that need evidence-driven recovery.',
+    evidence: ['python -m pytest tests -q'],
+    recoveryAction: 'Run the verification skill against the failed checks, capture the failing command output, and replan only from that evidence.',
+    loopStep: 'verify',
+    runtimeLane: 'hermes verification lane',
+    providerRoute: { role: 'verifier', provider: 'openai', model: 'gpt-5.4' },
+    proofRequirement: {
+      artifactKind: 'verification_failure_receipt',
+      label: 'Failing check output',
+      minimumEvidence: ['command', 'exit code', 'reproduced output', 'next focused repair'],
+    },
+  };
+  const recoveryPlan = {
+    schemaVersion: 'mission-skill-recovery-plan.v1',
+    status: 'ready',
+    selectedSkill: {
+      skillId: 'stuck_state_recovery',
+      label: 'Stuck State Recovery',
+      sourceKind: 'curated',
+      executionCapable: true,
+      guidanceOnly: false,
+    },
+    runtimeLane: 'hermes verification lane',
+    providerRoute: { role: 'verifier', provider: 'openai', model: 'gpt-5.4' },
+    routeReason: recoveryTrigger.reason,
+    loopStep: 'verify',
+    nextAction: recoveryTrigger.recoveryAction,
+    retryGuard: {
+      mode: 'change_skill_or_route_before_retry',
+      blockSameStepRetry: true,
+      reason: 'A recovery trigger is active, so the same verification step needs proof before retry.',
+    },
+    proofRequirement: recoveryTrigger.proofRequirement,
+    proofArtifactPlan: {
+      artifactKind: 'verification_failure_receipt',
+      suggestedPath: 'artifacts/mission-recovery/mission_verification_failure/verification_failure-verification_failure_receipt.json',
+      mustAttachBeforeRetry: true,
+    },
+    visibleRouteSummary: 'Stuck State Recovery - runtime lane hermes verification lane - openai - gpt-5.4',
+  };
+
+  return {
+    schemaVersion: 'mission-skill-recovery.v1',
+    status: 'needs_recovery',
+    generatedFrom: 'fixture_verification_failure',
+    triggerCount: 1,
+    triggers: [recoveryTrigger],
+    recommendations: [
+      {
+        recommendationId: 'verification_failure:stuck_state_recovery',
+        triggerId: 'verification_failure',
+        skillId: 'stuck_state_recovery',
+        label: 'Stuck State Recovery',
+        sourceKind: 'curated',
+        reason: 'Stuck State Recovery matches verification failed recovery.',
+        routeReason: recoveryTrigger.reason,
+        loopStep: 'verify',
+        recoveryAction: recoveryTrigger.recoveryAction,
+        proofRequirement: recoveryTrigger.proofRequirement,
+        permissions: ['read_files', 'run_tests'],
+        actionKinds: ['blocked_recovery', 'runtime_routing', 'context_recovery', 'verification'],
+        profileSuitability: ['builder', 'advanced', 'experimental'],
+        guidanceOnly: false,
+        executionCapable: true,
+        confidence: 0.86,
+        evidence: recoveryTrigger.evidence,
+      },
+    ],
+    recoveryActions: [
+      {
+        triggerId: 'verification_failure',
+        label: 'Verification failed',
+        action: recoveryTrigger.recoveryAction,
+        severity: 'high',
+        loopStep: 'verify',
+        proofRequirement: recoveryTrigger.proofRequirement,
+      },
+    ],
+    recoveryPlan,
+    routeSeparation: {
+      runtimeLane: 'hermes verification lane',
+      providerRoute: { role: 'verifier', provider: 'openai', model: 'gpt-5.4' },
+      rule: 'Hermes/OpenClaw are runtime lanes; OpenAI/MiniMax/etc. are provider routes.',
+    },
+  };
+}
+
 const profiles = {
   defaultProfile: 'builder',
   availableProfiles: ['beginner', 'builder', 'advanced', 'experimental'],
@@ -1503,6 +1596,8 @@ const verificationFailureFixture = (() => {
       ],
     },
   ];
+  snapshot.missions[0].state.skill_recovery = buildVerificationFailureSkillRecovery();
+  snapshot.missions[0].missionLoop.skillRecovery = snapshot.missions[0].state.skill_recovery;
   snapshot.inbox = [
     {
       missionId: 'mission_verification_failure',

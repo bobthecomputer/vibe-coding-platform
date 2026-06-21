@@ -4751,6 +4751,24 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           setUiMode("builder");
           setActiveDrawer("skills");
           return;
+        case "apply_recovery_plan": {
+          const plan = asRecord(payload.recoveryPlan);
+          const selectedSkill = asRecord(plan.selectedSkill);
+          const proofRequirement = asRecord(plan.proofRequirement);
+          setSkillStudioFilter("needs_attention");
+          setUiMode("builder");
+          setActiveDrawer("skills");
+          setOperatorDraft(
+            [
+              `/stuck-state-recovery ${selectedSkill.skillId || ""}`.trim(),
+              `Next action: ${plan.nextAction || "choose a changed skill or route before retrying"}`,
+              `Route reason: ${plan.routeReason || "recovery trigger active"}`,
+              `Proof required: ${proofRequirement.label || proofRequirement.artifactKind || "recovery receipt"}`,
+            ].join("\n"),
+          );
+          pushToast("Recovery plan staged in the operator composer.", "info");
+          return;
+        }
         case "open_escalation":
           setShowEscalationDialog(true);
           return;
@@ -8107,6 +8125,53 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const missionSkillRecoveryNeedsAction =
     String(missionSkillRecovery.status || "").toLowerCase() === "needs_recovery" ||
     missionSkillRecoveryTriggers.length > 0;
+  const missionSkillRecoveryPlanSource = asRecord(missionSkillRecovery.recoveryPlan);
+  const missionSkillRecoveryFallbackTrigger = missionSkillRecoveryTriggers[0] || {};
+  const missionSkillRecoveryFallbackRecommendation = missionSkillRecoveryRecommendations[0] || {};
+  const missionSkillRecoveryPlan = missionSkillRecoveryPlanSource.schemaVersion
+    ? missionSkillRecoveryPlanSource
+    : missionSkillRecoveryNeedsAction
+      ? {
+          schemaVersion: "mission-skill-recovery-plan.ui-fallback",
+          selectedSkill: {
+            skillId: missionSkillRecoveryFallbackRecommendation.skillId || "stuck_state_recovery",
+            label:
+              missionSkillRecoveryFallbackRecommendation.label ||
+              titleizeToken(missionSkillRecoveryFallbackRecommendation.skillId || "Stuck State Recovery"),
+            executionCapable: Boolean(missionSkillRecoveryFallbackRecommendation.executionCapable),
+            guidanceOnly: Boolean(missionSkillRecoveryFallbackRecommendation.guidanceOnly),
+          },
+          proofRequirement:
+            asRecord(missionSkillRecoveryFallbackTrigger.proofRequirement).label
+              ? asRecord(missionSkillRecoveryFallbackTrigger.proofRequirement)
+              : { label: "Recovery receipt", artifactKind: "mission_recovery_receipt" },
+          proofArtifactPlan: {
+            artifactKind:
+              asRecord(missionSkillRecoveryFallbackTrigger.proofRequirement).artifactKind ||
+              "mission_recovery_receipt",
+            suggestedPath: "",
+            mustAttachBeforeRetry: true,
+          },
+          runtimeLane: missionSkillRecoveryRoute.runtimeLane || mission?.runtime_id || "",
+          providerRoute: missionSkillRecoveryProviderRoute,
+          routeReason:
+            missionSkillRecoveryFallbackTrigger.reason ||
+            missionSkillRecoveryFallbackRecommendation.reason ||
+            "Recovery trigger active.",
+          loopStep: missionSkillRecoveryFallbackTrigger.loopStep || "repair",
+          nextAction:
+            missionSkillRecoveryFallbackTrigger.recoveryAction ||
+            missionSkillRecoveryFallbackRecommendation.recoveryAction ||
+            "Choose a recovery skill or route before retrying the same step.",
+          visibleRouteSummary:
+            missionSkillRecoveryRoute.runtimeLane ||
+            mission?.runtime_id ||
+            "Runtime lane pending",
+        }
+      : {};
+  const missionSkillRecoverySelectedSkill = asRecord(missionSkillRecoveryPlan.selectedSkill);
+  const missionSkillRecoveryProofRequirement = asRecord(missionSkillRecoveryPlan.proofRequirement);
+  const missionSkillRecoveryProofArtifactPlan = asRecord(missionSkillRecoveryPlan.proofArtifactPlan);
   const missionCodeExecutionState =
     mission?.state?.code_execution ||
     mission?.missionLoop?.codeExecution ||
@@ -10889,6 +10954,68 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <strong>{titleizeToken(missionSkillRecoveryRoute.runtimeLane || mission?.runtime_id || "none")}</strong>
               </article>
             </div>
+            {missionSkillRecoveryPlan.schemaVersion ? (
+              <div className="skill-recovery-plan-grid">
+                <article className="drawer-card tone-neutral">
+                  <span>Selected skill</span>
+                  <strong>
+                    {missionSkillRecoverySelectedSkill.label ||
+                      titleizeToken(missionSkillRecoverySelectedSkill.skillId || "Normal flow")}
+                  </strong>
+                  <p>{missionSkillRecoveryPlan.routeReason || "Route reason has not been recorded yet."}</p>
+                  <div className="pill-row">
+                    <span className="mini-pill">{`Loop: ${titleizeToken(missionSkillRecoveryPlan.loopStep || "repair")}`}</span>
+                    <span className="mini-pill muted">
+                      {missionSkillRecoverySelectedSkill.executionCapable ? "Can execute" : "Guidance first"}
+                    </span>
+                  </div>
+                </article>
+                <article className="drawer-card tone-neutral">
+                  <span>Runtime and model route</span>
+                  <strong>{missionSkillRecoveryPlan.visibleRouteSummary || "Route summary pending"}</strong>
+                  <p>
+                    {`Runtime: ${titleizeToken(missionSkillRecoveryPlan.runtimeLane || mission?.runtime_id || "none")} · Provider: ${
+                      missionSkillRecoveryProviderRoute.provider ||
+                      missionSkillRecoveryPlan.providerRoute?.provider ||
+                      "unresolved"
+                    } ${missionSkillRecoveryProviderRoute.model || missionSkillRecoveryPlan.providerRoute?.model || ""}`.trim()}
+                  </p>
+                </article>
+                <article className="drawer-card tone-warn">
+                  <span>Proof before retry</span>
+                  <strong>{missionSkillRecoveryProofRequirement.label || "Recovery proof"}</strong>
+                  <p>
+                    {missionSkillRecoveryProofArtifactPlan.mustAttachBeforeRetry
+                      ? "Attach this proof packet before retrying the same step."
+                      : "No recovery proof packet is required right now."}
+                  </p>
+                  {missionSkillRecoveryProofArtifactPlan.suggestedPath ? (
+                    <small>{missionSkillRecoveryProofArtifactPlan.suggestedPath}</small>
+                  ) : null}
+                </article>
+              </div>
+            ) : null}
+            {missionSkillRecoveryPlan.schemaVersion ? (
+              <div className="skill-recovery-action-row">
+                <ActionButton
+                  disabled={!missionSkillRecoveryNeedsAction}
+                  onClick={() =>
+                    void handleBuilderFeatureAction("apply_recovery_plan", {
+                      recoveryPlan: missionSkillRecoveryPlan,
+                    })
+                  }
+                  type="button"
+                  variant="primary"
+                >
+                  Use recovery plan
+                </ActionButton>
+                <span>
+                  {missionSkillRecoveryProofArtifactPlan.mustAttachBeforeRetry
+                    ? "Proof-gated retry"
+                    : "Normal flow"}
+                </span>
+              </div>
+            ) : null}
             {missionSkillRecoveryTriggers.length > 0 ? (
               <div className="drawer-list compact skill-recovery-list">
                 {missionSkillRecoveryTriggers.slice(0, 4).map(item => (
@@ -12166,9 +12293,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </div>
             <p>
               {missionSkillRecoveryNeedsAction
-                ? missionSkillRecoveryActions[0]?.action ||
-                  missionSkillRecoveryTriggers[0]?.recoveryAction ||
-                  "Choose a recovery skill or route before retrying the same step."
+                ? `${
+                    missionSkillRecoverySelectedSkill.label ||
+                    titleizeToken(missionSkillRecoverySelectedSkill.skillId || "Recovery skill")
+                  }: ${
+                    missionSkillRecoveryPlan.nextAction ||
+                    missionSkillRecoveryActions[0]?.action ||
+                    missionSkillRecoveryTriggers[0]?.recoveryAction ||
+                    "Choose a recovery skill or route before retrying the same step."
+                  } Proof: ${
+                    missionSkillRecoveryProofRequirement.label ||
+                    missionSkillRecoveryProofArtifactPlan.artifactKind ||
+                    "recovery receipt"
+                  }.`
                 : "The agent can continue the normal plan, execute, verify, repair loop."}
             </p>
           </div>

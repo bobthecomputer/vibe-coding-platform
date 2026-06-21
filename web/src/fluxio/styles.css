@@ -3722,6 +3722,42 @@ button.builder-review-target:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.skill-recovery-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.skill-recovery-plan-grid .drawer-card {
+  min-width: 0;
+}
+
+.skill-recovery-plan-grid small {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.skill-recovery-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid rgba(244, 240, 232, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.026);
+  padding: 10px;
+}
+
+.skill-recovery-action-row span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .skill-recovery-strip {
   display: grid;
   grid-template-columns: minmax(170px, 0.35fr) minmax(0, 1fr);
@@ -3938,6 +3974,7 @@ button.builder-review-target:hover {
   .skill-recovery-head,
   .skill-recovery-strip,
   .skill-recovery-list,
+  .skill-recovery-plan-grid,
   .monitor-loop-strip,
   .supervisor-intervention-strip,
   .monitor-loop-list,

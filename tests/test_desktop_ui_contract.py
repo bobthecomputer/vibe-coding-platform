@@ -14,6 +14,7 @@ FLUXIO_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
 FLUXIO_STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
 HELPERS_JS = ROOT / "desktop-ui" / "fluxioHelpers.js"
 MISSION_MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
+DESKTOP_FIXTURES = ROOT / "desktop-ui" / "fixtures.js"
 TAURI_CONF = ROOT / "src-tauri" / "tauri.conf.json"
 PACKAGE_JSON = ROOT / "package.json"
 CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
@@ -268,6 +269,7 @@ class DesktopUiContractTests(unittest.TestCase):
     def test_skills_drawer_surfaces_stuck_state_recovery_contract(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        fixtures = DESKTOP_FIXTURES.read_text(encoding="utf-8")
 
         self.assertIn("missionSkillRecovery", shell)
         self.assertIn("mission?.missionLoop?.skillRecovery", shell)
@@ -275,12 +277,22 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Skill recovery", shell)
         self.assertIn("Recommended recovery skills", shell)
         self.assertIn("Recovery actions and route separation", shell)
+        self.assertIn("missionSkillRecoveryPlan", shell)
+        self.assertIn("Use recovery plan", shell)
+        self.assertIn("apply_recovery_plan", shell)
+        self.assertIn("Proof before retry", shell)
+        self.assertIn("Proof-gated retry", shell)
+        self.assertIn("Route reason:", shell)
         self.assertIn("Hermes/OpenClaw remain runtime lanes", shell)
         self.assertIn("Mission skill recovery", shell)
         self.assertIn("function cx(...values)", shell)
         self.assertIn("skill-recovery-panel", styles)
         self.assertIn("skill-recovery-strip", styles)
         self.assertIn("skill-recovery-list", styles)
+        self.assertIn("skill-recovery-plan-grid", styles)
+        self.assertIn("skill-recovery-action-row", styles)
+        self.assertIn("mission-skill-recovery-plan.v1", fixtures)
+        self.assertIn("verification_failure-verification_failure_receipt.json", fixtures)
 
     def test_builder_surfaces_external_monitor_loops(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")

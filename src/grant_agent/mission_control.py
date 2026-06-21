@@ -2220,6 +2220,165 @@ def _recovery_action_for_trigger(kind: str) -> str:
     return actions.get(kind, "Inspect the mission evidence and choose the smallest recovery action before retrying.")
 
 
+def _recovery_loop_step_for_trigger(kind: str) -> str:
+    steps = {
+        "mission_blocked": "plan",
+        "verification_failure": "verify",
+        "repeated_failure": "repair",
+        "context_missing": "plan",
+        "weak_provider_route": "route",
+        "runtime_lane_attention": "observe",
+    }
+    return steps.get(kind, "repair")
+
+
+def _recovery_proof_requirement_for_trigger(kind: str) -> dict:
+    requirements = {
+        "mission_blocked": {
+            "artifactKind": "blocker_decision_receipt",
+            "label": "Decision receipt",
+            "minimumEvidence": [
+                "blocker label",
+                "operator decision or safe assumption",
+                "resume point",
+            ],
+        },
+        "verification_failure": {
+            "artifactKind": "verification_failure_receipt",
+            "label": "Failing check output",
+            "minimumEvidence": [
+                "command",
+                "exit code",
+                "reproduced output",
+                "next focused repair",
+            ],
+        },
+        "repeated_failure": {
+            "artifactKind": "retry_guard_receipt",
+            "label": "Retry guard receipt",
+            "minimumEvidence": [
+                "last failed attempts",
+                "changed skill or route",
+                "smallest next test",
+            ],
+        },
+        "context_missing": {
+            "artifactKind": "handoff_context_receipt",
+            "label": "Context handoff packet",
+            "minimumEvidence": [
+                "missing context",
+                "source files or artifacts",
+                "handoff summary",
+            ],
+        },
+        "weak_provider_route": {
+            "artifactKind": "provider_route_health_receipt",
+            "label": "Provider route health",
+            "minimumEvidence": [
+                "provider",
+                "model",
+                "auth status",
+                "route reason",
+            ],
+        },
+        "runtime_lane_attention": {
+            "artifactKind": "runtime_lane_recovery_receipt",
+            "label": "Runtime lane receipt",
+            "minimumEvidence": [
+                "runtime lane",
+                "heartbeat",
+                "last event",
+                "resume or restart decision",
+            ],
+        },
+    }
+    return requirements.get(
+        kind,
+        {
+            "artifactKind": "mission_recovery_receipt",
+            "label": "Recovery receipt",
+            "minimumEvidence": ["trigger", "selected action", "verification command"],
+        },
+    )
+
+
+def _build_skill_recovery_plan(
+    *,
+    mission: Mission,
+    triggers: list[dict],
+    recommendations: list[dict],
+    runtime_lane: str,
+    active_route: dict,
+) -> dict:
+    primary_trigger = triggers[0] if triggers else {}
+    primary_recommendation = recommendations[0] if recommendations else {}
+    selected_skill_id = str(
+        primary_recommendation.get("skillId")
+        or ("stuck_state_recovery" if triggers else "")
+    )
+    selected_skill_label = str(
+        primary_recommendation.get("label")
+        or ("Stuck State Recovery" if triggers else "")
+    )
+    trigger_id = str(primary_trigger.get("triggerId") or "normal_flow")
+    proof_requirement = _recovery_proof_requirement_for_trigger(trigger_id)
+    provider_route = {
+        "role": str(active_route.get("role", "") or "").strip().lower(),
+        "provider": str(active_route.get("provider", "") or "").strip().lower(),
+        "model": str(active_route.get("model", "") or "").strip(),
+    }
+    route_bits = [
+        selected_skill_label or "No recovery skill",
+        f"runtime lane {runtime_lane or mission.runtime_id or 'unresolved'}",
+        provider_route["provider"] or "provider unresolved",
+        provider_route["model"] or "model unresolved",
+    ]
+    return {
+        "schemaVersion": "mission-skill-recovery-plan.v1",
+        "status": "ready" if triggers else "idle",
+        "selectedSkill": {
+            "skillId": selected_skill_id,
+            "label": selected_skill_label,
+            "sourceKind": str(primary_recommendation.get("sourceKind") or ""),
+            "executionCapable": bool(primary_recommendation.get("executionCapable", False)),
+            "guidanceOnly": bool(primary_recommendation.get("guidanceOnly", False)),
+        },
+        "runtimeLane": runtime_lane or mission.runtime_id or "",
+        "providerRoute": provider_route,
+        "routeReason": (
+            str(primary_trigger.get("reason") or "")
+            or "No recovery trigger is active; continue the normal plan-execute-verify loop."
+        ),
+        "loopStep": _recovery_loop_step_for_trigger(trigger_id),
+        "nextAction": str(
+            primary_trigger.get("recoveryAction")
+            or "Continue the normal plan-execute-verify loop."
+        ),
+        "retryGuard": {
+            "mode": "change_skill_or_route_before_retry" if triggers else "normal_flow",
+            "blockSameStepRetry": bool(triggers),
+            "reason": (
+                "A recovery trigger is active, so the same step should not be retried "
+                "without a changed skill, route, handoff, or proof packet."
+                if triggers
+                else "No retry guard is active."
+            ),
+        },
+        "proofRequirement": proof_requirement,
+        "proofArtifactPlan": {
+            "artifactKind": proof_requirement["artifactKind"],
+            "suggestedPath": (
+                f"artifacts/mission-recovery/{mission.mission_id}/"
+                f"{trigger_id}-{proof_requirement['artifactKind']}.json"
+                if triggers
+                else ""
+            ),
+            "mustAttachBeforeRetry": bool(triggers),
+        },
+        "visibleRouteSummary": " · ".join(item for item in route_bits if item),
+    }
+
+
 def _mission_skill_recovery_triggers(mission: Mission) -> list[dict]:
     triggers: list[dict] = []
     delegated = mission.delegated_runtime_sessions or []
@@ -2255,6 +2414,8 @@ def _mission_skill_recovery_triggers(mission: Mission) -> list[dict]:
                 "reason": reason,
                 "evidence": _skill_recovery_evidence(evidence),
                 "recoveryAction": _recovery_action_for_trigger(kind),
+                "loopStep": _recovery_loop_step_for_trigger(kind),
+                "proofRequirement": _recovery_proof_requirement_for_trigger(kind),
             }
         )
 
@@ -2425,7 +2586,13 @@ def build_skill_recovery_snapshot(
                     "label": skill.get("label", skill_id),
                     "sourceKind": skill.get("sourceKind", "curated"),
                     "reason": f"{skill.get('label', skill_id)} matches {trigger['label'].lower()} recovery.",
+                    "routeReason": trigger["reason"],
+                    "loopStep": trigger.get("loopStep", _recovery_loop_step_for_trigger(trigger["triggerId"])),
                     "recoveryAction": trigger["recoveryAction"],
+                    "proofRequirement": trigger.get(
+                        "proofRequirement",
+                        _recovery_proof_requirement_for_trigger(trigger["triggerId"]),
+                    ),
                     "permissions": skill.get("permissions", []),
                     "actionKinds": skill.get("actionKinds", []),
                     "profileSuitability": skill.get("profileSuitability", []),
@@ -2458,8 +2625,21 @@ def build_skill_recovery_snapshot(
                 "label": trigger["label"],
                 "action": trigger["recoveryAction"],
                 "severity": trigger["severity"],
+                "loopStep": trigger.get("loopStep", _recovery_loop_step_for_trigger(trigger["triggerId"])),
+                "proofRequirement": trigger.get(
+                    "proofRequirement",
+                    _recovery_proof_requirement_for_trigger(trigger["triggerId"]),
+                ),
             }
         )
+
+    recovery_plan = _build_skill_recovery_plan(
+        mission=mission,
+        triggers=triggers,
+        recommendations=recommendations,
+        runtime_lane=runtime_lane,
+        active_route=active_route,
+    )
 
     return {
         "schemaVersion": "mission-skill-recovery.v1",
@@ -2469,6 +2649,7 @@ def build_skill_recovery_snapshot(
         "triggers": triggers,
         "recommendations": recommendations,
         "recoveryActions": recovery_actions,
+        "recoveryPlan": recovery_plan,
         "routeSeparation": {
             "runtimeLane": runtime_lane,
             "providerRoute": {

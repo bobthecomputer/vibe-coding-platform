@@ -1092,6 +1092,35 @@ class MissionControlTests(unittest.TestCase):
                 "openai",
             )
             self.assertIn("hermes", recovery["routeSeparation"]["runtimeLane"])
+            recovery_plan = recovery["recoveryPlan"]
+            self.assertEqual(
+                recovery_plan["schemaVersion"],
+                "mission-skill-recovery-plan.v1",
+            )
+            self.assertEqual(recovery_plan["status"], "ready")
+            self.assertEqual(
+                recovery_plan["selectedSkill"]["skillId"],
+                "stuck_state_recovery",
+            )
+            self.assertIn("hermes", recovery_plan["runtimeLane"])
+            self.assertEqual(recovery_plan["providerRoute"]["provider"], "openai")
+            self.assertIn(
+                recovery_plan["loopStep"],
+                {"plan", "verify", "repair", "route", "observe"},
+            )
+            self.assertTrue(recovery_plan["retryGuard"]["blockSameStepRetry"])
+            self.assertTrue(
+                recovery_plan["proofArtifactPlan"]["mustAttachBeforeRetry"]
+            )
+            self.assertIn(
+                "artifacts/mission-recovery/",
+                recovery_plan["proofArtifactPlan"]["suggestedPath"],
+            )
+            self.assertIn(
+                "minimumEvidence",
+                recovery_plan["proofRequirement"],
+            )
+            self.assertIn("visibleRouteSummary", recovery_plan)
             self.assertEqual(
                 mission_payload["state"]["skill_recovery"]["schemaVersion"],
                 "mission-skill-recovery.v1",
