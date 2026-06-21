@@ -11582,6 +11582,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <span>Blocked</span>
                 <strong>{fusionWorkbench.summary.blockedRows}</strong>
               </article>
+              <article className="context-item">
+                <span>Lanes</span>
+                <strong>{fusionWorkbench.summary.migrationLaneCount}</strong>
+              </article>
+            </div>
+            <div className="drawer-list fusion-migration-list">
+              {fusionWorkbench.migrationLanes.map(item => (
+                <article className="drawer-card fusion-migration-card" key={`fusion-migration-${item.id}`}>
+                  <span>{item.sourcePair} · {item.migrationStatus}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.duplicateArea}</p>
+                  <div className="pill-row">
+                    <span className="mini-pill">{item.targetRuntime}</span>
+                    <span className="mini-pill muted">{item.ownerRole}</span>
+                  </div>
+                  <p>{item.safeSlice}</p>
+                  <p className="fusion-source-path">{item.proofAction}</p>
+                </article>
+              ))}
             </div>
             <div className="drawer-list">
               {fusionWorkbench.rows.map(item => (
@@ -15722,11 +15741,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       Solantir, Mind Tower, and JBH-EAVEN data stay fixture-backed until each adapter proves provenance, collection mode, and risk.
                     </p>
                     <div className="builder-thread-list">
-                      {fusionWorkbench.rows.slice(0, 3).map(item => (
-                        <article className={`builder-thread-item ${toneClass(item.collectionMode === "blocked" ? "warn" : "neutral")}`} key={`builder-fusion-${item.id}`}>
-                          <span>{item.sourceProject} · {item.collectionMode}</span>
+                      {fusionWorkbench.migrationLanes.slice(0, 3).map(item => (
+                        <article className="builder-thread-item tone-neutral" key={`builder-fusion-migration-${item.id}`}>
+                          <span>{item.sourcePair}</span>
                           <strong>{item.title}</strong>
-                          <p>{item.riskLabel} · {item.nextSlice}</p>
+                          <p>{item.migrationStatus} · {item.safeSlice}</p>
                         </article>
                       ))}
                     </div>

@@ -94,3 +94,18 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "latestTestResult" in fixtures
     assert "Use for similar work" in fixtures
     assert "Needs local evidence" in fixtures
+
+
+def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
+    source = SHELL.read_text(encoding="utf-8")
+    styles = STYLES.read_text(encoding="utf-8")
+    fixtures = (ROOT / "web" / "src" / "fluxio" / "fusion" / "fusionFixtures.js").read_text(encoding="utf-8")
+
+    assert "migrationLanes" in source
+    assert "fusion-migration-card" in source
+    assert "fusion-migration-list" in source
+    assert ".fusion-migration-card" in styles
+    assert "FUSION_MIGRATION_LANES" in fixtures
+    assert "Terminal and operator workbench shell" in fixtures
+    assert "Synology monitoring and event records" in fixtures
+    assert "Synthetic red-team proof lane" in fixtures

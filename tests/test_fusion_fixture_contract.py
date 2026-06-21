@@ -28,6 +28,7 @@ class FusionFixtureContractTests(unittest.TestCase):
             import {
               FUSION_COLLECTION_MODES,
               FUSION_FIXTURES,
+              FUSION_MIGRATION_LANES,
               FUSION_RISK_LABELS,
               buildFusionWorkbench,
             } from './web/src/fluxio/fusion/fusionFixtures.js';
@@ -38,6 +39,7 @@ class FusionFixtureContractTests(unittest.TestCase):
               risks: FUSION_RISK_LABELS,
               summary: workbench.summary,
               rows: FUSION_FIXTURES,
+              lanes: FUSION_MIGRATION_LANES,
               rules: workbench.acceptanceRules,
             }));
             """
@@ -45,6 +47,8 @@ class FusionFixtureContractTests(unittest.TestCase):
 
         self.assertEqual(payload["summary"]["totalRows"], len(payload["rows"]))
         self.assertGreaterEqual(payload["summary"]["readyRows"], 2)
+        self.assertEqual(payload["summary"]["migrationLaneCount"], len(payload["lanes"]))
+        self.assertIn("Synology monitoring", payload["summary"]["nextMigrationLane"])
         self.assertIn("read-only-adapter", payload["modes"])
         self.assertIn("no-trading-execution", payload["risks"])
 
@@ -68,6 +72,22 @@ class FusionFixtureContractTests(unittest.TestCase):
             self.assertEqual(row["lastVerifiedAt"], "2026-06-21")
             self.assertTrue(row["sourcePath"])
 
+        lane_required = {
+            "id",
+            "title",
+            "sourcePair",
+            "duplicateArea",
+            "migrationStatus",
+            "targetRuntime",
+            "safeSlice",
+            "proofAction",
+            "ownerRole",
+        }
+        for lane in payload["lanes"]:
+            self.assertTrue(lane_required.issubset(lane), lane["id"])
+            self.assertIn("->", lane["sourcePair"])
+            self.assertTrue(lane["proofAction"])
+
     def test_fusion_fixtures_do_not_claim_live_or_write_access(self) -> None:
         payload = run_node(
             """
@@ -83,6 +103,7 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertNotIn("live exploit", joined)
         self.assertIn("read-only", joined)
         self.assertIn("synthetic", joined)
+        self.assertIn("safe slice", joined)
         self.assertTrue(
             any(row["collectionMode"] == "blocked" for row in payload["rows"])
         )

@@ -7541,6 +7541,14 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.fusion-migration-list {
+  margin-bottom: 12px;
+}
+
+.fusion-migration-card {
+  gap: 8px;
+}
+
 .fusion-source-path {
   border-top: 1px solid rgba(238, 242, 236, 0.08);
   color: var(--muted);
