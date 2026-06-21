@@ -12125,6 +12125,39 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           </div>
                         </div>
                         <p>{recommendationStudio.summary}</p>
+                        {recommendationStudio.recoveryCockpit ? (
+                          <section
+                            aria-label="Skill recovery cockpit"
+                            className={`skill-recovery-cockpit ${toneClass(recommendationStudio.recoveryCockpit.tone)}`.trim()}
+                          >
+                            <div className="skill-recovery-cockpit-head">
+                              <div>
+                                <span>Skill recovery cockpit</span>
+                                <strong>{recommendationStudio.recoveryCockpit.selectedSkill}</strong>
+                                <p>{recommendationStudio.recoveryCockpit.summary}</p>
+                              </div>
+                              <span className="mini-pill muted">{recommendationStudio.recoveryCockpit.status}</span>
+                            </div>
+                            <div className="skill-recovery-cockpit-grid">
+                              <span>Trigger: {recommendationStudio.recoveryCockpit.activeTrigger}</span>
+                              <span>Loop step: {recommendationStudio.recoveryCockpit.loopStep}</span>
+                              <span>Runtime lane: {recommendationStudio.recoveryCockpit.runtimeLane}</span>
+                              <span>Provider route: {recommendationStudio.recoveryCockpit.providerRoute}</span>
+                              <span>Retry guard: {recommendationStudio.recoveryCockpit.mustAttachBeforeRetry ? "proof required" : "not gated"}</span>
+                              <span>Proof: {recommendationStudio.recoveryCockpit.proofLabel}</span>
+                            </div>
+                            {recommendationStudio.recoveryCockpit.artifactPath ? (
+                              <p className="skill-recovery-proof-path">{recommendationStudio.recoveryCockpit.artifactPath}</p>
+                            ) : null}
+                            {recommendationStudio.recoveryCockpit.proofEvidence?.length ? (
+                              <div className="skill-recovery-evidence-list" aria-label="Required recovery proof evidence">
+                                {recommendationStudio.recoveryCockpit.proofEvidence.map(item => (
+                                  <span key={item}>{item}</span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </section>
+                        ) : null}
                         <div className="builder-thread-list">
                           {recommendationStudio.struggleSignals.map(item => (
                             <button
@@ -12869,6 +12902,39 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         </div>
                       </div>
                       <p>{recommendationStudio.summary}</p>
+                      {recommendationStudio.recoveryCockpit ? (
+                        <section
+                          aria-label="Skill recovery cockpit"
+                          className={`skill-recovery-cockpit ${toneClass(recommendationStudio.recoveryCockpit.tone)}`.trim()}
+                        >
+                          <div className="skill-recovery-cockpit-head">
+                            <div>
+                              <span>Skill recovery cockpit</span>
+                              <strong>{recommendationStudio.recoveryCockpit.selectedSkill}</strong>
+                              <p>{recommendationStudio.recoveryCockpit.summary}</p>
+                            </div>
+                            <span className="mini-pill muted">{recommendationStudio.recoveryCockpit.status}</span>
+                          </div>
+                          <div className="skill-recovery-cockpit-grid">
+                            <span>Trigger: {recommendationStudio.recoveryCockpit.activeTrigger}</span>
+                            <span>Loop step: {recommendationStudio.recoveryCockpit.loopStep}</span>
+                            <span>Runtime lane: {recommendationStudio.recoveryCockpit.runtimeLane}</span>
+                            <span>Provider route: {recommendationStudio.recoveryCockpit.providerRoute}</span>
+                            <span>Retry guard: {recommendationStudio.recoveryCockpit.mustAttachBeforeRetry ? "proof required" : "not gated"}</span>
+                            <span>Proof: {recommendationStudio.recoveryCockpit.proofLabel}</span>
+                          </div>
+                          {recommendationStudio.recoveryCockpit.artifactPath ? (
+                            <p className="skill-recovery-proof-path">{recommendationStudio.recoveryCockpit.artifactPath}</p>
+                          ) : null}
+                          {recommendationStudio.recoveryCockpit.proofEvidence?.length ? (
+                            <div className="skill-recovery-evidence-list" aria-label="Required recovery proof evidence">
+                              {recommendationStudio.recoveryCockpit.proofEvidence.map(item => (
+                                <span key={item}>{item}</span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </section>
+                      ) : null}
                       <div className="builder-thread-list">
                         {recommendationStudio.struggleSignals.map(item => (
                           <button

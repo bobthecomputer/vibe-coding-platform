@@ -333,12 +333,22 @@ def main() -> int:
 
         steps = []
         for label, expected in [
-            ("Builder", ["CONVERSATION COMMAND BOARD", "Launch mission"]),
+            (
+                "Builder",
+                [
+                    "CONVERSATION COMMAND BOARD",
+                    "Launch mission",
+                    "SKILL RECOVERY COCKPIT",
+                    "Runtime lane:",
+                    "Provider route:",
+                    "Retry guard:",
+                ],
+            ),
             (
                 "Skills",
                 [
                     "Skills",
-                    "Skill recovery",
+                    "SKILL RECOVERY",
                     "RECOMMENDED SKILLS",
                     "RUNTIME LANE",
                     "Recovery actions and route separation",
@@ -354,6 +364,14 @@ def main() -> int:
             for fragment in expected:
                 wait_for_text(cdp, fragment)
             visible = str(cdp.eval("document.body.innerText")).replace("\r\n", "\n")
+            if label == "Builder":
+                cdp.eval(
+                    """
+                    document.querySelector(".skill-recovery-cockpit")
+                      ?.scrollIntoView({ block: "center", inline: "nearest" });
+                    """
+                )
+                time.sleep(0.35)
             screenshot = capture(cdp, label.lower().replace(" ", "-"))
             steps.append(
                 {

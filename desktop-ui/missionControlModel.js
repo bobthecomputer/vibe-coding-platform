@@ -20,6 +20,9 @@ import {
 function asList(value) {
   return Array.isArray(value) ? value : [];
 }
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
 
 function uniq(items) {
   return [...new Set(asList(items).filter(Boolean).map(item => String(item).trim()))];
@@ -64,7 +67,6 @@ function liveReviewFrame(path, { id, label, timestamp } = {}) {
     proofSource: "mission_artifact",
   };
 }
-
 function ratioPercent(part, total) {
   if (total <= 0) {
     return 0;
@@ -1923,6 +1925,70 @@ function deriveRecommendationStudio({
   qualityRoadmap,
   builderBoard,
 }) {
+  const skillRecovery = asObject(mission?.missionLoop?.skillRecovery || mission?.state?.skill_recovery);
+  const recoveryPlan = asObject(skillRecovery.recoveryPlan);
+  const recoveryTriggers = asList(skillRecovery.triggers);
+  const recoveryRecommendations = asList(skillRecovery.recommendations);
+  const recoveryActions = asList(skillRecovery.recoveryActions);
+  const routeSeparation = asObject(skillRecovery.routeSeparation);
+  const providerRoute = asObject(recoveryPlan.providerRoute || routeSeparation.providerRoute);
+  const selectedSkill = asObject(
+    recoveryPlan.selectedSkill ||
+      recoveryRecommendations.find(item => item?.skillId) ||
+      {},
+  );
+  const proofRequirement = asObject(
+    recoveryPlan.proofRequirement ||
+      asObject(recoveryTriggers[0]?.proofRequirement) ||
+      {},
+  );
+  const proofArtifactPlan = asObject(recoveryPlan.proofArtifactPlan);
+  const recoveryNeedsAction =
+    String(skillRecovery.status || "").toLowerCase() === "needs_recovery" ||
+    recoveryTriggers.length > 0 ||
+    Boolean(recoveryPlan.schemaVersion);
+  const recoveryCockpit = recoveryNeedsAction ? {
+    status: recoveryNeedsAction ? "needs_recovery" : "clear",
+    tone: recoveryNeedsAction ? "warn" : "good",
+    headline: recoveryNeedsAction ? "Skill recovery cockpit" : "Skill recovery clear",
+    summary: recoveryNeedsAction
+      ? recoveryPlan.nextAction ||
+        recoveryActions[0]?.action ||
+        recoveryTriggers[0]?.recoveryAction ||
+        "Choose a recovery skill, route, and proof artifact before retrying."
+      : "No active stuck-state recovery trigger is recorded for this mission.",
+    activeTrigger: recoveryTriggers[0]?.label || recoveryTriggers[0]?.kind || "No trigger",
+    triggerReason: recoveryTriggers[0]?.reason || skillRecovery.generatedFrom || "",
+    selectedSkill: selectedSkill.label || titleizeToken(selectedSkill.skillId || "Stuck State Recovery"),
+    selectedSkillId: selectedSkill.skillId || "",
+    skillExecutionMode: selectedSkill.executionCapable
+      ? "execution capable"
+      : selectedSkill.guidanceOnly
+        ? "guidance only"
+        : "mode not recorded",
+    runtimeLane: recoveryPlan.runtimeLane || routeSeparation.runtimeLane || mission?.runtime_id || "Runtime lane pending",
+    providerRoute: [
+      providerRoute.role || "",
+      providerRoute.provider || "",
+      providerRoute.model || "",
+    ].filter(Boolean).join(" / ") || "Provider route pending",
+    routeReason: recoveryPlan.routeReason || recoveryRecommendations[0]?.routeReason || recoveryTriggers[0]?.reason || "",
+    loopStep: recoveryPlan.loopStep || recoveryTriggers[0]?.loopStep || "repair",
+    retryGuard: asObject(recoveryPlan.retryGuard).blockSameStepRetry
+      ? asObject(recoveryPlan.retryGuard).reason || "Same-step retry is blocked until recovery proof is attached."
+      : "Retry guard not active.",
+    proofLabel: proofRequirement.label || proofArtifactPlan.artifactKind || "Recovery proof",
+    proofEvidence: asList(proofRequirement.minimumEvidence).slice(0, 4),
+    artifactPath: proofArtifactPlan.suggestedPath || "",
+    mustAttachBeforeRetry: Boolean(proofArtifactPlan.mustAttachBeforeRetry || recoveryNeedsAction),
+    visibleRouteSummary:
+      recoveryPlan.visibleRouteSummary ||
+      [recoveryPlan.runtimeLane || routeSeparation.runtimeLane, providerRoute.provider, providerRoute.model]
+        .filter(Boolean)
+        .join(" - "),
+    recommendationCount: recoveryRecommendations.length,
+    actionCount: recoveryActions.length,
+  } : null;
   const struggleSignals = [];
   const approvalCount = asInt(asList(mission?.proof?.pending_approvals).length);
   const verificationCount = asInt(asList(mission?.state?.verification_failures).length);
@@ -1976,6 +2042,16 @@ function deriveRecommendationStudio({
   }
 
   const skillRecommendations = uniq([
+    ...recoveryRecommendations.map(item =>
+      [
+        item?.label || titleizeToken(item?.skillId || "Recovery skill"),
+        [
+          item?.reason || item?.recoveryAction || "",
+          recoveryCockpit?.proofLabel ? `Proof: ${recoveryCockpit.proofLabel}` : "",
+          recoveryCockpit?.runtimeLane ? `Runtime lane: ${recoveryCockpit.runtimeLane}` : "",
+        ].filter(Boolean).join(" "),
+      ].join("||"),
+    ),
     ...asList(workspace?.skillRecommendations).map(item => `${item?.label || "Skill"}||${item?.reason || ""}`),
     ...skillStudio.recommended.map(item => `${item?.label || "Pack"}||${item?.description || ""}`),
   ])
@@ -2029,6 +2105,7 @@ function deriveRecommendationStudio({
         ? "Recommendations adapt to the active conversations, current blockers, and the packs that still need work."
         : "Recommendations are based on setup state, workflow readiness, and the gaps still blocking a strong first run.",
     struggleSignals: struggleSignals.slice(0, 4),
+    recoveryCockpit,
     skillRecommendations,
     nextMoves,
     learningQueue: asList(workflowStudio?.learningQueue).slice(0, 4).map((item, index) => ({
@@ -2621,6 +2698,14 @@ function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQu
   const interventionQueue = asList(mission?.missionLoop?.supervisorInterventions).slice(0, 3);
   const topIntervention = interventionQueue[0] || null;
   const criticalCount = interventionQueue.filter(item => item.severity === "high").length;
+  const skillRecovery = asObject(mission?.missionLoop?.skillRecovery || mission?.state?.skill_recovery);
+  const recoveryPlan = asObject(skillRecovery.recoveryPlan);
+  const recoverySkill = asObject(recoveryPlan.selectedSkill || asList(skillRecovery.recommendations)[0]);
+  const recoveryProof = asObject(recoveryPlan.proofRequirement || asList(skillRecovery.triggers)[0]?.proofRequirement);
+  const recoveryActive =
+    String(skillRecovery.status || "").toLowerCase() === "needs_recovery" ||
+    asList(skillRecovery.triggers).length > 0 ||
+    Boolean(recoveryPlan.schemaVersion);
   const activeConversations = asList(builderBoard?.activeConversations);
   const stuckThreads = asList(builderBoard?.stuckThreads);
   const latestActivity = asList(snapshot?.activity)[0] || {};
@@ -2651,14 +2736,21 @@ function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQu
     {
       id: "blocked-state-sentry",
       label: "Blocked-state sentry",
-      status: stuckThreads.length > 0 || approvalCount > 0 || questionCount > 0 ? "warning" : "watching",
-      tone: stuckThreads.length > 0 || approvalCount > 0 || questionCount > 0 ? "warn" : "good",
-      trigger: `${stuckThreads.length} stuck thread(s), ${approvalCount} approval(s), ${questionCount} question(s)`,
+      status: recoveryActive || stuckThreads.length > 0 || approvalCount > 0 || questionCount > 0 ? "warning" : "watching",
+      tone: recoveryActive || stuckThreads.length > 0 || approvalCount > 0 || questionCount > 0 ? "warn" : "good",
+      trigger: recoveryActive
+        ? `${recoverySkill.label || titleizeToken(recoverySkill.skillId || "Recovery skill")} · ${recoveryProof.label || "proof required"}`
+        : `${stuckThreads.length} stuck thread(s), ${approvalCount} approval(s), ${questionCount} question(s)`,
       nextAction:
-        stuckThreads[0]?.reason ||
+        recoveryActive
+          ? recoveryPlan.nextAction || "Open Skills and run the selected recovery plan before retry."
+          : stuckThreads[0]?.reason ||
         (approvalCount > 0 ? "Open the queue and resolve the approval boundary." : "No blocked-state correction needed."),
       cadence: "important_only",
       activation: "manual_or_blocked",
+      targetDrawer: recoveryActive ? "skills" : "queue",
+      selectedSkill: recoverySkill.label || titleizeToken(recoverySkill.skillId || ""),
+      proofRequirement: recoveryProof.label || "",
     },
     {
       id: "intent-drift-sentry",

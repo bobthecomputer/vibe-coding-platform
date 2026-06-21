@@ -1886,6 +1886,76 @@ button.builder-inline-action:hover {
   line-height: 1.45;
 }
 
+.skill-recovery-cockpit {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(255, 255, 255, 0.025)),
+    #202023;
+  padding: 11px;
+}
+
+.skill-recovery-cockpit.tone-good {
+  border-color: rgba(34, 197, 94, 0.24);
+  background:
+    linear-gradient(135deg, rgba(34, 197, 94, 0.06), rgba(255, 255, 255, 0.02)),
+    #202023;
+}
+
+.skill-recovery-cockpit-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.skill-recovery-cockpit-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.skill-recovery-cockpit-head span:first-child {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.skill-recovery-cockpit-head p,
+.skill-recovery-proof-path {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.skill-recovery-cockpit-grid,
+.skill-recovery-evidence-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-recovery-cockpit-grid span,
+.skill-recovery-evidence-list span {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 4px 8px;
+}
+
+.skill-recovery-evidence-list span {
+  border-color: rgba(142, 203, 111, 0.24);
+  color: var(--text);
+}
+
 .builder-feature-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
