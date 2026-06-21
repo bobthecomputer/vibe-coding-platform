@@ -5921,6 +5921,100 @@ def _route_decision_fit(row: dict) -> tuple[str, str]:
     )
 
 
+def _latest_test_result(verification_results: list[dict]) -> str:
+    if not verification_results:
+        return "missing"
+    statuses = {
+        str(item.get("status", "") or "").lower()
+        for item in verification_results
+        if isinstance(item, dict)
+    }
+    return_codes = [
+        int(item.get("return_code", 1) or 0)
+        for item in verification_results
+        if isinstance(item, dict)
+    ]
+    if "timeout" in statuses or 124 in return_codes:
+        return "timed_out"
+    if any(return_code != 0 for return_code in return_codes):
+        return "failed"
+    return "passed"
+
+
+def _proof_artifact_score(run: dict) -> tuple[int, int]:
+    artifact_count = 0
+    if run.get("routeContractResolved"):
+        artifact_count += 1
+    if int(run.get("verificationResultCount", 0) or 0) > 0:
+        artifact_count += 1
+    if int(run.get("artifactCount", 0) or 0) + int(run.get("handoffCount", 0) or 0) > 0:
+        artifact_count += 1
+    return artifact_count, 3
+
+
+def _build_run_outcome_scorecard(payload: dict, metadata: dict | None) -> dict:
+    state = payload.get("state", {}) if isinstance(payload.get("state"), dict) else {}
+    context = payload.get("context", {}) if isinstance(payload.get("context"), dict) else {}
+    verification_results = payload.get("verification_results", [])
+    if not isinstance(verification_results, list):
+        verification_results = []
+    code_execution = payload.get("code_execution", {})
+    if not isinstance(code_execution, dict):
+        code_execution = payload.get("code_execution_state", {})
+    if not isinstance(code_execution, dict):
+        code_execution = {}
+    artifacts = code_execution.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        artifacts = []
+    handoff_packets = payload.get("handoff_packets", [])
+    if not isinstance(handoff_packets, list):
+        handoff_packets = []
+    blocker_retry_counts = payload.get("blocker_retry_counts", {})
+    if not isinstance(blocker_retry_counts, dict):
+        blocker_retry_counts = {}
+
+    verification_duration_ms = sum(
+        int(item.get("duration_ms", 0) or 0)
+        for item in verification_results
+        if isinstance(item, dict)
+    )
+    metadata_payload = metadata if isinstance(metadata, dict) else {}
+    created_at = (
+        _parse_iso_datetime(str(metadata_payload.get("created_at", "") or ""))
+        or _parse_iso_datetime(str(payload.get("created_at", "") or ""))
+    )
+    updated_at = _parse_iso_datetime(str(payload.get("updated_at", "") or ""))
+    wall_time_seconds = int(state.get("elapsed_runtime_seconds", 0) or 0)
+    if wall_time_seconds <= 0 and created_at and updated_at:
+        wall_time_seconds = max(0, int((updated_at - created_at).total_seconds()))
+    if wall_time_seconds <= 0:
+        wall_time_seconds = int(round(verification_duration_ms / 1000))
+
+    return {
+        "totalTokens": int(
+            context.get("used_tokens", 0)
+            or state.get("context_used_tokens", 0)
+            or 0
+        ),
+        "wallTimeSeconds": wall_time_seconds,
+        "retryCount": sum(int(value or 0) for value in blocker_retry_counts.values()),
+        "latestTestResult": _latest_test_result(verification_results),
+        "verificationResultCount": len(verification_results),
+        "artifactCount": len(artifacts),
+        "handoffCount": len(handoff_packets),
+        "humanInterventionCount": len(
+            state.get("approval_history", [])
+            if isinstance(state.get("approval_history"), list)
+            else []
+        )
+        + (
+            1
+            if str(payload.get("autopilot_pause_reason", "")) == "approval_required"
+            else 0
+        ),
+    }
+
+
 def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict]:
     rows: dict[str, dict] = {}
 
@@ -5946,6 +6040,13 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
                 "delegatedLaneCount": 0,
                 "routeContractProofCount": 0,
                 "verificationFailures": 0,
+                "totalTokens": 0,
+                "wallTimeSeconds": 0,
+                "retryCount": 0,
+                "humanInterventionCount": 0,
+                "proofArtifactCount": 0,
+                "proofArtifactRequiredCount": 0,
+                "latestTestResult": "missing",
                 "proofGaps": [],
             },
         )
@@ -5971,6 +6072,23 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
         row["delegatedLaneCount"] += int(run.get("delegatedSessionCount", 0) or 0)
         row["routeContractProofCount"] += 1 if run.get("routeContractResolved") else 0
         row["verificationFailures"] += int(run.get("verificationFailures", 0) or 0)
+        scorecard = run.get("outcomeScorecard", {}) if isinstance(run.get("outcomeScorecard"), dict) else {}
+        row["totalTokens"] += int(scorecard.get("totalTokens", 0) or 0)
+        row["wallTimeSeconds"] += int(scorecard.get("wallTimeSeconds", 0) or 0)
+        row["retryCount"] += int(scorecard.get("retryCount", 0) or 0)
+        row["humanInterventionCount"] += int(scorecard.get("humanInterventionCount", 0) or 0)
+        proof_count, proof_required = _proof_artifact_score(
+            {
+                **run,
+                "verificationResultCount": scorecard.get("verificationResultCount", 0),
+                "artifactCount": scorecard.get("artifactCount", 0),
+                "handoffCount": scorecard.get("handoffCount", 0),
+            }
+        )
+        row["proofArtifactCount"] += proof_count
+        row["proofArtifactRequiredCount"] += proof_required
+        if row["latestTestResult"] == "missing":
+            row["latestTestResult"] = str(scorecard.get("latestTestResult", "missing") or "missing")
 
     runtime_root = root / ".agent_control" / "runtime_sessions"
     if runtime_root.exists():
@@ -6007,6 +6125,20 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
         row["fitLabel"] = fit_label
         row["fitReason"] = fit_reason
         row["completionRate"] = _percent(int(row["completedRuns"]), int(row["observedRuns"]))
+        row["outcomeScorecard"] = {
+            "successRate": _percent(int(row["completedRuns"]), int(row["observedRuns"])),
+            "humanInterventionCount": int(row.pop("humanInterventionCount", 0) or 0),
+            "totalTokens": int(row.pop("totalTokens", 0) or 0),
+            "wallTimeSeconds": int(row.pop("wallTimeSeconds", 0) or 0),
+            "retryCount": int(row.pop("retryCount", 0) or 0),
+            "latestTestResult": str(row.pop("latestTestResult", "missing") or "missing"),
+            "proofArtifactCompleteness": _percent(
+                int(row.get("proofArtifactCount", 0) or 0),
+                int(row.get("proofArtifactRequiredCount", 0) or 0),
+            ),
+            "proofArtifactCount": int(row.pop("proofArtifactCount", 0) or 0),
+            "proofArtifactRequiredCount": int(row.pop("proofArtifactRequiredCount", 0) or 0),
+        }
         row["proofGaps"] = sorted(set(row["proofGaps"]))[:3]
         decision_rows.append(row)
 
@@ -6218,6 +6350,10 @@ def build_harness_lab_snapshot(root: Path) -> dict:
         route_provider = _route_provider_from_payload(payload)
         route_model = _route_model_from_payload(payload)
         route_role = _route_role_from_payload(payload)
+        outcome_scorecard = _build_run_outcome_scorecard(
+            payload,
+            metadata if isinstance(metadata, dict) else {},
+        )
         if has_route_contract:
             route_contract_run_count += 1
         if pause_reason == "runtime_budget":
@@ -6243,6 +6379,7 @@ def build_harness_lab_snapshot(root: Path) -> dict:
                 "routeProvider": route_provider,
                 "routeModel": route_model,
                 "routeRole": route_role,
+                "outcomeScorecard": outcome_scorecard,
                 "resumedFromSessionId": parent_session_id,
                 "actionCount": action_count,
             }

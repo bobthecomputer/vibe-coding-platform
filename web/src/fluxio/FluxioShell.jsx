@@ -15617,6 +15617,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             <small>
                               {item.observedRuns || 0} run{(item.observedRuns || 0) === 1 ? "" : "s"} · {item.completionRate || 0}% complete · {item.routeContractProofCount || 0} route proof
                             </small>
+                            {item.outcomeScorecard ? (
+                              <small className="route-outcome-scorecard">
+                                Tokens {item.outcomeScorecard.totalTokens || 0} · {formatDurationCompact(item.outcomeScorecard.wallTimeSeconds || 0)} · Test{" "}
+                                {titleizeToken(item.outcomeScorecard.latestTestResult || "missing")} · Human{" "}
+                                {item.outcomeScorecard.humanInterventionCount || 0} · Retry {item.outcomeScorecard.retryCount || 0} · Proof{" "}
+                                {item.outcomeScorecard.proofArtifactCount || 0}/{item.outcomeScorecard.proofArtifactRequiredCount || 0}
+                              </small>
+                            ) : null}
                             {asList(item.proofGaps).length > 0 ? (
                               <em>{asList(item.proofGaps).slice(0, 2).join(" · ")}</em>
                             ) : null}

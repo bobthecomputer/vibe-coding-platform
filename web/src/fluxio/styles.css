@@ -1043,6 +1043,10 @@ button.builder-sidebar-nexus:hover {
   font-size: 12px;
 }
 
+.route-outcome-scorecard {
+  display: block;
+}
+
 .route-decision-card em {
   font-style: normal;
 }

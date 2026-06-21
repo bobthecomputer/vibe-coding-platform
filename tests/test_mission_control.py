@@ -1422,6 +1422,22 @@ class MissionControlTests(unittest.TestCase):
                         "autopilot_status": "completed",
                         "autopilot_pause_reason": "",
                         "verification_failures": [],
+                        "verification_results": [
+                            {
+                                "command": "npm run frontend:build",
+                                "return_code": 0,
+                                "duration_ms": 143000,
+                                "status": "executed",
+                            }
+                        ],
+                        "context": {"used_tokens": 449},
+                        "blocker_retry_counts": {"verification_failed": 1},
+                        "code_execution": {
+                            "artifacts": [
+                                {"artifact_id": "proof_one", "created_at": "2026-05-20T12:01:00+00:00"}
+                            ]
+                        },
+                        "handoff_packets": ["handoff_one.md"],
                         "route_configs": [
                             {
                                 "role": "executor",
@@ -1551,6 +1567,13 @@ class MissionControlTests(unittest.TestCase):
             self.assertTrue(
                 any(item["fitLabel"] == "High confidence" for item in route_decisions)
             )
+            openai_route = next(item for item in route_decisions if item["provider"] == "openai")
+            self.assertIn("outcomeScorecard", openai_route)
+            self.assertEqual(openai_route["outcomeScorecard"]["totalTokens"], 449)
+            self.assertEqual(openai_route["outcomeScorecard"]["wallTimeSeconds"], 143)
+            self.assertEqual(openai_route["outcomeScorecard"]["retryCount"], 1)
+            self.assertEqual(openai_route["outcomeScorecard"]["latestTestResult"], "passed")
+            self.assertEqual(openai_route["outcomeScorecard"]["proofArtifactCount"], 3)
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
 
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:
