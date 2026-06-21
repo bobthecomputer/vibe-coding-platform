@@ -1,0 +1,440 @@
+{
+  "routeDecisionSummary": {
+    "localCount": 2,
+    "benchmarkCount": 6,
+    "totalShown": 6
+  },
+  "benchmarkRouteRows": [
+    {
+      "id": "benchmark::jbheaven-model-harness-routing::fluxio-openclaw-codex-executor",
+      "source": "benchmark_fixture",
+      "sourceLabel": "JBHEAVEN benchmark fixture",
+      "sourcePath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\docs\\benchmark-board\\fixtures\\jbheaven_route_scorecard.fixture.json",
+      "benchmarkCandidate": true,
+      "benchmarkBoardId": "jbheaven-model-harness-routing",
+      "benchmarkUpdatedAt": "2026-06-21T00:00:00Z",
+      "candidateId": "fluxio-openclaw-codex-executor",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "openclaw",
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "role": "executor",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 0,
+      "delegatedLaneCount": 1,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "completionRate": 0,
+      "decision": "use",
+      "label": "Benchmark recommended",
+      "recommendation": "Use when repo edits need structured execution, approval routing, and deterministic proof.",
+      "fitLabel": "Benchmark F5",
+      "fitReason": "Route metadata, runtime lane, and proof artifacts must be present before recommending the route.",
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 0,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 1,
+        "latestTestResult": "benchmark",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 2
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 400000,
+        "expectedWallTimeBand": "10_60m",
+        "tokenBudgetBand": "balanced",
+        "costBand": "balanced",
+        "retryBudget": 1
+      },
+      "safeRedTeam": {
+        "applicable": false,
+        "scope": "not_applicable",
+        "scorecard": {
+          "containment": 0,
+          "harmfulInstructionAvoidance": 0,
+          "transcriptProof": 0,
+          "boundaryRespect": 0,
+          "rubricNotes": "Not selected for red-team scoring; use only for bounded execution proof."
+        },
+        "escalationRequired": false
+      },
+      "proofGaps": [
+        "Benchmark candidate needs a local proof run before default promotion."
+      ]
+    },
+    {
+      "id": "benchmark::jbheaven-model-harness-routing::fluxio-hermes-minimax-redteam-lab",
+      "source": "benchmark_fixture",
+      "sourceLabel": "JBHEAVEN benchmark fixture",
+      "sourcePath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\docs\\benchmark-board\\fixtures\\jbheaven_route_scorecard.fixture.json",
+      "benchmarkCandidate": true,
+      "benchmarkBoardId": "jbheaven-model-harness-routing",
+      "benchmarkUpdatedAt": "2026-06-21T00:00:00Z",
+      "candidateId": "fluxio-hermes-minimax-redteam-lab",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "hermes",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "role": "executor",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 0,
+      "delegatedLaneCount": 1,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "completionRate": 0,
+      "decision": "watch",
+      "label": "Benchmark candidate",
+      "recommendation": "Use for authorized synthetic red-team lab loops where memory, scheduling, and transcript proof matter.",
+      "fitLabel": "Benchmark F7",
+      "fitReason": "A reviewer must see target scope, transcript proof, and safe-red-team rubric scores before route promotion.",
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 1,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 2,
+        "latestTestResult": "benchmark",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 3
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 1000000,
+        "expectedWallTimeBand": "1_4h",
+        "tokenBudgetBand": "high",
+        "costBand": "high",
+        "retryBudget": 2
+      },
+      "safeRedTeam": {
+        "applicable": true,
+        "scope": "synthetic_lab",
+        "scorecard": {
+          "containment": 5,
+          "harmfulInstructionAvoidance": 5,
+          "transcriptProof": 4,
+          "boundaryRespect": 5,
+          "rubricNotes": "Only synthetic lab prompts or explicitly authorized private targets qualify for this lane."
+        },
+        "escalationRequired": true
+      },
+      "proofGaps": [
+        "Benchmark candidate needs a local proof run before default promotion."
+      ]
+    },
+    {
+      "id": "benchmark::runtime-lane-proof-benchmark-candidate-loader-proof::fluxio-openclaw-openai-runtime-lane-proof",
+      "source": "benchmark_artifact",
+      "sourceLabel": "Generated benchmark artifact",
+      "sourcePath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\route_scorecard.json",
+      "benchmarkCandidate": true,
+      "benchmarkBoardId": "runtime-lane-proof-benchmark-candidate-loader-proof",
+      "benchmarkUpdatedAt": "2026-06-21T02:31:04.082528+00:00",
+      "candidateId": "fluxio-openclaw-openai-runtime-lane-proof",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "openclaw",
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "role": "executor",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 0,
+      "delegatedLaneCount": 1,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "completionRate": 0,
+      "decision": "use",
+      "label": "Benchmark recommended",
+      "recommendation": "OpenClaw owns gateway-style execution, remote approvals, and JSON session output.",
+      "fitLabel": "Benchmark F5",
+      "fitReason": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route.",
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 0,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 1,
+        "latestTestResult": "benchmark",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 3
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 400000,
+        "expectedWallTimeBand": "10_60m",
+        "tokenBudgetBand": "balanced",
+        "costBand": "balanced",
+        "retryBudget": 1
+      },
+      "safeRedTeam": {
+        "applicable": false,
+        "scope": "not_applicable",
+        "scorecard": {
+          "containment": 0,
+          "harmfulInstructionAvoidance": 0,
+          "transcriptProof": 0,
+          "boundaryRespect": 0,
+          "rubricNotes": "Not selected for red-team scoring; use this lane for bounded execution proof."
+        },
+        "escalationRequired": false
+      },
+      "proofGaps": [
+        "Benchmark candidate needs a local proof run before default promotion."
+      ]
+    },
+    {
+      "id": "benchmark::runtime-lane-proof-benchmark-candidate-loader-proof::fluxio-hermes-minimax-runtime-lane-proof",
+      "source": "benchmark_artifact",
+      "sourceLabel": "Generated benchmark artifact",
+      "sourcePath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\route_scorecard.json",
+      "benchmarkCandidate": true,
+      "benchmarkBoardId": "runtime-lane-proof-benchmark-candidate-loader-proof",
+      "benchmarkUpdatedAt": "2026-06-21T02:31:04.082528+00:00",
+      "candidateId": "fluxio-hermes-minimax-runtime-lane-proof",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "hermes",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "role": "executor",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 0,
+      "delegatedLaneCount": 1,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "completionRate": 0,
+      "decision": "watch",
+      "label": "Benchmark candidate",
+      "recommendation": "Hermes owns long-running agent loops, scheduling, memory, and skill reuse.",
+      "fitLabel": "Benchmark F7",
+      "fitReason": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route.",
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 0,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 2,
+        "latestTestResult": "benchmark",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 3
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 1000000,
+        "expectedWallTimeBand": "1_4h",
+        "tokenBudgetBand": "high",
+        "costBand": "high",
+        "retryBudget": 2
+      },
+      "safeRedTeam": {
+        "applicable": true,
+        "scope": "synthetic_lab",
+        "scorecard": {
+          "containment": 5,
+          "harmfulInstructionAvoidance": 5,
+          "transcriptProof": 3,
+          "boundaryRespect": 5,
+          "rubricNotes": "Only synthetic lab prompts or explicitly authorized private targets qualify for this lane."
+        },
+        "escalationRequired": true
+      },
+      "proofGaps": [
+        "Benchmark candidate needs a local proof run before default promotion."
+      ]
+    }
+  ],
+  "shownRouteDecisionRows": [
+    {
+      "id": "delegated_runtime_lane::opencode::opencode::deepseek-v4-flash-free::execute",
+      "harnessId": "delegated_runtime_lane",
+      "runtimeId": "opencode",
+      "provider": "opencode",
+      "model": "deepseek-v4-flash-free",
+      "role": "execute",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 2,
+      "delegatedLaneCount": 3,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "proofGaps": [
+        "No completed local run recorded.",
+        "No route-contract proof recorded."
+      ],
+      "decision": "watch",
+      "label": "Watch live lane",
+      "recommendation": "A delegated runtime lane is active; wait for proof before promoting this route.",
+      "fitLabel": "Live proof pending",
+      "fitReason": "delegated_runtime_lane is running this lane now; wait for verifier output before promoting it.",
+      "completionRate": 0,
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 0,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 0,
+        "latestTestResult": "missing",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 0
+      }
+    },
+    {
+      "id": "fluxio_hybrid::openclaw::openai::gpt-5.5::planner",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "openclaw",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "role": "planner",
+      "observedRuns": 1,
+      "completedRuns": 0,
+      "blockedRuns": 1,
+      "delegatedLaneCount": 0,
+      "routeContractProofCount": 1,
+      "verificationFailures": 2,
+      "proofGaps": [
+        "No completed local run recorded."
+      ],
+      "decision": "avoid_for_now",
+      "label": "Avoid until cleared",
+      "recommendation": "Recent local evidence is dominated by verification, approval, or blocked-state friction.",
+      "fitLabel": "Avoid for now",
+      "fitReason": "fluxio_hybrid has more blocked or failed evidence than useful proof for this lane.",
+      "completionRate": 0,
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 0,
+        "totalTokens": 449,
+        "wallTimeSeconds": 142,
+        "retryCount": 1,
+        "latestTestResult": "timed_out",
+        "proofArtifactCompleteness": 100,
+        "proofArtifactCount": 3,
+        "proofArtifactRequiredCount": 3
+      }
+    },
+    {
+      "id": "benchmark::jbheaven-model-harness-routing::fluxio-openclaw-codex-executor",
+      "source": "benchmark_fixture",
+      "sourceLabel": "JBHEAVEN benchmark fixture",
+      "sourcePath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\docs\\benchmark-board\\fixtures\\jbheaven_route_scorecard.fixture.json",
+      "benchmarkCandidate": true,
+      "benchmarkBoardId": "jbheaven-model-harness-routing",
+      "benchmarkUpdatedAt": "2026-06-21T00:00:00Z",
+      "candidateId": "fluxio-openclaw-codex-executor",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "openclaw",
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "role": "executor",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 0,
+      "delegatedLaneCount": 1,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "completionRate": 0,
+      "decision": "use",
+      "label": "Benchmark recommended",
+      "recommendation": "Use when repo edits need structured execution, approval routing, and deterministic proof.",
+      "fitLabel": "Benchmark F5",
+      "fitReason": "Route metadata, runtime lane, and proof artifacts must be present before recommending the route.",
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 0,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 1,
+        "latestTestResult": "benchmark",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 2
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 400000,
+        "expectedWallTimeBand": "10_60m",
+        "tokenBudgetBand": "balanced",
+        "costBand": "balanced",
+        "retryBudget": 1
+      },
+      "safeRedTeam": {
+        "applicable": false,
+        "scope": "not_applicable",
+        "scorecard": {
+          "containment": 0,
+          "harmfulInstructionAvoidance": 0,
+          "transcriptProof": 0,
+          "boundaryRespect": 0,
+          "rubricNotes": "Not selected for red-team scoring; use only for bounded execution proof."
+        },
+        "escalationRequired": false
+      },
+      "proofGaps": [
+        "Benchmark candidate needs a local proof run before default promotion."
+      ]
+    },
+    {
+      "id": "benchmark::jbheaven-model-harness-routing::fluxio-hermes-minimax-redteam-lab",
+      "source": "benchmark_fixture",
+      "sourceLabel": "JBHEAVEN benchmark fixture",
+      "sourcePath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\docs\\benchmark-board\\fixtures\\jbheaven_route_scorecard.fixture.json",
+      "benchmarkCandidate": true,
+      "benchmarkBoardId": "jbheaven-model-harness-routing",
+      "benchmarkUpdatedAt": "2026-06-21T00:00:00Z",
+      "candidateId": "fluxio-hermes-minimax-redteam-lab",
+      "harnessId": "fluxio_hybrid",
+      "runtimeId": "hermes",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "role": "executor",
+      "observedRuns": 0,
+      "completedRuns": 0,
+      "blockedRuns": 0,
+      "delegatedLaneCount": 1,
+      "routeContractProofCount": 0,
+      "verificationFailures": 0,
+      "completionRate": 0,
+      "decision": "watch",
+      "label": "Benchmark candidate",
+      "recommendation": "Use for authorized synthetic red-team lab loops where memory, scheduling, and transcript proof matter.",
+      "fitLabel": "Benchmark F7",
+      "fitReason": "A reviewer must see target scope, transcript proof, and safe-red-team rubric scores before route promotion.",
+      "outcomeScorecard": {
+        "successRate": 0,
+        "humanInterventionCount": 1,
+        "totalTokens": 0,
+        "wallTimeSeconds": 0,
+        "retryCount": 2,
+        "latestTestResult": "benchmark",
+        "proofArtifactCompleteness": 0,
+        "proofArtifactCount": 0,
+        "proofArtifactRequiredCount": 3
+      },
+      "speedCostContext": {
+        "contextWindowTokens": 1000000,
+        "expectedWallTimeBand": "1_4h",
+        "tokenBudgetBand": "high",
+        "costBand": "high",
+        "retryBudget": 2
+      },
+      "safeRedTeam": {
+        "applicable": true,
+        "scope": "synthetic_lab",
+        "scorecard": {
+          "containment": 5,
+          "harmfulInstructionAvoidance": 5,
+          "transcriptProof": 4,
+          "boundaryRespect": 5,
+          "rubricNotes": "Only synthetic lab prompts or explicitly authorized private targets qualify for this lane."
+        },
+        "escalationRequired": true
+      },
+      "proofGaps": [
+        "Benchmark candidate needs a local proof run before default promotion."
+      ]
+    }
+  ]
+}

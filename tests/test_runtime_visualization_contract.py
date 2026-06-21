@@ -78,6 +78,7 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
 
     assert "routeDecisionRows" in source
+    assert "benchmarkRouteRows" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
     assert "Local route decision scorecards" in source
     assert "route-decision-card" in source
     assert "route-decision-meta" in source

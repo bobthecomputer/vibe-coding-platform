@@ -1,0 +1,10 @@
+{
+  "runId": "benchmark-candidate-loader-proof",
+  "root": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof",
+  "paths": {
+    "proof": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\runtime_lane_proof.json",
+    "markdown": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\route_scorecard.json",
+    "artifact_index": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\artifacts_index.json"
+  }
+}

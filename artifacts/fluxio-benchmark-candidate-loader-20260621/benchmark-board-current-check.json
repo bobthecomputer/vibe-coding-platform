@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T02:32:30.190411+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&proofReload=benchmark-candidate-loader",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-benchmark-candidate-loader-20260621\\benchmark-board-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-benchmark-candidate-loader-20260621\\benchmark-board-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Runtime leaders",
+    "Local route decision scorecards",
+    "route proof"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 3600,
+    "sampleCount": 8100,
+    "uniqueSampleColors": 456,
+    "averageLuma": 27.94,
+    "nonBlank": true
+  },
+  "passed": true
+}

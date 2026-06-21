@@ -1,0 +1,139 @@
+{
+  "runId": "benchmark-candidate-loader-proof",
+  "mode": "deterministic-no-live-runtime-call",
+  "createdAt": "2026-06-21T02:31:04.082528+00:00",
+  "lanes": [
+    {
+      "runtimeId": "openclaw",
+      "label": "OpenClaw",
+      "skill": "jbheaven_godmode_lab",
+      "capabilities": [
+        {
+          "key": "remote_approvals",
+          "label": "Remote approvals",
+          "available": true,
+          "detail": "Messaging-first control plane with phone-friendly inbox patterns."
+        },
+        {
+          "key": "skills",
+          "label": "Managed skills",
+          "available": true,
+          "detail": "Bundled, managed, and workspace skills are supported."
+        },
+        {
+          "key": "multi_channel",
+          "label": "Multi-channel routing",
+          "available": true,
+          "detail": "Routes messages and approvals across Telegram and other channels."
+        }
+      ],
+      "launchCommand": "(openclaw agents add fluxio_mission_openclaw_lane_proof_d228bebc --workspace C:\\Users\\paul\\projects\\vibe-coding-platform --model openai-codex/gpt-5.4-mini --non-interactive --json >nul 2>nul || openclaw models --agent fluxio_mission_openclaw_lane_proof_d228bebc set openai-codex/gpt-5.4-mini >nul 2>nul) && openclaw agent --agent fluxio_mission_openclaw_lane_proof_d228bebc --session-id fluxio_mission_openclaw_lane_proof --message \"Prove runtime route metadata and skill visibility only. Do not call a model, edit files, or perform live red-team actions.\" --thinking medium --json",
+      "routeContract": {
+        "phase": "plan",
+        "role": "executor",
+        "provider": "openai-codex",
+        "model": "gpt-5.4-mini",
+        "canonical_model_id": "openai-codex/gpt-5.4-mini",
+        "effort": "medium"
+      },
+      "routeSummary": "OpenClaw launch route: plan:executor -> openai-codex/gpt-5.4-mini (medium thinking)",
+      "proofMeaning": "OpenClaw owns gateway-style execution, remote approvals, and JSON session output."
+    },
+    {
+      "runtimeId": "hermes",
+      "label": "Hermes",
+      "skill": "jbheaven_godmode_lab",
+      "capabilities": [
+        {
+          "key": "scheduled_automations",
+          "label": "Scheduled automations",
+          "available": true,
+          "detail": "Hermes has built-in scheduling and long-running agent loops."
+        },
+        {
+          "key": "skills_memory",
+          "label": "Skills and memory",
+          "available": true,
+          "detail": "Hermes learns and recalls skills across sessions."
+        },
+        {
+          "key": "delegation",
+          "label": "Delegation",
+          "available": true,
+          "detail": "Hermes can spawn isolated subagents for parallel workstreams."
+        }
+      ],
+      "launchCommand": "hermes chat -q \"Prove runtime route metadata and skill visibility only. Do not call a model, edit files, or perform live red-team actions.\" -Q --model MiniMax-M3 --provider minimax",
+      "routeContract": {
+        "phase": "plan",
+        "role": "executor",
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "effort": "high"
+      },
+      "routeSummary": "Hermes launch route: plan:executor -> minimax/MiniMax-M3 (high)",
+      "proofMeaning": "Hermes owns long-running agent loops, scheduling, memory, and skill reuse."
+    }
+  ],
+  "fusedRuntime": {
+    "runtimeId": "fluxio-fused-supervisor",
+    "role": "supervisor_not_runtime_adapter",
+    "runtimeAdapterAdded": false,
+    "registeredRuntimeAdapters": [
+      "openclaw",
+      "hermes"
+    ],
+    "normalizes": [
+      "route_contracts",
+      "structured_events",
+      "approval_state",
+      "logs",
+      "heartbeats",
+      "changed_files"
+    ],
+    "delegatedSessionFieldsPresent": {
+      "runtime_id": true,
+      "launch_command": true,
+      "events_path": true,
+      "log_path": true,
+      "decision_path": true,
+      "latest_events": true,
+      "pending_approval": true,
+      "heartbeat_status": true,
+      "target_phase": true,
+      "target_role": true,
+      "target_provider": true,
+      "target_model": true,
+      "changed_files": true
+    }
+  },
+  "skillVisibility": {
+    "requiredSkills": {
+      "jbheaven_godmode_lab": true,
+      "hermes_skill_packager": true,
+      "runtime_loop_supervisor": true
+    },
+    "retrievedSkills": [
+      "jbheaven_godmode_lab",
+      "runtime_loop_supervisor",
+      "hermes_skill_packager",
+      "frontend_taste_director",
+      "stuck_state_recovery",
+      "fluxio_workbench_studio"
+    ],
+    "catalogSize": 21
+  },
+  "safetyContract": {
+    "liveModelCalls": false,
+    "realTargets": false,
+    "harmfulInstructions": false,
+    "runtimeAdapterAdded": false,
+    "openCodeGoRuntimeAdded": false
+  },
+  "artifactPaths": {
+    "proof": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\runtime_lane_proof.json",
+    "markdown": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\route_scorecard.json",
+    "artifact_index": "artifacts\\runtime-lanes\\benchmark-candidate-loader-proof\\artifacts_index.json"
+  }
+}

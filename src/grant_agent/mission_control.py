@@ -85,6 +85,8 @@ HARNESS_RECENT_RUN_LIMIT = max(
     int(os.environ.get("FLUXIO_HARNESS_RECENT_RUN_LIMIT", "20")),
     8,
 )
+BENCHMARK_SCORECARD_SCHEMA_VERSION = "benchmark-board-route-scorecard/v1"
+BENCHMARK_SCORECARD_ARTIFACT_LIMIT = 3
 RELEASE_READINESS_WEIGHTS = {
     "required": 80,
     "quality": 20,
@@ -6206,6 +6208,154 @@ def _route_decision_fit(row: dict) -> tuple[str, str]:
     )
 
 
+def _benchmark_scorecard_fixture_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "benchmark-board"
+        / "fixtures"
+        / "jbheaven_route_scorecard.fixture.json"
+    )
+
+
+def _benchmark_scorecard_paths(root: Path) -> list[tuple[Path, str]]:
+    paths: list[tuple[Path, str]] = []
+    fixture_path = _benchmark_scorecard_fixture_path()
+    if fixture_path.exists():
+        paths.append((fixture_path, "benchmark_fixture"))
+    artifact_root = root / "artifacts" / "runtime-lanes"
+    if artifact_root.exists():
+        artifact_paths = sorted(
+            artifact_root.glob("*/route_scorecard.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        paths.extend(
+            (path, "benchmark_artifact")
+            for path in artifact_paths[:BENCHMARK_SCORECARD_ARTIFACT_LIMIT]
+        )
+    return paths
+
+
+def _benchmark_route_row_from_candidate(
+    *,
+    board: dict,
+    candidate: dict,
+    source: str,
+    path: Path,
+) -> dict | None:
+    provider_route = candidate.get("providerRoute", {})
+    runtime_lane = candidate.get("runtimeLane", {})
+    decision = candidate.get("decision", {})
+    verifier_proof = candidate.get("verifierProof", {})
+    speed_cost = candidate.get("speedCostContext", {})
+    safe_redteam = candidate.get("safeRedTeam", {})
+    if not all(
+        isinstance(item, dict)
+        for item in (provider_route, runtime_lane, decision, verifier_proof)
+    ):
+        return None
+    candidate_id = str(candidate.get("candidateId", "") or "").strip()
+    if not candidate_id:
+        return None
+    provider = str(provider_route.get("provider", "") or "").strip().lower()
+    runtime_id = str(runtime_lane.get("laneId", "") or "").strip()
+    if not provider or not runtime_id:
+        return None
+    route_tier = str(decision.get("routeTier", "") or "F0")
+    recommended = bool(decision.get("recommended"))
+    proof_artifacts = verifier_proof.get("proofArtifacts", [])
+    if not isinstance(proof_artifacts, list):
+        proof_artifacts = []
+    source_label = (
+        "Generated benchmark artifact"
+        if source == "benchmark_artifact"
+        else "JBHEAVEN benchmark fixture"
+    )
+    redteam_applicable = bool(safe_redteam.get("applicable"))
+    benchmark_decision = (
+        "use" if recommended else "watch" if redteam_applicable else "needs_evidence"
+    )
+    recommendation = str(provider_route.get("routeReason", "") or "").strip()
+    if not recommendation:
+        use_when = decision.get("useWhen", [])
+        recommendation = str(use_when[0]) if isinstance(use_when, list) and use_when else (
+            "Benchmark candidate loaded from route scorecard metadata."
+        )
+    return {
+        "id": f"benchmark::{board.get('boardId', 'scorecard')}::{candidate_id}",
+        "source": source,
+        "sourceLabel": source_label,
+        "sourcePath": str(path),
+        "benchmarkCandidate": True,
+        "benchmarkBoardId": board.get("boardId", ""),
+        "benchmarkUpdatedAt": board.get("updatedAt", ""),
+        "candidateId": candidate_id,
+        "harnessId": str(candidate.get("harnessId", "") or "fluxio_hybrid"),
+        "runtimeId": runtime_id,
+        "provider": provider,
+        "model": str(provider_route.get("model", "") or candidate.get("modelId", "") or "profile default"),
+        "role": str(provider_route.get("role", "") or "mission"),
+        "observedRuns": 0,
+        "completedRuns": 0,
+        "blockedRuns": 0,
+        "delegatedLaneCount": 1 if runtime_lane.get("handoffMode") == "delegated" else 0,
+        "routeContractProofCount": 0,
+        "verificationFailures": 0,
+        "completionRate": 0,
+        "decision": benchmark_decision,
+        "label": "Benchmark recommended" if recommended else "Benchmark candidate",
+        "recommendation": recommendation,
+        "fitLabel": f"Benchmark {route_tier}",
+        "fitReason": str(
+            verifier_proof.get("acceptanceGate", "")
+            or "Run local proof before promoting this route."
+        ),
+        "outcomeScorecard": {
+            "successRate": 0,
+            "humanInterventionCount": 1 if verifier_proof.get("independence") == "human_review" else 0,
+            "totalTokens": 0,
+            "wallTimeSeconds": 0,
+            "retryCount": int(speed_cost.get("retryBudget", 0) or 0),
+            "latestTestResult": "benchmark",
+            "proofArtifactCompleteness": 0,
+            "proofArtifactCount": 0,
+            "proofArtifactRequiredCount": len(proof_artifacts),
+        },
+        "speedCostContext": speed_cost if isinstance(speed_cost, dict) else {},
+        "safeRedTeam": safe_redteam if isinstance(safe_redteam, dict) else {},
+        "proofGaps": ["Benchmark candidate needs a local proof run before default promotion."],
+    }
+
+
+def _load_benchmark_route_decision_rows(root: Path) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for path, source in _benchmark_scorecard_paths(root):
+        board = _load_json_file(path)
+        if not isinstance(board, dict):
+            continue
+        if board.get("schemaVersion") != BENCHMARK_SCORECARD_SCHEMA_VERSION:
+            continue
+        candidates = board.get("candidates", [])
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            row = _benchmark_route_row_from_candidate(
+                board=board,
+                candidate=candidate,
+                source=source,
+                path=path,
+            )
+            if not row or row["id"] in seen:
+                continue
+            rows.append(row)
+            seen.add(row["id"])
+    return rows[:6]
+
+
 def _latest_test_result(verification_results: list[dict]) -> str:
     if not verification_results:
         return "missing"
@@ -6697,12 +6847,28 @@ def build_harness_lab_snapshot(root: Path) -> dict:
         delegated_run_count=delegated_run_count,
         session_health=session_health,
     )
-    route_decision_rows = _build_route_decision_rows(root, recent_runs)
+    local_route_decision_rows = _build_route_decision_rows(root, recent_runs)
+    benchmark_route_rows = _load_benchmark_route_decision_rows(root)
+    route_row_ids = {item.get("id") for item in local_route_decision_rows}
+    route_decision_rows = [
+        *local_route_decision_rows,
+        *[
+            item
+            for item in benchmark_route_rows
+            if item.get("id") not in route_row_ids
+        ],
+    ][:6]
     return {
         "productionHarness": "fluxio_hybrid",
         "shadowCandidates": ["legacy_autonomous_engine"],
         "fusedRuntime": fused_runtime,
         "routeDecisionRows": route_decision_rows,
+        "benchmarkRouteRows": benchmark_route_rows,
+        "routeDecisionSummary": {
+            "localCount": len(local_route_decision_rows),
+            "benchmarkCount": len(benchmark_route_rows),
+            "totalShown": len(route_decision_rows),
+        },
         "recentRuns": recent_runs,
         "harnessCounts": harness_counts,
         "statusCounts": status_counts,
