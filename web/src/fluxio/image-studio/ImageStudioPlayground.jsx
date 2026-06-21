@@ -542,8 +542,9 @@ function ProofReviewSummary({ review }) {
   );
 }
 
-function ImageBreakdownWorkflow({ workflow }) {
+function ImageBreakdownWorkflow({ workflow, route, routeAvailability }) {
   if (!workflow) return null;
+  const routeReady = Boolean(routeAvailability?.readyForRealRun);
   return (
     <section className="image-studio-breakdown" aria-label="Image breakdown workflow">
       <div className="image-studio-breakdown-head">
@@ -551,9 +552,17 @@ function ImageBreakdownWorkflow({ workflow }) {
           <span>Image breakdown</span>
           <strong>{workflow.handoffState.replace(/_/g, " ")}</strong>
         </div>
-        <b>{workflow.readyCount}/{workflow.stageCount} ready</b>
+        <div className="image-studio-breakdown-badges">
+          <b>{workflow.readyCount}/{workflow.stageCount} ready</b>
+          <b>{routeReady ? "route ready" : "fallback logged"}</b>
+        </div>
       </div>
       <p>{workflow.nextAction}</p>
+      <p className="image-studio-breakdown-route">
+        Preferred OpenCode / Z.AI / GLM-5.2; active proof chain: image_vision_breakdown, leon_lin_design_taste,
+        ui_self_repair_planner, self_repair_verifier. Current route:{" "}
+        {route?.providerId || route?.provider || "provider"} / {routeAvailability?.model || route?.model || "model"}.
+      </p>
       <details className="image-studio-breakdown-details">
         <summary>{workflow.stageCount} stage checks</summary>
         <div className="image-studio-breakdown-rail">
@@ -1052,7 +1061,7 @@ export function ImageStudioPlayground({
         </div>
       </div>
 
-      <ImageBreakdownWorkflow workflow={breakdownWorkflow} />
+      <ImageBreakdownWorkflow workflow={breakdownWorkflow} route={route} routeAvailability={routeAvailability} />
 
       <div className="image-studio-grid">
         <aside className="image-studio-panel image-studio-controls" aria-label="Prompt and route controls">

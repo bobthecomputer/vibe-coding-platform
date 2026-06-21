@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-06-21T13:49:26.945868+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder",
+  "locationHref": "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder",
+  "gitHead": "6c832f25a3eb59af7018aa1daba004df6486206c",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-image-studio-desktop.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-image-studio-desktop.html",
+  "expectedFragments": [
+    "Image breakdown",
+    "active proof chain",
+    "Provider-ready image playground"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "proofSelectors": {
+    "fluxioBuilderRoot": true,
+    "visualProofPacket": true,
+    "visualProofReadiness": true,
+    "visualProofMapCanvas": true,
+    "visualProofReceipts": true,
+    "currentAppProof": false
+  },
+  "placeholderFramePaths": [],
+  "image": {
+    "width": 1440,
+    "height": 900,
+    "sampleCount": 8100,
+    "uniqueSampleColors": 611,
+    "averageLuma": 19.61,
+    "nonBlank": true
+  },
+  "passed": true
+}

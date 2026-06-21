@@ -1003,6 +1003,64 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(receipt["safety"]["liveModelCallRecorded"])
             self.assertEqual(receipt["processEvidence"]["acceptedOutputField"], "output-last-message")
 
+    def test_agent_chat_command_uses_opencode_runtime_with_file_attachment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            screenshot = workspace / "frame.png"
+            screenshot.write_bytes(b"\x89PNG\r\n\x1a\n")
+            backend = FluxioWebBackend(root, root)
+            calls: list[list[str]] = []
+
+            def fake_run(args, **kwargs):
+                calls.append(list(args))
+                return mock.Mock(
+                    returncode=0,
+                    stdout=(
+                        '{"type":"step_start","part":{"type":"step-start"}}\n'
+                        '{"type":"text","part":{"type":"text","text":"Use the canvas as the first focus."}}\n'
+                        '{"type":"step_finish","part":{"type":"step-finish"}}\n'
+                    ),
+                    stderr="",
+                )
+
+            with mock.patch("grant_agent.web_backend.shutil.which", return_value="opencode"):
+                with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                    result = backend.dispatch(
+                        "send_agent_chat_command",
+                        {
+                            "payload": {
+                                "runtime": "opencode",
+                                "message": "Review this screenshot.",
+                                "workspaceId": "workspace_primary",
+                                "workspacePath": str(workspace),
+                                "files": [str(screenshot)],
+                                "route": {
+                                    "role": "verifier",
+                                    "provider": "minimax-coding-plan",
+                                    "model": "MiniMax-M2.7-highspeed",
+                                    "effort": "medium",
+                                },
+                            }
+                        },
+                    )
+
+            self.assertEqual(result["runtime"], "opencode")
+            self.assertEqual(result["reply"], "Use the canvas as the first focus.")
+            self.assertEqual(calls[-1][1], "run")
+            self.assertIn("Review this screenshot.", calls[-1][2])
+            self.assertIn("--format", calls[-1])
+            self.assertIn("--file", calls[-1])
+            self.assertIn(str(screenshot), calls[-1])
+            self.assertIn("minimax-coding-plan/MiniMax-M2.7-highspeed", calls[-1])
+            receipt = result["compartment"]["runtimeProofReceipt"]
+            self.assertTrue(receipt["proofSignals"]["hasProcessEvidence"])
+            self.assertTrue(receipt["safety"]["liveModelCallRecorded"])
+            self.assertTrue(receipt["safety"]["runtimeAdapterAdded"])
+            self.assertEqual(receipt["safety"]["fusedRuntimeRole"], "opencode_runtime_adapter")
+            self.assertEqual(receipt["processEvidence"]["acceptedOutputField"], "opencode.jsonl.part.text")
+
     def test_agent_chat_prefers_minimax_portal_when_oauth_profile_is_connected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

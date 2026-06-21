@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "self-repair-verifier.v1",
+  "generatedAt": "2026-06-21T13:50:18.1887280Z",
+  "skillId": "self_repair_verifier",
+  "passed": true,
+  "beforeScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\before-image-studio.png",
+  "afterScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-image-studio-desktop.png",
+  "afterMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-image-studio-mobile.png",
+  "runtimeProof": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\route_proof.json",
+  "checks": [
+    {
+      "id": "route-proof",
+      "detail": "Preferred GLM/Z.AI failed with ProviderModelNotFoundError; OpenCode fallback route and planner receipt recorded.",
+      "passed": true
+    },
+    {
+      "id": "skill-proof",
+      "detail": "image_vision_breakdown, leon_lin_design_taste, ui_self_repair_planner, browser_use_local_inspection, and self_repair_verifier are present in skill metadata or proof path.",
+      "passed": true
+    },
+    {
+      "id": "finding-drove-change",
+      "detail": "Model screenshot finding named SelfRepairLoopPanel as clutter; implementation removed it and folded proof chain into ImageBreakdownWorkflow.",
+      "passed": true
+    },
+    {
+      "id": "preview-proof",
+      "detail": "Desktop and mobile control-route visual smoke captures passed with active proof chain visible.",
+      "passed": true
+    },
+    {
+      "id": "no-fake-success",
+      "detail": "UI shows fallback logged when route is unavailable and keeps provider status as needs connector.",
+      "passed": true
+    }
+  ],
+  "changedFiles": [
+    "src/grant_agent/web_backend.py",
+    "config/skills.json",
+    "scripts/image_vision_self_repair_proof.py",
+    "web/src/fluxio/image-studio/ImageStudioPlayground.jsx",
+    "web/src/fluxio/image-studio/image-studio.css",
+    "tests/test_web_backend.py",
+    "tests/test_desktop_ui_contract.py"
+  ]
+}

@@ -114,7 +114,16 @@
   min-width: 0;
 }
 
-.image-studio-breakdown-head div {
+.image-studio-breakdown-badges {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: min(280px, 100%);
+}
+
+.image-studio-breakdown-head > div:not(.image-studio-breakdown-badges) {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -151,6 +160,12 @@
   color: var(--control-muted, #aab0a8);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.image-studio-breakdown-route {
+  max-width: 920px;
+  border-left: 1px solid rgba(142, 203, 111, 0.36);
+  padding-left: 9px;
 }
 
 .image-studio-breakdown-rail {
@@ -1461,6 +1476,23 @@
   }
 }
 
+@media (max-width: 1180px) {
+  .image-studio-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+  }
+
+  .image-studio-controls,
+  .image-studio-stage,
+  .image-studio-right-rail {
+    grid-area: auto;
+  }
+
+  .image-studio-controls {
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  }
+}
+
 @media (max-width: 480px) {
   .image-studio-proof-review {
     grid-template-columns: minmax(0, 1fr);
@@ -1481,7 +1513,10 @@
 /* PR110 design-scale guard: Image Studio is a canvas-first workbench, not a
    wall of equal cards. Proof remains visible as a dark ledger with line nodes. */
 .image-studio-grid {
-  grid-template-columns: minmax(200px, 0.58fr) minmax(420px, 1.72fr) minmax(210px, 0.64fr);
+  grid-template-columns: minmax(520px, 1fr) minmax(278px, 0.38fr);
+  grid-template-areas:
+    "stage rail"
+    "controls rail";
   gap: 14px;
 }
 
@@ -1504,12 +1539,23 @@
 
 .image-studio-canvas {
   position: relative;
-  width: min(100%, 760px);
+  width: min(100%, 820px);
   box-shadow: 0 22px 64px rgba(0, 0, 0, 0.42);
 }
 
 .image-studio-stage {
+  grid-area: stage;
   min-height: 72vh;
+}
+
+.image-studio-controls {
+  grid-area: controls;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
+.image-studio-right-rail {
+  grid-area: rail;
 }
 
 .image-studio-stage-toolbar {
@@ -1713,14 +1759,17 @@
 
   .image-studio-grid {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
   }
 
   .image-studio-controls,
   .image-studio-right-rail {
+    grid-area: auto;
     grid-template-columns: minmax(0, 1fr);
   }
 
   .image-studio-stage {
+    grid-area: auto;
     min-height: auto;
   }
 

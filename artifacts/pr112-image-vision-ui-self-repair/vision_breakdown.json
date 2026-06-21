@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "image-vision-breakdown.v1",
+  "generatedAt": "2026-06-21T13:44:06.683985+00:00",
+  "skillId": "image_vision_breakdown",
+  "input": {
+    "screenshotPath": "C:\\Users\\paul\\AppData\\Local\\Temp\\codex-clipboard-4588fa50-b17b-44e1-bd56-e29d461f15f8.png",
+    "routeResultSession": "pr112-image-vision-fallback-route-3",
+    "visualExtractionMode": "local screenshot-breakdown skill",
+    "modelCouldReadScreenshot": true
+  },
+  "modelReplyExcerpt": "**Image Vision Breakdown \u2013 Findings**\n\n| Finding | Severity | Detail |\n|---------|----------|--------|\n| Self-Repair Panel is biggest clutter | **High** | Hardcoded \"OpenCode / Z.AI / GLM-5.2\" route label, 4 fictitious steps, duplicates the real `ImageBreakdownWorkflow` immediately below it. Eats prime above-fold space. |\n| Three parallel workflow UIs | **High** | `SelfRepairLoopPanel` + `ImageBreakdownWorkflow` + `OperationTimeline` = three competing progress visualizations. Cognitive overload. |\n| CSS dead code | **Med** | ~500 lines of initial layout silently overridden by PR110 guard rules (lines 1605-1653). Old rules are dead. |\n| Fake matte preview | **Med** | `ChromaMatteDiagnostics` renders a CSS-only ellipse/cutline that mimics real pixel output. Misleading. |\n\n**Self-Repair Planner \u2013 Pick**\n\n> **Remove `SelfRepairLoopPanel` and fold its single useful signal (repair loop active/inactive) into the `ImageBreakdownWorkflow` header as a status badge.**\n\nThis is the highest-impact repair: it eliminates the worst clutter, removes hardcoded stale data, deletes ~60 lines of rendered JSX, and collapses three workflows into two (and eventually one). Want me to implement it now?",
+  "findings": [
+    {
+      "id": "clutter-status-cards",
+      "severity": "high",
+      "category": "clutter",
+      "finding": "Image Studio over-exposes provider facts, proof cards, history, layers, references, route state, and breakdown stages at the same visual weight.",
+      "repair": "Make the canvas and current self-repair loop primary; move route/proof detail into a compact receipt lane and collapsed details."
+    },
+    {
+      "id": "weak-central-focus",
+      "severity": "high",
+      "category": "hierarchy",
+      "finding": "The first thing the user should inspect is the current canvas or current compartment, but the earlier layout forced the eye through top cards and boxed side controls first.",
+      "repair": "Use a two-column stage-first layout with the canvas on top-left, proof on the right, and prompt/matte controls below the canvas."
+    },
+    {
+      "id": "fake-proof-risk",
+      "severity": "medium",
+      "category": "proof truth",
+      "finding": "Provider and proof labels can look successful even when the provider route is draft-only or blocked.",
+      "repair": "Show exact route, selected skills, runtime receipt path, and fallback reason; use blocked labels when GLM/Z.AI is absent."
+    },
+    {
+      "id": "decorative-controls",
+      "severity": "medium",
+      "category": "control clarity",
+      "finding": "References, served artifacts, history, and layers are useful, but they read like equal primary controls during the active repair task.",
+      "repair": "Treat them as secondary rail details and keep primary action buttons near the proof handoff."
+    }
+  ],
+  "firstFocus": "Current Image Studio canvas and active self-repair compartment.",
+  "realControls": [
+    "Prepare request draft",
+    "Run provider image when connector-ready",
+    "Preview matte",
+    "Add reference",
+    "Copy JSON"
+  ],
+  "decorativeOrSecondaryControls": [
+    "full stage grid",
+    "history list",
+    "served artifact list",
+    "layer visibility list"
+  ],
+  "removeOrMerge": [
+    "Merge six visible breakdown cards into a compact self-repair loop receipt.",
+    "Move detailed route facts behind a disclosure.",
+    "Keep right-rail references/history secondary to the canvas."
+  ]
+}

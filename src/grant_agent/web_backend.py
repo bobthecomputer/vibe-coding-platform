@@ -66,6 +66,8 @@ PROVIDER_ENV = {
     "openai-codex": ("OPENAI_API_KEY", "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT"),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "openrouter": ("OPENROUTER_API_KEY",),
+    "zai": ("ZAI_API_KEY", "Z_AI_API_KEY"),
+    "opencode": ("FLUXIO_OPENCODE_AUTH_PRESENT",),
     "minimax": ("MINIMAX_API_KEY",),
     "minimax-cn": ("MINIMAX_API_KEY",),
     "minimax-portal": ("MINIMAX_OAUTH_TOKEN", "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"),
@@ -598,6 +600,21 @@ def _process_evidence_from_capture(
     }
 
 
+def _opencode_command_prefix(env: dict[str, str]) -> list[str]:
+    command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+    if not command:
+        raise RuntimeError("OpenCode CLI was not found on PATH.")
+    command_path = Path(command)
+    if os.name == "nt":
+        basedir = command_path.parent
+        node_path = basedir / "node.exe"
+        node = str(node_path) if node_path.exists() else shutil.which("node", path=env.get("PATH") or os.environ.get("PATH"))
+        entrypoint = basedir / "node_modules" / "opencode-ai" / "bin" / "opencode"
+        if node and entrypoint.exists():
+            return [node, str(entrypoint)]
+    return [command]
+
+
 def _valid_process_evidence(evidence: object) -> bool:
     if not isinstance(evidence, dict):
         return False
@@ -864,15 +881,29 @@ def _chat_prompt(payload: dict[str, Any]) -> str:
     )
 
 
+def _auth_home_path() -> Path:
+    return Path(os.environ.get("HOME") or os.environ.get("USERPROFILE") or str(Path.home())).expanduser()
+
+
 def _provider_presence(
     provider_ids: list[str] | None = None,
     session_secrets: dict[str, str] | None = None,
 ) -> dict[str, bool]:
     ids = provider_ids or list(PROVIDER_ENV)
     output: dict[str, bool] = {}
-    minimax_oauth_file = Path.home() / ".minimax" / "oauth_creds.json"
-    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw")))
+    home_path = _auth_home_path()
+    minimax_oauth_file = home_path / ".minimax" / "oauth_creds.json"
+    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(home_path / ".openclaw")))
     openclaw_auth_store = state_root / "agents" / "main" / "agent" / "auth-profiles.json"
+    opencode_auth_store = home_path / ".local" / "share" / "opencode" / "auth.json"
+    opencode_auth_providers: set[str] = set()
+    if opencode_auth_store.exists():
+        try:
+            raw_opencode_auth = json.loads(opencode_auth_store.read_text(encoding="utf-8"))
+            if isinstance(raw_opencode_auth, dict):
+                opencode_auth_providers = {str(key).strip().lower() for key in raw_opencode_auth}
+        except (OSError, json.JSONDecodeError):
+            opencode_auth_providers = set()
     session_secrets = session_secrets or {}
     for provider_id in ids:
         env_names = PROVIDER_ENV.get(provider_id, (f"{provider_id.upper()}_API_KEY",))
@@ -889,6 +920,14 @@ def _provider_presence(
         if provider_id == "minimax-portal":
             present = present or minimax_oauth_file.exists()
             present = present or _openclaw_auth_store_has_provider(openclaw_auth_store, "minimax-portal")
+        if provider_id == "opencode":
+            present = present or bool(opencode_auth_providers)
+        if provider_id == "minimax":
+            present = present or "minimax-coding-plan" in opencode_auth_providers
+        if provider_id == "openai":
+            present = present or "openai" in opencode_auth_providers
+        if provider_id == "zai":
+            present = present or "zai" in opencode_auth_providers or "z-ai" in opencode_auth_providers
         output[provider_id] = present
     return output
 
@@ -3138,11 +3177,16 @@ class FluxioWebBackend:
             _valid_process_evidence(process_evidence)
             and any(item.get("role") == "assistant" for item in messages if isinstance(item, dict))
         )
+        runtime_value = str(compartment.get("runtime") or "")
+        runtime_adapter_added = _valid_process_evidence(process_evidence) and runtime_value.lower() in {
+            "opencode",
+            "opencodego",
+        }
         receipt = {
             "schemaVersion": "runtime-compartment-proof.v1",
             "receiptKind": "runtime_compartment_proof",
             "sessionId": session_id,
-            "runtime": str(compartment.get("runtime") or ""),
+            "runtime": runtime_value,
             "cwd": str(compartment.get("cwd") or ""),
             "route": {
                 "role": str(route.get("role") or ""),
@@ -3168,8 +3212,8 @@ class FluxioWebBackend:
             "processEvidence": process_evidence,
             "safety": {
                 "liveModelCallRecorded": live_model_call_recorded,
-                "runtimeAdapterAdded": False,
-                "fusedRuntimeRole": "evidence_layer_not_runtime_adapter",
+                "runtimeAdapterAdded": runtime_adapter_added,
+                "fusedRuntimeRole": "opencode_runtime_adapter" if runtime_adapter_added else "evidence_layer_not_runtime_adapter",
                 "secretsIncluded": False,
             },
             "artifacts": {
@@ -3642,10 +3686,90 @@ class FluxioWebBackend:
             "filesChanged": files_changed,
         }
 
+    def _run_opencode_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = _chat_prompt(payload)
+        env = self._provider_env()
+        command_prefix = _opencode_command_prefix(env)
+        route = self._chat_route(payload)
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+        session_id = _safe_identifier(payload.get("sessionId") or "syntelos_opencode_chat")
+        model_id = route["model_id"]
+        args = [
+            *command_prefix,
+            "run",
+            prompt,
+            "--format",
+            "json",
+        ]
+        if model_id:
+            args.extend(["--model", model_id])
+        for raw_file in payload.get("files") if isinstance(payload.get("files"), list) else []:
+            candidate = Path(str(raw_file)).expanduser()
+            if not candidate.is_absolute():
+                candidate = workspace_path / candidate
+            if candidate.exists() and candidate.is_file():
+                args.extend(["--file", str(candidate)])
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=720,
+            extra_env=env,
+        )
+        opencode_events = _parse_json_objects_from_text(stdout)
+        for event in opencode_events:
+            if event.get("type") == "error":
+                error = event.get("error") if isinstance(event.get("error"), dict) else {}
+                message = error.get("data", {}).get("message") if isinstance(error.get("data"), dict) else ""
+                raise RuntimeError(str(message or error.get("name") or "OpenCode returned an error event."))
+        if "ProviderModelNotFoundError" in stdout or "ProviderModelNotFoundError" in _stderr:
+            raise RuntimeError("OpenCode reported ProviderModelNotFoundError.")
+        reply = ""
+        reply_source = ""
+        for event in reversed(opencode_events):
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+            if event.get("type") == "text" and isinstance(part.get("text"), str) and part.get("text").strip():
+                reply = part["text"].strip()
+                reply_source = "opencode.jsonl.part.text"
+                break
+        if not reply:
+            reply, reply_source = _extract_model_reply_with_source(result)
+        if not reply:
+            raise RuntimeError("OpenCode finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
+        return {
+            "reply": reply,
+            "runtime": "opencode",
+            "sessionId": session_id,
+            "route": route,
+            "raw": result,
+            "elapsedMs": elapsed_ms,
+            "processEvidence": _process_evidence_from_capture(
+                args=args,
+                cwd=workspace_path,
+                payload=result,
+                stdout=stdout,
+                stderr=_stderr,
+                elapsed_ms=elapsed_ms,
+                accepted_output_field=reply_source,
+            ),
+            "toolTimeline": tool_timeline,
+            "filesChanged": files_changed,
+        }
+
     def _run_agent_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         runtime = str(payload.get("runtime") or payload.get("runtimeId") or "codex").strip().lower()
         if runtime == "hermes":
             result = self._run_hermes_chat(payload)
+        elif runtime in {"opencode", "opencodego"}:
+            result = self._run_opencode_chat(payload)
         elif runtime in {"openclaw", "openclaw-local", ""}:
             route = self._chat_route(payload)
             if route.get("provider") == "openai-codex":

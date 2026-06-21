@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "ui-self-repair-plan.v1",
+  "generatedAt": "2026-06-21T13:45:21.144772+00:00",
+  "skillId": "ui_self_repair_planner",
+  "route": {
+    "runtime": "opencode",
+    "provider": "opencode",
+    "model": "big-pickle",
+    "modelId": "opencode/big-pickle",
+    "reason": "The listed GLM-family fallback is rejected at call time; big-pickle is the nearest working OpenCode coding route proven locally."
+  },
+  "runtimeProofPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\runtime_compartment_proofs\\pr112-image-vision-ui-self-repair-plan.proof.json",
+  "inputBreakdownPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\vision_breakdown.json",
+  "plannerReplyExcerpt": "**UI Repair Plan: Remove `SelfRepairLoopPanel` \u2192 fold signal into `ImageBreakdownWorkflow` badge**\n\n### What changes\n\n1. **Delete `SelfRepairLoopPanel` component** (~60 lines of JSX) and its `<SelfRepairLoopPanel>` usage in the render tree.\n2. **Add a `repairActive` badge** to `ImageBreakdownWorkflow`'s header row \u2013 shows \"repair active\" / \"repair idle\" as a compact `<b>` tag next to the ready-count badge.\n3. **Strip dead CSS** \u2013 remove `.image-studio-self-repair`, `.image-studio-self-repair-copy`, `.image-studio-self-repair-route`, `.image-studio-self-repair-steps`, and responsive overrides for `.image-studio-self-repair-steps` (lines 98\u2013191, 1560\u20131586). The PR110 guard rules (line 1605+) already supersede the old layout.\n4. **Update the UI contract test** \u2013 remove assertions that check for `\"SelfRepairLoopPanel\"`, `\"App-driven Image / Vision UI self-repair\"`, `\"OpenCode / Z.AI / GLM-5.2\"`, `\"image_vision_breakdown\"`, `\"ui_self_repair_planner\"`, `\"self_repair_verifier\"`, `\".image-studio-self-repair\"`, `\".image-studio-self-repair-steps\"`, and the responsive grid-template setting for `.image-studio-self-repair`.\n\n### Files to change\n\n| # | File | What |\n|---|------|------|\n| 1 | `web/src/fluxio/image-studio/ImageStudioPlayground.jsx` | Remove `SelfRepairLoopPanel` function def (lines 579\u2013642), remove its import-reference usage at line 1120\u20131126, add `repairActive` badge to `ImageBreakdownWorkflow` header |\n| 2 | `web/src/fluxio/image-studio/image-studio.css` | Delete `.image-studio-self-repair` block (lines 98\u2013191) and responsive overrides (lines 1560\u20131586) |\n| 3 | `tests/test_desktop_ui_contract.py` | Drop 7 assertions (lines 615\u2013620, 659\u2013660 in the `test_current_shell_mounts_image_and_voice_surfaces` method) |\n\n### Not changing\n\n- `OperationTimeline` stays (it has real",
+  "selectedChange": "Reframe Image Studio as a self-repair loop with a stage-first canvas layout and compact proof receipt.",
+  "plan": [
+    "Add a compact self-repair loop panel that states selected skills, route, fallback reason, screenshot proof, and next implementation step.",
+    "Make the canvas the first large surface; move prompt/matte controls below it and keep references/history/layers as a narrow proof rail.",
+    "Collapse route and breakdown detail so proof remains inspectable without filling the page with equal-weight square cards.",
+    "Record before/after screenshots and a verifier artifact before claiming completion."
+  ],
+  "proofRequirement": "Before screenshot, after screenshot, runtime proof receipt, vision breakdown artifact, and verifier JSON must exist."
+}
