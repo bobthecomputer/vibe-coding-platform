@@ -87,8 +87,49 @@ function reducer(state, action) {
         detail: action.event?.detail || "The active voice capture session ended.",
         source,
         stoppedAt: action.event?.stoppedAt || new Date().toISOString(),
+        restartCount: Number(action.event?.restartCount ?? state.captureLifecycle?.restartCount ?? 0) || 0,
+        lastCaptureEvent: "stopped",
+        lastCaptureErrorCode: action.event?.errorCode || state.captureLifecycle?.lastCaptureErrorCode || "",
+        updatedAt: action.event?.stoppedAt || new Date().toISOString(),
       },
       status: getVoiceStatusCopy({ ...state, listening: false, error: "" }),
+    };
+  }
+  if (action.type === "capture.lifecycle") {
+    const event = action.event || {};
+    const status = event.status || state.captureLifecycle?.status || "idle";
+    const restartCount = Number(event.restartCount ?? state.captureLifecycle?.restartCount ?? 0) || 0;
+    const lastCaptureErrorCode = event.errorCode || state.captureLifecycle?.lastCaptureErrorCode || "";
+    return {
+      ...state,
+      listening: ["started", "reconnecting", "restarted", "listening"].includes(status)
+        ? true
+        : status === "stopped" || status === "blocked" || status === "ended"
+          ? false
+          : state.listening,
+      captureLifecycle: {
+        ...state.captureLifecycle,
+        status,
+        label:
+          status === "reconnecting"
+            ? "Reconnecting"
+            : status === "restarted"
+              ? "Capture restarted"
+              : status === "blocked"
+                ? "Capture blocked"
+                : status === "ended"
+                  ? "Capture ended"
+                  : status === "started"
+                    ? "Listening"
+                    : state.captureLifecycle?.label || "Capture event",
+        detail: event.detail || state.captureLifecycle?.detail || "Voice capture lifecycle changed.",
+        source: event.source || state.captureLifecycle?.source || state.support.label,
+        restartCount,
+        lastCaptureEvent: status,
+        lastCaptureErrorCode,
+        updatedAt: event.updatedAt || new Date().toISOString(),
+      },
+      status: getVoiceStatusCopy({ ...state, listening: status !== "blocked", error: "" }),
     };
   }
   if (action.type === "transcript.append") {
@@ -262,7 +303,14 @@ export function useVoiceInteractionController({
             event: {
               source: event?.source || activeAdapter.source || activeAdapter.name,
               detail: event?.detail || "The speech adapter reported that capture ended.",
+              restartCount: event?.restartCount,
+              errorCode: event?.errorCode,
             },
+          }),
+        onLifecycle: event =>
+          dispatch({
+            type: "capture.lifecycle",
+            event,
           }),
         onError: error =>
           dispatch({

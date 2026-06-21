@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle,
   Info,
@@ -57,6 +57,67 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
     interimActive: Boolean(voice.transcript.interimText),
     nextSegmentText: voice.transcript.lowConfidenceSegments?.[0]?.text || voice.transcript.ambiguousSegments?.[0]?.text || "",
   };
+  const reviewSegments = useMemo(() => {
+    const seen = new Set();
+    return [
+      ...(voice.transcript.lowConfidenceSegments || []),
+      ...(voice.transcript.ambiguousSegments || []),
+    ].filter(segment => {
+      if (!segment?.id || seen.has(segment.id)) {
+        return false;
+      }
+      seen.add(segment.id);
+      return true;
+    });
+  }, [voice.transcript.ambiguousSegments, voice.transcript.lowConfidenceSegments]);
+  const nextRepairSegment =
+    reviewSegments.find(segment => segment.id === repairQueue.nextSegmentId) ||
+    reviewSegments[0] ||
+    null;
+  const reviewConsoleStatus = voice.transcript.interimText
+    ? "waiting"
+    : nextRepairSegment
+      ? "review"
+      : voice.transcript.combinedText
+        ? "ready"
+        : "empty";
+  const reviewConsoleLabel =
+    reviewConsoleStatus === "waiting"
+      ? "Wait for final text"
+      : reviewConsoleStatus === "review"
+        ? "Fix the next segment"
+        : reviewConsoleStatus === "ready"
+          ? "Ready to run"
+          : "No dictation yet";
+  const reviewConsoleSummary =
+    reviewConsoleStatus === "waiting"
+      ? "The transcript is still changing, so command sending remains paused."
+      : reviewConsoleStatus === "review"
+        ? "Edit the highlighted phrase or mark it reviewed before running a guarded action."
+        : reviewConsoleStatus === "ready"
+          ? "The transcript has passed the visible review checks."
+          : "Start capture, use system dictation, or paste text through the normal composer.";
+  const [manualCorrectionDraft, setManualCorrectionDraft] = useState(nextRepairSegment?.text || "");
+
+  useEffect(() => {
+    setManualCorrectionDraft(nextRepairSegment?.text || "");
+  }, [nextRepairSegment?.id, nextRepairSegment?.text]);
+
+  const applyManualCorrection = () => {
+    const correctedText = manualCorrectionDraft.trim();
+    if (!nextRepairSegment || !correctedText) {
+      return;
+    }
+    voice.correctTranscriptSegment?.(nextRepairSegment.id, {
+      text: correctedText,
+      confidence: Math.max(nextRepairSegment.confidence ?? 0.92, 0.92),
+      reason: "manual dictation repair",
+    });
+  };
+  const manualCorrectionChanged =
+    Boolean(nextRepairSegment) &&
+    manualCorrectionDraft.trim() &&
+    manualCorrectionDraft.trim() !== nextRepairSegment.text;
 
   return (
     <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
@@ -113,6 +174,11 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
         </div>
         {capture.recovery ? <span>{capture.recovery}</span> : null}
         {captureLifecycle.status === "stopped" ? <span>Capture stopped by {captureLifecycle.source}</span> : null}
+        <div className="fluxio-voice-capture-facts" aria-label="Voice capture lifecycle facts">
+          <span>Last event: {captureLifecycle.lastCaptureEvent || captureLifecycle.status || "idle"}</span>
+          <span>Restart attempts: {captureLifecycle.restartCount || 0}</span>
+          <span>Last error: {captureLifecycle.lastCaptureErrorCode || "none"}</span>
+        </div>
       </div>
 
       <div className="fluxio-voice-transcript" aria-label="Current voice transcript">
@@ -213,6 +279,84 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
             Next repair: {repairQueue.nextSegmentText}
           </p>
         ) : null}
+      </div>
+
+      <div
+        className="fluxio-voice-review-console"
+        data-status={reviewConsoleStatus}
+        aria-label="Dictation review console"
+      >
+        <div className="fluxio-voice-review-head">
+          <div>
+            <span>Review console</span>
+            <strong>{reviewConsoleLabel}</strong>
+            <p>{reviewConsoleSummary}</p>
+          </div>
+          <span className="fluxio-voice-review-status">{sendGateLabel}</span>
+        </div>
+        <div className="fluxio-voice-review-checks" aria-label="Dictation send readiness">
+          <span data-status={voice.transcript.interimText ? "waiting" : "ready"}>Final text</span>
+          <span data-status={repairQueue.lowConfidenceCount > 0 ? "review" : "ready"}>Confidence</span>
+          <span data-status={repairQueue.ambiguousCount > 0 ? "review" : "ready"}>Command ambiguity</span>
+          <span data-status={voice.sendGuard?.status === "blocked" ? "blocked" : "ready"}>Accidental-send check</span>
+        </div>
+        {nextRepairSegment ? (
+          <div className="fluxio-voice-manual-repair">
+            <label htmlFor={`voice-manual-correction-${nextRepairSegment.id}`}>
+              Correction text
+              <input
+                id={`voice-manual-correction-${nextRepairSegment.id}`}
+                onChange={event => setManualCorrectionDraft(event.target.value)}
+                type="text"
+                value={manualCorrectionDraft}
+              />
+            </label>
+            <div className="fluxio-voice-manual-repair-actions">
+              <button
+                disabled={!manualCorrectionChanged}
+                onClick={applyManualCorrection}
+                type="button"
+              >
+                Apply correction
+              </button>
+              <button
+                onClick={() =>
+                  voice.correctTranscriptSegment?.(nextRepairSegment.id, {
+                    text: nextRepairSegment.text,
+                    confidence: Math.max(nextRepairSegment.confidence ?? 0.92, 0.92),
+                    reason: "operator reviewed text",
+                  })
+                }
+                type="button"
+              >
+                Mark reviewed
+              </button>
+            </div>
+            <p>
+              Next repair is tracked as {repairQueue.nextRepairKind || "dictation review"} so the command cannot be sent silently.
+            </p>
+          </div>
+        ) : (
+          <div className="fluxio-voice-manual-repair is-empty">
+            <label htmlFor="voice-manual-correction-empty">
+              Correction text
+              <input
+                disabled
+                id="voice-manual-correction-empty"
+                placeholder="Waiting for dictated text"
+                type="text"
+                value=""
+              />
+            </label>
+            <p className="fluxio-voice-review-empty">
+              {voice.transcript.interimText
+                ? "Stop capture or wait for final text before correction controls unlock."
+                : voice.transcript.combinedText
+                  ? "No correction is queued. Use Run when the pre-send gate is acceptable."
+                  : "Correction controls unlock when dictated text needs review."}
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="fluxio-voice-actions">

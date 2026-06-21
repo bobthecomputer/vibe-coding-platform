@@ -219,9 +219,11 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
 
             const browserSegments = [];
             const browserStops = [];
+            const browserLifecycle = [];
             class FakeSpeechRecognition {
               constructor() {
                 FakeSpeechRecognition.instance = this;
+                FakeSpeechRecognition.instances.push(this);
               }
               start() {
                 const interim = [
@@ -240,11 +242,13 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
                 this.stopped = true;
               }
             }
+            FakeSpeechRecognition.instances = [];
             const browserAdapter = createBrowserSpeechAdapter({ window: { SpeechRecognition: FakeSpeechRecognition } });
             await browserAdapter.start({
               onInterim: segment => browserSegments.push({ kind: 'interim', ...segment }),
               onFinal: segment => browserSegments.push({ kind: 'final', ...segment }),
               onStop: event => browserStops.push(event),
+              onLifecycle: event => browserLifecycle.push(event),
             });
             FakeSpeechRecognition.instance.onend();
             await browserAdapter.stop();
@@ -289,7 +293,9 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               browserKinds: browserSegments.map(item => item.kind),
               browserFinal: browserSegments.find(item => item.kind === 'final'),
               browserStops,
+              browserLifecycle,
               browserStopped: FakeSpeechRecognition.instance.stopped,
+              browserInstanceCount: FakeSpeechRecognition.instances.length,
               bridgeKinds: bridgeSegments.map(item => item.kind),
               bridgeFinal: bridgeSegments.find(item => item.kind === 'final'),
               preferredName: preferred.name,
@@ -298,10 +304,13 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             """
         )
 
-        self.assertEqual(payload["browserKinds"], ["interim", "final"])
+        self.assertEqual(payload["browserKinds"][:2], ["interim", "final"])
         self.assertEqual(payload["browserFinal"]["text"], "open settings")
         self.assertEqual(payload["browserFinal"]["alternatives"][0]["text"], "open setting")
-        self.assertEqual(payload["browserStops"][0]["source"], "browser-speech-api")
+        self.assertEqual(payload["browserStops"], [])
+        self.assertIn("reconnecting", [item["status"] for item in payload["browserLifecycle"]])
+        self.assertIn("restarted", [item["status"] for item in payload["browserLifecycle"]])
+        self.assertGreaterEqual(payload["browserInstanceCount"], 2)
         self.assertTrue(payload["browserStopped"])
         self.assertEqual(payload["bridgeKinds"], ["interim", "final"])
         self.assertEqual(payload["bridgeFinal"]["text"], "show proof")
@@ -318,22 +327,41 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             class FakeSpeechRecognition {
               constructor() {
                 FakeSpeechRecognition.instance = this;
+                FakeSpeechRecognition.instances.push(this);
               }
               start() {
                 this.onerror({ error: 'not-allowed', message: 'permission denied by test' });
               }
               stop() {}
             }
+            FakeSpeechRecognition.instances = [];
             const errors = [];
+            const lifecycle = [];
+            const stops = [];
             const adapter = createBrowserSpeechAdapter({ window: { webkitSpeechRecognition: FakeSpeechRecognition } });
-            await adapter.start({ onError: error => errors.push(error) });
-            console.log(JSON.stringify({ label: adapter.label, errors }));
+            await adapter.start({
+              onError: error => errors.push(error),
+              onLifecycle: event => lifecycle.push(event),
+              onStop: event => stops.push(event),
+            });
+            FakeSpeechRecognition.instance.onend();
+            console.log(JSON.stringify({
+              label: adapter.label,
+              errors,
+              lifecycle,
+              stops,
+              instanceCount: FakeSpeechRecognition.instances.length,
+            }));
             """
         )
 
         self.assertEqual(payload["label"], "Browser speech adapter")
         self.assertEqual(payload["errors"][0]["code"], "permission_denied")
         self.assertIn("permission denied", payload["errors"][0]["message"])
+        self.assertEqual(payload["instanceCount"], 1)
+        self.assertIn("blocked", [item["status"] for item in payload["lifecycle"]])
+        self.assertNotIn("restarted", [item["status"] for item in payload["lifecycle"]])
+        self.assertEqual(payload["stops"][0]["errorCode"], "permission_denied")
 
     def test_image_studio_request_draft_reports_preview_and_annotation_proof(self) -> None:
         payload = run_node(

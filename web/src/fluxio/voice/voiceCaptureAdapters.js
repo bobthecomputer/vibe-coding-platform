@@ -83,38 +83,133 @@ export function createBrowserSpeechAdapter(runtime = globalThis) {
     return null;
   }
   let recognition = null;
+  let activeHandlers = {};
+  let stopRequested = false;
+  let captureStarted = false;
+  let restartCount = 0;
+  let lastErrorCode = "";
+  const maxAutoRestarts = Math.max(
+    0,
+    Number(root.__FLUXIO_VOICE_MAX_AUTO_RESTARTS ?? runtime?.maxAutoRestarts ?? 2) || 0,
+  );
+  const fatalErrorCodes = new Set([
+    "permission_denied",
+    "not-allowed",
+    "service-not-allowed",
+    "audio-capture",
+    "audio_capture",
+  ]);
+
+  function emitLifecycle(event = {}) {
+    activeHandlers.onLifecycle?.({
+      source: "browser-speech-api",
+      restartCount,
+      errorCode: lastErrorCode,
+      ...event,
+    });
+  }
+
+  function normalizeBrowserErrorCode(error) {
+    if (error === "not-allowed" || error === "service-not-allowed") {
+      return "permission_denied";
+    }
+    if (error === "audio-capture") {
+      return "audio_capture";
+    }
+    return error || "browser_speech_error";
+  }
+
+  function startRecognitionSession({ restarted = false } = {}) {
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onresult = event => {
+      const startIndex = Number.isInteger(event.resultIndex) ? event.resultIndex : 0;
+      for (let index = startIndex; index < event.results.length; index += 1) {
+        emitSegment(
+          activeHandlers,
+          normalizeSpeechRecognitionResult(event.results[index], {
+            source: "browser-speech-api",
+          }),
+        );
+      }
+    };
+    recognition.onerror = event => {
+      lastErrorCode = normalizeBrowserErrorCode(event?.error);
+      emitLifecycle({
+        status: "error",
+        detail: event?.message || event?.error || "Browser speech recognition reported an error.",
+      });
+      activeHandlers.onError?.({
+        code: lastErrorCode,
+        message: event?.message || event?.error || "Browser speech recognition failed.",
+      });
+    };
+    recognition.onend = () => {
+      const fatal = fatalErrorCodes.has(lastErrorCode);
+      const shouldRestart =
+        captureStarted &&
+        !stopRequested &&
+        !fatal &&
+        restartCount < maxAutoRestarts;
+      if (shouldRestart) {
+        restartCount += 1;
+        emitLifecycle({
+          status: "reconnecting",
+          detail: "Browser speech capture ended unexpectedly; reconnecting.",
+        });
+        startRecognitionSession({ restarted: true });
+        return;
+      }
+      captureStarted = false;
+      recognition = null;
+      emitLifecycle({
+        status: stopRequested ? "stopped" : fatal ? "blocked" : "ended",
+        detail: stopRequested
+          ? "Browser speech capture stopped by operator request."
+          : fatal
+            ? "Browser speech capture ended after a fatal permission or device error."
+            : "Browser speech capture ended.",
+      });
+      if (!stopRequested) {
+        activeHandlers.onStop?.({
+          source: "browser-speech-api",
+          detail: fatal
+            ? "Browser speech capture ended after a fatal permission or device error."
+            : "Browser speech capture ended.",
+          restartCount,
+          errorCode: lastErrorCode,
+        });
+      }
+    };
+    emitLifecycle({
+      status: restarted ? "restarted" : "started",
+      detail: restarted
+        ? "Browser speech capture restarted after an unexpected end."
+        : "Browser speech capture started.",
+    });
+    recognition.start();
+  }
 
   return {
     name: "browser-speech-api",
     label: "Browser speech adapter",
     source: "Browser SpeechRecognition",
     async start(handlers = {}) {
-      recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onresult = event => {
-        const startIndex = Number.isInteger(event.resultIndex) ? event.resultIndex : 0;
-        for (let index = startIndex; index < event.results.length; index += 1) {
-          emitSegment(
-            handlers,
-            normalizeSpeechRecognitionResult(event.results[index], {
-              source: "browser-speech-api",
-            }),
-          );
-        }
-      };
-      recognition.onerror = event => {
-        handlers.onError?.({
-          code: event?.error === "not-allowed" ? "permission_denied" : event?.error || "browser_speech_error",
-          message: event?.message || event?.error || "Browser speech recognition failed.",
-        });
-      };
-      recognition.onend = () => {
-        handlers.onStop?.({ source: "browser-speech-api" });
-      };
-      recognition.start();
+      activeHandlers = handlers;
+      stopRequested = false;
+      captureStarted = true;
+      restartCount = 0;
+      lastErrorCode = "";
+      startRecognitionSession();
     },
     async stop() {
+      stopRequested = true;
+      captureStarted = false;
+      emitLifecycle({
+        status: "stopping",
+        detail: "Browser speech capture stop requested by the operator.",
+      });
       if (recognition) {
         recognition.stop();
         recognition = null;

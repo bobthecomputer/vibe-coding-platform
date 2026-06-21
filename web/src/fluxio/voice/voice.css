@@ -108,6 +108,19 @@
   line-height: 1.35;
 }
 
+.fluxio-voice-capture-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fluxio-voice-capture-facts span {
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 4px 8px;
+}
+
 .fluxio-voice-empty {
   color: var(--muted, #aaa395);
 }
@@ -234,6 +247,138 @@
   border: 1px solid rgba(234, 228, 214, 0.12);
   border-radius: 999px;
   padding: 4px 8px;
+}
+
+.fluxio-voice-review-console {
+  display: grid;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.018)),
+    var(--panel-soft, #161918);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  padding: 10px;
+}
+
+.fluxio-voice-review-console[data-status="review"],
+.fluxio-voice-review-console[data-status="waiting"] {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.fluxio-voice-review-console[data-status="ready"] {
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+.fluxio-voice-review-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fluxio-voice-review-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fluxio-voice-review-head span,
+.fluxio-voice-review-head p,
+.fluxio-voice-manual-repair p,
+.fluxio-voice-review-empty {
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxio-voice-review-head span {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fluxio-voice-review-status {
+  flex: 0 0 auto;
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 999px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.fluxio-voice-review-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fluxio-voice-review-checks span {
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  border-radius: 999px;
+  color: var(--good, #22c55e);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.fluxio-voice-review-checks span[data-status="review"],
+.fluxio-voice-review-checks span[data-status="waiting"],
+.fluxio-voice-review-checks span[data-status="blocked"] {
+  border-color: rgba(245, 158, 11, 0.34);
+  color: var(--warn, #f59e0b);
+}
+
+.fluxio-voice-manual-repair {
+  display: grid;
+  gap: 8px;
+}
+
+.fluxio-voice-manual-repair label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+}
+
+.fluxio-voice-manual-repair input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid rgba(234, 228, 214, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text, #f4f0e8);
+  padding: 0 10px;
+}
+
+.fluxio-voice-manual-repair input:focus {
+  border-color: rgba(142, 203, 111, 0.55);
+  outline: 2px solid rgba(142, 203, 111, 0.18);
+  outline-offset: 2px;
+}
+
+.fluxio-voice-manual-repair input:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.fluxio-voice-manual-repair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fluxio-voice-manual-repair-actions button {
+  min-height: 34px;
+  border: 1px solid var(--line, rgba(234, 228, 214, 0.12));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text, #f4f0e8);
+  padding: 0 10px;
+}
+
+.fluxio-voice-manual-repair-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .fluxio-voice-actions,
