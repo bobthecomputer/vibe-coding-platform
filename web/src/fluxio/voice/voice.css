@@ -429,6 +429,41 @@
   padding: 4px 8px;
 }
 
+.fluxio-voice-handler-outcome {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(234, 228, 214, 0.13);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 9px 10px;
+}
+
+.fluxio-voice-handler-outcome[data-status="canceled"],
+.fluxio-voice-handler-outcome[data-status="blocked"] {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.fluxio-voice-handler-outcome strong {
+  color: var(--text, #eae4d6);
+  font-size: 12px;
+}
+
+.fluxio-voice-handler-outcome span {
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxio-voice-handler-outcome code {
+  width: fit-content;
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 999px;
+  color: var(--warn, #f59e0b);
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
 .fluxio-voice-mode-checkpoint {
   display: grid;
   gap: 9px;
@@ -710,19 +745,41 @@
   text-transform: uppercase;
 }
 
-.fluxio-voice-confirm-target blockquote {
-  margin: 0;
-  border-left: 2px solid rgba(142, 203, 111, 0.48);
-  color: var(--text, #f4f0e8);
-  font-size: 13px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  padding-left: 9px;
+.fluxio-voice-confirm-editor {
+  display: grid;
+  gap: 5px;
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.fluxio-voice-confirm-target[data-blocked="true"] blockquote {
-  border-left-color: rgba(245, 158, 11, 0.6);
+.fluxio-voice-confirm-editor textarea {
+  min-height: 70px;
+  border: 1px solid rgba(142, 203, 111, 0.32);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text, #f4f0e8);
+  font: inherit;
+  font-weight: 500;
+  line-height: 1.45;
+  outline: none;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.fluxio-voice-confirm-editor textarea:focus {
+  border-color: rgba(142, 203, 111, 0.74);
+  box-shadow: 0 0 0 3px rgba(142, 203, 111, 0.16);
+}
+
+.fluxio-voice-confirm-editor textarea:disabled {
+  border-color: rgba(245, 158, 11, 0.26);
   color: var(--muted, #aaa395);
+  opacity: 0.82;
+}
+
+.fluxio-voice-confirm-editor-note {
+  margin: 0;
 }
 
 .fluxio-voice-confirm-facts,

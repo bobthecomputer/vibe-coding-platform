@@ -18,6 +18,7 @@ import "./voice.css";
 export function VoiceCommandPanel({
   autoStartToken = 0,
   controller,
+  onUpdateComposerDraft,
   onVoiceCommand,
   reducedMotion = false,
   speechAdapter = null,
@@ -111,10 +112,12 @@ export function VoiceCommandPanel({
           : "Start capture, use system dictation, or paste text through the normal composer.";
   const [manualCorrectionDraft, setManualCorrectionDraft] = useState(nextRepairSegment?.text || "");
   const [manualDictationDraft, setManualDictationDraft] = useState("");
+  const [reviewTargetDraft, setReviewTargetDraft] = useState("");
   const commandPacket = voice.pendingCommand?.voicePacket || voice.lastCommand?.voicePacket || null;
   const commandPacketReview = commandPacket?.review || {};
   const commandPacketTranscript = commandPacket?.transcript || {};
   const commandPacketBlockedBy = commandPacketReview.blockedBy || [];
+  const handlerOutcome = voice.lastCommand?.handlerOutcome || null;
   const pendingReviewTarget = voice.pendingCommand?.reviewTarget || commandPacketReview.target || null;
   const modeCheckpoint =
     commandPacketReview.modeCheckpoint ||
@@ -144,6 +147,10 @@ export function VoiceCommandPanel({
   useEffect(() => {
     setManualCorrectionDraft(nextRepairSegment?.text || "");
   }, [nextRepairSegment?.id, nextRepairSegment?.text]);
+
+  useEffect(() => {
+    setReviewTargetDraft(pendingReviewTarget?.textPreview || "");
+  }, [pendingReviewTarget?.textFingerprint, pendingReviewTarget?.textPreview]);
 
   useEffect(() => {
     if (!autoStartToken || autoStartToken === lastAutoStartTokenRef.current) {
@@ -500,6 +507,13 @@ export function VoiceCommandPanel({
               : "No packet blockers"}
           </span>
         </div>
+        {handlerOutcome ? (
+          <div className="fluxio-voice-handler-outcome" data-status={handlerOutcome.status || "complete"} aria-label="Voice shell handler outcome">
+            <strong>Handler outcome: {handlerOutcome.label || handlerOutcome.status || "Complete"}</strong>
+            <span>{handlerOutcome.detail || "The shell handler completed this voice command."}</span>
+            {handlerOutcome.reason ? <code>{handlerOutcome.reason}</code> : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="fluxio-voice-mode-checkpoint" data-route={modeCheckpoint.route} aria-label="Voice mode checkpoint">
@@ -664,9 +678,22 @@ export function VoiceCommandPanel({
                 <span>Confirmation target</span>
                 <strong>{pendingReviewTarget.label}</strong>
                 <p>{pendingReviewTarget.destination}</p>
-                <blockquote>
-                  {pendingReviewTarget.textPreview || "No composer text is ready."}
-                </blockquote>
+                <label className="fluxio-voice-confirm-editor">
+                  Outgoing text
+                  <textarea
+                    aria-label="Voice confirmation outgoing text"
+                    disabled={Boolean(pendingReviewTarget.blocked) || !onUpdateComposerDraft}
+                    onChange={event => {
+                      setReviewTargetDraft(event.target.value);
+                      onUpdateComposerDraft?.(event.target.value);
+                    }}
+                    rows={3}
+                    value={reviewTargetDraft}
+                  />
+                </label>
+                <p className="fluxio-voice-confirm-editor-note">
+                  Editing this text updates the composer and requires the voice command to re-check before sending.
+                </p>
                 <div className="fluxio-voice-confirm-facts">
                   <span>{pendingReviewTarget.textLength || 0} characters</span>
                   <span>{pendingReviewTarget.attachmentCount || 0} attachments</span>

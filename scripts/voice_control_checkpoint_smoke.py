@@ -75,6 +75,24 @@ def set_agent_composer(cdp: Cdp, value: str) -> bool:
     )
 
 
+def set_voice_confirmation_text(cdp: Cdp, value: str) -> bool:
+    return bool(
+        cdp.eval(
+            f"""
+            (() => {{
+              const field = document.querySelector('textarea[aria-label="Voice confirmation outgoing text"]');
+              if (!field || field.disabled) return false;
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+              if (setter) setter.call(field, {json.dumps(value)});
+              else field.value = {json.dumps(value)};
+              field.dispatchEvent(new Event("input", {{ bubbles: true }}));
+              return true;
+            }})()
+            """
+        )
+    )
+
+
 def press_voice_shortcut(cdp: Cdp, key: str, *, ctrl: bool = False, shift: bool = False) -> bool:
     return bool(
         cdp.eval(
@@ -96,6 +114,13 @@ def press_voice_shortcut(cdp: Cdp, key: str, *, ctrl: bool = False, shift: bool 
             """
         )
     )
+
+
+def switch_surface(cdp: Cdp, label: str) -> bool:
+    clicked = click_button(cdp, label)
+    if clicked:
+        time.sleep(0.65)
+    return clicked
 
 
 def main() -> int:
@@ -143,7 +168,7 @@ def main() -> int:
         )
         time.sleep(0.45)
         assert_current_control_shell(cdp)
-        set_agent_composer(cdp, "Continue the PR stack and attach proof.")
+        initial_composer_set = set_agent_composer(cdp, "Continue the PR stack and attach proof.")
         time.sleep(0.25)
         checkpoint_text = str(cdp.eval('document.querySelector(".voice-control-checkpoint")?.innerText || ""'))
         opened_review = click_button(cdp, "Open voice review")
@@ -202,15 +227,41 @@ def main() -> int:
             )
         )
         confirm_target_text = str(cdp.eval('document.querySelector(".fluxio-voice-confirm-target")?.innerText || ""'))
-        body_text = str(cdp.eval('document.body.innerText || ""'))
-        visible_text = f"{checkpoint_text}\n{review_mode_checkpoint_text}\n{body_text}\n{confirm_target_text}"
+        confirmation_target_draft_before_mutation = str(
+            cdp.eval('document.querySelector("textarea[aria-label=\\"Voice confirmation outgoing text\\"]")?.value || ""')
+        )
+        composer_mutated_after_review = set_voice_confirmation_text(cdp, "Changed after the voice review target was created.")
+        agent_surface_reopened_for_mutation = False
+        voice_surface_reopened_after_mutation = False
+        if not composer_mutated_after_review:
+            agent_surface_reopened_for_mutation = switch_surface(cdp, "Agent")
+            composer_mutated_after_review = set_agent_composer(cdp, "Changed after the voice review target was created.")
+            voice_surface_reopened_after_mutation = switch_surface(cdp, "Voice")
+            cdp.eval(
+                """
+                document.querySelector(".fluxio-voice-confirm-target")
+                  ?.scrollIntoView({ block: "center", inline: "nearest" });
+                """
+            )
+        time.sleep(0.35)
+        confirm_clicked_after_mutation = click_button(cdp, "Confirm")
+        time.sleep(0.9)
+        post_confirm_text = str(cdp.eval('document.body.innerText || ""'))
+        cancellation_found = "Voice send canceled because the composer changed after review" in post_confirm_text
+        handler_outcome_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-handler-outcome"))'))
+        pending_confirmation_cleared = not bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-confirm-target"))'))
         cdp.eval(
             """
-            document.querySelector(".fluxio-voice-confirm-target")
+            document.querySelector(".fluxio-voice-handler-outcome")
               ?.scrollIntoView({ block: "center", inline: "nearest" });
             """
         )
         time.sleep(0.45)
+        body_text = str(cdp.eval('document.body.innerText || ""'))
+        visible_text = (
+            f"{checkpoint_text}\n{review_mode_checkpoint_text}\n{body_text}\n"
+            f"{confirm_target_text}\n{confirmation_target_draft_before_mutation}\n{post_confirm_text}"
+        )
         screenshot_path = OUT_DIR / "voice-control-checkpoint.png"
         capture(cdp, screenshot_path)
         expected = [
@@ -224,13 +275,16 @@ def main() -> int:
             "hold_for_mode_review",
             "CONFIRMATION TARGET",
             "Continue the PR stack and attach proof.",
-            "Cancel",
+            "Voice send canceled because the composer changed after review",
+            "Handler outcome: Canceled",
+            "composer_changed_after_review",
         ]
         report = {
             "checkedAt": datetime.now(timezone.utc).isoformat(),
             "url": URL,
             "browser": str(CHROME),
             "screenshotPath": str(screenshot_path.resolve()),
+            "initialComposerSet": initial_composer_set,
             "openedReview": opened_review,
             "addedDictation": added_dictation,
             "runDisabledAfterRiskyDictation": run_disabled,
@@ -241,15 +295,24 @@ def main() -> int:
             "runShortcutForConfirmation": run_shortcut_for_confirmation,
             "confirmationTargetFound": confirmation_target_found,
             "cancelFound": cancel_found,
-            "composerMutationVisualProof": "skipped: this builder voice proof surface does not mount the agent composer",
+            "agentSurfaceReopenedForMutation": agent_surface_reopened_for_mutation,
+            "voiceSurfaceReopenedAfterMutation": voice_surface_reopened_after_mutation,
+            "composerMutatedAfterReview": composer_mutated_after_review,
+            "confirmClickedAfterMutation": confirm_clicked_after_mutation,
+            "cancellationFound": cancellation_found,
+            "handlerOutcomeFound": handler_outcome_found,
+            "pendingConfirmationCleared": pending_confirmation_cleared,
             "reviewModeCheckpointText": review_mode_checkpoint_text,
             "confirmationTargetText": confirm_target_text,
+            "confirmationTargetDraftBeforeMutation": confirmation_target_draft_before_mutation,
+            "postConfirmText": post_confirm_text,
             "checkpointText": checkpoint_text,
             "expectedFragments": expected,
             "missingFragments": [fragment for fragment in expected if fragment not in visible_text],
         }
         report["passed"] = (
             not report["missingFragments"]
+            and initial_composer_set
             and opened_review
             and added_dictation
             and run_disabled
@@ -260,6 +323,11 @@ def main() -> int:
             and run_shortcut_for_confirmation
             and confirmation_target_found
             and cancel_found
+            and composer_mutated_after_review
+            and confirm_clicked_after_mutation
+            and cancellation_found
+            and handler_outcome_found
+            and pending_confirmation_cleared
         )
         CHECK_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))

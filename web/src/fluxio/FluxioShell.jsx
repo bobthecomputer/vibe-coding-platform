@@ -12067,6 +12067,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     <VoiceCommandPanel
                       autoStartToken={voiceAutoStartToken}
                       controller={voiceController}
+                      onUpdateComposerDraft={setOperatorDraft}
                       onVoiceCommand={handleVoiceCommand}
                     />
                   </Suspense>
@@ -12545,6 +12546,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <VoiceCommandPanel
                     autoStartToken={voiceAutoStartToken}
                     controller={voiceController}
+                    onUpdateComposerDraft={setOperatorDraft}
                     onVoiceCommand={handleVoiceCommand}
                   />
                 </Suspense>
