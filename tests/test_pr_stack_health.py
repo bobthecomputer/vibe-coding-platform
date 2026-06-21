@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
 from scripts.pr_stack_health import build_pr_stack_health
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def pr(number: int, head: str, base: str) -> dict[str, object]:
@@ -50,6 +55,23 @@ class PrStackHealthTests(unittest.TestCase):
         self.assertEqual(report["openPrCount"], 3)
         self.assertEqual(report["longestChainLength"], 1)
         self.assertEqual(report["chainCount"], 3)
+
+    def test_operator_doc_matches_scripts_and_workflow(self) -> None:
+        doc = (ROOT / "docs" / "PR_STACK_HEALTH.md").read_text(encoding="utf-8")
+        package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        workflow = (ROOT / ".github" / "workflows" / "pr-stack-health.yml").read_text(encoding="utf-8")
+
+        self.assertIn("verify:pr-stack", package["scripts"])
+        self.assertIn("proof:pr-stack", package["scripts"])
+        self.assertIn("scripts/pr_stack_health.py", workflow)
+        self.assertIn("tests.test_pr_stack_health", workflow)
+        self.assertIn("artifacts/pr-stack-health/pr-stack-health.json", workflow)
+        self.assertIn("npm run verify:pr-stack", doc)
+        self.assertIn("npm run proof:pr-stack", doc)
+        self.assertIn("artifacts/pr-stack-health-local/pr-stack-health.json", doc)
+        self.assertIn(".github/workflows/pr-stack-health.yml", doc)
+        self.assertIn("artifacts/pr-stack-health/pr-stack-health.json", doc)
+        self.assertIn("Stop opening new broad PRs", doc)
 
 
 if __name__ == "__main__":
