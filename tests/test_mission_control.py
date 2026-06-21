@@ -529,6 +529,19 @@ class MissionControlTests(unittest.TestCase):
             )
             self.assertIn("updateSafety", openai_provider)
             self.assertIn("compatibilityWarnings", openai_provider)
+            self.assertIn("healthCheck", openai_provider)
+            self.assertIn("modelCapabilities", openai_provider)
+            self.assertIn(
+                openai_provider["healthCheck"]["status"],
+                {"ready", "missing_auth", "runtime_missing", "unverified"},
+            )
+            self.assertIn("safeNextStep", openai_provider["healthCheck"])
+            self.assertTrue(openai_provider["modelCapabilities"]["chat"])
+            self.assertTrue(openai_provider["modelCapabilities"]["coding"])
+            self.assertIn(
+                openai_provider["modelCapabilities"]["toolUse"],
+                {"supported", "planned", "unknown"},
+            )
             self.assertIn(
                 "Review refreshed catalog metadata",
                 openai_provider["compatibilityWarnings"][0],

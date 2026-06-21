@@ -243,6 +243,91 @@ def _provider_compatibility_warnings(row: dict, *, auth_present: bool, can_route
     return warnings
 
 
+def _provider_model_capabilities(row: dict) -> dict:
+    supports = {str(item).strip().lower() for item in row.get("supports", [])}
+    provider_id = str(row.get("providerId", "")).strip().lower()
+    planned = str(row.get("status", "")).startswith("planned")
+    return {
+        "chat": "chat" in supports or "multi-provider" in supports or "many-providers" in supports,
+        "coding": "coding" in supports or "benchmarking" in supports or provider_id in {"openai", "minimax", "anthropic"},
+        "toolUse": "supported" if provider_id in {"openai", "anthropic", "minimax"} else "planned" if planned else "unknown",
+        "vision": "vision" in supports or "image" in supports,
+        "image": "image" in supports or "image-route-check" in supports,
+        "localPrivate": provider_id == "local",
+        "contextWindowTokens": None,
+        "costBand": "low" if provider_id in {"minimax", "local"} else "balanced" if provider_id in {"openai", "anthropic"} else "unknown",
+        "speedBand": "fast" if provider_id in {"minimax", "local"} else "balanced" if provider_id in {"openai", "anthropic"} else "unknown",
+    }
+
+
+def _provider_capability_chips(capabilities: dict) -> list[str]:
+    chips = [
+        "chat" if capabilities.get("chat") else "",
+        "coding" if capabilities.get("coding") else "",
+        "image" if capabilities.get("image") else "",
+        "vision" if capabilities.get("vision") else "",
+        "local private" if capabilities.get("localPrivate") else "",
+        f"tools {capabilities.get('toolUse')}" if capabilities.get("toolUse") else "",
+        f"cost {capabilities.get('costBand')}" if capabilities.get("costBand") else "",
+        f"speed {capabilities.get('speedBand')}" if capabilities.get("speedBand") else "",
+    ]
+    return [chip for chip in chips if chip][:8]
+
+
+def _provider_health_check(
+    row: dict,
+    *,
+    auth_present: bool,
+    can_route_now: bool,
+    observed_route_count: int,
+    runtime_ids: set[str],
+    compatibility_warnings: list[str],
+) -> dict:
+    provider_id = str(row.get("providerId", "")).strip().lower()
+    status = str(row.get("status", "")).strip().lower()
+    needs_openclaw = provider_id in {"minimax", "vercel-ai-gateway", "litellm"} or row.get("updateSource") == "OpenClaw provider directory"
+    needs_hermes = "hermes-route" in {str(item).strip().lower() for item in row.get("supports", [])}
+    missing_runtime = (needs_openclaw and "openclaw" not in runtime_ids) or (needs_hermes and "hermes" not in runtime_ids)
+    evidence = []
+    if auth_present:
+        evidence.append("auth present")
+    else:
+        evidence.append("auth missing")
+    if observed_route_count:
+        evidence.append(f"{observed_route_count} observed route{'s' if observed_route_count != 1 else ''}")
+    if needs_openclaw:
+        evidence.append("OpenClaw detected" if "openclaw" in runtime_ids else "OpenClaw missing")
+    if needs_hermes:
+        evidence.append("Hermes detected" if "hermes" in runtime_ids else "Hermes missing")
+    if can_route_now:
+        health_status = "ready"
+        summary = "Credentials and route metadata are ready for controlled live work."
+        safe_next_step = "Run a provider smoke test before assigning expensive or long-running work."
+    elif status.startswith("planned"):
+        health_status = "adapter_planned"
+        summary = "This provider is tracked as a catalog or future adapter signal only."
+        safe_next_step = "Implement the adapter and prove a route smoke test before using it."
+    elif missing_runtime:
+        health_status = "runtime_missing"
+        summary = "Credentials alone are not enough because a required runtime adapter is missing."
+        safe_next_step = "Repair the missing runtime, then rerun setup health."
+    elif not auth_present:
+        health_status = "missing_auth"
+        summary = "A supported provider route exists, but credentials are not configured."
+        safe_next_step = "Connect credentials, then rerun provider health."
+    else:
+        health_status = "unverified"
+        summary = "Provider metadata is tracked but no recent route proof is available."
+        safe_next_step = "Run a route smoke test and keep the previous default until it passes."
+    return {
+        "status": health_status,
+        "summary": summary,
+        "evidence": evidence,
+        "safeNextStep": safe_next_step,
+        "warnings": compatibility_warnings,
+    }
+
+
 def _runtime_update_safety(service: dict) -> dict:
     if not service.get("updateAvailable"):
         return dict(service.get("updateSafety") or {})
@@ -464,14 +549,26 @@ def _build_provider_ecosystem_snapshot(
             auth_present=auth_present,
             can_route_now=can_route_now,
         )
+        observed_route_count = observed_routes.get(provider_id, 0)
+        model_capabilities = _provider_model_capabilities(row)
         rows.append(
             {
                 **row,
                 "authPresent": auth_present,
                 "canRouteNow": can_route_now,
-                "observedRouteCount": observed_routes.get(provider_id, 0),
+                "observedRouteCount": observed_route_count,
                 "setup": setup,
                 "compatibilityWarnings": compatibility_warnings,
+                "healthCheck": _provider_health_check(
+                    row,
+                    auth_present=auth_present,
+                    can_route_now=can_route_now,
+                    observed_route_count=observed_route_count,
+                    runtime_ids=runtime_ids,
+                    compatibility_warnings=compatibility_warnings,
+                ),
+                "modelCapabilities": model_capabilities,
+                "capabilityChips": _provider_capability_chips(model_capabilities),
                 "updateSafety": {
                     "label": "Safe catalog refresh",
                     "summary": "Refresh provider catalogs before changing defaults or routing expensive work.",

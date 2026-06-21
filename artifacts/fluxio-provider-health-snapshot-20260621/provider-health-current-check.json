@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-21T01:51:18.450485+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&drawer=runtime&proofReload=provider-health-snapshot",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-provider-health-snapshot-20260621\\provider-health-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-provider-health-snapshot-20260621\\provider-health-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Provider ecosystem",
+    "Routes, catalogs, and safe updates",
+    "provider health check",
+    "model capabilities"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1800,
+    "sampleCount": 8100,
+    "uniqueSampleColors": 705,
+    "averageLuma": 37.07,
+    "nonBlank": true
+  },
+  "passed": true
+}

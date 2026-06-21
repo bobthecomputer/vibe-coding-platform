@@ -33,6 +33,11 @@ const ImageStudioPlayground = lazy(() =>
     default: module.ImageStudioPlayground,
   })),
 );
+const ProviderEcosystemPanel = lazy(() =>
+  import("./provider/ProviderEcosystemPanel.jsx").then(module => ({
+    default: module.ProviderEcosystemPanel,
+  })),
+);
 const RedTeamProofBoard = lazy(() =>
   import("./redteam/RedTeamProofBoard.jsx").then(module => ({
     default: module.RedTeamProofBoard,
@@ -11122,97 +11127,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               })}
             </div>
 
-            <section className="provider-ecosystem-panel" aria-label="Provider ecosystem and model catalog status">
-              <div className="section-header">
-                <div className="section-title-block">
-                  <p className="eyebrow">Provider ecosystem</p>
-                  <h3>Routes, catalogs, and safe updates</h3>
-                </div>
-                <StatusPill tone={Number(providerEcosystemSummary.routeReadyCount || 0) > 0 ? "good" : "warn"}>
-                  {providerEcosystemSummary.routeReadyCount || 0} route ready
-                </StatusPill>
-              </div>
-              <div className="context-grid compact-metrics">
-                <article className="context-item">
-                  <span>Tracked</span>
-                  <strong>{providerEcosystemSummary.totalProvidersTracked || providerEcosystemProviders.length}</strong>
-                  <p>{providerEcosystem.schemaVersion || "provider-ecosystem.v1"}</p>
-                </article>
-                <article className="context-item">
-                  <span>Implemented</span>
-                  <strong>{providerEcosystemSummary.implementedOrCredentialReady || 0}</strong>
-                  <p>Repo-supported or credential-ready routes.</p>
-                </article>
-                <article className="context-item">
-                  <span>Missing auth</span>
-                  <strong>{providerEcosystemSummary.missingAuthCount || 0}</strong>
-                  <p>{providerEcosystem.lastVerifiedAt ? `Verified ${providerEcosystem.lastVerifiedAt}` : "Waiting for live snapshot."}</p>
-                </article>
-              </div>
-              <div className="drawer-list compact provider-ecosystem-list">
-                {providerEcosystemProviders.length > 0 ? (
-                  providerEcosystemProviders.map(item => (
-                    <article
-                      className={`drawer-card ${toneClass(item.canRouteNow ? "good" : item.authPresent ? "neutral" : "warn")}`}
-                      key={`provider-ecosystem-${item.providerId}`}
-                    >
-                      <span>{item.routeRole || "provider route"}</span>
-                      <strong>{item.label || item.providerId}</strong>
-                      <p>
-                        {titleizeToken(item.status || "unknown")} · {item.canRouteNow ? "route ready" : item.authPresent ? "auth present" : "auth or adapter needed"}
-                      </p>
-                      <div className="pill-row">
-                        <span className="mini-pill">{item.providerId}</span>
-                        <span className="mini-pill muted">{item.updateSource || "manual"}</span>
-                        <span className="mini-pill muted">{item.observedRouteCount || 0} observed</span>
-                      </div>
-                      {item.updateSafety?.summary || asList(item.compatibilityWarnings).length > 0 ? (
-                        <div className="update-safety-note" aria-label={`${item.label || item.providerId} compatibility warnings`}>
-                          <strong>{item.updateSafety?.label || "Compatibility warning"}</strong>
-                          <p>{item.updateSafety?.summary || asList(item.compatibilityWarnings)[0]}</p>
-                          {asList(item.compatibilityWarnings).slice(0, 2).map(warning => (
-                            <span key={`${item.providerId}-${warning}`}>{warning}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))
-                ) : (
-                  <article className="drawer-card">
-                    <strong>Provider ecosystem snapshot not loaded yet.</strong>
-                    <p>Run a live setup snapshot to show OpenAI, MiniMax, local, gateway, and future provider route status.</p>
-                  </article>
-                )}
-              </div>
-              <div className="bridge-context-list">
-                <div className="bridge-context-item">
-                  <span>Safe refresh policy</span>
-                  <p>
-                    {providerEcosystemUpdatePolicy.requiresApprovalForDefaultChanges
-                      ? "Default route changes require approval."
-                      : "Default route approval policy is not loaded yet."}
-                    {" "}
-                    {providerEcosystemUpdatePolicy.neverOverwriteUserModels
-                      ? "User-defined models are never overwritten."
-                      : "User-defined model overwrite policy is pending."}
-                  </p>
-                </div>
-                <div className="bridge-context-item">
-                  <span>Catalog sources</span>
-                  <p>
-                    {providerEcosystemSources.length > 0
-                      ? providerEcosystemSources.slice(0, 4).map(item => item.label || item.sourceId).join(", ")
-                      : "OpenCode, OpenClaw, LiteLLM, AI Gateway, and local model catalogs appear after a live snapshot."}
-                  </p>
-                </div>
-                {asList(providerEcosystemUpdatePolicy.compatibilityWarnings).length > 0 ? (
-                  <div className="bridge-context-item update-policy-warnings">
-                    <span>Compatibility warnings</span>
-                    <p>{providerEcosystemUpdatePolicy.compatibilityWarnings.slice(0, 3).join(" ")}</p>
-                  </div>
-                ) : null}
-              </div>
-            </section>
+            <Suspense fallback={<LazySurfaceFallback label="Provider ecosystem" />}>
+              <ProviderEcosystemPanel
+                providerEcosystem={providerEcosystem}
+                providers={providerEcosystemProviders}
+                sources={providerEcosystemSources}
+                summary={providerEcosystemSummary}
+                updatePolicy={providerEcosystemUpdatePolicy}
+              />
+            </Suspense>
 
             <div className="field-row">
               <Field label="Code execution">
