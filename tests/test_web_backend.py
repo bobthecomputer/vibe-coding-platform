@@ -672,6 +672,54 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("PATH", env)
             self.assertEqual(env["PATH"].split(__import__("os").pathsep)[0], str(runtime_bin))
 
+    def test_web_backend_exports_minimax_openclaw_oauth_env_from_session_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            backend.provider_secrets["minimax-portal"] = "portal-oauth-token"
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                    "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                    "HOME": str(root / "home"),
+                    "OPENCLAW_STATE_DIR": str(root / "home" / ".openclaw"),
+                },
+            ):
+                env = backend._provider_env()
+
+            self.assertEqual(env["MINIMAX_OAUTH_TOKEN"], "portal-oauth-token")
+            self.assertEqual(env["FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"], "1")
+
+    def test_web_backend_exports_minimax_openclaw_oauth_presence_from_auth_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            home = root / "home"
+            auth_store = home / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+            auth_store.parent.mkdir(parents=True)
+            auth_store.write_text(
+                '{"profiles":{"minimax-portal:default":{"provider":"minimax-portal","access":"token","refresh":"refresh"}}}',
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(home),
+                    "OPENCLAW_STATE_DIR": str(home / ".openclaw"),
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                    "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                },
+            ):
+                env = backend._provider_env()
+
+            self.assertNotIn("MINIMAX_OAUTH_TOKEN", env)
+            self.assertEqual(env["FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"], "1")
+
     def test_web_backend_reports_minimax_openclaw_manual_auth_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -977,6 +1025,64 @@ class FluxioWebBackendTests(unittest.TestCase):
 
             self.assertEqual(route["provider"], "minimax-portal")
             self.assertEqual(route["model_id"], "minimax-portal/MiniMax-M2.7")
+
+    def test_hermes_chat_receives_minimax_portal_route_and_oauth_presence_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            home = root / "home"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            auth_store = home / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+            auth_store.parent.mkdir(parents=True)
+            auth_store.write_text(
+                '{"profiles":{"minimax-portal:default":{"provider":"minimax-portal","access":"token","refresh":"refresh"}}}',
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+            calls: list[list[str]] = []
+            envs: list[dict[str, str]] = []
+
+            def fake_run(args, **kwargs):
+                calls.append(list(args))
+                envs.append(dict(kwargs.get("env") or {}))
+                return mock.Mock(returncode=0, stdout='{"reply":"Hermes portal route."}', stderr="")
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(home),
+                    "OPENCLAW_STATE_DIR": str(home / ".openclaw"),
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                    "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                },
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="hermes"):
+                    with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                        result = backend.dispatch(
+                            "send_agent_chat_command",
+                            {
+                                "payload": {
+                                    "runtime": "hermes",
+                                    "message": "hello",
+                                    "workspaceId": "workspace_primary",
+                                    "workspacePath": str(workspace),
+                                    "route": {
+                                        "role": "executor",
+                                        "provider": "minimax",
+                                        "model": "MiniMax-M2.7",
+                                        "effort": "low",
+                                    },
+                                }
+                            },
+                        )
+
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertEqual(result["reply"], "Hermes portal route.")
+            self.assertIn("--provider", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--provider") + 1], "minimax-portal")
+            self.assertEqual(envs[-1]["FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"], "1")
+            self.assertFalse(envs[-1].get("MINIMAX_API_KEY"))
 
     def test_agent_chat_uses_wsl_hermes_when_native_cli_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

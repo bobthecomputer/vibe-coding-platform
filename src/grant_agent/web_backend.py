@@ -2296,6 +2296,10 @@ class FluxioWebBackend:
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax"]
         if self.provider_secrets.get("minimax-cn"):
             env["MINIMAX_API_KEY"] = self.provider_secrets["minimax-cn"]
+        if self.provider_secrets.get("minimax-portal"):
+            env["MINIMAX_OAUTH_TOKEN"] = self.provider_secrets["minimax-portal"]
+        if _provider_presence(["minimax-portal"], session_secrets=self.provider_secrets).get("minimax-portal"):
+            env["FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"] = "1"
         return env
 
     def _live_review_receipt_dir(self) -> Path:
