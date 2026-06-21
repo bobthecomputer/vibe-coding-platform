@@ -26,6 +26,7 @@ from control_route_interaction_smoke import (
 OUT_DIR = Path(os.environ.get("FLUXIO_PROOF_OUT_DIR", ROOT / "artifacts" / "pr99-runtime-lane-proof-contract"))
 CHECK_PATH = OUT_DIR / "runtime-proof-focused-check.json"
 RUNTIME_PROOF_SELECTORS = [
+    ".delegated-runtime-proof-receipts",
     ".runtime-proof-flight-recorder",
     ".runtime-proof-artifact-integrity",
     ".runtime-recovery-proof-gate",
@@ -65,13 +66,13 @@ def main() -> int:
         wait_for_control_shell(cdp)
         deadline = time.time() + 12
         while time.time() < deadline:
-            if cdp.eval('Boolean(document.querySelector(".runtime-proof-flight-recorder")) && Boolean(document.querySelector(".runtime-proof-artifact-integrity")) && Boolean(document.querySelector(".runtime-recovery-proof-gate"))'):
+            if cdp.eval('Boolean(document.querySelector(".delegated-runtime-proof-receipts")) && Boolean(document.querySelector(".runtime-proof-flight-recorder")) && Boolean(document.querySelector(".runtime-proof-artifact-integrity")) && Boolean(document.querySelector(".runtime-recovery-proof-gate"))'):
                 break
             cdp.eval("window.scrollBy(0, 420)")
             time.sleep(0.35)
         cdp.eval(
             """
-            document.querySelector(".runtime-recovery-proof-gate")
+            document.querySelector(".delegated-runtime-proof-receipts")
               ?.scrollIntoView({ block: "center", inline: "nearest" });
             """
         )
@@ -83,11 +84,13 @@ def main() -> int:
             screenshot_path.replace(final_path)
         visible_text = str(cdp.eval('document.querySelector(".runtime-truth-contract")?.innerText || ""'))
         expected = [
+            "DELEGATED RUNTIME PROOF RECEIPTS",
+            "DELEGATED-RUNTIME-PROOF.V1",
+            "live runtime execution: yes",
             "RUNTIME PROOF FLIGHT RECORDER",
             "Promotion blocked",
             "PROOF ARTIFACT INTEGRITY",
             "RECOVERY PROOF GATE",
-            "Stuck State Recovery",
             "Proof before retry:",
             "Missing evidence",
             "Missing gate proof:",

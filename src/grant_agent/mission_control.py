@@ -42,6 +42,7 @@ from .onboarding import (
 from .profiles import ProfileRegistry
 from .runtimes import detect_runtime_statuses, invalidate_runtime_status_cache
 from .runtime_supervisor import DelegatedRuntimeSupervisor
+from .runtime_proof import verify_delegated_runtime_proof_receipt
 from .skill_library import SkillLibrary
 from .skills import SkillRegistry
 from .verification import detect_default_verification_commands
@@ -5744,6 +5745,11 @@ def _build_runtime_compartments_snapshot(
             seen_ids.add(session_id)
             recent_events = session.latest_events[-8:] if isinstance(session.latest_events, list) else []
             lanes = _runtime_lane_rows_for_mission(mission, session)
+            runtime_proof_receipt = (
+                _delegated_runtime_receipt_from_path(Path(session.proof_receipt_path))
+                if session.proof_receipt_path
+                else {}
+            )
             blockers = [
                 lane["blocker"]
                 for lane in lanes
@@ -5795,6 +5801,7 @@ def _build_runtime_compartments_snapshot(
                     },
                     "filesChanged": session.changed_files,
                     "approvals": session.approval_history,
+                    "runtimeProofReceipt": runtime_proof_receipt or {},
                     "heartbeat": {
                         "status": session.heartbeat_status,
                         "at": session.heartbeat_at,
@@ -7396,6 +7403,74 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
     }
 
 
+def _delegated_runtime_receipt_from_path(path: Path) -> dict | None:
+    payload = _load_json_file(path)
+    if not isinstance(payload, dict) or not payload:
+        return None
+    verification = payload.get("verification")
+    if not isinstance(verification, dict):
+        verification = verify_delegated_runtime_proof_receipt(payload)
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    promotion_gate = (
+        payload.get("promotionGate") if isinstance(payload.get("promotionGate"), dict) else {}
+    )
+    safety = payload.get("safety") if isinstance(payload.get("safety"), dict) else {}
+    return {
+        "schemaVersion": str(payload.get("schemaVersion") or "delegated-runtime-proof.v1"),
+        "delegatedId": str(payload.get("delegatedId") or path.stem.replace(".proof", "")),
+        "runtimeId": str(payload.get("runtimeId") or ""),
+        "status": str(payload.get("status") or ""),
+        "terminal": bool(payload.get("terminal")),
+        "exitCode": payload.get("exitCode"),
+        "updatedAt": str(payload.get("updatedAt") or ""),
+        "path": str(path),
+        "artifactUrl": _artifact_api_url_if_safe(path),
+        "eventCount": int(payload.get("eventCount") or 0),
+        "changedFileCount": int(payload.get("changedFileCount") or 0),
+        "route": payload.get("route") if isinstance(payload.get("route"), dict) else {},
+        "heartbeat": payload.get("heartbeat") if isinstance(payload.get("heartbeat"), dict) else {},
+        "promotionGate": {
+            "promotionBlocked": bool(promotion_gate.get("promotionBlocked", True)),
+            "terminalStatusVerified": bool(promotion_gate.get("terminalStatusVerified")),
+            "artifactIntegrityVerified": bool(promotion_gate.get("artifactIntegrityVerified")),
+            "eventLogObserved": bool(promotion_gate.get("eventLogObserved")),
+        },
+        "safety": {
+            "liveRuntimeExecution": bool(safety.get("liveRuntimeExecution")),
+            "liveModelCalls": bool(safety.get("liveModelCalls")),
+            "runtimeAdapterAdded": bool(safety.get("runtimeAdapterAdded")),
+            "openCodeGoRuntimeAdded": bool(safety.get("openCodeGoRuntimeAdded")),
+            "secretsIncluded": bool(safety.get("secretsIncluded")),
+            "realTargetsAsserted": bool(safety.get("realTargetsAsserted")),
+        },
+        "verification": verification,
+        "artifacts": {
+            "sessionPath": str(artifacts.get("sessionPath") or ""),
+            "eventsPath": str(artifacts.get("eventsPath") or ""),
+            "logPath": str(artifacts.get("logPath") or ""),
+            "skillPayloadPath": str(artifacts.get("skillPayloadPath") or ""),
+        },
+    }
+
+
+def _latest_delegated_runtime_proof_receipts(root: Path, limit: int = 4) -> list[dict]:
+    receipt_root = root / ".agent_control" / "runtime_sessions"
+    if not receipt_root.exists():
+        return []
+    receipts: list[dict] = []
+    for path in sorted(
+        receipt_root.glob("*.proof.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )[: max(limit * 2, limit)]:
+        receipt = _delegated_runtime_receipt_from_path(path)
+        if receipt:
+            receipts.append(receipt)
+        if len(receipts) >= limit:
+            break
+    return receipts
+
+
 def _runtime_proof_gate_summary(latest_proof: dict | None) -> dict:
     if not isinstance(latest_proof, dict) or not latest_proof:
         return {
@@ -8043,6 +8118,12 @@ def _fused_runtime_status(
         gaps.append(f"{stale_heartbeat_count} delegated runtime heartbeat(s) are stale.")
 
     latest_lane_proof = _latest_runtime_lane_proof(root)
+    delegated_proof_receipts = _latest_delegated_runtime_proof_receipts(root)
+    verified_delegated_receipt_count = sum(
+        1
+        for item in delegated_proof_receipts
+        if item.get("verification", {}).get("passed")
+    )
     return {
         "schemaVersion": "fused-runtime-status.v1",
         "status": status,
@@ -8075,12 +8156,15 @@ def _fused_runtime_status(
                 harness_counts.get("legacy_autonomous_engine", 0) or 0
             ),
             "delegatedRunCount": delegated_run_count,
+            "delegatedProofReceiptCount": len(delegated_proof_receipts),
+            "verifiedDelegatedProofReceiptCount": verified_delegated_receipt_count,
             "routeContractRunCount": route_contract_run_count,
             "supervisorSessionCount": int(session_health.get("totalSessions", 0) or 0),
             "fusedRuntimeRole": "supervisor_not_runtime_adapter",
             "openCodeGoRole": "route_lane_only",
         },
         "latestLaneProof": latest_lane_proof,
+        "delegatedProofReceipts": delegated_proof_receipts,
         "proofGateSummary": _runtime_proof_gate_summary(latest_lane_proof),
         "gaps": gaps,
     }

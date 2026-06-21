@@ -88,6 +88,11 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Proof artifact integrity" in runtime_contract
     assert "Runtime recovery proof gate" in runtime_contract
     assert "Recovery proof gate" in runtime_contract
+    assert "Delegated runtime proof receipts" in runtime_contract
+    assert "delegatedProofReceipts" in runtime_contract
+    assert "delegated-runtime-proof.v1" in runtime_contract
+    assert "delegated-runtime-proof-receipts" in runtime_contract
+    assert "delegated-runtime-proof-card" in runtime_contract
     assert "missionSkillRecovery" in runtime_contract
     assert "missionSkillRecoveryPlan" in runtime_contract
     assert "recoveryRetryGuard" in runtime_contract
@@ -143,6 +148,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Live execution" in source
     assert ".runtime-truth-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-lane-proof-receipt" in STYLES.read_text(encoding="utf-8")
+    assert ".delegated-runtime-proof-receipts" in STYLES.read_text(encoding="utf-8")
+    assert ".delegated-runtime-proof-card" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-gate-list" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-proof-flight-recorder" in STYLES.read_text(encoding="utf-8")
@@ -164,6 +171,7 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "provider_model_route" in fixtures
     assert "fixture_runtime_compartment_state" in fixtures
     assert "runtime-compartment-proof.v1" in fixtures
+    assert "delegated-runtime-proof.v1" in fixtures
     assert "runtime-proof-gate-summary.v1" in fixtures
     assert "Runtime proof flight recorder" in runtime_contract
     assert "python scripts/runtime_lane_proof_harness.py --run-id lane-proof-fixture" in fixtures

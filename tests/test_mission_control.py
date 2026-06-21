@@ -19,6 +19,7 @@ from grant_agent.cli import cmd_mission_follow_up, cmd_workspace_delete
 from grant_agent.mission_control import (
     ControlRoomStore,
     _build_generated_image_artifacts_snapshot,
+    _build_runtime_compartments_snapshot,
     _build_git_actions,
     _build_validation_actions,
     _mission_title,
@@ -33,7 +34,7 @@ from grant_agent.mission_control import (
     mission_time_budget_window,
     reconcile_provider_secret_presence,
 )
-from grant_agent.models import DelegatedRuntimeSession, MissionEvent, utc_now_iso
+from grant_agent.models import DelegatedRuntimeSession, Mission, MissionEvent, utc_now_iso
 from grant_agent.workspace_actions import execute_control_room_workspace_action
 
 
@@ -140,6 +141,118 @@ class MissionControlTests(unittest.TestCase):
             "Rerun the deterministic runtime lane proof harness",
             summary["nextRecoveryActions"][0],
         )
+
+    def test_delegated_runtime_proof_receipts_surface_in_fused_runtime_and_compartments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            sessions_dir = root / ".agent_control" / "runtime_sessions"
+            sessions_dir.mkdir(parents=True)
+            session_path = sessions_dir / "delegate_live.json"
+            events_path = sessions_dir / "delegate_live.events.jsonl"
+            log_path = sessions_dir / "delegate_live.log"
+            receipt_path = sessions_dir / "delegate_live.proof.json"
+            session_path.write_text("{}", encoding="utf-8")
+            log_path.write_text("runtime completed\n", encoding="utf-8")
+            events_path.write_text(
+                json.dumps(
+                    {
+                        "event_id": "evt_1",
+                        "delegated_id": "delegate_live",
+                        "runtime_id": "hermes",
+                        "kind": "session.completed",
+                        "message": "runtime completed",
+                        "status": "completed",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "delegated-runtime-proof.v1",
+                        "delegatedId": "delegate_live",
+                        "runtimeId": "hermes",
+                        "status": "completed",
+                        "terminal": True,
+                        "exitCode": 0,
+                        "updatedAt": "2026-06-21T08:00:00+00:00",
+                        "route": {
+                            "phase": "execute",
+                            "role": "executor",
+                            "provider": "minimax",
+                            "model": "MiniMax-M3",
+                        },
+                        "heartbeat": {"status": "inactive"},
+                        "artifacts": {
+                            "sessionPath": str(session_path),
+                            "eventsPath": str(events_path),
+                            "logPath": str(log_path),
+                        },
+                        "eventCount": 1,
+                        "changedFiles": ["proof.txt"],
+                        "changedFileCount": 1,
+                        "safety": {
+                            "liveRuntimeExecution": True,
+                            "liveModelCalls": False,
+                            "runtimeAdapterAdded": False,
+                            "openCodeGoRuntimeAdded": False,
+                            "secretsIncluded": False,
+                            "realTargetsAsserted": False,
+                        },
+                        "promotionGate": {
+                            "promotionBlocked": False,
+                            "terminalStatusVerified": True,
+                            "artifactIntegrityVerified": True,
+                            "eventLogObserved": True,
+                        },
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            harness = build_harness_lab_snapshot(root)
+
+            receipts = harness["fusedRuntime"]["delegatedProofReceipts"]
+            self.assertEqual(receipts[0]["schemaVersion"], "delegated-runtime-proof.v1")
+            self.assertEqual(receipts[0]["delegatedId"], "delegate_live")
+            self.assertTrue(receipts[0]["verification"]["passed"])
+            self.assertTrue(receipts[0]["safety"]["liveRuntimeExecution"])
+            self.assertFalse(receipts[0]["safety"]["liveModelCalls"])
+            self.assertEqual(
+                harness["fusedRuntime"]["proofSignals"]["delegatedProofReceiptCount"],
+                1,
+            )
+
+            mission = Mission(
+                mission_id="mission_runtime_receipt",
+                workspace_id="workspace_runtime_receipt",
+                runtime_id="hermes",
+                objective="Show delegated receipt",
+                success_checks=[],
+            )
+            mission.delegated_runtime_sessions = [
+                DelegatedRuntimeSession(
+                    delegated_id="delegate_live",
+                    runtime_id="hermes",
+                    launch_command="hermes chat -q test",
+                    status="completed",
+                    session_path=str(session_path),
+                    workspace_root=str(root),
+                    execution_root=str(root),
+                    log_path=str(log_path),
+                    events_path=str(events_path),
+                    proof_receipt_path=str(receipt_path),
+                    exit_code=0,
+                )
+            ]
+
+            compartments = _build_runtime_compartments_snapshot(root, [mission])
+
+            receipt = compartments["items"][0]["runtimeProofReceipt"]
+            self.assertEqual(receipt["delegatedId"], "delegate_live")
+            self.assertTrue(receipt["verification"]["passed"])
 
     def test_workspace_store_reanchors_old_release_root_to_current_release(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

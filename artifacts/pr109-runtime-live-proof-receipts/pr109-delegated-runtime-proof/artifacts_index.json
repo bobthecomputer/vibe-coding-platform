@@ -1,0 +1,10 @@
+{
+  "runId": "pr109-delegated-runtime-proof",
+  "root": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof",
+  "paths": {
+    "proof": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\runtime_lane_proof.json",
+    "markdown": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\route_scorecard.json",
+    "artifact_index": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\artifacts_index.json"
+  }
+}

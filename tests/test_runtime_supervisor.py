@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.models import DelegatedRuntimeSession, Mission, WorkspaceProfile
+from grant_agent.runtime_proof import verify_delegated_runtime_proof_receipt
 from grant_agent.runtime_supervisor import DelegatedRuntimeSupervisor, _coerce_platform_path
 from grant_agent.runtime_worker import _popen_command, run as run_runtime_worker
 
@@ -251,6 +252,29 @@ class RuntimeSupervisorTests(unittest.TestCase):
                 self.assertTrue(
                     any(item["kind"] == "session.heartbeat" for item in session.latest_events)
                 )
+                receipt_path = pathlib.Path(session.proof_receipt_path)
+                self.assertTrue(receipt_path.exists())
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                self.assertEqual(receipt["schemaVersion"], "delegated-runtime-proof.v1")
+                self.assertEqual(receipt["delegatedId"], session.delegated_id)
+                self.assertEqual(receipt["runtimeId"], "hermes")
+                self.assertEqual(receipt["status"], "completed")
+                self.assertEqual(receipt["exitCode"], 0)
+                self.assertTrue(receipt["promotionGate"]["terminalStatusVerified"])
+                self.assertTrue(receipt["promotionGate"]["artifactIntegrityVerified"])
+                self.assertTrue(receipt["safety"]["liveRuntimeExecution"])
+                self.assertFalse(receipt["safety"]["liveModelCalls"])
+                self.assertFalse(receipt["safety"]["runtimeAdapterAdded"])
+                self.assertFalse(receipt["safety"]["secretsIncluded"])
+                self.assertIn("delegated.txt", receipt["changedFiles"])
+                self.assertTrue(
+                    verify_delegated_runtime_proof_receipt(
+                        receipt,
+                        json.loads(pathlib.Path(session.session_path).read_text(encoding="utf-8")),
+                    )["passed"]
+                )
+                snapshot = supervisor.build_session_snapshot(session)
+                self.assertEqual(snapshot.proof_receipt_path, str(receipt_path))
                 # Explicit shutdown avoids transient file locks on Windows temp cleanup.
                 supervisor.stop_session(session)
                 time.sleep(0.2)

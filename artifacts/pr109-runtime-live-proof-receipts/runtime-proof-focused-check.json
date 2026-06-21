@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-21T11:54:41.937701+00:00",
+  "url": "http://127.0.0.1:1428/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr109-runtime-live-proof-receipts\\runtime-proof-focused.png",
+  "requiredSelectors": [
+    ".delegated-runtime-proof-receipts",
+    ".runtime-proof-flight-recorder",
+    ".runtime-proof-artifact-integrity",
+    ".runtime-recovery-proof-gate"
+  ],
+  "expectedFragments": [
+    "DELEGATED RUNTIME PROOF RECEIPTS",
+    "DELEGATED-RUNTIME-PROOF.V1",
+    "live runtime execution: yes",
+    "RUNTIME PROOF FLIGHT RECORDER",
+    "Promotion blocked",
+    "PROOF ARTIFACT INTEGRITY",
+    "RECOVERY PROOF GATE",
+    "Proof before retry:",
+    "Missing evidence",
+    "Missing gate proof:",
+    "python scripts/runtime_lane_proof_harness.py"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

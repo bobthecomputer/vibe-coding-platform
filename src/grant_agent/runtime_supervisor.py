@@ -22,6 +22,7 @@ from .models import (
     utc_now_iso,
 )
 from .execution_truth import derive_execution_target
+from .runtime_proof import write_delegated_runtime_proof_receipt
 from .runtimes import runtime_adapter_map
 from .subprocess_utils import background_creationflags, hidden_windows_subprocess_kwargs
 
@@ -125,6 +126,7 @@ class DelegatedRuntimeSupervisor:
         events_path = self.control_dir / f"{delegated_id}.events.jsonl"
         decision_path = self.control_dir / f"{delegated_id}.approval.json"
         skill_payload_path = self.control_dir / f"{delegated_id}.skill-payload.json"
+        proof_receipt_path = self.control_dir / f"{delegated_id}.proof.json"
         mission_scope = getattr(mission, "execution_scope", None)
         workspace_root = str(
             _coerce_platform_path(
@@ -156,6 +158,7 @@ class DelegatedRuntimeSupervisor:
             events_path=str(events_path),
             decision_path=str(decision_path),
             skill_payload_path=str(skill_payload_path) if skill_payload else "",
+            proof_receipt_path=str(proof_receipt_path),
             source_step_id=source_step_id,
         )
         if skill_payload:
@@ -302,6 +305,8 @@ class DelegatedRuntimeSupervisor:
         _apply_execution_truth(payload)
         _apply_heartbeat_truth(payload)
         if payload.status in {"completed", "failed", "stopped"}:
+            self._ensure_proof_receipt(payload)
+            self._write_session(payload)
             return payload
 
         alive = _pid_alive(payload.supervisor_pid) or _pid_alive(payload.pid)
@@ -339,6 +344,7 @@ class DelegatedRuntimeSupervisor:
                         },
                     )
                     _apply_heartbeat_truth(payload)
+                    self._ensure_proof_receipt(payload)
                     self._write_session(payload)
                     return payload
                 payload.detail = payload.last_event or payload.detail or "Delegated runtime state is settling."
@@ -349,6 +355,7 @@ class DelegatedRuntimeSupervisor:
             payload.detail = "Delegated runtime process is no longer active."
             payload.updated_at = utc_now_iso()
             _apply_heartbeat_truth(payload)
+            self._ensure_proof_receipt(payload)
             self._write_session(payload)
             return payload
         _apply_heartbeat_truth(payload)
@@ -526,6 +533,7 @@ class DelegatedRuntimeSupervisor:
             session_path=payload.session_path,
             log_path=payload.log_path,
             skill_payload_path=payload.skill_payload_path,
+            proof_receipt_path=payload.proof_receipt_path,
             source_step_id=payload.source_step_id,
             pid=payload.pid,
             supervisor_pid=payload.supervisor_pid,
@@ -545,6 +553,13 @@ class DelegatedRuntimeSupervisor:
             source_delegated_id=payload.source_delegated_id,
             changed_files=list(payload.changed_files or []),
         )
+
+    def build_session_proof_receipt(
+        self,
+        session: DelegatedRuntimeSession | dict | str,
+    ) -> dict:
+        payload = self.refresh_session(session)
+        return self._ensure_proof_receipt(payload)
 
     def _load_session(self, session: DelegatedRuntimeSession | dict | str) -> DelegatedRuntimeSession | None:
         acknowledged = False
@@ -598,6 +613,16 @@ class DelegatedRuntimeSupervisor:
         path = Path(session.session_path) if session.session_path else self.control_dir / f"{session.delegated_id}.json"
         session.session_path = str(path)
         _atomic_write_json(path, asdict(session))
+
+    def _ensure_proof_receipt(self, session: DelegatedRuntimeSession) -> dict:
+        if not session.proof_receipt_path:
+            session.proof_receipt_path = str(
+                self.control_dir / f"{session.delegated_id}.proof.json"
+            )
+        receipt_path = Path(session.proof_receipt_path)
+        receipt = write_delegated_runtime_proof_receipt(receipt_path, asdict(session))
+        session.proof_receipt_path = str(receipt_path)
+        return receipt
 
     def _append_structured_event(
         self,

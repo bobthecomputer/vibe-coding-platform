@@ -46,6 +46,7 @@ export function RuntimeTruthContract({ fusedRuntime, missionSkillRecovery, missi
     "No mission recovery action is active right now.";
   const proofSignals = runtime.proofSignals || {};
   const latestProof = runtime.latestLaneProof || {};
+  const delegatedProofReceipts = asList(runtime.delegatedProofReceipts);
   const proofGateSummary = runtime.proofGateSummary || latestProof.proofGateSummary || {};
   const lanes = asList(runtime.runtimeLanes)
     .map(item => item.label || runtimeLabel(item.runtimeId))
@@ -79,7 +80,37 @@ export function RuntimeTruthContract({ fusedRuntime, missionSkillRecovery, missi
       <strong>Role: {titleizeToken(proofSignals.fusedRuntimeRole || "supervisor_not_runtime_adapter")}</strong>
       <p>Runtime adapter added: {runtime.runtimeAdapterAdded ? "yes" : "no"} · Providers stay model routes, not runtime lanes.</p>
       <p>Executable lanes: {lanes.join(" · ") || "none recorded"}</p>
+      <p>
+        Delegated proof receipts: {proofSignals.verifiedDelegatedProofReceiptCount || 0}/{proofSignals.delegatedProofReceiptCount || delegatedProofReceipts.length || 0} verified
+      </p>
       <small>Normalizes {fusionPoints.join(" · ") || "mission control evidence"} before route promotion.</small>
+      {delegatedProofReceipts.length > 0 ? (
+        <div className="delegated-runtime-proof-receipts" aria-label="Delegated runtime proof receipts">
+          <div className="runtime-proof-flight-head">
+            <span>Delegated runtime proof receipts</span>
+            <strong>{proofSignals.verifiedDelegatedProofReceiptCount || 0} verified</strong>
+          </div>
+          <div className="delegated-runtime-proof-list">
+            {delegatedProofReceipts.slice(0, 4).map(item => (
+              <article
+                className="delegated-runtime-proof-card"
+                data-verified={Boolean(item.verification?.passed)}
+                key={`delegated-runtime-proof-${item.delegatedId || item.path}`}
+              >
+                <span>{item.schemaVersion || "delegated-runtime-proof.v1"}</span>
+                <strong>{runtimeLabel(item.runtimeId)} · {item.delegatedId || "delegated session"}</strong>
+                <p>
+                  {titleizeToken(item.status || "unknown")} · events {item.eventCount || 0} · changed files {item.changedFileCount || 0}
+                </p>
+                <small>
+                  live runtime execution: {item.safety?.liveRuntimeExecution ? "yes" : "no"} · live model calls: {item.safety?.liveModelCalls ? "yes" : "no"} · runtime adapter added: {item.safety?.runtimeAdapterAdded ? "yes" : "no"}
+                </small>
+                <code>{item.path || item.artifactUrl || "receipt path pending"}</code>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="runtime-lane-proof-receipt">
         <b>Latest runtime lane proof</b>
         {latestProof.runId ? (

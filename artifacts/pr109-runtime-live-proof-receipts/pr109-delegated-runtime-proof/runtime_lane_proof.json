@@ -1,0 +1,261 @@
+{
+  "runId": "pr109-delegated-runtime-proof",
+  "mode": "deterministic-no-live-runtime-call",
+  "createdAt": "2026-06-21T11:53:24.200768+00:00",
+  "lanes": [
+    {
+      "runtimeId": "openclaw",
+      "label": "OpenClaw",
+      "skill": "jbheaven_godmode_lab",
+      "capabilities": [
+        {
+          "key": "remote_approvals",
+          "label": "Remote approvals",
+          "available": true,
+          "detail": "Messaging-first control plane with phone-friendly inbox patterns."
+        },
+        {
+          "key": "skills",
+          "label": "Managed skills",
+          "available": true,
+          "detail": "Bundled, managed, and workspace skills are supported."
+        },
+        {
+          "key": "multi_channel",
+          "label": "Multi-channel routing",
+          "available": true,
+          "detail": "Routes messages and approvals across Telegram and other channels."
+        }
+      ],
+      "launchCommand": "openclaw agent --agent fluxio_mission_openclaw_lane_proof_d228bebc --session-id fluxio_mission_openclaw_lane_proof --message \"Prove runtime route metadata and skill visibility only. Do not call a model, edit files, or perform live red-team actions.\" --thinking medium --json",
+      "routeContract": {
+        "phase": "plan",
+        "role": "executor",
+        "provider": "openai-codex",
+        "model": "gpt-5.4-mini",
+        "canonical_model_id": "openai-codex/gpt-5.4-mini",
+        "effort": "medium"
+      },
+      "routeSummary": "OpenClaw launch route: plan:executor -> openai-codex/gpt-5.4-mini (medium thinking)",
+      "proofMeaning": "OpenClaw owns gateway-style execution, remote approvals, and JSON session output.",
+      "readiness": {
+        "status": "contract_ready_live_unverified",
+        "summary": "Deterministic route contract is present; live CLI/auth/session proof is still required.",
+        "promotionBlocked": true,
+        "blockingGateCount": 3,
+        "gates": [
+          {
+            "gateId": "openclaw_cli_available",
+            "label": "OpenClaw CLI available",
+            "status": "unchecked",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Run setup doctor or install OpenClaw before promoting this lane to live execution.",
+            "blocksPromotion": true
+          },
+          {
+            "gateId": "openai_codex_route_configured",
+            "label": "OpenAI/Codex route configured",
+            "status": "unchecked",
+            "proofArtifact": "route_scorecard.json",
+            "recoveryAction": "Connect Codex OAuth or configure the OpenAI route, then rerun provider health checks.",
+            "blocksPromotion": true
+          },
+          {
+            "gateId": "openclaw_contract_written",
+            "label": "Route contract written",
+            "status": "passed",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Rebuild the deterministic lane proof if this gate disappears.",
+            "blocksPromotion": false
+          },
+          {
+            "gateId": "openclaw_json_session_output",
+            "label": "JSON session output observed",
+            "status": "needs_live_validation",
+            "proofArtifact": "runtime_session.events.jsonl",
+            "recoveryAction": "Run one bounded OpenClaw proving mission and attach the runtime session events.",
+            "blocksPromotion": true
+          }
+        ],
+        "nextRecoveryAction": "Run setup doctor or install OpenClaw before promoting this lane to live execution."
+      }
+    },
+    {
+      "runtimeId": "hermes",
+      "label": "Hermes",
+      "skill": "jbheaven_godmode_lab",
+      "capabilities": [
+        {
+          "key": "scheduled_automations",
+          "label": "Scheduled automations",
+          "available": true,
+          "detail": "Hermes has built-in scheduling and long-running agent loops."
+        },
+        {
+          "key": "skills_memory",
+          "label": "Skills and memory",
+          "available": true,
+          "detail": "Hermes learns and recalls skills across sessions."
+        },
+        {
+          "key": "delegation",
+          "label": "Delegation",
+          "available": true,
+          "detail": "Hermes can spawn isolated subagents for parallel workstreams."
+        }
+      ],
+      "launchCommand": "hermes chat -q \"Prove runtime route metadata and skill visibility only. Do not call a model, edit files, or perform live red-team actions.\" -Q --model MiniMax-M3 --provider minimax",
+      "routeContract": {
+        "phase": "plan",
+        "role": "executor",
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "effort": "high"
+      },
+      "routeSummary": "Hermes launch route: plan:executor -> minimax/MiniMax-M3 (high)",
+      "proofMeaning": "Hermes owns long-running agent loops, scheduling, memory, and skill reuse.",
+      "readiness": {
+        "status": "contract_ready_live_unverified",
+        "summary": "Deterministic route contract is present; live CLI/auth/session proof is still required.",
+        "promotionBlocked": true,
+        "blockingGateCount": 3,
+        "gates": [
+          {
+            "gateId": "hermes_cli_available",
+            "label": "Hermes CLI available",
+            "status": "unchecked",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Repair Hermes from setup or NAS runtime doctor before long-running delegated work.",
+            "blocksPromotion": true
+          },
+          {
+            "gateId": "minimax_route_configured",
+            "label": "MiniMax route configured",
+            "status": "unchecked",
+            "proofArtifact": "route_scorecard.json",
+            "recoveryAction": "Connect the MiniMax/OpenClaw auth route or choose a cheaper verified model route.",
+            "blocksPromotion": true
+          },
+          {
+            "gateId": "hermes_skill_payload_visible",
+            "label": "Skill payload visible",
+            "status": "passed",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Attach the selected skill payload before relaunching the Hermes lane.",
+            "blocksPromotion": false
+          },
+          {
+            "gateId": "hermes_transcript_proof_observed",
+            "label": "Transcript proof observed",
+            "status": "needs_live_validation",
+            "proofArtifact": "red_team_transcript.md",
+            "recoveryAction": "Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.",
+            "blocksPromotion": true
+          }
+        ],
+        "nextRecoveryAction": "Repair Hermes from setup or NAS runtime doctor before long-running delegated work."
+      }
+    }
+  ],
+  "fusedRuntime": {
+    "runtimeId": "fluxio-fused-supervisor",
+    "role": "supervisor_not_runtime_adapter",
+    "runtimeAdapterAdded": false,
+    "registeredRuntimeAdapters": [
+      "openclaw",
+      "hermes"
+    ],
+    "normalizes": [
+      "route_contracts",
+      "structured_events",
+      "approval_state",
+      "logs",
+      "heartbeats",
+      "changed_files"
+    ],
+    "delegatedSessionFieldsPresent": {
+      "runtime_id": true,
+      "launch_command": true,
+      "events_path": true,
+      "log_path": true,
+      "decision_path": true,
+      "latest_events": true,
+      "pending_approval": true,
+      "heartbeat_status": true,
+      "target_phase": true,
+      "target_role": true,
+      "target_provider": true,
+      "target_model": true,
+      "changed_files": true
+    },
+    "readinessSummary": {
+      "overallStatus": "contract_ready_live_unverified",
+      "promotionBlocked": true,
+      "blockingGateCount": 6,
+      "lanes": [
+        {
+          "runtimeId": "openclaw",
+          "status": "contract_ready_live_unverified",
+          "blockingGateCount": 3,
+          "nextRecoveryAction": "Run setup doctor or install OpenClaw before promoting this lane to live execution."
+        },
+        {
+          "runtimeId": "hermes",
+          "status": "contract_ready_live_unverified",
+          "blockingGateCount": 3,
+          "nextRecoveryAction": "Repair Hermes from setup or NAS runtime doctor before long-running delegated work."
+        }
+      ]
+    }
+  },
+  "skillVisibility": {
+    "requiredSkills": {
+      "jbheaven_godmode_lab": true,
+      "hermes_skill_packager": true,
+      "runtime_loop_supervisor": true
+    },
+    "retrievedSkills": [
+      "jbheaven_godmode_lab",
+      "runtime_loop_supervisor",
+      "hermes_skill_packager",
+      "frontend_taste_director",
+      "stuck_state_recovery",
+      "fluxio_workbench_studio"
+    ],
+    "catalogSize": 21
+  },
+  "safetyContract": {
+    "liveModelCalls": false,
+    "realTargets": false,
+    "harmfulInstructions": false,
+    "runtimeAdapterAdded": false,
+    "openCodeGoRuntimeAdded": false,
+    "liveRuntimeExecution": false,
+    "proofType": "route_contract_proof"
+  },
+  "proofType": "route_contract_proof",
+  "proofTruth": {
+    "classification": "route_contract_proof",
+    "liveRuntimeExecution": false,
+    "liveModelCalls": false,
+    "proves": [
+      "runtime adapter registration",
+      "route contract construction",
+      "launch command shape",
+      "skill visibility",
+      "fused supervisor metadata shape"
+    ],
+    "doesNotProve": [
+      "a live runtime process completed",
+      "a provider model generated output",
+      "a delegated runtime modified files",
+      "a red-team probe was executed"
+    ]
+  },
+  "artifactPaths": {
+    "proof": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\runtime_lane_proof.json",
+    "markdown": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\route_scorecard.json",
+    "artifact_index": "artifacts\\pr109-runtime-live-proof-receipts\\pr109-delegated-runtime-proof\\artifacts_index.json"
+  }
+}

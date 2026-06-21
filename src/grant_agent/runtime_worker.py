@@ -15,8 +15,10 @@ from pathlib import Path
 
 try:
     from .subprocess_utils import background_creationflags
+    from .runtime_proof import write_delegated_runtime_proof_receipt
 except ImportError:  # pragma: no cover - direct script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from grant_agent.runtime_proof import write_delegated_runtime_proof_receipt
     from grant_agent.subprocess_utils import background_creationflags
 
 STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
@@ -305,6 +307,7 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     events_path = Path(payload.get("events_path", session_path.with_suffix(".events.jsonl"))).resolve()
     decision_path = Path(payload.get("decision_path", session_path.with_suffix(".approval.json"))).resolve()
+    proof_receipt_path = Path(payload.get("proof_receipt_path", session_path.with_suffix(".proof.json"))).resolve()
     before_snapshot = _workspace_snapshot(cwd)
 
     _write_state(
@@ -316,6 +319,7 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
             "detail": "Launching delegated runtime process.",
             "events_path": str(events_path),
             "decision_path": str(decision_path),
+            "proof_receipt_path": str(proof_receipt_path),
             "heartbeat_at": _utc_now(),
             "heartbeat_status": "healthy",
             "heartbeat_interval_seconds": max(
@@ -482,6 +486,27 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
         message=summary or ("Delegated runtime completed." if final_status == "completed" else "Delegated runtime failed."),
         status=final_status,
         data={"exit_code": return_code, "changed_files": changed_files},
+    )
+    final_state = _load_state(session_path)
+    receipt = write_delegated_runtime_proof_receipt(proof_receipt_path, final_state)
+    _write_state(
+        session_path,
+        {
+            "proof_receipt_path": str(proof_receipt_path),
+            "last_event_kind": "runtime.proof_receipt",
+            "last_event": "Delegated runtime proof receipt written.",
+        },
+    )
+    _append_event(
+        session_path,
+        kind="runtime.proof_receipt",
+        message="Delegated runtime proof receipt written.",
+        status=final_status,
+        data={
+            "proof_receipt_path": str(proof_receipt_path),
+            "schemaVersion": receipt["schemaVersion"],
+            "promotionBlocked": receipt["promotionGate"]["promotionBlocked"],
+        },
     )
     return return_code
 
