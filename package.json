@@ -87,6 +87,8 @@
     "verify:long-history": "python scripts/control_route_responsive_smoke.py --long-history-fixture --expect Builder --expect \"Long-History Proof Load\" --expect \"Side-by-side proof diff\"",
     "verify:release-artifacts": "python scripts/archive_release_proofs.py --require-long-history --require-proof-digest",
     "verify:release-candidate": "python scripts/archive_release_proofs.py --require-long-history --require-proof-digest --require-public-web-deployment",
+    "verify:pr-stack": "python scripts/pr_stack_health.py --max-chain 5",
+    "proof:pr-stack": "python scripts/pr_stack_health.py --max-chain 5 --output artifacts/pr-stack-health-local/pr-stack-health.json",
     "verify:control": "python scripts/verify_control_workspace.py",
     "verify:desktop": "python -m pytest tests -q && npm run frontend:build && npm run tauri build -- --debug",
     "dev": "tauri dev",
