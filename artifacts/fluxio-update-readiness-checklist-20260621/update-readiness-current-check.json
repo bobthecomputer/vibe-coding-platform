@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-21T02:22:26.087960+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&drawer=runtime&proofReload=update-readiness-checklist",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-update-readiness-checklist-20260621\\update-readiness-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-update-readiness-checklist-20260621\\update-readiness-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Provider ecosystem",
+    "Safe refresh checklist",
+    "Provider update readiness checklist",
+    "Catalog refresh review"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 4200,
+    "sampleCount": 8280,
+    "uniqueSampleColors": 790,
+    "averageLuma": 36.76,
+    "nonBlank": true
+  },
+  "passed": true
+}

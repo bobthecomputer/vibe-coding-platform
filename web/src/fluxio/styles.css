@@ -7748,6 +7748,83 @@ button.builder-review-target:hover {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.provider-update-readiness {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(125, 211, 252, 0.07), transparent 58%),
+    rgba(255, 255, 255, 0.026);
+  padding: 10px;
+}
+
+.provider-update-readiness .section-header {
+  margin: 0;
+}
+
+.provider-update-readiness-list {
+  display: grid;
+  gap: 7px;
+}
+
+.provider-update-readiness-row {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 8px;
+  background: rgba(5, 8, 10, 0.38);
+  padding: 9px;
+}
+
+.provider-update-readiness-row > div {
+  display: grid;
+  gap: 3px;
+}
+
+.provider-update-readiness-row span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.provider-update-readiness-row strong,
+.provider-update-readiness-row p,
+.provider-update-readiness-row small {
+  margin: 0;
+}
+
+.provider-update-readiness-row strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.provider-update-readiness-row p,
+.provider-update-readiness-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.provider-update-readiness-row small {
+  color: rgba(238, 242, 236, 0.58);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.provider-update-readiness-row.tone-good {
+  border-color: rgba(34, 197, 94, 0.18);
+}
+
+.provider-update-readiness-row.tone-warn {
+  border-color: rgba(245, 158, 11, 0.24);
+  background:
+    linear-gradient(90deg, rgba(245, 158, 11, 0.08), transparent 64%),
+    rgba(5, 8, 10, 0.38);
+}
+
 .update-safety-note {
   display: grid;
   gap: 4px;

@@ -522,6 +522,25 @@ class MissionControlTests(unittest.TestCase):
                 "compatibilityWarnings",
                 snapshot["providerEcosystem"]["updatePolicy"],
             )
+            readiness = snapshot["providerEcosystem"]["updatePolicy"][
+                "readinessChecklist"
+            ]
+            self.assertGreaterEqual(len(readiness), 5)
+            readiness_ids = {item["checkId"] for item in readiness}
+            self.assertIn("catalog_refresh_review", readiness_ids)
+            self.assertIn("credential_safety", readiness_ids)
+            self.assertIn("runtime_compatibility", readiness_ids)
+            self.assertIn("route_smoke", readiness_ids)
+            self.assertIn("user_model_preservation", readiness_ids)
+            self.assertFalse(
+                snapshot["providerEcosystem"]["updatePolicy"]["readinessSummary"][
+                    "safeToRefresh"
+                ]
+            )
+            self.assertIn(
+                "updateReadinessReadyCount",
+                snapshot["providerEcosystem"]["summary"],
+            )
             openai_provider = next(
                 item
                 for item in snapshot["providerEcosystem"]["providers"]
@@ -670,6 +689,22 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(providers["local"]["status"], "planned_adapter")
             self.assertFalse(providers["local"]["canRouteNow"])
             self.assertIn("https://ai-gateway.vercel.sh/v1/models", ecosystem["updatePolicy"]["dynamicSources"])
+            checklist = ecosystem["updatePolicy"]["readinessChecklist"]
+            self.assertIn(
+                "scripts/provider_catalog_refresh.py",
+                next(
+                    item
+                    for item in checklist
+                    if item["checkId"] == "catalog_refresh_review"
+                )["safeAction"],
+            )
+            self.assertTrue(
+                next(
+                    item
+                    for item in checklist
+                    if item["checkId"] == "user_model_preservation"
+                )["proof"].endswith("neverOverwriteUserModels=true.")
+            )
             source_ids = {item["sourceId"] for item in ecosystem["sources"]}
             self.assertIn("opencode_models", source_ids)
             self.assertIn("crush_local_models", source_ids)

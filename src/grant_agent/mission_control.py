@@ -597,6 +597,77 @@ def _build_provider_ecosystem_snapshot(
     next_actions.append(
         "Use dynamic catalog refresh for Vercel AI Gateway, LiteLLM, OpenClaw, and OpenCode/Models.dev before changing default model IDs."
     )
+    readiness_checklist = [
+        {
+            "checkId": "catalog_refresh_review",
+            "label": "Catalog refresh review",
+            "status": "ready",
+            "summary": "Create a review-only provider catalog artifact before changing model defaults.",
+            "safeAction": (
+                "Run scripts/provider_catalog_refresh.py and review the JSON artifact "
+                "in artifacts/provider-catalog."
+            ),
+            "proof": "provider-catalog-refresh/v1 report; writesDefaults=false; writesCredentials=false.",
+        },
+        {
+            "checkId": "credential_safety",
+            "label": "Credential safety",
+            "status": "review" if missing_auth else "ready",
+            "summary": (
+                "Provider credentials are present for route-ready accounts."
+                if not missing_auth
+                else "Some supported providers still need credentials before they can route live work."
+            ),
+            "safeAction": (
+                "Keep stored credentials masked and connect missing providers: "
+                + ", ".join(missing_auth)
+                + "."
+                if missing_auth
+                else "Keep masked credential status visible; never write raw keys into catalog artifacts."
+            ),
+            "proof": "providerSetupStatus and provider health checks are included in the snapshot.",
+        },
+        {
+            "checkId": "runtime_compatibility",
+            "label": "Runtime compatibility",
+            "status": (
+                "ready" if {"openclaw", "hermes"}.issubset(runtime_ids) else "review"
+            ),
+            "summary": "OpenClaw and Hermes runtime presence is checked before widening provider routing.",
+            "safeAction": (
+                "Runtime lanes detected for OpenClaw and Hermes."
+                if {"openclaw", "hermes"}.issubset(runtime_ids)
+                else "Repair missing OpenClaw/Hermes lanes before assigning long-running provider routes."
+            ),
+            "proof": "Runtime install statuses and fused runtime route observations feed this checklist.",
+        },
+        {
+            "checkId": "route_smoke",
+            "label": "Route smoke verification",
+            "status": "ready" if route_ready else "review",
+            "summary": "A route should pass a cheap health check before becoming the default path.",
+            "safeAction": (
+                "Use the existing provider health check before assigning live work."
+                if route_ready
+                else "Connect at least one supported provider, then run a provider health check."
+            ),
+            "proof": "healthCheck.status, safeNextStep, and observed route counts are shown per provider.",
+        },
+        {
+            "checkId": "user_model_preservation",
+            "label": "User model preservation",
+            "status": "ready",
+            "summary": "Catalog refreshes cannot overwrite user-defined model IDs or route defaults.",
+            "safeAction": "Promote catalog changes through a PR and require approval before default route changes.",
+            "proof": "requiresApprovalForDefaultChanges=true; neverOverwriteUserModels=true.",
+        },
+    ]
+    readiness_ready = [
+        item for item in readiness_checklist if item["status"] == "ready"
+    ]
+    readiness_review = [
+        item for item in readiness_checklist if item["status"] != "ready"
+    ]
     return {
         "schemaVersion": "provider-ecosystem.v1",
         "lastVerifiedAt": "2026-06-21",
@@ -605,6 +676,8 @@ def _build_provider_ecosystem_snapshot(
             "implementedOrCredentialReady": len(implemented),
             "routeReadyCount": len(route_ready),
             "missingAuthCount": len(missing_auth),
+            "updateReadinessReadyCount": len(readiness_ready),
+            "updateReadinessReviewCount": len(readiness_review),
         },
         "providers": rows,
         "sources": PROVIDER_ECOSYSTEM_SOURCES,
@@ -630,6 +703,13 @@ def _build_provider_ecosystem_snapshot(
                 "OpenCode Models.dev-backed provider catalog",
                 "LiteLLM provider registry",
             ],
+            "readinessChecklist": readiness_checklist,
+            "readinessSummary": {
+                "readyCount": len(readiness_ready),
+                "reviewCount": len(readiness_review),
+                "totalCount": len(readiness_checklist),
+                "safeToRefresh": len(readiness_review) == 0,
+            },
         },
         "nextActions": next_actions,
     }

@@ -1,0 +1,186 @@
+{
+  "schemaVersion": "provider-catalog-refresh/v1",
+  "runId": "update-readiness-checklist-proof",
+  "createdAt": "2026-06-21T02:19:26.991707+00:00",
+  "mode": "review_artifact_only",
+  "liveFetch": {
+    "aiGateway": false
+  },
+  "trackedProviders": [
+    {
+      "providerId": "openai",
+      "label": "OpenAI / Codex",
+      "supportStatus": "repo_supported",
+      "routeRole": "primary_model_route",
+      "authPath": "OpenAI API key or OpenAI Codex OAuth",
+      "updateSource": "official_docs_and_runtime_status",
+      "supports": [
+        "chat",
+        "coding",
+        "image-route-check"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "minimax",
+      "label": "MiniMax",
+      "supportStatus": "repo_supported",
+      "routeRole": "bounded_model_route",
+      "authPath": "MiniMax API key or OpenClaw OAuth",
+      "updateSource": "OpenClaw provider directory",
+      "supports": [
+        "chat",
+        "coding",
+        "hermes-route"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "anthropic",
+      "label": "Anthropic",
+      "supportStatus": "credential_ready",
+      "routeRole": "external_model_route",
+      "authPath": "Anthropic API key",
+      "updateSource": "AI SDK provider registry",
+      "supports": [
+        "chat",
+        "coding",
+        "verification"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "openrouter",
+      "label": "OpenRouter",
+      "supportStatus": "credential_ready",
+      "routeRole": "gateway_model_route",
+      "authPath": "OpenRouter API key",
+      "updateSource": "OpenCode/OpenRouter integration",
+      "supports": [
+        "multi-provider",
+        "fallback",
+        "benchmarking"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "google",
+      "label": "Google Gemini / Vertex",
+      "supportStatus": "planned_adapter",
+      "routeRole": "future_model_route",
+      "authPath": "Google AI Studio or Vertex credentials",
+      "updateSource": "AI SDK provider registry",
+      "supports": [
+        "chat",
+        "vision",
+        "long-context"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "local",
+      "label": "Local models",
+      "supportStatus": "planned_adapter",
+      "routeRole": "local_model_route",
+      "authPath": "Ollama, LM Studio, LiteLLM, vLLM, or OMLX endpoint",
+      "updateSource": "Crush local-provider discovery",
+      "supports": [
+        "private-chat",
+        "cheap-probes",
+        "offline-runs"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "label": "Vercel AI Gateway",
+      "supportStatus": "planned_gateway",
+      "routeRole": "provider_catalog_source",
+      "authPath": "AI Gateway key",
+      "updateSource": "AI Gateway /v1/models endpoint",
+      "supports": [
+        "model-catalog",
+        "pricing",
+        "capability-metadata"
+      ],
+      "defaultChangeAllowed": false
+    },
+    {
+      "providerId": "litellm",
+      "label": "LiteLLM",
+      "supportStatus": "planned_gateway",
+      "routeRole": "adapter_gateway",
+      "authPath": "LiteLLM proxy or provider-specific keys",
+      "updateSource": "LiteLLM provider docs",
+      "supports": [
+        "many-providers",
+        "speech",
+        "image",
+        "fallback"
+      ],
+      "defaultChangeAllowed": false
+    }
+  ],
+  "sourceSnapshots": [
+    {
+      "sourceId": "opencode_models",
+      "label": "OpenCode models",
+      "url": "https://opencode.ai/docs/models/",
+      "verifiedAt": "2026-06-21",
+      "signal": "OpenCode uses AI SDK plus Models.dev for broad provider/model discovery.",
+      "status": "metadata_only"
+    },
+    {
+      "sourceId": "crush_local_models",
+      "label": "Crush local providers",
+      "url": "https://github.com/charmbracelet/crush",
+      "verifiedAt": "2026-06-21",
+      "signal": "Crush auto-discovers Ollama, LM Studio, LiteLLM, and OMLX providers.",
+      "status": "metadata_only"
+    },
+    {
+      "sourceId": "openclaw_model_providers",
+      "label": "OpenClaw model providers",
+      "url": "https://docs.openclaw.ai/concepts/model-providers",
+      "verifiedAt": "2026-06-21",
+      "signal": "OpenClaw exposes a provider directory and exact-origin network trust rules.",
+      "status": "metadata_only"
+    },
+    {
+      "sourceId": "vercel_ai_gateway_models",
+      "label": "Vercel AI Gateway models endpoint",
+      "url": "https://ai-gateway.vercel.sh/v1/models",
+      "verifiedAt": "2026-06-21",
+      "signal": "Gateway model metadata can include IDs, pricing, context windows, and capabilities.",
+      "status": "metadata_only"
+    },
+    {
+      "sourceId": "litellm_providers",
+      "label": "LiteLLM providers",
+      "url": "https://docs.litellm.ai/docs/providers",
+      "verifiedAt": "2026-06-21",
+      "signal": "LiteLLM is a broad adapter/gateway source for remote, local, speech, and image providers.",
+      "status": "metadata_only"
+    }
+  ],
+  "dynamicSourceSnapshots": [
+    {
+      "sourceId": "vercel_ai_gateway_models",
+      "url": "https://ai-gateway.vercel.sh/v1/models",
+      "status": "not_fetched",
+      "reason": "Live fetch disabled. Run with --fetch-ai-gateway to collect a review artifact."
+    }
+  ],
+  "approvalPolicy": {
+    "requiresApprovalForDefaultChanges": true,
+    "neverOverwriteUserModels": true,
+    "writesDefaults": false,
+    "writesCredentials": false,
+    "writesProviderRegistry": false
+  },
+  "reviewActions": [
+    "Inspect provider counts, capability samples, auth paths, and source freshness.",
+    "Promote changes through a separate PR; do not mutate defaults from this report.",
+    "Keep local/user-defined model IDs unless a reviewer explicitly approves replacements."
+  ]
+}

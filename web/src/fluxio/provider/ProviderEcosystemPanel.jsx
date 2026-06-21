@@ -20,6 +20,41 @@ export function ProviderEcosystemPanel({
   summary = {},
   updatePolicy = {},
 }) {
+  const providedReadinessChecklist = asList(updatePolicy.readinessChecklist);
+  const readinessSummary = asRecord(updatePolicy.readinessSummary);
+  const readinessChecklist =
+    providedReadinessChecklist.length > 0
+      ? providedReadinessChecklist
+      : [
+          {
+            checkId: "catalog_refresh_review",
+            label: "Catalog refresh review",
+            status: "ready",
+            summary: "Create a review-only catalog artifact before model default changes.",
+            safeAction: "Run scripts/provider_catalog_refresh.py and review the artifact.",
+            proof: "No default route or credential writes.",
+          },
+          {
+            checkId: "route_smoke",
+            label: "Route smoke verification",
+            status: Number(summary.routeReadyCount || 0) > 0 ? "ready" : "review",
+            summary: "Routes pass a cheap health check before default use.",
+            safeAction: "Run provider health before live work.",
+            proof: "Provider health status and route observations.",
+          },
+          {
+            checkId: "user_model_preservation",
+            label: "User model preservation",
+            status: "ready",
+            summary: "Catalog refreshes cannot overwrite user model IDs.",
+            safeAction: "Require approval before route default changes.",
+            proof: "neverOverwriteUserModels policy.",
+          },
+        ];
+  const readyCount =
+    Number(readinessSummary.readyCount || 0) ||
+    readinessChecklist.filter(item => item.status === "ready").length;
+  const totalCount = Number(readinessSummary.totalCount || 0) || readinessChecklist.length;
   return (
     <section className="provider-ecosystem-panel" aria-label="Provider ecosystem and model catalog status">
       <div className="section-header">
@@ -48,6 +83,35 @@ export function ProviderEcosystemPanel({
           <p>{providerEcosystem.lastVerifiedAt ? `Verified ${providerEcosystem.lastVerifiedAt}` : "Waiting for live snapshot."}</p>
         </article>
       </div>
+      {readinessChecklist.length > 0 ? (
+        <div className="provider-update-readiness" aria-label="Provider update readiness checklist">
+          <div className="section-header compact">
+            <div className="section-title-block">
+              <p className="eyebrow">Update readiness</p>
+              <h4>Safe refresh checklist</h4>
+            </div>
+            <StatusPill tone={Number(readinessSummary.reviewCount || 0) > 0 ? "warn" : "good"}>
+              {readyCount}/{totalCount} ready
+            </StatusPill>
+          </div>
+          <div className="provider-update-readiness-list">
+            {readinessChecklist.map(item => (
+              <article
+                className={`provider-update-readiness-row ${toneClass(item.status === "ready" ? "good" : "warn")}`}
+                key={`provider-update-readiness-${item.checkId || item.label}`}
+              >
+                <div>
+                  <span>{titleizeToken(item.status || "review")}</span>
+                  <strong>{item.label || "Readiness check"}</strong>
+                  <p>{item.summary}</p>
+                </div>
+                <p>{item.safeAction}</p>
+                <small>{item.proof}</small>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="drawer-list compact provider-ecosystem-list">
         {providers.length > 0 ? (
           providers.map(item => {
