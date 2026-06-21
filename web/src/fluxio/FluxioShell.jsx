@@ -49,6 +49,7 @@ const RedTeamProofBoard = lazy(() =>
   })),
 );
 const VisualProofReceiptGallery = lazy(() => import("./proof/VisualProofReceiptGallery.jsx"));
+const SubagentReadinessPanel = lazy(() => import("./subagents/SubagentReadinessPanel.jsx"));
 const VoiceCommandPanel = lazy(() =>
   import("./voice/index.js").then(module => ({
     default: module.VoiceCommandPanel,
@@ -12244,7 +12245,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             <div className="builder-live-review-panel-head compact">
               <div>
                 <h3>{subagentOrchestrationStudio.headline || "Subagent command center"}</h3>
-                <p>{subagentOrchestrationStudio.summary || "Delegated lanes will appear here when the mission splits work."}</p>
+                <p>{subagentOrchestrationStudio.summary || "Delegated lanes appear here."}</p>
               </div>
               <span className="mini-pill muted">
                 {titleizeToken(subagentOrchestrationStudio.mergePolicy || "best_score")}
@@ -12264,6 +12265,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <strong>{subagentOrchestrationStudio.blockedCount || 0}</strong>
               </article>
             </div>
+            <Suspense fallback={null}>
+              <SubagentReadinessPanel
+                studio={subagentOrchestrationStudio}
+              />
+            </Suspense>
             <div className="subagent-lane-list">
               {subagentLanes.length > 0 ? (
                 subagentLanes.map(item => (
@@ -12300,7 +12306,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ))
               ) : (
                 <article className="subagent-lane-empty">
-                  <strong>No delegated lane active</strong>
+                  <strong>No lane active</strong>
                   <p>{subagentOrchestrationStudio.recommendedAction}</p>
                 </article>
               )}

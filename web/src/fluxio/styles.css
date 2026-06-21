@@ -7491,13 +7491,16 @@ button.builder-review-target:hover {
 }
 
 .subagent-lane-list,
+.subagent-handoff-grid,
 .subagent-scoreboard {
   display: grid;
   gap: 8px;
 }
 
+.subagent-readiness-panel,
 .subagent-lane-card,
 .subagent-lane-empty,
+.subagent-handoff-grid article,
 .subagent-scoreboard article {
   display: grid;
   gap: 8px;
@@ -7507,6 +7510,17 @@ button.builder-review-target:hover {
   background: rgba(255, 255, 255, 0.032);
   padding: 10px;
 }
+
+.subagent-readiness-panel { border-color: rgba(153, 235, 185, 0.18); }
+.subagent-readiness-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.subagent-readiness-head span,
+.subagent-handoff-grid span { color: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.subagent-readiness-panel p,
+.subagent-readiness-panel small { margin: 0; overflow-wrap: anywhere; }
+.subagent-readiness-panel small,
+.subagent-handoff-grid small { color: var(--muted); }
+.subagent-handoff-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.subagent-merge-checklist { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .subagent-lane-card > div:first-child {
   display: flex;

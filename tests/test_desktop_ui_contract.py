@@ -291,6 +291,7 @@ class DesktopUiContractTests(unittest.TestCase):
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
         model = MISSION_MODEL.read_text(encoding="utf-8")
+        readiness = (ROOT / "web" / "src" / "fluxio" / "subagents" / "SubagentReadinessPanel.jsx").read_text(encoding="utf-8")
 
         for fragment in [
             "deriveSubagentOrchestrationStudio",
@@ -309,6 +310,7 @@ class DesktopUiContractTests(unittest.TestCase):
             "subagent-command-panel",
             "subagent-command-strip",
             "subagent-board-stack",
+            "SubagentReadinessPanel",
             "Inspect runtime",
             "Resolve lane blocks",
             "Verify merge proof",
@@ -316,7 +318,21 @@ class DesktopUiContractTests(unittest.TestCase):
             "subagent-supervisor-note",
         ]:
             self.assertIn(fragment, shell)
+        for fragment in [
+            "Subagent spawn readiness",
+            "Spawn readiness",
+            "Handoff packet",
+            "Suggested roles",
+            "Subagent merge checklist",
+            "Ready to spawn another lane",
+            "Handoff context bounded",
+            "Preserve user work during merge",
+        ]:
+            self.assertIn(fragment, readiness)
         self.assertIn(".subagent-lane-card", styles)
+        self.assertIn(".subagent-readiness-panel", styles)
+        self.assertIn(".subagent-handoff-grid", styles)
+        self.assertIn(".subagent-merge-checklist", styles)
         self.assertIn(".subagent-supervisor-note", styles)
         self.assertIn(".subagent-command-strip", styles)
         self.assertIn(".subagent-board-card", styles)

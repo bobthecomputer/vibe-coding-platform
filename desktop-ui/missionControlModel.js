@@ -2819,14 +2819,14 @@ function deriveSubagentOrchestrationStudio({ mission, workspace }) {
         session?.proof_path ||
         latestEvent?.event_id ||
         session?.execution_target_detail ||
-        "Proof expected from delegated lane.",
+        "Proof expected.",
       nextAction: pendingApproval
-        ? "Open queue and resolve the delegated approval boundary."
+        ? "Resolve delegated approval."
         : ["running", "launching", "queued"].includes(String(status).toLowerCase())
-          ? "Keep monitoring heartbeat, latest event, and proof output."
+          ? "Monitor heartbeat and proof."
           : ["completed", "stopped"].includes(String(status).toLowerCase())
-            ? "Review proof and merge or archive the lane result."
-            : "Inspect runtime events before assigning more work.",
+            ? "Review proof before merge."
+            : "Inspect runtime events.",
       blockReason: laneIntervention?.reason || "",
       supervisorAction: laneIntervention?.nextAction || "",
     };
@@ -2857,8 +2857,8 @@ function deriveSubagentOrchestrationStudio({ mission, workspace }) {
       blockedCount > 0
         ? "Resolve blocked delegated lanes before spawning more workers."
         : activeCount > 0
-          ? "Let active lanes finish, then verify proof before merge."
-          : "Use subagents when the next task can be split into disjoint files or read-only research.",
+          ? "Let lanes finish, then verify proof."
+          : "Use subagents for split file work or research.",
   };
 }
 

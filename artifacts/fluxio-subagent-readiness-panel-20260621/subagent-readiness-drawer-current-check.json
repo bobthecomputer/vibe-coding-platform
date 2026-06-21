@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-21T03:05:31.658264+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder&drawer=builder",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-subagent-readiness-panel-20260621\\subagent-readiness-drawer-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-subagent-readiness-panel-20260621\\subagent-readiness-drawer-current.html",
+  "expectedFragments": [
+    "Subagent command center",
+    "Spawn readiness",
+    "Handoff packet",
+    "Subagent merge checklist",
+    "Wait for active lanes"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 4300,
+    "sampleCount": 8280,
+    "uniqueSampleColors": 724,
+    "averageLuma": 36.12,
+    "nonBlank": true
+  },
+  "passed": true
+}
