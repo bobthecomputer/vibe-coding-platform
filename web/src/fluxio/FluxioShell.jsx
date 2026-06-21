@@ -1627,6 +1627,20 @@ function cx(...values) {
   return values.filter(Boolean).join(" ");
 }
 
+function providerLabel(provider) {
+  const normalized = String(provider || "").toLowerCase();
+  if (normalized === "openai") {
+    return "OpenAI";
+  }
+  if (normalized === "opencode") {
+    return "OpenCodeGo";
+  }
+  if (normalized === "minimax") {
+    return "MiniMax";
+  }
+  return titleizeToken(provider || "Provider");
+}
+
 function timestampLabel(value) {
   if (!value) {
     return "";
@@ -15575,6 +15589,31 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           <p>{item.reason}</p>
                         </button>
                       ))}
+                    </div>
+                    <div className="route-decision-grid" aria-label="Local route decision scorecards">
+                      {asList(snapshot.harnessLab?.routeDecisionRows).slice(0, 3).map(item => {
+                        const decisionTone =
+                          item.decision === "use"
+                            ? "good"
+                            : item.decision === "avoid_for_now"
+                              ? "bad"
+                              : item.decision === "watch"
+                                ? "warn"
+                                : "neutral";
+                        return (
+                          <article className={`route-decision-card ${toneClass(decisionTone)}`} key={item.id}>
+                            <span>{titleizeToken(item.label || item.decision || "Route decision")}</span>
+                            <strong>{runtimeLabel(item.runtimeId)} / {providerLabel(item.provider)} / {item.model}</strong>
+                            <p>{item.recommendation}</p>
+                            <small>
+                              {item.observedRuns || 0} run{(item.observedRuns || 0) === 1 ? "" : "s"} · {item.completionRate || 0}% complete · {item.routeContractProofCount || 0} route proof
+                            </small>
+                            {asList(item.proofGaps).length > 0 ? (
+                              <em>{asList(item.proofGaps).slice(0, 2).join(" · ")}</em>
+                            ) : null}
+                          </article>
+                        );
+                      })}
                     </div>
                   </article>
 

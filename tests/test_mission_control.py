@@ -1513,6 +1513,20 @@ class MissionControlTests(unittest.TestCase):
             }
             self.assertNotIn("opencode", provider_routes)
             self.assertGreaterEqual(provider_routes["openai"]["observedCount"], 1)
+            route_decisions = snapshot["routeDecisionRows"]
+            self.assertTrue(route_decisions)
+            self.assertTrue(
+                any(item["provider"] == "openai" for item in route_decisions)
+            )
+            self.assertTrue(
+                any(item["runtimeId"] == "hermes" for item in route_decisions)
+            )
+            self.assertTrue(
+                any(item["model"] == "gpt-5.4-mini" for item in route_decisions)
+            )
+            self.assertTrue(
+                all("decision" in item and "recommendation" in item for item in route_decisions)
+            )
             self.assertIn("Approval waits dominate", snapshot["recommendation"])
 
     def test_release_readiness_snapshot_scores_required_gates(self) -> None:

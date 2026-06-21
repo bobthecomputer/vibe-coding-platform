@@ -70,3 +70,16 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "modelProviderRoutes" in source
     assert "supervisor_not_runtime_adapter" in fixtures
     assert "provider_model_route" in fixtures
+
+
+def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
+    source = SHELL.read_text(encoding="utf-8")
+    styles = STYLES.read_text(encoding="utf-8")
+    fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
+
+    assert "routeDecisionRows" in source
+    assert "Local route decision scorecards" in source
+    assert "route-decision-card" in source
+    assert ".route-decision-card" in styles
+    assert "Use for similar work" in fixtures
+    assert "Needs local evidence" in fixtures

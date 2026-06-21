@@ -5755,6 +5755,182 @@ def _observed_route_provider_counts(root: Path, recent_runs: list[dict]) -> dict
     return counts
 
 
+def _route_model_from_payload(payload: dict) -> str:
+    effective_contract = payload.get("effective_route_contract", {})
+    if isinstance(effective_contract, dict):
+        roles = effective_contract.get("roles", [])
+        if isinstance(roles, list):
+            for item in roles:
+                if isinstance(item, dict) and str(item.get("model", "")).strip():
+                    return str(item.get("model", "")).strip()
+    route_configs = payload.get("route_configs", [])
+    if isinstance(route_configs, list):
+        for item in route_configs:
+            if isinstance(item, dict) and str(item.get("model", "")).strip():
+                return str(item.get("model", "")).strip()
+    delegated_sessions = payload.get("delegated_runtime_sessions", [])
+    if isinstance(delegated_sessions, list):
+        for item in delegated_sessions:
+            if isinstance(item, dict) and str(item.get("target_model", "")).strip():
+                return str(item.get("target_model", "")).strip()
+    return ""
+
+
+def _route_role_from_payload(payload: dict) -> str:
+    effective_contract = payload.get("effective_route_contract", {})
+    if isinstance(effective_contract, dict):
+        roles = effective_contract.get("roles", [])
+        if isinstance(roles, list):
+            for item in roles:
+                if isinstance(item, dict) and str(item.get("role", "")).strip():
+                    return str(item.get("role", "")).strip()
+    route_configs = payload.get("route_configs", [])
+    if isinstance(route_configs, list):
+        for item in route_configs:
+            if isinstance(item, dict) and str(item.get("role", "")).strip():
+                return str(item.get("role", "")).strip()
+    delegated_sessions = payload.get("delegated_runtime_sessions", [])
+    if isinstance(delegated_sessions, list):
+        for item in delegated_sessions:
+            if isinstance(item, dict) and str(item.get("target_phase", "")).strip():
+                return str(item.get("target_phase", "")).strip()
+    return "mission"
+
+
+def _route_decision_recommendation(row: dict) -> tuple[str, str, str]:
+    observed = int(row.get("observedRuns", 0) or 0)
+    completed = int(row.get("completedRuns", 0) or 0)
+    blocked = int(row.get("blockedRuns", 0) or 0)
+    verification_failures = int(row.get("verificationFailures", 0) or 0)
+    delegated_lanes = int(row.get("delegatedLaneCount", 0) or 0)
+    route_contracts = int(row.get("routeContractProofCount", 0) or 0)
+    if observed == 0 and delegated_lanes == 0:
+        return (
+            "needs_evidence",
+            "Needs local evidence",
+            "Run this route once before treating it as a recommended choice.",
+        )
+    if verification_failures > completed or blocked > completed + delegated_lanes:
+        return (
+            "avoid_for_now",
+            "Avoid until cleared",
+            "Recent local evidence is dominated by verification, approval, or blocked-state friction.",
+        )
+    if completed > 0 and route_contracts > 0:
+        return (
+            "use",
+            "Use for similar work",
+            "Local runs completed and proved provider/model route-contract resolution.",
+        )
+    if delegated_lanes > 0:
+        return (
+            "watch",
+            "Watch live lane",
+            "A delegated runtime lane is active; wait for proof before promoting this route.",
+        )
+    return (
+        "needs_evidence",
+        "Needs more proof",
+        "The route has local traces, but not enough completion and route-contract proof yet.",
+    )
+
+
+def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict]:
+    rows: dict[str, dict] = {}
+
+    def ensure_row(runtime_id: str, provider: str, model: str, role: str) -> dict:
+        clean_runtime = runtime_id or "runtime"
+        clean_provider = provider or "unresolved"
+        clean_model = model or "profile default"
+        clean_role = role or "mission"
+        key = f"{clean_runtime}::{clean_provider}::{clean_model}::{clean_role}"
+        return rows.setdefault(
+            key,
+            {
+                "id": key,
+                "runtimeId": clean_runtime,
+                "provider": clean_provider,
+                "model": clean_model,
+                "role": clean_role,
+                "observedRuns": 0,
+                "completedRuns": 0,
+                "blockedRuns": 0,
+                "delegatedLaneCount": 0,
+                "routeContractProofCount": 0,
+                "verificationFailures": 0,
+                "proofGaps": [],
+            },
+        )
+
+    for run in recent_runs:
+        row = ensure_row(
+            str(run.get("runtimeId", "") or "").strip(),
+            str(run.get("routeProvider", "") or "").strip().lower(),
+            str(run.get("routeModel", "") or "").strip(),
+            str(run.get("routeRole", "") or "").strip(),
+        )
+        row["observedRuns"] += 1
+        if str(run.get("autopilotStatus", "")) == "completed":
+            row["completedRuns"] += 1
+        if str(run.get("pauseReason", "")) in {
+            "approval_required",
+            "verification_failed",
+            "delegated_runtime_running",
+            "runtime_budget",
+        } or str(run.get("autopilotStatus", "")) in {"failed", "blocked"}:
+            row["blockedRuns"] += 1
+        row["delegatedLaneCount"] += int(run.get("delegatedSessionCount", 0) or 0)
+        row["routeContractProofCount"] += 1 if run.get("routeContractResolved") else 0
+        row["verificationFailures"] += int(run.get("verificationFailures", 0) or 0)
+
+    runtime_root = root / ".agent_control" / "runtime_sessions"
+    if runtime_root.exists():
+        for path in runtime_root.glob("delegate_*.json"):
+            payload = _load_json_file(path)
+            if not isinstance(payload, dict):
+                continue
+            row = ensure_row(
+                str(payload.get("runtime_id", "") or "").strip(),
+                str(payload.get("target_provider", "") or "").strip().lower(),
+                str(payload.get("target_model", "") or "").strip(),
+                str(payload.get("target_phase", "") or "").strip(),
+            )
+            row["delegatedLaneCount"] += 1
+            if str(payload.get("status", "")).lower() in {"waiting_for_approval", "blocked", "failed"}:
+                row["blockedRuns"] += 1
+            if not str(payload.get("target_provider", "") or "").strip():
+                row["proofGaps"].append("Provider route missing from delegated session.")
+            if not str(payload.get("target_model", "") or "").strip():
+                row["proofGaps"].append("Model route missing from delegated session.")
+
+    decision_rows = []
+    for row in rows.values():
+        if int(row["routeContractProofCount"]) == 0:
+            row["proofGaps"].append("No route-contract proof recorded.")
+        if int(row["completedRuns"]) == 0:
+            row["proofGaps"].append("No completed local run recorded.")
+        decision, label, recommendation = _route_decision_recommendation(row)
+        row["decision"] = decision
+        row["label"] = label
+        row["recommendation"] = recommendation
+        row["completionRate"] = _percent(int(row["completedRuns"]), int(row["observedRuns"]))
+        row["proofGaps"] = sorted(set(row["proofGaps"]))[:3]
+        decision_rows.append(row)
+
+    return sorted(
+        decision_rows,
+        key=lambda item: (
+            {"use": 0, "watch": 1, "needs_evidence": 2, "avoid_for_now": 3}.get(
+                item["decision"],
+                4,
+            ),
+            -int(item["observedRuns"]),
+            -int(item["delegatedLaneCount"]),
+            item["runtimeId"],
+        ),
+    )[:6]
+
+
 def _fused_runtime_status(
     *,
     root: Path,
@@ -5946,6 +6122,8 @@ def build_harness_lab_snapshot(root: Path) -> dict:
                 approval_rejected_run_count += 1
         has_route_contract = _route_contract_present(payload)
         route_provider = _route_provider_from_payload(payload)
+        route_model = _route_model_from_payload(payload)
+        route_role = _route_role_from_payload(payload)
         if has_route_contract:
             route_contract_run_count += 1
         if pause_reason == "runtime_budget":
@@ -5969,6 +6147,8 @@ def build_harness_lab_snapshot(root: Path) -> dict:
                 "delegatedSessionCount": delegated_session_count,
                 "routeContractResolved": has_route_contract,
                 "routeProvider": route_provider,
+                "routeModel": route_model,
+                "routeRole": route_role,
                 "resumedFromSessionId": parent_session_id,
                 "actionCount": action_count,
             }
@@ -6001,10 +6181,12 @@ def build_harness_lab_snapshot(root: Path) -> dict:
         delegated_run_count=delegated_run_count,
         session_health=session_health,
     )
+    route_decision_rows = _build_route_decision_rows(root, recent_runs)
     return {
         "productionHarness": "fluxio_hybrid",
         "shadowCandidates": ["legacy_autonomous_engine"],
         "fusedRuntime": fused_runtime,
+        "routeDecisionRows": route_decision_rows,
         "recentRuns": recent_runs,
         "harnessCounts": harness_counts,
         "statusCounts": status_counts,

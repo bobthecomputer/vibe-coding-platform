@@ -985,6 +985,45 @@ button.builder-sidebar-nexus:hover {
   gap: 6px;
 }
 
+.route-decision-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.route-decision-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(244, 240, 232, 0.04), transparent 62%),
+    rgba(255, 255, 255, 0.03);
+  padding: 10px;
+}
+
+.route-decision-card span,
+.route-decision-card small,
+.route-decision-card em {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.route-decision-card span {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.route-decision-card p,
+.route-decision-card small,
+.route-decision-card em {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.route-decision-card em {
+  font-style: normal;
+}
+
 .builder-metric-card {
   display: grid;
   gap: 4px;
