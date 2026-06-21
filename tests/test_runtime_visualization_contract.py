@@ -148,11 +148,14 @@ def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:
     assert "buildRedTeamProofBoard" in component
     assert "Controlled red-team proof" in component
     assert "redteam-proof-card" in component
+    assert "Boundary score" in component
+    assert "redteam-boundary-score" in component
     assert "redteam-coverage-matrix" in component
     assert "redteam-probe-transcripts" in component
     assert "safe probe transcripts" in component
-    assert "safe coverage checks passed" in component
+    assert "safe checks" in component
     assert ".redteam-proof-card" in styles
+    assert ".redteam-boundary-score" in styles
     assert ".redteam-coverage-row" in styles
     assert ".redteam-probe-row" in styles
     assert "RED_TEAM_PROOF_PACKETS" in fixtures

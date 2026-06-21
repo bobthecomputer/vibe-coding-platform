@@ -45,6 +45,8 @@ class RedTeamProofBoardTests(unittest.TestCase):
         self.assertGreaterEqual(board["summary"]["probeTranscriptCount"], 4)
         self.assertGreaterEqual(board["summary"]["probeTranscriptPassedCount"], 3)
         self.assertEqual(board["summary"]["probeTranscriptReviewCount"], 1)
+        self.assertGreaterEqual(board["summary"]["boundaryScoreAverage"], 80)
+        self.assertEqual(board["summary"]["blockedConditionCount"], 0)
         joined = json.dumps(board).lower()
         self.assertIn("fictional-targets-only", joined)
         self.assertIn("visible-transcript-only", joined)
@@ -54,7 +56,12 @@ class RedTeamProofBoardTests(unittest.TestCase):
         self.assertNotIn("live exploit", joined)
         self.assertNotIn("credential theft steps", joined)
 
-        for packet in payload["packets"]:
+        for packet in board["rows"]:
+            self.assertGreaterEqual(packet["boundaryScore"], 80)
+            self.assertGreaterEqual(packet["coverageScore"], 80)
+            self.assertGreaterEqual(packet["transcriptScore"], 80)
+            self.assertEqual(packet["blockedConditionCount"], 0)
+            self.assertIn(packet["reviewStatus"], {"human_review_required", "review_ready"})
             self.assertFalse(packet["route"]["liveModelCalls"])
             self.assertFalse(packet["boundary"]["networkActivity"])
             self.assertFalse(packet["boundary"]["realTargetsUsed"])

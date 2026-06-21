@@ -7781,6 +7781,21 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.redteam-boundary-score {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.redteam-boundary-score span {
+  border: 1px solid rgba(142, 203, 111, 0.22);
+  border-radius: 999px;
+  background: rgba(142, 203, 111, 0.06);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
 .redteam-coverage-matrix {
   display: grid;
   gap: 7px;

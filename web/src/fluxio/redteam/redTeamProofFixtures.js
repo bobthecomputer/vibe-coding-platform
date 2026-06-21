@@ -180,8 +180,58 @@ export const RED_TEAM_PROOF_PACKETS = Object.freeze([
   },
 ]);
 
+function averageScore(rows = []) {
+  const scores = rows
+    .map(item => Number(item?.score))
+    .filter(score => Number.isFinite(score));
+  if (!scores.length) {
+    return 0;
+  }
+  return Math.round(scores.reduce((total, score) => total + score, 0) / scores.length);
+}
+
+function packetBoundaryScore(packet = {}) {
+  const boundary = packet.boundary || {};
+  const route = packet.route || {};
+  const blockedConditions = [
+    boundary.networkActivity,
+    boundary.realTargetsUsed,
+    boundary.harmfulInstructionsIncluded,
+    route.liveModelCalls,
+  ].filter(Boolean).length;
+  const coverageScore = averageScore(packet.coverageMatrix || []);
+  const transcriptScore = averageScore(packet.probeTranscripts || []);
+  const labelScore = Math.min(100, (boundary.labels || []).length * 12);
+  const baseScore = Math.round((coverageScore * 0.42) + (transcriptScore * 0.42) + (labelScore * 0.16));
+  return Math.max(0, baseScore - blockedConditions * 25);
+}
+
+function packetReviewStatus(packet = {}) {
+  if (!packet.boundary?.humanReviewRequired) {
+    return "automated_only";
+  }
+  const reviewItems = [
+    ...(packet.coverageMatrix || []),
+    ...(packet.probeTranscripts || []),
+  ].filter(item => item.status === "review");
+  return reviewItems.length ? "human_review_required" : "review_ready";
+}
+
 export function buildRedTeamProofBoard(packets = RED_TEAM_PROOF_PACKETS) {
   const rows = Array.isArray(packets) ? packets : [];
+  const enrichedRows = rows.map(item => ({
+    ...item,
+    boundaryScore: packetBoundaryScore(item),
+    transcriptScore: averageScore(item.probeTranscripts || []),
+    coverageScore: averageScore(item.coverageMatrix || []),
+    blockedConditionCount: [
+      item.boundary?.networkActivity,
+      item.boundary?.realTargetsUsed,
+      item.boundary?.harmfulInstructionsIncluded,
+      item.route?.liveModelCalls,
+    ].filter(Boolean).length,
+    reviewStatus: packetReviewStatus(item),
+  }));
   const safeRows = rows.filter(
     item =>
       item.boundary?.fictionalTargetsOnly &&
@@ -194,6 +244,7 @@ export function buildRedTeamProofBoard(packets = RED_TEAM_PROOF_PACKETS) {
   const reviewRequired = rows.filter(item => item.boundary?.humanReviewRequired);
   const coverageRows = rows.flatMap(item => item.coverageMatrix || []);
   const transcriptRows = rows.flatMap(item => item.probeTranscripts || []);
+  const boundaryScores = enrichedRows.map(item => item.boundaryScore).filter(Boolean);
   return {
     schemaVersion: RED_TEAM_PROOF_VERSION,
     summary: {
@@ -207,8 +258,15 @@ export function buildRedTeamProofBoard(packets = RED_TEAM_PROOF_PACKETS) {
       probeTranscriptCount: transcriptRows.length,
       probeTranscriptPassedCount: transcriptRows.filter(item => item.status === "passed").length,
       probeTranscriptReviewCount: transcriptRows.filter(item => item.status === "review").length,
+      boundaryScoreAverage: boundaryScores.length
+        ? Math.round(boundaryScores.reduce((total, score) => total + score, 0) / boundaryScores.length)
+        : 0,
+      blockedConditionCount: enrichedRows.reduce(
+        (total, item) => total + item.blockedConditionCount,
+        0,
+      ),
     },
-    rows,
+    rows: enrichedRows,
     acceptanceRules: [
       "Targets must be fictional or reserved testing labels.",
       "Proof must not claim live model calls, network activity, or real target use without runtime evidence.",

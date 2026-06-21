@@ -24,7 +24,9 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
             <article className="builder-thread-item tone-neutral" key={`builder-redteam-proof-${item.id}`}>
               <span>{item.scenarioId}</span>
               <strong>{item.title}</strong>
-              <p>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount} safe coverage checks passed · {board.summary.probeTranscriptCount} probe transcripts</p>
+              <p>
+                Boundary {item.boundaryScore}/100 · {board.summary.coveragePassedCount}/{board.summary.coverageCheckCount} safe checks · {board.summary.probeTranscriptCount} transcripts
+              </p>
             </article>
           ))}
         </div>
@@ -57,6 +59,10 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
           <strong>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount}</strong>
         </article>
         <article className="context-item">
+          <span>Boundary score</span>
+          <strong>{board.summary.boundaryScoreAverage}/100</strong>
+        </article>
+        <article className="context-item">
           <span>Probe transcripts</span>
           <strong>{board.summary.probeTranscriptCount}</strong>
         </article>
@@ -70,6 +76,13 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
               Fictional targets only: {item.boundary.fictionalTargetsOnly ? "yes" : "no"} · Live model calls:{" "}
               {item.route.liveModelCalls ? "yes" : "no"} · Network activity: {item.boundary.networkActivity ? "yes" : "no"}
             </p>
+            <div className="redteam-boundary-score" aria-label={`${item.title} boundary score`}>
+              <span>Boundary score {item.boundaryScore}/100</span>
+              <span>Coverage {item.coverageScore}/100</span>
+              <span>Transcript {item.transcriptScore}/100</span>
+              <span>{titleize(item.reviewStatus)}</span>
+              <span>Blocked conditions {item.blockedConditionCount}</span>
+            </div>
             <div className="pill-row">
               {item.probeFamilies.slice(0, 4).map(family => (
                 <span className="mini-pill" key={`${item.id}-${family}`}>{titleize(family)}</span>
