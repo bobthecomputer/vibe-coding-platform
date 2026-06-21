@@ -305,6 +305,15 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn('label="Images"', shell)
         self.assertIn('label="Voice"', shell)
         self.assertIn(".voice-studio-grid", styles)
+        voice_panel = (ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx").read_text(encoding="utf-8")
+        voice_controller = (ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js").read_text(encoding="utf-8")
+        voice_css = (ROOT / "web" / "src" / "fluxio" / "voice" / "voice.css").read_text(encoding="utf-8")
+        self.assertIn("Pre-send gate", voice_panel)
+        self.assertIn("Mark reviewed", voice_panel)
+        self.assertIn("correctTranscriptSegment", voice_panel)
+        self.assertIn("replaceTranscriptSegment", voice_controller)
+        self.assertIn(".fluxio-voice-send-gate", voice_css)
+        self.assertIn(".fluxio-voice-correction-actions", voice_css)
 
     def test_builder_agent_modes_and_runtimes_remain_distinct(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")

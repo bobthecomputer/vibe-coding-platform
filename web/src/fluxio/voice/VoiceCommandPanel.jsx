@@ -25,6 +25,14 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
       ? `${Math.round(voice.transcript.averageConfidence * 100)}%`
       : "No final text";
   const segmentList = voice.transcript.segments || [];
+  const sendGateLabel =
+    voice.sendGuard?.status === "confirmation_required"
+      ? "Confirm before send"
+      : voice.sendGuard?.status === "review_required" || voice.sendGuard?.status === "blocked"
+        ? "Blocked until reviewed"
+        : voice.pendingCommand
+          ? "Waiting for confirmation"
+          : "Safe to review";
 
   return (
     <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
@@ -55,6 +63,10 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
           <span>Corrections</span>
           <strong>{voice.transcript.correctionCount || 0}</strong>
         </div>
+        <div className="fluxio-voice-quality-card">
+          <span>Pre-send gate</span>
+          <strong>{sendGateLabel}</strong>
+        </div>
       </div>
 
       <div className="fluxio-voice-transcript" aria-label="Current voice transcript">
@@ -80,6 +92,35 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
                 {segment.alternatives?.length ? (
                   <small>Alternatives: {segment.alternatives.map(item => item.text).join(", ")}</small>
                 ) : null}
+                <div className="fluxio-voice-correction-actions" aria-label={`Correction actions for ${segment.text}`}>
+                  {segment.alternatives?.slice(0, 3).map(alternative => (
+                    <button
+                      key={`${segment.id}-${alternative.text}`}
+                      onClick={() =>
+                        voice.correctTranscriptSegment?.(segment.id, {
+                          text: alternative.text,
+                          confidence: alternative.confidence ?? segment.confidence,
+                          reason: "selected speech alternative",
+                        })
+                      }
+                      type="button"
+                    >
+                      Use "{alternative.text}"
+                    </button>
+                  ))}
+                  <button
+                    onClick={() =>
+                      voice.correctTranscriptSegment?.(segment.id, {
+                        text: segment.text,
+                        confidence: Math.max(segment.confidence ?? 0.92, 0.92),
+                        reason: "operator reviewed text",
+                      })
+                    }
+                    type="button"
+                  >
+                    Mark reviewed
+                  </button>
+                </div>
               </li>
             ))}
           </ol>
@@ -147,6 +188,18 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
         >
           Clear
         </button>
+      </div>
+
+      <div className="fluxio-voice-send-gate" aria-label="Voice pre-send safety gate">
+        <strong>{sendGateLabel}</strong>
+        <p>{voice.sendGuard?.detail || "Dictate, review, then run the command when the gate is clear."}</p>
+        <span>
+          {voice.transcript.reviewRequired
+            ? "Correction flow is active."
+            : voice.transcript.combinedText
+              ? "Transcript is ready for command parsing."
+              : "No dictated text is ready yet."}
+        </span>
       </div>
 
       {voice.pendingCommand ? (

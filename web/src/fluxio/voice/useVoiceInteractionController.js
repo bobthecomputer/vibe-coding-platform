@@ -6,6 +6,7 @@ import {
   clearTranscriptBuffer,
   createVoiceTranscriptState,
   finalizeInterimTranscript,
+  replaceTranscriptSegment,
 } from "./voiceTranscriptBuffer.js";
 import {
   buildAccidentalSendGuard,
@@ -94,6 +95,25 @@ function reducer(state, action) {
           : "Final transcript is ready for command parsing.",
       },
       status: getVoiceStatusCopy({ ...state, transcript }),
+    };
+  }
+  if (action.type === "transcript.correct") {
+    const transcriptState = replaceTranscriptSegment(state.transcriptState, action.segmentId, action.patch);
+    const transcript = buildTranscriptSnapshot(transcriptState);
+    return {
+      ...state,
+      transcriptState,
+      transcript,
+      pendingCommand: null,
+      sendGuard: {
+        status: transcript.reviewRequired ? "review_required" : "idle",
+        reason: transcript.reviewRequired ? "transcript_quality" : "transcript_corrected",
+        label: transcript.reviewRequired ? "Review remaining text" : "Correction saved",
+        detail: transcript.reviewRequired
+          ? "One correction was saved, but other transcript quality warnings remain."
+          : "The transcript correction is saved and the command can be reviewed again.",
+      },
+      status: getVoiceStatusCopy({ ...state, transcript, pendingCommand: null }),
     };
   }
   if (action.type === "transcript.clear") {
@@ -220,6 +240,10 @@ export function useVoiceInteractionController({
     dispatch({ type: "transcript.finalize", patch });
   }, []);
 
+  const correctTranscriptSegment = useCallback((segmentId, patch = {}) => {
+    dispatch({ type: "transcript.correct", segmentId, patch });
+  }, []);
+
   const clearTranscript = useCallback((reason = "manual_clear") => {
     dispatch({ type: "transcript.clear", reason });
   }, []);
@@ -279,6 +303,7 @@ export function useVoiceInteractionController({
       startListening,
       stopListening,
       appendTranscript,
+      correctTranscriptSegment,
       finalizeTranscript,
       clearTranscript,
       runTranscriptCommand,
@@ -288,6 +313,7 @@ export function useVoiceInteractionController({
       appendTranscript,
       clearTranscript,
       confirmPendingCommand,
+      correctTranscriptSegment,
       finalizeTranscript,
       refreshSupport,
       runTranscriptCommand,
