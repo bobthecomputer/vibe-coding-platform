@@ -79,17 +79,20 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         styles = STYLES.read_text(encoding="utf-8")
 
         for fragment in [
+            "bridge.permission",
+            "set_connected_device_bridge_permission_command",
+            "plan_connected_device_bridge_operation_command",
+        ]:
+            self.assertIn(fragment, bridge)
+        for fragment in [
             "connectedDeviceBridge",
             "dualPathBridge",
             "performedByHost",
             "pendingApprovals",
             "syncStatus",
             "receipts",
-            "bridge.permission",
-            "set_connected_device_bridge_permission_command",
-            "plan_connected_device_bridge_operation_command",
         ]:
-            self.assertIn(fragment, bridge)
+            self.assertIn(fragment, shell)
         for fragment in [
             "Dual-path bridge",
             "builder-live-review-bridge",
@@ -131,38 +134,42 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         ]:
             self.assertIn(fragment, styles)
 
-    def test_fluxio_app_live_review_renders_coworking_bridge_and_skill_influence_panels(self) -> None:
-        app = FLUXIO_APP.read_text(encoding="utf-8")
-        bridge = (ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts").read_text(encoding="utf-8")
+    def test_current_shell_live_review_renders_coworking_bridge_and_skill_influence_panels(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        model = MODEL.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
 
         for fragment in [
-            "skillInfluence",
-            "coworkStatus",
-            "plannerBridgePacket",
-            "statusUpdates",
+            "plannerExecutorHandoffId",
+            "structuredFeedbackReceipt",
+            "latestStructuredFeedbackReceipt",
+            "live_review_structured_feedback",
+        ]:
+            self.assertIn(fragment, model)
+        for fragment in [
+            "plannerProof",
             "routeContext",
             "taskContext",
             "verifierFeedback",
         ]:
-            self.assertIn(fragment, bridge)
+            self.assertIn(fragment, shell)
         for fragment in [
             "Side-by-side preview",
             "Feedback bridge",
             "Evidence timeline",
             "Planner \u2192 executor bridge packet",
-            "Route/model/task context",
             "Verifier feedback",
             "Skill/ruleset impact",
-            "Design prompts + next idea",
-            "Status updates",
+            "Design prompts",
+            "Next idea handoff",
+            "status updates",
         ]:
-            self.assertIn(fragment, app)
+            self.assertIn(fragment, shell)
         for fragment in [
-            ".syntelos-review-cowork-grid",
-            ".syntelos-review-bridge-grid",
-            ".syntelos-review-skill-influence",
-            ".syntelos-review-status-updates",
+            ".builder-cowork-status-grid",
+            ".builder-live-bridge-grid",
+            ".builder-live-proof-impact-grid",
+            ".builder-live-review-panel",
             "touch-action: manipulation",
         ]:
             self.assertIn(fragment, styles)

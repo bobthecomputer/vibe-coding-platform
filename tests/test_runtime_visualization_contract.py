@@ -38,7 +38,7 @@ def test_workbench_runtime_panel_is_not_trapped_in_top_grid_row() -> None:
 
     assert ".builder-workbench-grid" in source
     assert ".agent-live-workbench-grid" in source
-    assert ".syntelos-review-workbench" in source
+    assert ".builder-live-review-panel" in source
 
 
 def test_workbench_state_exposes_runtime_update_and_auto_verify_counts() -> None:

@@ -52,6 +52,9 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("React.Suspense", fluxio_app)
         self.assertIn("control-shell-loading", fluxio_app)
         self.assertNotIn('import { FluxioShellApp } from "./FluxioShell.jsx"', fluxio_app)
+        self.assertNotIn("PublicProductPage", fluxio_app)
+        self.assertNotIn("grand-public-page", fluxio_app)
+        self.assertNotIn("buildLiveReviewWorkbench", fluxio_app)
 
     def test_bridge_exposes_fluxio_facade_commands(self) -> None:
         bridge = FLUXIO_BRIDGE.read_text(encoding="utf-8")
@@ -62,7 +65,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn('"approval.resolve"', bridge)
         self.assertIn("export function getTurnDiff", bridge)
         self.assertIn("export function getFullThreadDiff", bridge)
-        self.assertIn("export function replayEvents", bridge)
+        self.assertNotIn("export function replayEvents", bridge)
 
     def test_tauri_frontend_dist_points_at_web_build(self) -> None:
         tauri_conf = json.loads(TAURI_CONF.read_text(encoding="utf-8"))
@@ -97,6 +100,10 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn(".fluxos-", styles)
         self.assertNotIn(".reference-", styles)
         self.assertNotIn(".image-playground", styles)
+        self.assertNotIn(".grand-public", styles)
+        self.assertNotIn(".grand-console", styles)
+        self.assertNotIn(".syntelos-review", styles)
+        self.assertNotIn(".syntelos-app-preview", styles)
         self.assertIn('className="fluxio-shell"', shell)
         self.assertIn("data-mode={uiMode}", shell)
         self.assertIn("control-preview-refresh", shell)
