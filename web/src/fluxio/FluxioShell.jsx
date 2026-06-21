@@ -6659,9 +6659,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [selectedLiveReviewEvent?.id]);
 
   const handleStructuredLiveReviewFeedback = useCallback(
-    async ({ sendFollowUp = false } = {}) => {
+    async ({ sendFollowUp = false, proofOnly = false } = {}) => {
       const followUp = operatorDraft.trim();
-      if (!followUp) {
+      if (!followUp && !proofOnly) {
         pushToast("Write structured Live Review feedback first.", "warn");
         return;
       }
@@ -6690,6 +6690,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         target.id || "target",
       ].filter(Boolean).join(":");
       const payload = {
+        proofOnly,
         eventId,
         sourceEventId: eventId,
         source: "builder-live-review",
@@ -12145,12 +12146,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               <article>
                 <span>Frame</span>
                 <strong>{visualProofPacket.frameLabel}</strong>
-                <small>{visualProofPacket.framePath || "Frame path pending"}</small>
+                <small>{visualProofPacket.framePath || "Path pending"}</small>
               </article>
               <article>
                 <span>Target</span>
-                <strong>{visualProofPacket.proofTarget || "Proof target pending"}</strong>
-                <small>{visualProofPacket.threadTarget || "Thread target pending"}</small>
+                <strong>{visualProofPacket.proofTarget || "Target pending"}</strong>
+                <small>{visualProofPacket.threadTarget || "Thread pending"}</small>
               </article>
               <article>
                 <span>Receipt</span>
@@ -14691,7 +14692,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 data-proof-handle="plannerExecutorHandoffId"
                                 disabled={!latestStructuredFeedbackReceipt.plannerExecutorHandoffId}
                                 onClick={() => copyContextValue(latestStructuredFeedbackReceipt.plannerExecutorHandoffId)}
-                                title="Copy latest plannerExecutorHandoffId"
                                 type="button"
                               >
                                 plannerExecutorHandoffId: {latestStructuredFeedbackReceipt.plannerExecutorHandoffId || "none yet"}
@@ -14704,10 +14704,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                     `live_review_structured_feedback eventId=${latestStructuredFeedbackReceipt.eventId || ""} plannerExecutorHandoffId=${latestStructuredFeedbackReceipt.plannerExecutorHandoffId || ""}`,
                                   )
                                 }
-                                title="Copy receipt proof handle"
                                 type="button"
                               >
-                                Copy receipt proof handle
+                                Copy proof handle
                               </button>
                             </div>
                             <p className="builder-live-review-meta">
@@ -14721,9 +14720,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             </div>
                             <div className="builder-visual-proof-grid">
                               <article>
-                                <span>Screenshot frame</span>
+                                <span>Frame</span>
                                 <strong>{visualProofPacket.frameLabel}</strong>
-                                <small>{visualProofPacket.framePath || "Frame path pending"}</small>
+                                <small>{visualProofPacket.framePath || "Path pending"}</small>
                               </article>
                               <article>
                                 <span>Annotations</span>
@@ -14734,14 +14733,22 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               </article>
                               <article>
                                 <span>Targets</span>
-                                <strong>{visualProofPacket.proofTarget || "Proof target pending"}</strong>
-                                <small>{visualProofPacket.threadTarget || "Thread target pending"}</small>
+                                <strong>{visualProofPacket.proofTarget || "Target pending"}</strong>
+                                <small>{visualProofPacket.threadTarget || "Thread pending"}</small>
                               </article>
                             </div>
                             <p className="builder-live-review-meta">
                               Event: {visualProofPacket.eventLabel} · Handle: {visualProofPacket.receiptHandle || "none yet"}
                             </p>
                             <div className="builder-live-review-controls">
+                              <ActionButton
+                                disabled={!visualProofPacket.framePath || previewMode !== "live"}
+                                onClick={() => void handleStructuredLiveReviewFeedback({ proofOnly: true })}
+                                type="button"
+                                variant="primary"
+                              >
+                                Capture proof
+                              </ActionButton>
                               <ActionButton
                                 disabled={!visualProofPacket.framePath}
                                 onClick={() => copyContextValue(visualProofPacket.framePath)}
@@ -14772,7 +14779,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 type="button"
                                 variant="ghost"
                               >
-                                Open screenshot event
+                                Open event
                               </ActionButton>
                               {visualProofPacket.previewUrl && !visualProofPacket.previewUrl.startsWith("No ") ? (
                                 <ActionButton
@@ -14780,7 +14787,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                   type="button"
                                   variant="ghost"
                                 >
-                                  Open proof preview
+                                  Open preview
                                 </ActionButton>
                               ) : null}
                             </div>
@@ -15114,7 +15121,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                       }}
                                       role="button"
                                       tabIndex={item.structuredFeedbackReceipt.plannerExecutorHandoffId ? 0 : -1}
-                                      title="Copy latest plannerExecutorHandoffId"
                                     >
                                       plannerExecutorHandoffId: {item.structuredFeedbackReceipt.plannerExecutorHandoffId || "none yet"}
                                     </span>
@@ -15348,7 +15354,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             data-proof-handle="plannerExecutorHandoffId"
                             disabled={!latestStructuredFeedbackReceipt.plannerExecutorHandoffId}
                             onClick={() => copyContextValue(latestStructuredFeedbackReceipt.plannerExecutorHandoffId)}
-                            title="Copy latest plannerExecutorHandoffId"
                             type="button"
                           >
                             plannerExecutorHandoffId: {latestStructuredFeedbackReceipt.plannerExecutorHandoffId || "none yet"}

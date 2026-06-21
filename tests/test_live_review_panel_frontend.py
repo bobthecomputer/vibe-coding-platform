@@ -192,10 +192,9 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "Receipt kind: live_review_structured_feedback",
             "Timeline receipt kind: live_review_structured_feedback",
             "Proof eventId",
-            "Copy receipt proof handle",
+            "Copy proof handle",
             "builder-live-review-receipt-handles",
             "Copy latest receipt eventId",
-            "Copy latest plannerExecutorHandoffId",
             "data-proof-handle",
             "Structured feedback receipt history",
             "Copy receipt history eventId",
@@ -207,11 +206,11 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "plannerExecutorHandoffId",
             "Visual proof packet",
             "visualProofPacket",
-            "Screenshot frame",
+            "Frame",
             "Copy frame path",
             "Copy proof handle",
-            "Open screenshot event",
-            "Open proof preview",
+            "Open event",
+            "Open preview",
         ]:
             self.assertIn(fragment, shell)
         self.assertIn(".builder-live-review-receipt-handles", styles)

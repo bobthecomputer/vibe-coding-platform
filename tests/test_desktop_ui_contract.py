@@ -223,10 +223,15 @@ class DesktopUiContractTests(unittest.TestCase):
 
     def test_tauri_registers_live_review_structured_feedback_command(self) -> None:
         tauri = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
 
         self.assertIn("record_live_review_structured_feedback_command", tauri)
+        self.assertIn("live_review_visual_proof", tauri)
+        self.assertIn("proofOnly", tauri)
         self.assertIn("live_review_receipts", tauri)
         self.assertIn("merge_live_review_receipts", tauri)
+        self.assertIn("proofOnly", shell)
+        self.assertIn("Capture proof", shell)
 
     def test_skills_drawer_surfaces_stuck_state_recovery_contract(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")

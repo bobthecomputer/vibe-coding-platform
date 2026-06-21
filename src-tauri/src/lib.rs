@@ -6435,8 +6435,13 @@ async fn record_live_review_structured_feedback_command(
         .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| format!("live-review:{event_id}:{}", Uuid::new_v4()));
+    let proof_only = source_payload
+        .get("proofOnly")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut receipt = json!({
-        "receiptKind": "live_review_structured_feedback",
+        "receiptKind": if proof_only { "live_review_visual_proof" } else { "live_review_structured_feedback" },
+        "proofOnly": proof_only,
         "eventId": event_id.clone(),
         "sourceEventId": source_payload.get("sourceEventId").cloned().unwrap_or_else(|| Value::String(event_id.clone())),
         "plannerExecutorHandoffId": handoff.clone(),

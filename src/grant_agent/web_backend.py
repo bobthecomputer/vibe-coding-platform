@@ -2257,6 +2257,7 @@ class FluxioWebBackend:
         task_context = payload.get("taskContext") if isinstance(payload.get("taskContext"), dict) else {}
         route_context = payload.get("routeContext") if isinstance(payload.get("routeContext"), dict) else {}
         visual_proof = payload.get("visualProofPacket") if isinstance(payload.get("visualProofPacket"), dict) else {}
+        proof_only = bool(payload.get("proofOnly"))
         screenshots = [
             str(item).strip()
             for item in task_context.get("screenshots", [])
@@ -2287,7 +2288,8 @@ class FluxioWebBackend:
             }
         now = _utc_now()
         receipt = {
-            "receiptKind": "live_review_structured_feedback",
+            "receiptKind": "live_review_visual_proof" if proof_only else "live_review_structured_feedback",
+            "proofOnly": proof_only,
             "eventId": event_id,
             "sourceEventId": _safe_identifier(payload.get("sourceEventId") or event_id, "live_review"),
             "plannerExecutorHandoffId": handoff_id,

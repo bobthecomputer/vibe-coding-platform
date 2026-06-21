@@ -1,0 +1,35 @@
+{
+  "receiptKind": "live_review_visual_proof",
+  "proofOnly": true,
+  "eventId": "proof-only-capture-artifact",
+  "sourceEventId": "proof-only-capture-artifact",
+  "plannerExecutorHandoffId": "live-review:proof-only-capture-artifact:a40e193f",
+  "status": "received",
+  "timestamp": "2026-06-21T02:40:12.835219+00:00",
+  "source": "builder-visual-proof",
+  "routeContext": {},
+  "taskContext": {
+    "reviewTargetId": "preview-proof",
+    "screenshots": [
+      "artifacts/fluxio-preview-proof-only-capture-20260621/proof-only-capture-current.png"
+    ],
+    "annotations": [
+      {
+        "id": "anno-proof-only",
+        "severity": "medium"
+      }
+    ]
+  },
+  "visualProofPacket": {
+    "framePath": "artifacts/fluxio-preview-proof-only-capture-20260621/proof-only-capture-current.png",
+    "annotationCount": 1,
+    "annotationIds": [
+      "anno-proof-only"
+    ],
+    "proofTarget": "preview-proof",
+    "threadTarget": "proof-only"
+  },
+  "verifierFeedback": {},
+  "nextIdea": "",
+  "artifactPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\live_review_receipts\\proof-only-capture-artifact-live-review_proof-only-capture-artifact_a40e193f.json"
+}

@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T02:40:16.978831+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=builder&builderDetail=1&proofReload=preview-proof-only-capture",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-preview-proof-only-capture-20260621\\proof-only-capture-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-preview-proof-only-capture-20260621\\proof-only-capture-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Visual proof packet",
+    "Capture proof",
+    "Browser annotations"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 2600,
+    "sampleCount": 8370,
+    "uniqueSampleColors": 687,
+    "averageLuma": 36.78,
+    "nonBlank": true
+  },
+  "passed": true
+}

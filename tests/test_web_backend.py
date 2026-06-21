@@ -353,6 +353,41 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(receipts[-1]["eventId"], "evt-screenshot")
             self.assertEqual(receipts[-1]["visualProofPacket"]["proofTarget"], "review-preview")
 
+    def test_live_review_visual_proof_only_receipt_does_not_require_feedback_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            payload = {
+                "proofOnly": True,
+                "eventId": "evt-proof-only",
+                "source": "builder-visual-proof",
+                "routeContext": {"missionId": "mission-visual"},
+                "taskContext": {
+                    "reviewTargetId": "preview-frame",
+                    "screenshots": ["screenshots/frame.png"],
+                    "annotations": [{"id": "anno-proof", "severity": "medium"}],
+                },
+                "visualProofPacket": {
+                    "framePath": "screenshots/frame.png",
+                    "previewUrl": "http://127.0.0.1:1420/preview",
+                    "annotationCount": 1,
+                    "annotationIds": ["anno-proof"],
+                    "proofTarget": "preview-frame",
+                    "threadTarget": "mission-visual",
+                },
+            }
+
+            receipt = backend.dispatch(
+                "record_live_review_structured_feedback_command",
+                {"payload": payload},
+            )
+
+            self.assertEqual(receipt["receiptKind"], "live_review_visual_proof")
+            self.assertTrue(receipt["proofOnly"])
+            self.assertEqual(receipt["visualProofPacket"]["framePath"], "screenshots/frame.png")
+            self.assertEqual(receipt["taskContext"]["annotations"][0]["id"], "anno-proof")
+            self.assertTrue(pathlib.Path(receipt["artifactPath"]).exists())
+
     def test_provider_secret_presence_uses_session_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
