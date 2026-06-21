@@ -299,6 +299,19 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("web/src/fluxio/FluxioShell.jsx", compartment["filesChanged"])
             timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
             self.assertIn("runtime.roundtrip", timeline_kinds)
+            receipt = compartment["runtimeProofReceipt"]
+            self.assertEqual(receipt["schemaVersion"], "runtime-compartment-proof.v1")
+            self.assertEqual(receipt["receiptKind"], "runtime_compartment_proof")
+            self.assertEqual(receipt["route"]["provider"], "openai-codex")
+            self.assertEqual(receipt["route"]["model"], "gpt-5.5")
+            self.assertEqual(receipt["summary"]["elapsedMs"], 842)
+            self.assertTrue(receipt["proofSignals"]["hasRuntimeReply"])
+            self.assertTrue(receipt["proofSignals"]["hasRoute"])
+            self.assertFalse(receipt["safety"]["runtimeAdapterAdded"])
+            proof_path = pathlib.Path(receipt["artifacts"]["proofPath"])
+            self.assertTrue(proof_path.exists())
+            saved_receipt = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_receipt["sessionId"], "chat-live")
 
     def test_nas_deploy_readiness_command_returns_offline_safe_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

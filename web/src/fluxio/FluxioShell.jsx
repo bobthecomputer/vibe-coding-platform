@@ -8338,6 +8338,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       .find(item => item.role === "assistant" && item.technicalDetail);
     return parseCompartmentFromNote(note);
   }, [activeChatSessionId, missionRuntimeCompartment, operatorNotes, runtimeCompartments]);
+  const latestRuntimeProofSource =
+    asRecord(latestAgentCompartment?.runtimeProofReceipt).schemaVersion
+      ? latestAgentCompartment
+      : runtimeCompartments.find(item => asRecord(item?.runtimeProofReceipt).schemaVersion) || null;
+  const latestRuntimeProofReceipt = asRecord(latestRuntimeProofSource?.runtimeProofReceipt);
+  const latestRuntimeProofSummary = asRecord(latestRuntimeProofReceipt.summary);
+  const latestRuntimeProofSignals = asRecord(latestRuntimeProofReceipt.proofSignals);
+  const latestRuntimeProofArtifacts = asRecord(latestRuntimeProofReceipt.artifacts);
   const providerOAuthActionsAvailable =
     previewMode === "live" && hasCommandBackend();
   const providerOAuthUnavailableReason = !hasTauriBackend()
@@ -16046,6 +16054,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       <strong>{latestAgentCompartment.cwd || workspace?.root_path || "Not selected"}</strong>
                     </div>
                   </div>
+
+                  {latestRuntimeProofReceipt.schemaVersion ? (
+                    <div className="agent-runtime-proof-receipt">
+                      <div>
+                        <span>Runtime proof receipt</span>
+                        <strong>{latestRuntimeProofReceipt.receiptKind || "runtime_compartment_proof"}</strong>
+                        <p>
+                          {`${latestRuntimeProofSummary.messageCount || 0} messages · ${
+                            latestRuntimeProofSummary.timelineEventCount || 0
+                          } timeline events · ${latestRuntimeProofSummary.filesChangedCount || 0} changed files`}
+                        </p>
+                      </div>
+                      <div className="agent-runtime-proof-flags">
+                        <span className={latestRuntimeProofSignals.hasRoute ? "tone-good" : "tone-warn"}>
+                          Route {latestRuntimeProofSignals.hasRoute ? "recorded" : "missing"}
+                        </span>
+                        <span className={latestRuntimeProofSignals.hasRuntimeReply ? "tone-good" : "tone-warn"}>
+                          Reply {latestRuntimeProofSignals.hasRuntimeReply ? "recorded" : "missing"}
+                        </span>
+                        <span className={latestRuntimeProofReceipt.safety?.runtimeAdapterAdded ? "tone-bad" : "tone-good"}>
+                          No runtime adapter added
+                        </span>
+                      </div>
+                      {latestRuntimeProofArtifacts.proofUrl ? (
+                        <a href={latestRuntimeProofArtifacts.proofUrl} rel="noreferrer" target="_blank">
+                          Open proof receipt
+                        </a>
+                      ) : (
+                        <span className="agent-runtime-proof-path">
+                          Open proof receipt after artifact is served
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
 
                   <div className="agent-compartment-body agent-live-workbench-grid">
                     <div className="agent-compartment-lane">

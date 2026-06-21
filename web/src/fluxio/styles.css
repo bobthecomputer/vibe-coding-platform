@@ -2428,6 +2428,64 @@ button.builder-review-target:hover {
   padding: 10px 12px;
 }
 
+.agent-runtime-proof-receipt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(132, 204, 160, 0.22);
+  border-radius: 14px;
+  background:
+    linear-gradient(90deg, rgba(132, 204, 160, 0.11), transparent 52%),
+    rgba(255, 255, 255, 0.032);
+  padding: 12px;
+}
+
+.agent-runtime-proof-receipt span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-proof-receipt strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+}
+
+.agent-runtime-proof-receipt p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-proof-receipt a {
+  justify-self: end;
+  color: var(--good);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-proof-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.agent-runtime-proof-flags span {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
 .agent-compartment-matrix span,
 .agent-compartment-subhead span {
   color: var(--muted);
@@ -5158,8 +5216,15 @@ button.builder-review-target:hover {
   }
 
   .agent-compartment-matrix,
+  .agent-runtime-proof-receipt,
   .agent-compartment-body {
     grid-template-columns: 1fr;
+  }
+
+  .agent-runtime-proof-receipt a,
+  .agent-runtime-proof-flags {
+    justify-self: start;
+    justify-content: flex-start;
   }
 
   .agent-compartment-box-head,
@@ -5421,6 +5486,7 @@ button.builder-review-target:hover {
     grid-template-rows: auto auto minmax(0, 1fr);
     height: auto;
     min-height: 100dvh;
+    overflow-x: hidden;
   }
 
   .fluxio-topbar {
@@ -5454,6 +5520,7 @@ button.builder-review-target:hover {
   .interaction-mode-rail span,
   .interaction-mode-rail small {
     max-width: 100%;
+    white-space: normal;
   }
 
   .fluxio-body {
@@ -5467,6 +5534,28 @@ button.builder-review-target:hover {
     min-width: 0;
     overflow-x: hidden;
     padding-inline: 16px;
+  }
+
+  .thread-shell,
+  .agent-shell,
+  .agent-title-head,
+  .agent-compartment-box,
+  .agent-compartment-box-head,
+  .agent-runtime-proof-receipt,
+  .agent-compartment-body,
+  .agent-live-workbench-grid {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .agent-title-head h1,
+  .agent-compartment-box-head h2 {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .fluxio-sidebar {
@@ -6375,6 +6464,13 @@ body::-webkit-scrollbar-thumb {
     white-space: normal;
   }
 
+  .agent-title-head h1 {
+    display: block;
+    width: 100%;
+    max-inline-size: calc(100vw - 64px);
+    text-align: center;
+  }
+
   .builder-head h1,
   .builder-head p,
   .builder-command-copy h2,
@@ -7120,9 +7216,24 @@ button.builder-digest-item:active {
     min-width: 0;
   }
 
+  .interaction-mode-rail {
+    min-width: 0;
+  }
+
   .fluxio-mode button {
     min-width: 0;
     padding: 8px 10px;
+  }
+
+  .interaction-mode-rail button {
+    min-width: 0;
+    padding-inline: 7px;
+  }
+
+  .interaction-mode-rail span,
+  .interaction-mode-rail small {
+    max-width: 100%;
+    white-space: normal;
   }
 
   .topbar-shortcut {
@@ -7167,6 +7278,8 @@ button.builder-digest-item:active {
   .builder-head p,
   .builder-command-copy h2,
   .builder-command-copy p,
+  .agent-title-head,
+  .agent-title-head h1,
   .thread-chip-row,
   .ambient-companion,
   .mini-pill {
@@ -7174,6 +7287,13 @@ button.builder-digest-item:active {
     min-width: 0;
     overflow-wrap: anywhere;
     white-space: normal;
+  }
+
+  .agent-title-head h1 {
+    display: block;
+    width: 100%;
+    max-inline-size: calc(100vw - 64px);
+    text-align: center;
   }
 
   .builder-head p {

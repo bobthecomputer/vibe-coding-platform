@@ -78,10 +78,17 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "runtime adapter added:" in runtime_contract
     assert "runtime-truth-contract" in runtime_contract
     assert "runtime-lane-proof-receipt" in runtime_contract
+    assert "runtimeProofReceipt" in source
+    assert "Runtime proof receipt" in source
+    assert "Open proof receipt" in source
+    assert "agent-runtime-proof-receipt" in source
     assert ".runtime-truth-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-lane-proof-receipt" in STYLES.read_text(encoding="utf-8")
+    assert ".agent-runtime-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert "supervisor_not_runtime_adapter" in fixtures
     assert "provider_model_route" in fixtures
+    assert "fixture_runtime_compartment_state" in fixtures
+    assert "runtime-compartment-proof.v1" in fixtures
 
 
 def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:

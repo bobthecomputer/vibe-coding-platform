@@ -2842,6 +2842,67 @@ class FluxioWebBackend:
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
+    def _chat_compartment_proof_path(self, session_id: str) -> Path:
+        return (
+            self.root
+            / ".agent_control"
+            / "runtime_compartment_proofs"
+            / f"{_safe_identifier(session_id, 'syntelos_chat')}.proof.json"
+        )
+
+    def _build_chat_compartment_proof_receipt(
+        self,
+        *,
+        session_id: str,
+        compartment: dict[str, Any],
+        proof_path: Path,
+        elapsed_ms: int,
+    ) -> dict[str, Any]:
+        route = compartment.get("route") if isinstance(compartment.get("route"), dict) else {}
+        timeline = compartment.get("toolTimeline") if isinstance(compartment.get("toolTimeline"), list) else []
+        files_changed = (
+            compartment.get("filesChanged") if isinstance(compartment.get("filesChanged"), list) else []
+        )
+        messages = compartment.get("messages") if isinstance(compartment.get("messages"), list) else []
+        receipt = {
+            "schemaVersion": "runtime-compartment-proof.v1",
+            "receiptKind": "runtime_compartment_proof",
+            "sessionId": session_id,
+            "runtime": str(compartment.get("runtime") or ""),
+            "cwd": str(compartment.get("cwd") or ""),
+            "route": {
+                "role": str(route.get("role") or ""),
+                "provider": str(route.get("provider") or ""),
+                "model": str(route.get("model") or ""),
+                "effort": str(route.get("effort") or ""),
+            },
+            "summary": {
+                "messageCount": len(messages),
+                "timelineEventCount": len(timeline),
+                "filesChangedCount": len(files_changed),
+                "elapsedMs": elapsed_ms,
+            },
+            "proofSignals": {
+                "hasRuntimeReply": any(item.get("role") == "assistant" for item in messages if isinstance(item, dict)),
+                "hasRoute": bool(route.get("provider") and route.get("model")),
+                "hasToolTimeline": len(timeline) > 0,
+                "hasChangedFiles": len(files_changed) > 0,
+            },
+            "safety": {
+                "liveModelCallRecorded": True,
+                "runtimeAdapterAdded": False,
+                "fusedRuntimeRole": "evidence_layer_not_runtime_adapter",
+                "secretsIncluded": False,
+            },
+            "artifacts": {
+                "compartmentPath": str(self._chat_compartment_path(session_id)),
+                "proofPath": str(proof_path),
+                "proofUrl": self._artifact_url(proof_path),
+            },
+            "createdAt": str(compartment.get("updatedAt") or _utc_now()),
+        }
+        return receipt
+
     def _save_chat_compartment(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         session_id = _safe_identifier(result.get("sessionId") or payload.get("sessionId") or "syntelos_chat")
         route = result.get("route") if isinstance(result.get("route"), dict) else self._chat_route(payload)
@@ -2955,6 +3016,16 @@ class FluxioWebBackend:
             "updatedAt": now,
         }
         path.parent.mkdir(parents=True, exist_ok=True)
+        proof_path = self._chat_compartment_proof_path(session_id)
+        proof_path.parent.mkdir(parents=True, exist_ok=True)
+        proof_receipt = self._build_chat_compartment_proof_receipt(
+            session_id=session_id,
+            compartment=compartment,
+            proof_path=proof_path,
+            elapsed_ms=elapsed_ms,
+        )
+        proof_path.write_text(json.dumps(proof_receipt, indent=2), encoding="utf-8")
+        compartment["runtimeProofReceipt"] = proof_receipt
         path.write_text(json.dumps(compartment, indent=2), encoding="utf-8")
         return compartment
 

@@ -608,6 +608,40 @@ class MissionControlTests(unittest.TestCase):
             session_file = pathlib.Path(session.session_path)
             session_file.parent.mkdir(parents=True)
             session_file.write_text(json.dumps(asdict(session), indent=2), encoding="utf-8")
+            compartment_dir = root / ".agent_control" / "runtime_compartments"
+            compartment_dir.mkdir(parents=True)
+            proof_path = root / ".agent_control" / "runtime_compartment_proofs" / "chat-live.proof.json"
+            proof_path.parent.mkdir(parents=True)
+            proof_receipt = {
+                "schemaVersion": "runtime-compartment-proof.v1",
+                "receiptKind": "runtime_compartment_proof",
+                "sessionId": "chat-live",
+                "runtime": "codex",
+                "route": {"role": "executor", "provider": "openai-codex", "model": "gpt-5.5"},
+                "summary": {"messageCount": 2, "timelineEventCount": 3, "filesChangedCount": 1},
+                "proofSignals": {"hasRuntimeReply": True, "hasRoute": True, "hasToolTimeline": True},
+                "safety": {"runtimeAdapterAdded": False, "fusedRuntimeRole": "evidence_layer_not_runtime_adapter"},
+                "artifacts": {"proofPath": str(proof_path), "proofUrl": "/api/artifact?id=test"},
+            }
+            proof_path.write_text(json.dumps(proof_receipt, indent=2), encoding="utf-8")
+            (compartment_dir / "chat-live.json").write_text(
+                json.dumps(
+                    {
+                        "sessionId": "chat-live",
+                        "runtime": "codex",
+                        "state": "ready",
+                        "streaming": "recorded",
+                        "route": {"role": "executor", "provider": "openai-codex", "model": "gpt-5.5"},
+                        "toolTimeline": [{"kind": "runtime.roundtrip", "summary": "completed"}],
+                        "messages": [{"role": "assistant", "text": "done"}],
+                        "filesChanged": ["web/src/fluxio/FluxioShell.jsx"],
+                        "runtimeProofReceipt": proof_receipt,
+                        "updatedAt": "2026-05-12T10:02:00+00:00",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             mission.delegated_runtime_sessions = [session]
             mission.state.delegated_runtime_sessions = [asdict(session)]
             mission.proof.passed_checks = ["Hermes proof captured"]
@@ -626,8 +660,11 @@ class MissionControlTests(unittest.TestCase):
 
             compartments = snapshot["runtimeCompartments"]
             self.assertGreaterEqual(compartments["summary"]["total"], 1)
-            self.assertEqual(compartments["items"][0]["runtime"], "hermes")
-            self.assertEqual(compartments["items"][0]["status"], "running")
+            proof_item = next(item for item in compartments["items"] if item["sessionId"] == "chat-live")
+            self.assertEqual(proof_item["runtimeProofReceipt"]["schemaVersion"], "runtime-compartment-proof.v1")
+            self.assertFalse(proof_item["runtimeProofReceipt"]["safety"]["runtimeAdapterAdded"])
+            hermes_item = next(item for item in compartments["items"] if item["runtime"] == "hermes")
+            self.assertEqual(hermes_item["status"], "running")
             self.assertIn("recentActivity", compartments["items"][0])
 
             evidence = snapshot["hermesMissionEvidence"]

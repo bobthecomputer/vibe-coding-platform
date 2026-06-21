@@ -5226,6 +5226,11 @@ def _build_runtime_compartments_snapshot(
             seen_ids.add(session_id)
             timeline = payload.get("toolTimeline") if isinstance(payload.get("toolTimeline"), list) else []
             route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+            runtime_proof_receipt = (
+                payload.get("runtimeProofReceipt")
+                if isinstance(payload.get("runtimeProofReceipt"), dict)
+                else {}
+            )
             state = str(payload.get("state") or payload.get("status") or "recorded")
             streaming = str(payload.get("streaming") or payload.get("lifecycle") or "recorded")
             items.append(
@@ -5257,6 +5262,7 @@ def _build_runtime_compartments_snapshot(
                     if isinstance(payload.get("filesChanged"), list)
                     else [],
                     "approvals": payload.get("approvals") if isinstance(payload.get("approvals"), list) else [],
+                    "runtimeProofReceipt": runtime_proof_receipt,
                 }
             )
 
