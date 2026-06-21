@@ -4038,6 +4038,92 @@ button.builder-review-target:hover {
   font-size: 12px;
 }
 
+.voice-control-checkpoint {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.07), rgba(255, 255, 255, 0.018)),
+    rgba(255, 255, 255, 0.024);
+  padding: 10px;
+}
+
+.voice-control-checkpoint[data-status="ready"] {
+  border-color: rgba(34, 197, 94, 0.28);
+  background:
+    linear-gradient(135deg, rgba(34, 197, 94, 0.07), rgba(255, 255, 255, 0.018)),
+    rgba(255, 255, 255, 0.024);
+}
+
+.voice-control-checkpoint[data-status="available"] {
+  border-color: rgba(96, 165, 250, 0.28);
+  background:
+    linear-gradient(135deg, rgba(96, 165, 250, 0.07), rgba(255, 255, 255, 0.018)),
+    rgba(255, 255, 255, 0.024);
+}
+
+.voice-control-checkpoint-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voice-control-checkpoint-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.voice-control-checkpoint-head span,
+.voice-control-checkpoint-grid span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.voice-control-checkpoint-head > div > span {
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.voice-control-checkpoint-head > span {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 4px 8px;
+  text-align: right;
+}
+
+.voice-control-checkpoint strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.voice-control-checkpoint p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.voice-control-checkpoint-grid,
+.voice-control-checkpoint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.voice-control-checkpoint-grid span {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.12);
+  padding: 4px 8px;
+}
+
 .composer-attachment-preview {
   width: 56px;
   height: 56px;
@@ -6266,6 +6352,16 @@ button.builder-review-target:hover {
 
   .composer-attachment {
     grid-template-columns: 1fr;
+  }
+
+  .voice-control-checkpoint-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .voice-control-checkpoint-head > span {
+    align-self: flex-start;
+    text-align: left;
   }
 
   .agent-docked-composer {

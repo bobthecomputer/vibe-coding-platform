@@ -19,6 +19,8 @@ import {
 import { ActionButton, Field, Modal, StatusPill } from "../../../desktop-ui/MissionControlPrimitives.jsx";
 import { buildMissionControlModel } from "../../../desktop-ui/missionControlModel.js";
 import { buildFusionWorkbench } from "./fusion/fusionFixtures.js";
+import { installTauriVoiceBridge } from "./voice/tauriVoiceBridge.js";
+import { useVoiceInteractionController } from "./voice/useVoiceInteractionController.js";
 import {
   EXECUTION_TARGET_OPTIONS,
   MODEL_EFFORT_OPTIONS,
@@ -2229,6 +2231,82 @@ function ComposerAttachmentStrip({
             </ActionButton>
           </article>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function VoiceControlCheckpoint({
+  onOpenReview = () => {},
+  onStartCapture = () => {},
+  onUseSystemDictation = () => {},
+  voice,
+}) {
+  const transcript = voice?.transcript || {};
+  const repairQueue = transcript.repairQueue || {};
+  const capture = voice?.capture || {};
+  const captureLifecycle = voice?.captureLifecycle || {};
+  const guard = voice?.sendGuard || {};
+  const canStartCapture = Boolean(capture.canStartLiveCapture);
+  const reviewBlocked =
+    Boolean(transcript.interimText) ||
+    Boolean(transcript.reviewRequired) ||
+    ["blocked", "review_required"].includes(guard.status);
+  const checkpointStatus = reviewBlocked
+    ? "review"
+    : transcript.combinedText
+      ? "ready"
+      : canStartCapture
+        ? "available"
+        : "fallback";
+  const checkpointLabel =
+    checkpointStatus === "review"
+      ? "Review before command"
+      : checkpointStatus === "ready"
+        ? "Reviewed transcript ready"
+        : checkpointStatus === "available"
+          ? "Capture ready"
+          : "Use fallback dictation";
+  const checkpointDetail =
+    repairQueue.nextSegmentText ||
+    guard.detail ||
+    capture.recovery ||
+    capture.status ||
+    "Voice commands use the same reviewed transcript path as the full voice panel.";
+
+  return (
+    <section
+      className="voice-control-checkpoint"
+      data-status={checkpointStatus}
+      aria-label="Voice control checkpoint"
+      aria-live="polite"
+    >
+      <div className="voice-control-checkpoint-head">
+        <div>
+          <span>Voice control checkpoint</span>
+          <strong>{checkpointLabel}</strong>
+          <p>{checkpointDetail}</p>
+        </div>
+        <span>{captureLifecycle.label || capture.label || "Voice idle"}</span>
+      </div>
+      <div className="voice-control-checkpoint-grid" aria-label="Voice command readiness">
+        <span>Source: {capture.source || capture.label || "not checked"}</span>
+        <span>Guard: {guard.label || "No command"}</span>
+        <span>Low confidence: {repairQueue.lowConfidenceCount || 0}</span>
+        <span>Ambiguous: {repairQueue.ambiguousCount || 0}</span>
+        <span>Interim: {repairQueue.interimActive ? "active" : "clear"}</span>
+        <span>Corrections: {transcript.correctionCount || 0}</span>
+      </div>
+      <div className="voice-control-checkpoint-actions">
+        <ActionButton onClick={onOpenReview} type="button">
+          Open voice review
+        </ActionButton>
+        <ActionButton disabled={!canStartCapture} onClick={onStartCapture} type="button">
+          Start dictation
+        </ActionButton>
+        <ActionButton onClick={onUseSystemDictation} type="button">
+          System dictation
+        </ActionButton>
       </div>
     </section>
   );
@@ -9971,6 +10049,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     };
   }, [previewMode, surface]);
 
+  const openVoiceReview = useCallback(
+    ({ autoStart = false } = {}) => {
+      setUiMode("builder");
+      setSurface("voice");
+      setActiveDrawer(null);
+      if (autoStart) {
+        setVoiceAutoStartToken(current => current + 1);
+      }
+    },
+    [],
+  );
+
   const handleVoiceCommand = useCallback(
     async command => {
       const action = String(command?.action || "").trim();
@@ -9998,9 +10088,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           return;
         }
         if (nextSurface === "voice") {
-          setUiMode("builder");
-          setSurface("voice");
-          setActiveDrawer(null);
+          openVoiceReview();
           return;
         }
         if (["runtime", "skills", "proof", "queue", "context", "settings"].includes(nextSurface)) {
@@ -10014,17 +10102,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (action === "voice.showCommands") {
-        setUiMode("builder");
-        setSurface("voice");
-        setActiveDrawer(null);
+        openVoiceReview();
         return;
       }
 
       if (action === "voice.start") {
-        setUiMode("builder");
-        setSurface("voice");
-        setActiveDrawer(null);
-        setVoiceAutoStartToken(current => current + 1);
+        openVoiceReview({ autoStart: true });
         pushToast("Voice panel opened; live capture will start when a browser or local adapter is ready.", "info");
         return;
       }
@@ -10089,9 +10172,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       handleAgentIdlePrimaryAction,
       markAction,
       mission,
+      openVoiceReview,
       pushToast,
     ],
   );
+  useMemo(() => installTauriVoiceBridge(), []);
+  const voiceController = useVoiceInteractionController({ onVoiceCommand: handleVoiceCommand });
 
   const handleReferenceAppearanceChange = useCallback((key, value) => {
     setReferenceAppearance(current => ({
@@ -11840,7 +11926,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </header>
                 <div className="voice-studio-grid">
                   <Suspense fallback={<LazySurfaceFallback label="Voice command panel" />}>
-                    <VoiceCommandPanel autoStartToken={voiceAutoStartToken} onVoiceCommand={handleVoiceCommand} />
+                    <VoiceCommandPanel
+                      autoStartToken={voiceAutoStartToken}
+                      controller={voiceController}
+                      onVoiceCommand={handleVoiceCommand}
+                    />
                   </Suspense>
                   <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
                     <p className="eyebrow">Accessible operation</p>
@@ -12222,6 +12312,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       </ActionButton>
                     ))}
                   </div>
+                  <VoiceControlCheckpoint
+                    onOpenReview={() => openVoiceReview()}
+                    onStartCapture={() => openVoiceReview({ autoStart: true })}
+                    onUseSystemDictation={() => void handleReferenceDictation()}
+                    voice={voiceController}
+                  />
                   <label htmlFor="thread-note-idle">{agentComposerLabel}</label>
                   <textarea
                     id="thread-note-idle"
@@ -12274,7 +12370,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </header>
               <div className="voice-studio-grid">
                 <Suspense fallback={<LazySurfaceFallback label="Voice command panel" />}>
-                  <VoiceCommandPanel autoStartToken={voiceAutoStartToken} onVoiceCommand={handleVoiceCommand} />
+                  <VoiceCommandPanel
+                    autoStartToken={voiceAutoStartToken}
+                    controller={voiceController}
+                    onVoiceCommand={handleVoiceCommand}
+                  />
                 </Suspense>
                 <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
                   <p className="eyebrow">Accessible operation</p>
@@ -14629,6 +14729,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       </ActionButton>
                     ))}
                   </div>
+                  <VoiceControlCheckpoint
+                    onOpenReview={() => openVoiceReview()}
+                    onStartCapture={() => openVoiceReview({ autoStart: true })}
+                    onUseSystemDictation={() => void handleReferenceDictation()}
+                    voice={voiceController}
+                  />
                   <textarea
                     aria-label="Agent message composer"
                     id="thread-note"

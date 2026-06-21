@@ -23,6 +23,7 @@ PACKAGE_JSON = ROOT / "package.json"
 CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
 CONTROL_VISUAL_SMOKE = ROOT / "scripts" / "control_route_visual_smoke.py"
 CONTROL_INTERACTION_SMOKE = ROOT / "scripts" / "control_route_interaction_smoke.py"
+VOICE_CHECKPOINT_SMOKE = ROOT / "scripts" / "voice_control_checkpoint_smoke.py"
 VOICE_PANEL = ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx"
 VOICE_CONTROLLER = ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js"
 VOICE_ADAPTERS = ROOT / "web" / "src" / "fluxio" / "voice" / "voiceCaptureAdapters.js"
@@ -472,6 +473,15 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("VoiceCommandPanel", shell)
         self.assertIn('import("./voice/VoiceCommandPanel.jsx")', shell)
         self.assertNotIn('import("./voice/index.js")', shell)
+        self.assertIn("useVoiceInteractionController", shell)
+        self.assertIn("installTauriVoiceBridge", shell)
+        self.assertIn("voiceController", shell)
+        self.assertIn("VoiceControlCheckpoint", shell)
+        self.assertIn("Voice control checkpoint", shell)
+        self.assertIn("Open voice review", shell)
+        self.assertIn("Use fallback dictation", shell)
+        self.assertIn("controller={voiceController}", shell)
+        self.assertIn("openVoiceReview({ autoStart: true })", shell)
         self.assertIn('surface === "images"', shell)
         self.assertIn('surface === "voice"', shell)
         self.assertIn("handleImageStudioRequestDraft", shell)
@@ -485,6 +495,13 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn('label="Images"', shell)
         self.assertIn('label="Voice"', shell)
         self.assertIn(".voice-studio-grid", styles)
+        self.assertIn(".voice-control-checkpoint", styles)
+        self.assertIn(".voice-control-checkpoint-grid", styles)
+        self.assertIn(".voice-control-checkpoint-actions", styles)
+        voice_checkpoint_smoke = VOICE_CHECKPOINT_SMOKE.read_text(encoding="utf-8")
+        self.assertIn("voice-control-checkpoint", voice_checkpoint_smoke)
+        self.assertIn("VOICE CONTROL CHECKPOINT", voice_checkpoint_smoke)
+        self.assertIn("assert_current_control_shell", voice_checkpoint_smoke)
         self.assertIn(".lazy-surface-fallback", styles)
         image_studio = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "ImageStudioPlayground.jsx").read_text(encoding="utf-8")
         image_css = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "image-studio.css").read_text(encoding="utf-8")
