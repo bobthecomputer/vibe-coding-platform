@@ -11,6 +11,7 @@ import {
 
 import { buildKeyboardParityLabel, getVoiceMotionAffordance } from "./voiceAccessibility.js";
 import { getVoiceCommandExamples } from "./voiceCommandGrammar.js";
+import { installTauriVoiceBridge } from "./tauriVoiceBridge.js";
 import { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 import "./voice.css";
 
@@ -21,6 +22,7 @@ export function VoiceCommandPanel({
   reducedMotion = false,
   speechAdapter = null,
 }) {
+  useMemo(() => installTauriVoiceBridge(), []);
   const ownedController = useVoiceInteractionController({ onVoiceCommand, speechAdapter });
   const voice = controller || ownedController;
   const lastAutoStartTokenRef = useRef(autoStartToken);

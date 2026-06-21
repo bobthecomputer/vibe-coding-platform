@@ -387,6 +387,164 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertNotIn("restarted", [item["status"] for item in payload["lifecycle"]])
         self.assertEqual(payload["stops"][0]["errorCode"], "permission_denied")
 
+    def test_tauri_voice_bridge_records_audio_before_local_stt(self) -> None:
+        payload = run_node(
+            """
+            import { installTauriVoiceBridge } from './web/src/fluxio/voice/tauriVoiceBridge.js';
+
+            class FakeBlob {
+              constructor(parts, options = {}) {
+                this.parts = parts;
+                this.type = options.type || '';
+                this.size = parts.reduce((total, part) => total + Number(part?.size || String(part || '').length), 0);
+              }
+            }
+            class FakeFileReader {
+              readAsDataURL() {
+                this.result = 'data:audio/webm;base64,ZmFrZS1hdWRpbw==';
+                this.onloadend();
+              }
+            }
+            class FakeMediaRecorder {
+              static isTypeSupported() { return true; }
+              constructor(stream, options = {}) {
+                this.stream = stream;
+                this.mimeType = options.mimeType || 'audio/webm';
+                this.state = 'inactive';
+              }
+              start() {
+                this.state = 'recording';
+                this.ondataavailable({ data: { size: 10 } });
+              }
+              stop() {
+                this.state = 'inactive';
+                this.onstop();
+              }
+            }
+            const calls = [];
+            const lifecycle = [];
+            const finals = [];
+            const stops = [];
+            const root = {
+              __TAURI_INTERNALS__: {},
+              Blob: FakeBlob,
+              FileReader: FakeFileReader,
+              MediaRecorder: FakeMediaRecorder,
+              navigator: {
+                mediaDevices: {
+                  async getUserMedia() {
+                    return { getTracks: () => [{ stop() { this.stopped = true; } }] };
+                  },
+                },
+              },
+            };
+            globalThis.Blob = FakeBlob;
+            const bridge = installTauriVoiceBridge(root, {
+              FileReader: FakeFileReader,
+              MediaRecorder: FakeMediaRecorder,
+              navigator: root.navigator,
+              async invoke(command, args) {
+                calls.push({ command, args });
+                if (command === 'start_dictation') return { sessionId: 'dict-test' };
+                if (command === 'save_dictation_audio_blob') {
+                  return { audioPath: 'C:/tmp/dict-test.webm', byteCount: 10 };
+                }
+                if (command === 'stop_dictation') {
+                  return { status: 'transcribed', transcript: 'open settings', message: '' };
+                }
+                throw new Error(command);
+              },
+            });
+            await bridge.startDictation({
+              onLifecycle: event => lifecycle.push(event.status),
+              onFinal: segment => finals.push(segment),
+              onStop: event => stops.push(event),
+            });
+            await bridge.stopDictation();
+            console.log(JSON.stringify({ calls, lifecycle, finals, stops, installed: Boolean(root.__FLUXIO_VOICE_BRIDGE__) }));
+            """
+        )
+
+        self.assertTrue(payload["installed"])
+        self.assertEqual([item["command"] for item in payload["calls"]], [
+            "start_dictation",
+            "save_dictation_audio_blob",
+            "stop_dictation",
+        ])
+        self.assertIn("started", payload["lifecycle"])
+        self.assertIn("saving", payload["lifecycle"])
+        self.assertIn("transcribing", payload["lifecycle"])
+        self.assertEqual(payload["calls"][1]["args"]["payload"]["sessionId"], "dict-test")
+        self.assertEqual(payload["calls"][2]["args"]["payload"]["audioPath"], "C:/tmp/dict-test.webm")
+        self.assertEqual(payload["finals"][0]["text"], "open settings")
+        self.assertEqual(payload["finals"][0]["source"], "tauri-local-stt")
+        self.assertEqual(payload["stops"][0]["source"], "tauri-local-dictation")
+
+    def test_tauri_voice_bridge_surfaces_local_stt_fallback_without_fake_transcript(self) -> None:
+        payload = run_node(
+            """
+            import { installTauriVoiceBridge } from './web/src/fluxio/voice/tauriVoiceBridge.js';
+
+            class FakeBlob {
+              constructor(parts, options = {}) {
+                this.parts = parts;
+                this.type = options.type || '';
+                this.size = 8;
+              }
+            }
+            class FakeFileReader {
+              readAsDataURL() {
+                this.result = 'data:audio/webm;base64,ZmFrZQ==';
+                this.onloadend();
+              }
+            }
+            class FakeMediaRecorder {
+              static isTypeSupported() { return true; }
+              constructor() { this.mimeType = 'audio/webm'; this.state = 'inactive'; }
+              start() { this.state = 'recording'; this.ondataavailable({ data: { size: 8 } }); }
+              stop() { this.state = 'inactive'; this.onstop(); }
+            }
+            globalThis.Blob = FakeBlob;
+            const errors = [];
+            const finals = [];
+            const root = {
+              __TAURI_INTERNALS__: {},
+              FileReader: FakeFileReader,
+              MediaRecorder: FakeMediaRecorder,
+              navigator: {
+                mediaDevices: {
+                  async getUserMedia() {
+                    return { getTracks: () => [{ stop() {} }] };
+                  },
+                },
+              },
+            };
+            const bridge = installTauriVoiceBridge(root, {
+              FileReader: FakeFileReader,
+              MediaRecorder: FakeMediaRecorder,
+              navigator: root.navigator,
+              async invoke(command) {
+                if (command === 'start_dictation') return { sessionId: 'dict-fallback' };
+                if (command === 'save_dictation_audio_blob') return { audioPath: 'C:/tmp/fallback.webm' };
+                if (command === 'stop_dictation') {
+                  return { status: 'needs_os_fallback', message: 'Local STT is not configured.' };
+                }
+                throw new Error(command);
+              },
+            });
+            await bridge.startDictation({
+              onError: error => errors.push(error),
+              onFinal: segment => finals.push(segment),
+            });
+            await bridge.stopDictation();
+            console.log(JSON.stringify({ errors, finals }));
+            """
+        )
+
+        self.assertEqual(payload["finals"], [])
+        self.assertEqual(payload["errors"][0]["code"], "local_stt_fallback")
+        self.assertIn("not configured", payload["errors"][0]["message"])
+
     def test_image_studio_request_draft_reports_preview_and_annotation_proof(self) -> None:
         payload = run_node(
             """

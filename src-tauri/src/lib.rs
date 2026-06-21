@@ -1131,6 +1131,22 @@ struct DictationStopPayload {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DictationAudioBlobPayload {
+    session_id: Option<String>,
+    audio_base64: String,
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationAudioBlobResult {
+    audio_path: String,
+    byte_count: usize,
+    mime_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DictationTranscribePayload {
     audio_path: String,
 }
@@ -5361,6 +5377,70 @@ fn start_dictation(app: AppHandle) -> Result<DictationSession, String> {
     Ok(session)
 }
 
+fn dictation_audio_extension(mime_type: &str) -> &'static str {
+    let lowered = mime_type.to_ascii_lowercase();
+    if lowered.contains("wav") {
+        "wav"
+    } else if lowered.contains("ogg") || lowered.contains("opus") {
+        "ogg"
+    } else if lowered.contains("mp4") || lowered.contains("m4a") {
+        "m4a"
+    } else {
+        "webm"
+    }
+}
+
+#[tauri::command]
+fn save_dictation_audio_blob(
+    app: AppHandle,
+    payload: DictationAudioBlobPayload,
+) -> Result<DictationAudioBlobResult, String> {
+    use base64::Engine;
+
+    let mime_type = payload
+        .mime_type
+        .clone()
+        .unwrap_or_else(|| "audio/webm".to_string());
+    let encoded = payload
+        .audio_base64
+        .split_once(',')
+        .map(|(_, data)| data)
+        .unwrap_or(payload.audio_base64.as_str());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| format!("Failed to decode dictation audio: {error}"))?;
+    if bytes.is_empty() {
+        return Err("Dictation audio blob was empty.".to_string());
+    }
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data dir: {error}"))?;
+    let dir = base.join("dictation_audio");
+    fs::create_dir_all(&dir).map_err(|error| format!("Failed to create dictation audio directory: {error}"))?;
+    let session_id = live_review_safe_identifier(payload.session_id.as_deref(), "dictation");
+    let extension = dictation_audio_extension(&mime_type);
+    let path = dir.join(format!("{session_id}-{}.{}", Uuid::new_v4().simple(), extension));
+    fs::write(&path, &bytes).map_err(|error| format!("Failed to write dictation audio: {error}"))?;
+
+    append_audit_entry(
+        &app,
+        "dictation.audio.saved",
+        json!({
+            "sessionId": session_id,
+            "audioPath": path.to_string_lossy(),
+            "byteCount": bytes.len(),
+            "mimeType": mime_type,
+        }),
+    );
+
+    Ok(DictationAudioBlobResult {
+        audio_path: path.to_string_lossy().to_string(),
+        byte_count: bytes.len(),
+        mime_type,
+    })
+}
+
 #[tauri::command]
 async fn stop_dictation(
     app: AppHandle,
@@ -7134,6 +7214,7 @@ pub fn run() {
             get_dictation_config,
             configure_dictation,
             start_dictation,
+            save_dictation_audio_blob,
             stop_dictation,
             transcribe_audio_file,
             get_dictation_history,

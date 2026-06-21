@@ -18,6 +18,7 @@ MISSION_MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
 DESKTOP_FIXTURES = ROOT / "desktop-ui" / "fixtures.js"
 DESKTOP_FIXTURE_MANIFEST = ROOT / "desktop-ui" / "fixtureManifest.js"
 TAURI_CONF = ROOT / "src-tauri" / "tauri.conf.json"
+TAURI_LIB = ROOT / "src-tauri" / "src" / "lib.rs"
 PACKAGE_JSON = ROOT / "package.json"
 CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
 CONTROL_VISUAL_SMOKE = ROOT / "scripts" / "control_route_visual_smoke.py"
@@ -26,6 +27,7 @@ VOICE_PANEL = ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx
 VOICE_CONTROLLER = ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js"
 VOICE_ADAPTERS = ROOT / "web" / "src" / "fluxio" / "voice" / "voiceCaptureAdapters.js"
 VOICE_INDEX = ROOT / "web" / "src" / "fluxio" / "voice" / "index.js"
+VOICE_TAURI_BRIDGE = ROOT / "web" / "src" / "fluxio" / "voice" / "tauriVoiceBridge.js"
 BASELINE_AUDIT = ROOT / "docs" / "cleanup" / "baseline-audit.md"
 
 
@@ -506,8 +508,11 @@ class DesktopUiContractTests(unittest.TestCase):
         voice_controller = VOICE_CONTROLLER.read_text(encoding="utf-8")
         voice_adapters = VOICE_ADAPTERS.read_text(encoding="utf-8")
         voice_index = VOICE_INDEX.read_text(encoding="utf-8")
+        voice_tauri_bridge = VOICE_TAURI_BRIDGE.read_text(encoding="utf-8")
         voice_css = (ROOT / "web" / "src" / "fluxio" / "voice" / "voice.css").read_text(encoding="utf-8")
+        tauri_lib = TAURI_LIB.read_text(encoding="utf-8")
         self.assertIn("speechAdapter", voice_panel)
+        self.assertIn("installTauriVoiceBridge", voice_panel)
         self.assertIn("Pre-send gate", voice_panel)
         self.assertIn("Capture source", voice_panel)
         self.assertIn("Capture state", voice_panel)
@@ -557,11 +562,22 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("maxAutoRestarts", voice_adapters)
         self.assertIn("Browser speech capture ended unexpectedly; reconnecting.", voice_adapters)
         self.assertIn("createBridgeSpeechAdapter", voice_adapters)
+        self.assertIn("onLifecycle", voice_adapters)
+        self.assertIn("onStop", voice_adapters)
         self.assertIn("normalizeSpeechRecognitionResult", voice_adapters)
         self.assertIn("SpeechRecognition", voice_adapters)
         self.assertIn("__FLUXIO_VOICE_BRIDGE__", voice_adapters)
         self.assertIn("createVoiceCaptureAdapter", voice_index)
         self.assertIn("buildVoiceCommandPacket", voice_index)
+        self.assertIn("installTauriVoiceBridge", voice_index)
+        self.assertIn("save_dictation_audio_blob", voice_tauri_bridge)
+        self.assertIn("MediaRecorder", voice_tauri_bridge)
+        self.assertIn("getUserMedia", voice_tauri_bridge)
+        self.assertIn("tauri-local-stt", voice_tauri_bridge)
+        self.assertIn("DictationAudioBlobPayload", tauri_lib)
+        self.assertIn("DictationAudioBlobResult", tauri_lib)
+        self.assertIn("save_dictation_audio_blob", tauri_lib)
+        self.assertIn("dictation.audio.saved", tauri_lib)
         self.assertIn(".fluxio-voice-capture-diagnostics", voice_css)
         self.assertIn(".fluxio-voice-capture-facts", voice_css)
         self.assertIn(".fluxio-voice-manual-intake", voice_css)

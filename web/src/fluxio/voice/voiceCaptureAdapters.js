@@ -262,6 +262,16 @@ export function createBridgeSpeechAdapter(runtime = globalThis) {
             code: error?.code || "bridge_offline",
             message: error?.message || String(error || "The local voice bridge failed."),
           }),
+        onLifecycle: event =>
+          handlers.onLifecycle?.({
+            ...event,
+            source: event?.source || "fluxio-voice-bridge",
+          }),
+        onStop: event =>
+          handlers.onStop?.({
+            ...event,
+            source: event?.source || "fluxio-voice-bridge",
+          }),
       };
       const started = await startMethod.call(bridge, callbacks);
       if (typeof started === "function") {

@@ -32,5 +32,6 @@ export {
   createVoiceCaptureAdapter,
   normalizeSpeechRecognitionResult,
 } from "./voiceCaptureAdapters.js";
+export { installTauriVoiceBridge } from "./tauriVoiceBridge.js";
 export { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 export { VoiceCommandPanel } from "./VoiceCommandPanel.jsx";
