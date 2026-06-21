@@ -2616,6 +2616,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("proof-pane", visual)
         self.assertIn("--long-history-fixture", responsive)
         self.assertIn("--long-history-fixture", visual)
+        self.assertIn('"surface": "workbench"', visual)
+        self.assertIn('"drawer": "proof"', visual)
         self.assertIn("long-history-mission-switch", visual)
         self.assertIn("long-history-proof-pane", visual)
         self.assertIn("long_history", fixtures)

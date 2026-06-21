@@ -606,7 +606,7 @@ def main() -> int:
                 "preview-control": "1",
                 "fixture": "long_history",
                 "mode": "builder",
-                "surface": "builder",
+                "surface": "workbench",
                 "drawer": "proof",
             },
         )
