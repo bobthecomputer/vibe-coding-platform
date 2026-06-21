@@ -43,6 +43,11 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Task navigator", fluxio_app)
         self.assertIn("Timeline", fluxio_app)
         self.assertIn("Context, apps, and escalation", fluxio_app)
+        self.assertIn("React.lazy", fluxio_app)
+        self.assertIn('import("./FluxioShell.jsx")', fluxio_app)
+        self.assertIn("React.Suspense", fluxio_app)
+        self.assertIn("control-shell-loading", fluxio_app)
+        self.assertNotIn('import { FluxioShellApp } from "./FluxioShell.jsx"', fluxio_app)
 
     def test_bridge_exposes_fluxio_facade_commands(self) -> None:
         bridge = FLUXIO_BRIDGE.read_text(encoding="utf-8")

@@ -24,8 +24,11 @@ import {
   TerminalWindow,
 } from "@phosphor-icons/react";
 
-import { FluxioShellApp } from "./FluxioShell.jsx";
 import { buildLiveReviewWorkbench, getSnapshot } from "./fluxioBridge.ts";
+
+const FluxioShellApp = React.lazy(() =>
+  import("./FluxioShell.jsx").then(module => ({ default: module.FluxioShellApp })),
+);
 
 const PRODUCT_NAME = "Fluxio";
 const PRODUCT_TAGLINE = "Agent operating system for workspaces.";
@@ -1513,7 +1516,18 @@ export function FluxioApp() {
         getLastAction={() => lastActionRef.current}
         onRecover={recoverShell}
       >
-        <FluxioShellApp key={instanceKey} reportUiAction={reportUiAction} />
+        <React.Suspense
+          fallback={
+            <main className="grand-login-shell">
+              <section className="grand-login-loading control-shell-loading">
+                <span />
+                <p>Loading {PRODUCT_NAME} control shell...</p>
+              </section>
+            </main>
+          }
+        >
+          <FluxioShellApp key={instanceKey} reportUiAction={reportUiAction} />
+        </React.Suspense>
       </FluxioErrorBoundary>
     </SidebarProvider>
   );

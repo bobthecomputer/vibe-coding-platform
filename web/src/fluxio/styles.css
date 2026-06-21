@@ -5811,6 +5811,10 @@ button.builder-review-target:hover {
   font-weight: 700;
 }
 
+.control-shell-loading {
+  min-height: min(420px, calc(100vh - 48px));
+}
+
 @keyframes grand-login-pulse {
   0%,
   100% {
