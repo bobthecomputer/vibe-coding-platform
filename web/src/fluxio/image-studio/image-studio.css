@@ -429,6 +429,7 @@
 
 .image-studio-reference-list,
 .image-studio-history-list,
+.image-studio-generated-artifact-list,
 .image-studio-layer-list {
   display: grid;
   gap: 8px;
@@ -444,8 +445,19 @@
   gap: 9px;
 }
 
+.image-studio-generated-artifact {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 9px;
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+}
+
 .image-studio-reference-row strong,
 .image-studio-history-row strong,
+.image-studio-generated-artifact strong,
 .image-studio-layer-list span,
 .image-studio-proof-item strong {
   overflow: hidden;
@@ -466,10 +478,50 @@
   background: #070909;
 }
 
+.image-studio-generated-artifact-thumb {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 7px;
+  background: #070909;
+}
+
 .image-studio-reference-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.image-studio-generated-artifact-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-studio-generated-artifact span,
+.image-studio-generated-artifact code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--control-muted, #9ca39b);
+  font-size: 11px;
+}
+
+.image-studio-generated-artifact-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.image-studio-generated-artifact-actions a {
+  border: 1px solid rgba(238, 242, 236, 0.11);
+  border-radius: 999px;
+  color: var(--control-text, #eef2ec);
+  padding: 4px 8px;
+  text-decoration: none;
 }
 
 .image-studio-icon-button {

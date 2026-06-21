@@ -192,6 +192,29 @@ function HistoryRow({ item }) {
   );
 }
 
+function GeneratedArtifactCard({ artifact }) {
+  const imageUrl = artifact?.servedUrl || artifact?.previewUrl || artifact?.imageUrl || "";
+  const manifestUrl = artifact?.manifestUrl || "";
+  const label = artifact?.title || artifact?.label || artifact?.filename || artifact?.artifactId || "Generated image artifact";
+  const source = artifact?.provider || artifact?.source || artifact?.route || "served artifact";
+  return (
+    <article className="image-studio-generated-artifact">
+      <div className="image-studio-generated-artifact-thumb">
+        {imageUrl ? <img src={imageUrl} alt="" /> : <FileImage size={24} aria-hidden="true" />}
+      </div>
+      <div>
+        <strong>{label}</strong>
+        <span>{source}</span>
+        {artifact?.artifactSha256 ? <code>sha {String(artifact.artifactSha256).slice(0, 12)}</code> : null}
+      </div>
+      <div className="image-studio-generated-artifact-actions">
+        {imageUrl ? <a href={imageUrl}>Open image</a> : null}
+        {manifestUrl ? <a href={manifestUrl}>Manifest</a> : null}
+      </div>
+    </article>
+  );
+}
+
 function ProofReviewSummary({ review }) {
   if (!review) return null;
   return (
@@ -218,7 +241,7 @@ function ProofReviewSummary({ review }) {
   );
 }
 
-export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
+export function ImageStudioPlayground({ generatedArtifacts = [], initialProject, onRequestDraft }) {
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
   const [draft, setDraft] = useState(null);
@@ -233,6 +256,7 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
     [draft, project, route, session.referenceAssets],
   );
   const routeAvailability = proofReview.imageGenerationRouteStatus;
+  const servedGeneratedArtifacts = Array.isArray(generatedArtifacts) ? generatedArtifacts : [];
 
   useEffect(() => {
     saveImageProject(project);
@@ -598,6 +622,22 @@ export function ImageStudioPlayground({ initialProject, onRequestDraft }) {
               </ul>
             ) : (
               <p className="image-studio-empty">No real image artifact history is available.</p>
+            )}
+          </section>
+
+          <section className="image-studio-control-group" aria-labelledby="image-studio-served-artifacts-label">
+            <div className="image-studio-section-title">
+              <FileImage size={18} aria-hidden="true" />
+              <h3 id="image-studio-served-artifacts-label">Served artifacts</h3>
+            </div>
+            {servedGeneratedArtifacts.length > 0 ? (
+              <div className="image-studio-generated-artifact-list">
+                {servedGeneratedArtifacts.slice(0, 4).map((artifact, index) => (
+                  <GeneratedArtifactCard artifact={artifact} key={artifact?.artifactId || artifact?.path || index} />
+                ))}
+              </div>
+            ) : (
+              <p className="image-studio-empty">No served generated image artifacts are available yet.</p>
             )}
           </section>
 

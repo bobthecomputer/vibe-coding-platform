@@ -33,6 +33,7 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "providerEvents",
             "generatedImages",
             "layerHandoff",
+            "generatedImages: imageArtifacts.map",
             "launchedPrograms",
             "runtimeActivity",
             "progressUpdate",
@@ -69,6 +70,7 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "plannerExecutorHandoffId",
         ]:
             self.assertIn(fragment, model)
+        self.assertNotIn('{ path: "screenshots/latest.png", label: "latest.png" }', model)
 
     def test_connected_device_bridge_evidence_is_exposed_to_live_review(self) -> None:
         bridge = (ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts").read_text(encoding="utf-8")

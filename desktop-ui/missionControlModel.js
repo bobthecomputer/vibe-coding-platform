@@ -2350,10 +2350,7 @@ function deriveLiveReviewStudio({
       queueTimeline: ["queued", "provider", "layer_handoff", "artifact", "verified"],
       providerEvents: ["provider_selected", "image_generated", "artifact_registered"],
       layerHandoff: ["prompt_layer", "render_layer", "artifact_layer"],
-      generatedImages:
-        imageArtifacts.length > 0
-          ? imageArtifacts.map(path => ({ path, label: path.split("/").slice(-1)[0] || "artifact" }))
-          : [{ path: "screenshots/latest.png", label: "latest.png" }],
+      generatedImages: imageArtifacts.map(path => ({ path, label: path.split("/").slice(-1)[0] || "artifact" })),
       artifactPaths: imageArtifacts,
     },
     {

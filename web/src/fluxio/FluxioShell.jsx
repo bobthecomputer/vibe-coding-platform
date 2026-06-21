@@ -13723,7 +13723,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           {!mission ? (
             uiMode === "builder" && surface === "images" ? (
               <section className="builder-shell image-studio-shell">
-                <ImageStudioPlayground onRequestDraft={handleImageStudioRequestDraft} />
+                <ImageStudioPlayground
+                  generatedArtifacts={generatedImageArtifacts}
+                  onRequestDraft={handleImageStudioRequestDraft}
+                />
               </section>
             ) : uiMode === "builder" && surface === "voice" ? (
               <section className="builder-shell voice-studio-shell">
@@ -14149,7 +14152,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             )
           ) : uiMode === "builder" && surface === "images" ? (
             <section className="builder-shell image-studio-shell">
-              <ImageStudioPlayground onRequestDraft={handleImageStudioRequestDraft} />
+              <ImageStudioPlayground
+                generatedArtifacts={generatedImageArtifacts}
+                onRequestDraft={handleImageStudioRequestDraft}
+              />
             </section>
           ) : uiMode === "builder" && surface === "voice" ? (
             <section className="builder-shell voice-studio-shell">
