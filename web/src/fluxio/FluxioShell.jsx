@@ -48,6 +48,7 @@ const RedTeamProofBoard = lazy(() =>
     default: module.RedTeamProofBoard,
   })),
 );
+const VisualProofReceiptGallery = lazy(() => import("./proof/VisualProofReceiptGallery.jsx"));
 const VoiceCommandPanel = lazy(() =>
   import("./voice/index.js").then(module => ({
     default: module.VoiceCommandPanel,
@@ -6735,7 +6736,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           event.nextIdea ||
           event.progressUpdate?.next ||
           routePreservation.nextIdea ||
-          "Use this Live Review receipt to drive the next planner/executor handoff.",
+          "Use this receipt for the next planner/executor handoff.",
       };
 
       markAction("live-review:structured-feedback");
@@ -6746,20 +6747,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           { throwOnError: true },
         );
         appendOperatorEntry({
-          title: "Structured Live Review receipt",
-          detail: `Receipt ${receipt?.eventId || eventId} handed off as ${receipt?.plannerExecutorHandoffId || handoffId}.`,
-          meta: "agent:structured-feedback received",
+          title: "Live Review receipt",
+          detail: `Receipt ${receipt?.eventId || eventId} -> ${receipt?.plannerExecutorHandoffId || handoffId}.`,
+          meta: "receipt received",
           tone: "good",
           channel: "receipt",
           role: "system",
         });
-        pushToast(`Structured feedback receipt recorded for ${receipt?.eventId || eventId}.`, "info");
+        pushToast(`Receipt recorded for ${receipt?.eventId || eventId}.`, "info");
         void refreshAll("live-review-structured-feedback");
         if (sendFollowUp) {
           await handleAgentFollowUp();
         }
       } catch (error) {
-        pushToast(`Structured feedback receipt failed: ${error}`, "error");
+        pushToast(`Receipt failed: ${error}`, "error");
       }
     },
     [
@@ -14607,12 +14608,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         <article className="builder-cowork-status-card">
                           <span>Feedback bridge</span>
                           <strong>{selectedLiveReviewEvent?.threadTarget || selectedLiveReviewEvent?.proofTarget || "Mission bridge ready"}</strong>
-                          <small>Annotations, proof chips, and verifier feedback feed back into planner/executor context.</small>
+                          <small>Annotations and proof chips feed planner/executor context.</small>
                         </article>
                         <article className="builder-cowork-status-card">
                           <span>Evidence timeline</span>
                           <strong>{(liveReviewStudio.events || []).length} live events</strong>
-                          <small>Activity, replay markers, browser QA, and timelapse frames stay visible while the agent works.</small>
+                          <small>Activity, browser QA, and frames stay visible while the agent works.</small>
                         </article>
                       </section>
 
@@ -14792,6 +14793,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               ) : null}
                             </div>
                           </article>
+                          <Suspense fallback={null}>
+                            <VisualProofReceiptGallery
+                              copyContextValue={copyContextValue}
+                              receipts={bridgeReceipts}
+                            />
+                          </Suspense>
                           {selectedLiveReviewEvent ? (
                             <article
                               className={`builder-live-review-focus tone-${selectedLiveReviewEvent.tone || "neutral"}`.trim()}

@@ -205,6 +205,27 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(backend._resolve_artifact_path(str(events)), events)
             self.assertEqual(backend._resolve_artifact_id(backend._artifact_id(events)), events)
 
+    def test_artifact_resolver_serves_live_review_receipt_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            receipt_dir = root / ".agent_control" / "live_review_receipts"
+            receipt_dir.mkdir(parents=True)
+            receipt = receipt_dir / "evt-screenshot-live-review.json"
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "receiptKind": "live_review_visual_proof",
+                        "eventId": "evt-screenshot",
+                        "visualProofPacket": {"framePath": "screenshots/latest.png"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            self.assertEqual(backend._resolve_artifact_path(str(receipt)), receipt)
+            self.assertEqual(backend._resolve_artifact_id(backend._artifact_id(receipt)), receipt)
+
     def test_artifact_resolver_recovers_embedded_windows_runtime_evidence_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

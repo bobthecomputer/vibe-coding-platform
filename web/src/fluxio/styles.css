@@ -9561,6 +9561,9 @@ body::-webkit-scrollbar-thumb {
 .builder-live-review-receipt-history-meta { display: grid; gap: 0.16rem; }
 .builder-live-review-receipt-history-meta span { color: var(--muted); font-size: 0.74rem; }
 .builder-visual-proof-packet { display: grid; gap: 0.55rem; border-color: rgba(214,168,79,0.24); padding: 0.65rem; }
+.builder-visual-proof-receipts { border: 1px solid rgba(86,174,255,0.18); border-radius: 10px; background: linear-gradient(135deg, rgba(86,174,255,0.075), rgba(255,255,255,0.025)); display: grid; gap: 0.5rem; padding: 0.62rem; }
+.builder-visual-proof-receipt-list { display: grid; gap: 0.45rem; }
+.builder-visual-proof-receipt-row { border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; background: rgba(2,8,18,0.26); display: grid; gap: 0.38rem; padding: 0.48rem; }
 .builder-visual-proof-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.42rem; }
 .builder-visual-proof-grid article { display: grid; gap: 0.18rem; min-width: 0; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px; background: rgba(255,255,255,0.035); padding: 0.48rem; }
 .builder-visual-proof-grid span { color: var(--muted); font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase; }

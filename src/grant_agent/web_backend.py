@@ -2360,17 +2360,20 @@ class FluxioWebBackend:
             self.root / ".agent_control" / "design_references",
             self.root / ".agent_control" / "runtime_compartments",
             self.root / ".agent_control" / "runtime_sessions",
+            self.root / ".agent_control" / "live_review_receipts",
             self.root / ".agent_control" / "mission_async",
             self.root / ".agent_runs",
         ]
         if os.name == "nt":
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
+            candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/live_review_receipts"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
             candidates.append(Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
         else:
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"))
+            candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/live_review_receipts"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"))
             candidates.append(Path("/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"))
         roots: list[Path] = []
@@ -2435,10 +2438,12 @@ class FluxioWebBackend:
                     self.root / ".agent_control" / "design_references",
                     self.root / ".agent_control" / "runtime_compartments",
                     self.root / ".agent_control" / "runtime_sessions",
+                    self.root / ".agent_control" / "live_review_receipts",
                     self.root / ".agent_control" / "mission_async",
                     self.root / ".agent_runs",
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/design_references"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/runtime_sessions"),
+                    Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/live_review_receipts"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_control/mission_async"),
                     Path("C:/volume1/Saclay/projects/vibe-coding-platform/.agent_runs"),
                 ):

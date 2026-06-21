@@ -9,6 +9,7 @@ FLUXIO_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
 FLUXIO_APP = ROOT / "web" / "src" / "fluxio" / "FluxioApp.tsx"
 MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
 STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
+VISUAL_PROOF_RECEIPTS = ROOT / "web" / "src" / "fluxio" / "proof" / "VisualProofReceiptGallery.jsx"
 
 
 class LiveReviewPanelFrontendTests(unittest.TestCase):
@@ -168,6 +169,7 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
 
     def test_live_review_side_panel_renders_current_shell_timeline_and_annotations(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        visual_receipts = VISUAL_PROOF_RECEIPTS.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
 
         for fragment in [
@@ -213,9 +215,21 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "Open preview",
         ]:
             self.assertIn(fragment, shell)
+        for fragment in [
+            "VisualProofReceiptGallery",
+            "Visual proof receipts",
+            "live_review_visual_proof",
+            "live_review_structured_feedback",
+            "Copy receipt artifact",
+            "Open receipt",
+            "Open frame",
+            "No captured visual-proof receipts yet",
+        ]:
+            self.assertIn(fragment, visual_receipts)
         self.assertIn(".builder-live-review-receipt-handles", styles)
         self.assertIn(".builder-live-review-receipt-history", styles)
         self.assertIn(".builder-visual-proof-packet", styles)
+        self.assertIn(".builder-visual-proof-receipts", styles)
         self.assertIn(".builder-visual-proof-grid", styles)
 
     def test_control_room_renders_runtime_compartment_and_visual_generated_artifacts(self) -> None:
