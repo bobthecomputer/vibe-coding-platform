@@ -21,6 +21,7 @@ import { buildMissionControlModel } from "../../../desktop-ui/missionControlMode
 import { buildFusionWorkbench } from "./fusion/fusionFixtures.js";
 import { installTauriVoiceBridge } from "./voice/tauriVoiceBridge.js";
 import { useVoiceInteractionController } from "./voice/useVoiceInteractionController.js";
+import { fingerprintVoiceText } from "./voice/voiceCommandGrammar.js";
 import {
   EXECUTION_TARGET_OPTIONS,
   MODEL_EFFORT_OPTIONS,
@@ -2248,6 +2249,7 @@ function VoiceControlCheckpoint({
   const captureLifecycle = voice?.captureLifecycle || {};
   const guard = voice?.sendGuard || {};
   const inputMode = voice?.inputMode || transcript.inputMode || "command";
+  const pendingTarget = voice?.pendingCommand?.reviewTarget || voice?.lastCommand?.voicePacket?.review?.target || null;
   const canStartCapture = Boolean(capture.canStartLiveCapture);
   const reviewBlocked =
     Boolean(transcript.interimText) ||
@@ -2269,6 +2271,7 @@ function VoiceControlCheckpoint({
           ? "Capture ready"
           : "Use fallback dictation";
   const checkpointDetail =
+    pendingTarget?.textPreview ||
     repairQueue.nextSegmentText ||
     guard.detail ||
     capture.recovery ||
@@ -2293,6 +2296,7 @@ function VoiceControlCheckpoint({
       <div className="voice-control-checkpoint-grid" aria-label="Voice command readiness">
         <span>Source: {capture.source || capture.label || "not checked"}</span>
         <span>Mode: {inputMode}</span>
+        <span>Target: {pendingTarget?.label || "none"}</span>
         <span>Guard: {guard.label || "No command"}</span>
         <span>Low confidence: {repairQueue.lowConfidenceCount || 0}</span>
         <span>Unknown confidence: {repairQueue.unknownConfidenceCount || 0}</span>
@@ -10154,11 +10158,19 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (action === "composer.send") {
+        const reviewTarget = command?.reviewTarget || command?.voicePacket?.review?.target || null;
+        if (reviewTarget?.textFingerprint) {
+          const currentFingerprint = fingerprintVoiceText(operatorDraft.trim());
+          if (currentFingerprint !== reviewTarget.textFingerprint) {
+            pushToast("Voice send canceled because the composer changed after review. Run the voice command again.", "warn");
+            return;
+          }
+        }
         if (mission) {
           await handleAgentFollowUp();
           return;
         }
-        await handleAgentIdlePrimaryAction();
+        handleAgentIdleSubmit();
         return;
       }
 
@@ -10188,15 +10200,50 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     },
     [
       handleAgentFollowUp,
-      handleAgentIdlePrimaryAction,
+      handleAgentIdleSubmit,
       markAction,
       mission,
+      operatorDraft,
       openVoiceReview,
       pushToast,
     ],
   );
   useMemo(() => installTauriVoiceBridge(), []);
-  const voiceController = useVoiceInteractionController({ onVoiceCommand: handleVoiceCommand });
+  const getVoiceCommandReviewContext = useCallback(
+    command => {
+      const action = String(command?.action || "").trim();
+      return {
+        action,
+        composerText: operatorDraft,
+        missionId: mission?.mission_id || "",
+        missionTitle: mission?.title || "",
+        missionObjective: mission?.objective || "",
+        chatConversationActive,
+        idleSendMode: mission?.mission_id ? "mission-follow-up" : "chat",
+        chatSessionId: activeChatSession?.id || activeChatSessionId || "",
+        chatTitle: activeChatSession?.title || "",
+        workspaceName: workspace?.name || "",
+        attachmentCount: operatorAttachments.length,
+        transcriptText: "",
+      };
+    },
+    [
+      activeChatSession?.id,
+      activeChatSession?.title,
+      activeChatSessionId,
+      chatConversationActive,
+      mission?.mission_id,
+      mission?.objective,
+      mission?.title,
+      operatorAttachments.length,
+      operatorDraft,
+      workspace?.name,
+    ],
+  );
+  const voiceController = useVoiceInteractionController({
+    onVoiceCommand: handleVoiceCommand,
+    getCommandReviewContext: getVoiceCommandReviewContext,
+  });
 
   const handleReferenceAppearanceChange = useCallback((key, value) => {
     setReferenceAppearance(current => ({

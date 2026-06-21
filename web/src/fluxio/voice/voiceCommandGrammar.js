@@ -482,10 +482,94 @@ function compactSegment(segment = {}) {
   };
 }
 
-export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
+export function fingerprintVoiceText(value = "") {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${text.length}:${(hash >>> 0).toString(36)}`;
+}
+
+export function buildVoiceCommandReviewTarget({ command, context = {} } = {}) {
+  const action = command?.action || "";
+  const composerText = String(context.composerText || context.operatorDraft || "").trim();
+  const missionTitle = String(context.missionTitle || context.missionObjective || "").trim();
+  const chatTitle = String(context.chatTitle || context.chatSessionTitle || "").trim();
+  const attachmentCount = Number(context.attachmentCount || 0) || 0;
+  const textPreview = composerText.length > 280 ? `${composerText.slice(0, 277)}...` : composerText;
+
+  if (action === "composer.send") {
+    const destinationLabel = context.missionId
+      ? "Mission follow-up"
+      : context.chatConversationActive
+        ? "Chat message"
+        : context.idleSendMode === "chat"
+          ? "Workspace chat message"
+        : "Mission prompt";
+    const destinationDetail = context.missionId
+      ? missionTitle || `Mission ${context.missionId}`
+      : chatTitle || context.workspaceName || "Current workspace";
+    const blocked = !composerText;
+    return {
+      action,
+      kind: "composer",
+      label: destinationLabel,
+      destination: destinationDetail,
+      textPreview,
+      textLength: composerText.length,
+      textFingerprint: fingerprintVoiceText(composerText),
+      attachmentCount,
+      blocked,
+      blockedReason: blocked ? "empty_composer" : "",
+      confirmationLabel: blocked
+        ? "Write or dictate text before confirming."
+        : `Confirm send to ${destinationLabel.toLowerCase()}.`,
+      detail: blocked
+        ? "The composer is empty, so this voice command cannot send anything yet."
+        : "Confirming will send the visible composer text through the existing shell handler.",
+    };
+  }
+
+  if (action === "voice.clearTranscript") {
+    return {
+      action,
+      kind: "voice-transcript",
+      label: "Voice transcript",
+      destination: "Current dictation buffer",
+      textPreview: context.transcriptText || "",
+      textLength: String(context.transcriptText || "").length,
+      textFingerprint: fingerprintVoiceText(context.transcriptText || ""),
+      attachmentCount: 0,
+      blocked: false,
+      blockedReason: "",
+      confirmationLabel: "Confirm transcript clear.",
+      detail: "Confirming clears only the reviewed voice transcript.",
+    };
+  }
+
+  return {
+    action,
+    kind: action ? "shell-action" : "unknown",
+    label: command?.label || "Voice action",
+    destination: context.destination || "Fluxio shell",
+    textPreview: context.previewText || "",
+    textLength: String(context.previewText || "").length,
+    textFingerprint: fingerprintVoiceText(context.previewText || ""),
+    attachmentCount,
+    blocked: false,
+    blockedReason: "",
+    confirmationLabel: command?.confirmationPrompt || "Confirm this voice action.",
+    detail: "Confirming sends this voice command to the existing shell handler.",
+  };
+}
+
+export function buildVoiceCommandPacket({ command, guard, transcript, reviewTarget = null } = {}) {
   const safeCommand = command || {};
   const safeTranscript = transcript || {};
   const safeGuard = guard || buildAccidentalSendGuard({ command: safeCommand, transcript: safeTranscript });
+  const safeReviewTarget = reviewTarget || null;
   const modeCheckpoint =
     safeGuard.modeCheckpoint ||
     buildVoiceModeCheckpoint({
@@ -570,6 +654,7 @@ export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
       blockedBy: Array.from(new Set([...blockedBy, modeCheckpoint.modeConflict ? modeCheckpoint.reason : ""])).filter(Boolean),
       correctionCount: correctionLog.length || safeTranscript.correctionCount || 0,
       modeCheckpoint,
+      target: safeReviewTarget,
     },
   };
 }

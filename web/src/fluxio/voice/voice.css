@@ -671,6 +671,74 @@
   padding-top: 10px;
 }
 
+.fluxio-voice-confirm-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 260px;
+  flex: 1 1 320px;
+}
+
+.fluxio-voice-confirm-target {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(142, 203, 111, 0.26);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(142, 203, 111, 0.09), rgba(255, 255, 255, 0.025)),
+    rgba(0, 0, 0, 0.14);
+  padding: 10px;
+}
+
+.fluxio-voice-confirm-target[data-blocked="true"] {
+  border-color: rgba(245, 158, 11, 0.36);
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(255, 255, 255, 0.025)),
+    rgba(0, 0, 0, 0.14);
+}
+
+.fluxio-voice-confirm-target span,
+.fluxio-voice-confirm-target p {
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxio-voice-confirm-target > span:first-child {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fluxio-voice-confirm-target blockquote {
+  margin: 0;
+  border-left: 2px solid rgba(142, 203, 111, 0.48);
+  color: var(--text, #f4f0e8);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  padding-left: 9px;
+}
+
+.fluxio-voice-confirm-target[data-blocked="true"] blockquote {
+  border-left-color: rgba(245, 158, 11, 0.6);
+  color: var(--muted, #aaa395);
+}
+
+.fluxio-voice-confirm-facts,
+.fluxio-voice-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fluxio-voice-confirm-facts span {
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 4px 8px;
+}
+
 .fluxio-voice-guard {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

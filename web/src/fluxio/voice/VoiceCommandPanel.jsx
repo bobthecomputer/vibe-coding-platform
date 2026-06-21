@@ -115,6 +115,7 @@ export function VoiceCommandPanel({
   const commandPacketReview = commandPacket?.review || {};
   const commandPacketTranscript = commandPacket?.transcript || {};
   const commandPacketBlockedBy = commandPacketReview.blockedBy || [];
+  const pendingReviewTarget = voice.pendingCommand?.reviewTarget || commandPacketReview.target || null;
   const modeCheckpoint =
     commandPacketReview.modeCheckpoint ||
     commandPacket?.guard?.modeCheckpoint ||
@@ -610,10 +611,38 @@ export function VoiceCommandPanel({
 
       {voice.pendingCommand ? (
         <div className="fluxio-voice-confirm">
-          <p>{voice.pendingCommand.confirmationPrompt || "Confirm this voice command before it runs."}</p>
-          <button onClick={() => voice.confirmPendingCommand()} type="button">
-            Confirm
-          </button>
+          <div className="fluxio-voice-confirm-copy">
+            <p>{voice.pendingCommand.confirmationPrompt || "Confirm this voice command before it runs."}</p>
+            {pendingReviewTarget ? (
+              <div className="fluxio-voice-confirm-target" data-blocked={pendingReviewTarget.blocked}>
+                <span>Confirmation target</span>
+                <strong>{pendingReviewTarget.label}</strong>
+                <p>{pendingReviewTarget.destination}</p>
+                <blockquote>
+                  {pendingReviewTarget.textPreview || "No composer text is ready."}
+                </blockquote>
+                <div className="fluxio-voice-confirm-facts">
+                  <span>{pendingReviewTarget.textLength || 0} characters</span>
+                  <span>{pendingReviewTarget.attachmentCount || 0} attachments</span>
+                  <span>{pendingReviewTarget.blocked ? pendingReviewTarget.blockedReason || "blocked" : "target ready"}</span>
+                </div>
+                <p>{pendingReviewTarget.detail}</p>
+              </div>
+            ) : null}
+          </div>
+          <div className="fluxio-voice-confirm-actions">
+            <button
+              disabled={Boolean(pendingReviewTarget?.blocked)}
+              onClick={() => voice.confirmPendingCommand()}
+              title={pendingReviewTarget?.blocked ? pendingReviewTarget.detail : undefined}
+              type="button"
+            >
+              Confirm
+            </button>
+            <button onClick={() => voice.cancelPendingCommand?.()} type="button">
+              Cancel
+            </button>
+          </div>
         </div>
       ) : null}
 

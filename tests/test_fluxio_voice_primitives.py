@@ -67,6 +67,8 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               buildAccidentalSendGuard,
               buildVoiceModeCheckpoint,
               buildVoiceCommandPacket,
+              buildVoiceCommandReviewTarget,
+              fingerprintVoiceText,
               parseVoiceCommand,
             } from './web/src/fluxio/voice/voiceCommandGrammar.js';
 
@@ -88,10 +90,32 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               command: send,
               transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [] },
             });
+            const readyTarget = buildVoiceCommandReviewTarget({
+              command: send,
+              context: {
+                composerText: 'Please continue the PR stack and include proof.',
+                missionId: 'mission-42',
+                missionTitle: 'Autonomous platform proof',
+                attachmentCount: 2,
+              },
+            });
+            const emptyTarget = buildVoiceCommandReviewTarget({
+              command: send,
+              context: { composerText: '', workspaceName: 'Syntelos Workspace' },
+            });
+            const workspaceChatTarget = buildVoiceCommandReviewTarget({
+              command: send,
+              context: {
+                composerText: 'Continue the stack',
+                workspaceName: 'Syntelos Workspace',
+                idleSendMode: 'chat',
+              },
+            });
             const confirmationPacket = buildVoiceCommandPacket({
               command: send,
               guard: confirmationGuard,
               transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [], combinedText: 'send message' },
+              reviewTarget: readyTarget,
             });
             const dictationModeCheckpoint = buildVoiceModeCheckpoint({
               text: 'send message',
@@ -120,7 +144,25 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
                 warnings: ['review before send'],
               },
             });
-            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, send, clear, guarded, confirmationGuard, confirmationPacket, dictationModeCheckpoint, dictationModeGuard, packet }));
+            console.log(JSON.stringify({
+              navigation,
+              lowConfidence,
+              approval,
+              unknown,
+              send,
+              clear,
+              guarded,
+              confirmationGuard,
+              confirmationPacket,
+              readyTarget,
+              emptyTarget,
+              workspaceChatTarget,
+              sameFingerprint: readyTarget.textFingerprint === fingerprintVoiceText('Please continue the PR stack and include proof.'),
+              changedFingerprint: readyTarget.textFingerprint === fingerprintVoiceText('Changed text'),
+              dictationModeCheckpoint,
+              dictationModeGuard,
+              packet
+            }));
             """
         )
 
@@ -139,6 +181,15 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["confirmationGuard"]["status"], "confirmation_required")
         self.assertTrue(payload["confirmationPacket"]["review"]["confirmationRequired"])
         self.assertFalse(payload["confirmationPacket"]["review"]["sendable"])
+        self.assertEqual(payload["confirmationPacket"]["review"]["target"]["label"], "Mission follow-up")
+        self.assertEqual(payload["confirmationPacket"]["review"]["target"]["attachmentCount"], 2)
+        self.assertFalse(payload["readyTarget"]["blocked"])
+        self.assertEqual(payload["readyTarget"]["destination"], "Autonomous platform proof")
+        self.assertTrue(payload["sameFingerprint"])
+        self.assertFalse(payload["changedFingerprint"])
+        self.assertTrue(payload["emptyTarget"]["blocked"])
+        self.assertEqual(payload["emptyTarget"]["blockedReason"], "empty_composer")
+        self.assertEqual(payload["workspaceChatTarget"]["label"], "Workspace chat message")
         self.assertTrue(payload["dictationModeCheckpoint"]["modeConflict"])
         self.assertEqual(payload["dictationModeCheckpoint"]["route"], "hold_for_mode_review")
         self.assertEqual(payload["dictationModeGuard"]["reason"], "dictation_contains_command")

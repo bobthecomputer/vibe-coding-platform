@@ -21,7 +21,7 @@ from control_route_interaction_smoke import (
 )
 
 
-OUT_DIR = ROOT / "artifacts" / "pr91-voice-dictation-repair-flow"
+OUT_DIR = ROOT / "artifacts" / "pr92-voice-confirmation-targets"
 CHECK_PATH = OUT_DIR / "voice-control-checkpoint-check.json"
 URL = "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=agent&surface=agent"
 
@@ -95,6 +95,20 @@ def main() -> int:
         )
         time.sleep(0.45)
         assert_current_control_shell(cdp)
+        cdp.eval(
+            """
+            (() => {
+              const field = document.querySelector('textarea[aria-label="Agent message composer"]');
+              if (!field) return false;
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+              if (setter) setter.call(field, "Continue the PR stack and attach proof.");
+              else field.value = "Continue the PR stack and attach proof.";
+              field.dispatchEvent(new Event("input", { bubbles: true }));
+              return true;
+            })()
+            """
+        )
+        time.sleep(0.25)
         checkpoint_text = str(cdp.eval('document.querySelector(".voice-control-checkpoint")?.innerText || ""'))
         opened_review = click_button(cdp, "Open voice review")
         time.sleep(0.8)
@@ -122,7 +136,6 @@ def main() -> int:
             """
         )
         time.sleep(0.45)
-        visible_text = f"{checkpoint_text}\n{str(cdp.eval('document.body.innerText || \"\"'))}"
         run_disabled = bool(
             cdp.eval(
                 """
@@ -136,6 +149,31 @@ def main() -> int:
         )
         mode_switch_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-mode-switch"))'))
         mode_checkpoint_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-mode-checkpoint"))'))
+        review_mode_checkpoint_text = str(cdp.eval('document.querySelector(".fluxio-voice-mode-checkpoint")?.innerText || ""'))
+        marked_reviewed = click_button(cdp, "Mark reviewed")
+        time.sleep(0.45)
+        command_mode_selected = click_button(cdp, "Command")
+        time.sleep(0.35)
+        run_clicked_for_confirmation = click_button(cdp, "Run")
+        time.sleep(0.65)
+        confirmation_target_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-confirm-target"))'))
+        cancel_found = bool(
+            cdp.eval(
+                """
+                Boolean(Array.from(document.querySelectorAll("button"))
+                  .find(item => (item.textContent || "").trim() === "Cancel"))
+                """
+            )
+        )
+        confirm_target_text = str(cdp.eval('document.querySelector(".fluxio-voice-confirm-target")?.innerText || ""'))
+        visible_text = f"{checkpoint_text}\n{review_mode_checkpoint_text}\n{str(cdp.eval('document.body.innerText || \"\"'))}\n{confirm_target_text}"
+        cdp.eval(
+            """
+            document.querySelector(".fluxio-voice-confirm-target")
+              ?.scrollIntoView({ block: "center", inline: "nearest" });
+            """
+        )
+        time.sleep(0.45)
         screenshot_path = OUT_DIR / "voice-control-checkpoint.png"
         capture(cdp, screenshot_path)
         expected = [
@@ -147,6 +185,9 @@ def main() -> int:
             "MODE CHECKPOINT",
             "Dictation mode",
             "hold_for_mode_review",
+            "CONFIRMATION TARGET",
+            "Continue the PR stack and attach proof.",
+            "Cancel",
         ]
         report = {
             "checkedAt": datetime.now(timezone.utc).isoformat(),
@@ -158,6 +199,13 @@ def main() -> int:
             "runDisabledAfterRiskyDictation": run_disabled,
             "modeSwitchFound": mode_switch_found,
             "modeCheckpointFound": mode_checkpoint_found,
+            "markedReviewed": marked_reviewed,
+            "commandModeSelected": command_mode_selected,
+            "runClickedForConfirmation": run_clicked_for_confirmation,
+            "confirmationTargetFound": confirmation_target_found,
+            "cancelFound": cancel_found,
+            "reviewModeCheckpointText": review_mode_checkpoint_text,
+            "confirmationTargetText": confirm_target_text,
             "checkpointText": checkpoint_text,
             "expectedFragments": expected,
             "missingFragments": [fragment for fragment in expected if fragment not in visible_text],
@@ -169,6 +217,11 @@ def main() -> int:
             and run_disabled
             and mode_switch_found
             and mode_checkpoint_found
+            and marked_reviewed
+            and command_mode_selected
+            and run_clicked_for_confirmation
+            and confirmation_target_found
+            and cancel_found
         )
         CHECK_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))

@@ -11,6 +11,7 @@ import {
 import {
   buildAccidentalSendGuard,
   buildVoiceCommandPacket,
+  buildVoiceCommandReviewTarget,
   describeVoiceCommandResult,
   parseVoiceCommand,
 } from "./voiceCommandGrammar.js";
@@ -245,6 +246,19 @@ function reducer(state, action) {
       status: describeVoiceCommandResult(action.command),
     };
   }
+  if (action.type === "command.cancelPending") {
+    return {
+      ...state,
+      pendingCommand: null,
+      sendGuard: {
+        status: "idle",
+        reason: "operator_cancelled",
+        label: "Canceled",
+        detail: "The pending voice command was canceled before it reached the shell.",
+      },
+      status: "Pending voice command canceled.",
+    };
+  }
   if (action.type === "command.guardBlocked") {
     return {
       ...state,
@@ -291,6 +305,7 @@ export function useVoiceInteractionController({
   speechAdapter,
   minConfidence,
   onVoiceCommand,
+  getCommandReviewContext,
 } = {}) {
   const [state, dispatch] = useReducer(reducer, null, () => createInitialState({ runtime }));
   const activeAdapterRef = useRef(null);
@@ -416,7 +431,12 @@ export function useVoiceInteractionController({
         return blockedCommand;
       }
       const guard = buildAccidentalSendGuard({ command, transcript: state.transcript, activeMode: state.inputMode });
-      const voicePacket = buildVoiceCommandPacket({ command, guard, transcript: state.transcript });
+      const reviewContext =
+        typeof getCommandReviewContext === "function" ? getCommandReviewContext(command) || {} : {};
+      const reviewTarget = command.requiresConfirmation
+        ? buildVoiceCommandReviewTarget({ command, context: reviewContext })
+        : null;
+      const voicePacket = buildVoiceCommandPacket({ command, guard, transcript: state.transcript, reviewTarget });
       if (guard.status === "review_required" || guard.status === "blocked") {
         const blockedCommand = {
           ...command,
@@ -432,6 +452,7 @@ export function useVoiceInteractionController({
       const commandWithPacket = {
         ...command,
         guard,
+        reviewTarget,
         voicePacket,
       };
       if (command.requiresConfirmation) {
@@ -445,11 +466,29 @@ export function useVoiceInteractionController({
       dispatch({ type: "command.complete", command: commandWithPacket, guard });
       return commandWithPacket;
     },
-    [minConfidence, onVoiceCommand, state.inputMode, state.transcript, stopListening],
+    [getCommandReviewContext, minConfidence, onVoiceCommand, state.inputMode, state.transcript, stopListening],
   );
+
+  const cancelPendingCommand = useCallback(() => {
+    dispatch({ type: "command.cancelPending" });
+    return true;
+  }, []);
 
   const confirmPendingCommand = useCallback(async () => {
     if (!state.pendingCommand) {
+      return null;
+    }
+    if (state.pendingCommand.reviewTarget?.blocked) {
+      dispatch({
+        type: "command.guardBlocked",
+        command: state.pendingCommand,
+        guard: {
+          status: "blocked",
+          reason: state.pendingCommand.reviewTarget.blockedReason || "review_target_blocked",
+          label: "Cannot confirm",
+          detail: state.pendingCommand.reviewTarget.detail || "Review the target before confirming this voice command.",
+        },
+      });
       return null;
     }
     if (state.pendingCommand.action === "voice.clearTranscript") {
@@ -485,10 +524,12 @@ export function useVoiceInteractionController({
       clearTranscript,
       setInputMode,
       runTranscriptCommand,
+      cancelPendingCommand,
       confirmPendingCommand,
     }),
     [
       appendTranscript,
+      cancelPendingCommand,
       clearTranscript,
       confirmPendingCommand,
       correctTranscriptSegment,
