@@ -1564,6 +1564,17 @@ button.builder-sidebar-nexus:hover {
   padding: 9px;
 }
 
+.runtime-proof-artifact-integrity {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 9px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.07), transparent 58%),
+    rgba(255, 255, 255, 0.024);
+  padding: 9px;
+}
+
 .runtime-proof-flight-head {
   display: flex;
   align-items: flex-start;
@@ -1618,6 +1629,32 @@ button.builder-sidebar-nexus:hover {
   font-size: 11px;
   overflow-wrap: anywhere;
   padding: 8px;
+}
+
+.runtime-proof-artifact-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.runtime-proof-artifact-list span {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  padding: 4px 7px;
+}
+
+.runtime-proof-artifact-list span[data-present="true"] {
+  border-color: rgba(142, 203, 111, 0.26);
+  color: rgba(192, 238, 169, 0.92);
+}
+
+.runtime-proof-artifact-list span[data-present="false"] {
+  border-color: rgba(245, 158, 11, 0.32);
+  color: rgba(252, 211, 77, 0.92);
 }
 
 .runtime-proof-next-actions {

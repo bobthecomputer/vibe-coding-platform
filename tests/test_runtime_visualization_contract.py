@@ -85,10 +85,16 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Latest runtime lane proof" in runtime_contract
     assert "Runtime readiness and recovery gates" in runtime_contract
     assert "Runtime proof flight recorder" in runtime_contract
+    assert "Proof artifact integrity" in runtime_contract
+    assert "Runtime proof artifact integrity" in runtime_contract
+    assert "missingGateArtifacts" in runtime_contract
+    assert "Missing gate proof:" in runtime_contract
     assert "proofGateSummary" in runtime_contract
     assert "proofRunCommand" in runtime_contract
     assert "requiredArtifacts" in runtime_contract
     assert "runtime-proof-flight-recorder" in runtime_contract
+    assert "runtime-proof-artifact-integrity" in runtime_contract
+    assert "runtime-proof-artifact-list" in runtime_contract
     assert "runtime-proof-next-actions" in runtime_contract
     assert "runtime-readiness-contract" in runtime_contract
     assert "runtime-readiness-summary-list" in runtime_contract
@@ -128,6 +134,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert ".runtime-readiness-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-gate-list" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-proof-flight-recorder" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-proof-artifact-integrity" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-proof-artifact-list" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-proof-flight-grid" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-proof-next-actions" in STYLES.read_text(encoding="utf-8")
     assert ".agent-runtime-proof-receipt" in STYLES.read_text(encoding="utf-8")
@@ -146,6 +154,7 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Runtime proof flight recorder" in runtime_contract
     assert "python scripts/runtime_lane_proof_harness.py --run-id lane-proof-fixture" in fixtures
     assert "runtime-proof-flight-recorder" in (ROOT / "scripts" / "runtime_proof_visual_smoke.py").read_text(encoding="utf-8")
+    assert "runtime-proof-artifact-integrity" in (ROOT / "scripts" / "runtime_proof_visual_smoke.py").read_text(encoding="utf-8")
 
 
 def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:

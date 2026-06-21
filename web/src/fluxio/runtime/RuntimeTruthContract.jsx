@@ -30,6 +30,11 @@ export function RuntimeTruthContract({ fusedRuntime }) {
   const proofArtifactCount = Object.keys(latestProof.artifactPaths || {}).length;
   const readiness = latestProof.fusedRuntime?.readinessSummary || latestProof.readinessSummary || {};
   const readinessRows = asList(readiness.lanes);
+  const artifactIntegrity = latestProof.artifactIntegrity || {};
+  const artifactIntegrityRows = asList(artifactIntegrity.artifacts);
+  const missingGateArtifacts = asList(
+    proofGateSummary.missingGateArtifacts || artifactIntegrity.missingGateArtifacts,
+  );
   const laneReadinessRows = proofLanes.flatMap(item =>
     asList(item.readiness?.gates).map(gate => ({
       runtimeId: item.runtimeId || item.label,
@@ -94,6 +99,46 @@ export function RuntimeTruthContract({ fusedRuntime }) {
               {requiredArtifacts.length > 0 ? (
                 <small>Artifacts: {requiredArtifacts.slice(0, 4).join(" · ")}</small>
               ) : null}
+              <div className="runtime-proof-artifact-integrity" aria-label="Runtime proof artifact integrity">
+                <div className="runtime-proof-flight-head">
+                  <span>Proof artifact integrity</span>
+                  <strong>
+                    {artifactIntegrity.missingCount || proofGateSummary.missingArtifactCount
+                      ? "Missing evidence"
+                      : "Files present"}
+                  </strong>
+                </div>
+                <div className="runtime-proof-flight-grid">
+                  <div>
+                    <span>Present files</span>
+                    <b>{artifactIntegrity.presentCount || proofGateSummary.presentArtifactCount || 0}</b>
+                  </div>
+                  <div>
+                    <span>Missing files</span>
+                    <b>{artifactIntegrity.missingCount || proofGateSummary.missingArtifactCount || 0}</b>
+                  </div>
+                  <div>
+                    <span>Gate-required</span>
+                    <b>{artifactIntegrity.gateRequiredCount || requiredArtifacts.length || 0}</b>
+                  </div>
+                  <div>
+                    <span>Tracked paths</span>
+                    <b>{artifactIntegrityRows.length || proofArtifactCount}</b>
+                  </div>
+                </div>
+                {artifactIntegrityRows.length > 0 ? (
+                  <div className="runtime-proof-artifact-list">
+                    {artifactIntegrityRows.slice(0, 4).map(item => (
+                      <span data-present={item.exists} key={`${item.key}-${item.path}`}>
+                        {item.name || item.key}: {item.exists ? "present" : "missing"}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {missingGateArtifacts.length > 0 ? (
+                  <small>Missing gate proof: {missingGateArtifacts.slice(0, 4).join(" · ")}</small>
+                ) : null}
+              </div>
               {nextRecoveryActions.length > 0 ? (
                 <ul className="runtime-proof-next-actions">
                   {nextRecoveryActions.slice(0, 3).map(action => (

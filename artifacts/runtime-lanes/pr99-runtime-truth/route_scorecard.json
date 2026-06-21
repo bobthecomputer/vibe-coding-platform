@@ -1,0 +1,264 @@
+{
+  "schemaVersion": "benchmark-board-route-scorecard/v1",
+  "boardId": "runtime-lane-proof-pr99-runtime-truth",
+  "decisionQuestion": "Which provider route plus runtime lane should own this Fluxio mission?",
+  "updatedAt": "2026-06-21T10:08:41.303249+00:00",
+  "candidates": [
+    {
+      "candidateId": "fluxio-openclaw-openai-runtime-lane-proof",
+      "label": "Fluxio supervisor with OpenClaw Openai route",
+      "modelId": "openai-codex/gpt-5.4-mini",
+      "harnessId": "fluxio_hybrid",
+      "providerRoute": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "role": "executor",
+        "effort": "medium",
+        "budgetClass": "balanced",
+        "authStatus": "unknown",
+        "routeReason": "OpenClaw owns gateway-style execution, remote approvals, and JSON session output."
+      },
+      "runtimeLane": {
+        "laneId": "openclaw",
+        "supervisorHarness": "fluxio_hybrid",
+        "executionTarget": "wsl2",
+        "runtimeAdapterAdded": false,
+        "handoffMode": "delegated"
+      },
+      "harnessQualities": {
+        "strengths": [
+          "Structured launch contract",
+          "Approval-aware handoff",
+          "JSON session output"
+        ],
+        "risks": [
+          "Provider auth must be healthy",
+          "Not a red-team scorer by itself"
+        ],
+        "prerequisites": [
+          "OpenClaw installed",
+          "OpenAI provider route configured",
+          "Fluxio proof artifact path writable"
+        ],
+        "scaffoldingSensitivity": "medium",
+        "recoverySupport": "restart_safe"
+      },
+      "verifierProof": {
+        "verifierType": "deterministic_test",
+        "independence": "deterministic",
+        "proofType": "route_contract_proof",
+        "liveRuntimeExecution": false,
+        "requiredCommands": [
+          "python -m pytest tests/test_runtime_lane_proof_harness.py"
+        ],
+        "proofArtifacts": [
+          "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\runtime_lane_proof.json",
+          "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\RUNTIME_LANE_PROOF.md",
+          "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\route_scorecard.json"
+        ],
+        "acceptanceGate": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route."
+      },
+      "readinessGates": [
+        {
+          "gateId": "openclaw_cli_available",
+          "label": "OpenClaw CLI available",
+          "status": "unchecked",
+          "proofArtifact": "runtime_lane_proof.json",
+          "recoveryAction": "Run setup doctor or install OpenClaw before promoting this lane to live execution.",
+          "blocksPromotion": true
+        },
+        {
+          "gateId": "openai_codex_route_configured",
+          "label": "OpenAI/Codex route configured",
+          "status": "unchecked",
+          "proofArtifact": "route_scorecard.json",
+          "recoveryAction": "Connect Codex OAuth or configure the OpenAI route, then rerun provider health checks.",
+          "blocksPromotion": true
+        },
+        {
+          "gateId": "openclaw_contract_written",
+          "label": "Route contract written",
+          "status": "passed",
+          "proofArtifact": "runtime_lane_proof.json",
+          "recoveryAction": "Rebuild the deterministic lane proof if this gate disappears.",
+          "blocksPromotion": false
+        },
+        {
+          "gateId": "openclaw_json_session_output",
+          "label": "JSON session output observed",
+          "status": "needs_live_validation",
+          "proofArtifact": "runtime_session.events.jsonl",
+          "recoveryAction": "Run one bounded OpenClaw proving mission and attach the runtime session events.",
+          "blocksPromotion": true
+        }
+      ],
+      "speedCostContext": {
+        "contextWindowTokens": 400000,
+        "expectedWallTimeBand": "10_60m",
+        "tokenBudgetBand": "balanced",
+        "costBand": "balanced",
+        "retryBudget": 1
+      },
+      "safeRedTeam": {
+        "applicable": false,
+        "scope": "not_applicable",
+        "scorecard": {
+          "containment": 0,
+          "harmfulInstructionAvoidance": 0,
+          "transcriptProof": 0,
+          "boundaryRespect": 0,
+          "rubricNotes": "Not selected for red-team scoring; use this lane for bounded execution proof."
+        },
+        "escalationRequired": false
+      },
+      "decision": {
+        "recommended": true,
+        "routeTier": "F5",
+        "useWhen": [
+          "The mission needs runtime lane visibility and deterministic proof artifacts.",
+          "OpenClaw owns gateway-style execution, remote approvals, and JSON session output."
+        ],
+        "doNotUseWhen": [
+          "Provider auth is missing or the route contract cannot be written.",
+          "The task can be completed by a deterministic local script without a model."
+        ],
+        "downgradeTriggers": [
+          "The work is read-only summarization.",
+          "The verifier can complete the proof without a delegated runtime lane."
+        ],
+        "upgradeTriggers": [
+          "Independent verifier rejects proof quality.",
+          "The task crosses into long-horizon or boundary-sensitive work."
+        ]
+      }
+    },
+    {
+      "candidateId": "fluxio-hermes-minimax-runtime-lane-proof",
+      "label": "Fluxio supervisor with Hermes Minimax route",
+      "modelId": "minimax/MiniMax-M3",
+      "harnessId": "fluxio_hybrid",
+      "providerRoute": {
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "role": "executor",
+        "effort": "high",
+        "budgetClass": "premium",
+        "authStatus": "unknown",
+        "routeReason": "Hermes owns long-running agent loops, scheduling, memory, and skill reuse."
+      },
+      "runtimeLane": {
+        "laneId": "hermes",
+        "supervisorHarness": "fluxio_hybrid",
+        "executionTarget": "nas",
+        "runtimeAdapterAdded": false,
+        "handoffMode": "delegated"
+      },
+      "harnessQualities": {
+        "strengths": [
+          "Long-running loop supervision",
+          "Skill reuse",
+          "Transcript-oriented proof"
+        ],
+        "risks": [
+          "Requires strict target boundaries",
+          "Higher setup and provider cost"
+        ],
+        "prerequisites": [
+          "Hermes installed",
+          "MiniMax provider route configured",
+          "Synthetic or authorized target scope recorded"
+        ],
+        "scaffoldingSensitivity": "high",
+        "recoverySupport": "checkpointed"
+      },
+      "verifierProof": {
+        "verifierType": "deterministic_test",
+        "independence": "deterministic",
+        "proofType": "route_contract_proof",
+        "liveRuntimeExecution": false,
+        "requiredCommands": [
+          "python -m pytest tests/test_runtime_lane_proof_harness.py"
+        ],
+        "proofArtifacts": [
+          "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\runtime_lane_proof.json",
+          "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\RUNTIME_LANE_PROOF.md",
+          "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\route_scorecard.json"
+        ],
+        "acceptanceGate": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route."
+      },
+      "readinessGates": [
+        {
+          "gateId": "hermes_cli_available",
+          "label": "Hermes CLI available",
+          "status": "unchecked",
+          "proofArtifact": "runtime_lane_proof.json",
+          "recoveryAction": "Repair Hermes from setup or NAS runtime doctor before long-running delegated work.",
+          "blocksPromotion": true
+        },
+        {
+          "gateId": "minimax_route_configured",
+          "label": "MiniMax route configured",
+          "status": "unchecked",
+          "proofArtifact": "route_scorecard.json",
+          "recoveryAction": "Connect the MiniMax/OpenClaw auth route or choose a cheaper verified model route.",
+          "blocksPromotion": true
+        },
+        {
+          "gateId": "hermes_skill_payload_visible",
+          "label": "Skill payload visible",
+          "status": "passed",
+          "proofArtifact": "runtime_lane_proof.json",
+          "recoveryAction": "Attach the selected skill payload before relaunching the Hermes lane.",
+          "blocksPromotion": false
+        },
+        {
+          "gateId": "hermes_transcript_proof_observed",
+          "label": "Transcript proof observed",
+          "status": "needs_live_validation",
+          "proofArtifact": "red_team_transcript.md",
+          "recoveryAction": "Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.",
+          "blocksPromotion": true
+        }
+      ],
+      "speedCostContext": {
+        "contextWindowTokens": 1000000,
+        "expectedWallTimeBand": "1_4h",
+        "tokenBudgetBand": "high",
+        "costBand": "high",
+        "retryBudget": 2
+      },
+      "safeRedTeam": {
+        "applicable": true,
+        "scope": "synthetic_lab",
+        "scorecard": {
+          "containment": 5,
+          "harmfulInstructionAvoidance": 5,
+          "transcriptProof": 3,
+          "boundaryRespect": 5,
+          "rubricNotes": "Only synthetic lab prompts or explicitly authorized private targets qualify for this lane."
+        },
+        "escalationRequired": true
+      },
+      "decision": {
+        "recommended": false,
+        "routeTier": "F7",
+        "useWhen": [
+          "The mission needs runtime lane visibility and deterministic proof artifacts.",
+          "Hermes owns long-running agent loops, scheduling, memory, and skill reuse."
+        ],
+        "doNotUseWhen": [
+          "Provider auth is missing or the route contract cannot be written.",
+          "The task can be completed by a deterministic local script without a model."
+        ],
+        "downgradeTriggers": [
+          "The work is read-only summarization.",
+          "The verifier can complete the proof without a delegated runtime lane."
+        ],
+        "upgradeTriggers": [
+          "Independent verifier rejects proof quality.",
+          "The task crosses into long-horizon or boundary-sensitive work."
+        ]
+      }
+    }
+  ]
+}

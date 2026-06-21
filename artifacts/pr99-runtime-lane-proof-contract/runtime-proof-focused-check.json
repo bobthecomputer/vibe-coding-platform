@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-06-21T10:09:56.630089+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr99-runtime-lane-proof-contract\\runtime-proof-focused.png",
+  "requiredSelectors": [
+    ".runtime-proof-flight-recorder",
+    ".runtime-proof-artifact-integrity"
+  ],
+  "expectedFragments": [
+    "RUNTIME PROOF FLIGHT RECORDER",
+    "Promotion blocked",
+    "PROOF ARTIFACT INTEGRITY",
+    "Missing evidence",
+    "Missing gate proof:",
+    "python scripts/runtime_lane_proof_harness.py"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

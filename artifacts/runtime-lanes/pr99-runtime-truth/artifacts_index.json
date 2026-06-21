@@ -1,0 +1,10 @@
+{
+  "runId": "pr99-runtime-truth",
+  "root": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth",
+  "paths": {
+    "proof": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\runtime_lane_proof.json",
+    "markdown": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\route_scorecard.json",
+    "artifact_index": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\runtime-lanes\\pr99-runtime-truth\\artifacts_index.json"
+  }
+}

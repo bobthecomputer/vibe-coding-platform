@@ -6807,6 +6807,26 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
     artifact_paths = payload.get("artifactPaths", {})
     if not isinstance(artifact_paths, dict):
         artifact_paths = {}
+    artifact_statuses = []
+    present_artifact_names: set[str] = set()
+    tracked_artifact_names: set[str] = set()
+    for key, value in artifact_paths.items():
+        if not isinstance(key, str) or not isinstance(value, str) or not value.strip():
+            continue
+        artifact_path = Path(value)
+        exists = artifact_path.exists()
+        tracked_artifact_names.add(artifact_path.name)
+        if exists:
+            present_artifact_names.add(artifact_path.name)
+        artifact_statuses.append(
+            {
+                "key": key,
+                "path": str(value),
+                "name": artifact_path.name,
+                "exists": exists,
+                "requiredByGate": False,
+            }
+        )
     safety_contract = payload.get("safetyContract", {})
     if not isinstance(safety_contract, dict):
         safety_contract = {}
@@ -6816,6 +6836,23 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
     readiness_summary = fused_runtime.get("readinessSummary", payload.get("readinessSummary", {}))
     if not isinstance(readiness_summary, dict):
         readiness_summary = {}
+    gate_required_artifacts: set[str] = set()
+    for lane in payload.get("lanes", []):
+        if not isinstance(lane, dict):
+            continue
+        readiness = lane.get("readiness", {})
+        if not isinstance(readiness, dict):
+            continue
+        for gate in readiness.get("gates", []):
+            if not isinstance(gate, dict):
+                continue
+            artifact_name = str(gate.get("proofArtifact") or "").strip()
+            if artifact_name:
+                gate_required_artifacts.add(artifact_name)
+    for item in artifact_statuses:
+        item["requiredByGate"] = item["name"] in gate_required_artifacts
+    missing_artifacts = sorted((tracked_artifact_names | gate_required_artifacts) - present_artifact_names)
+    missing_gate_artifacts = sorted(gate_required_artifacts - present_artifact_names)
     run_id = str(payload.get("runId") or proof_path.parent.name)
     return {
         "runId": run_id,
@@ -6831,6 +6868,16 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
             key: str(value)
             for key, value in artifact_paths.items()
             if isinstance(key, str) and isinstance(value, str)
+        },
+        "artifactIntegrity": {
+            "schemaVersion": "runtime-proof-artifact-integrity.v1",
+            "presentCount": sum(1 for item in artifact_statuses if item["exists"]),
+            "missingCount": len(missing_artifacts),
+            "artifactComplete": len(missing_artifacts) == 0,
+            "gateRequiredCount": len(gate_required_artifacts),
+            "missingArtifacts": missing_artifacts,
+            "missingGateArtifacts": missing_gate_artifacts,
+            "artifacts": artifact_statuses,
         },
         "safetyContract": {
             "liveModelCalls": bool(safety_contract.get("liveModelCalls")),
@@ -6867,6 +6914,18 @@ def _runtime_proof_gate_summary(latest_proof: dict | None) -> dict:
     readiness = latest_proof.get("readinessSummary", {})
     if not isinstance(readiness, dict):
         readiness = {}
+    artifact_integrity = latest_proof.get("artifactIntegrity", {})
+    if not isinstance(artifact_integrity, dict):
+        artifact_integrity = {}
+    missing_artifact_count = int(artifact_integrity.get("missingCount") or 0)
+    readiness_promotion_blocked = bool(readiness.get("promotionBlocked", True))
+    promotion_blocked = readiness_promotion_blocked or missing_artifact_count > 0
+    readiness_status = str(readiness.get("overallStatus") or "contract_ready_live_unverified")
+    status = (
+        "artifact_incomplete"
+        if missing_artifact_count > 0 and not readiness_promotion_blocked
+        else readiness_status
+    )
     gates: list[dict] = []
     next_actions: list[str] = []
     for lane in latest_proof.get("lanes", []):
@@ -6898,19 +6957,38 @@ def _runtime_proof_gate_summary(latest_proof: dict | None) -> dict:
     )
     if not next_actions:
         next_actions.append("Review the latest runtime lane proof before assigning live work.")
+    if missing_artifact_count > 0:
+        next_actions.insert(
+            0,
+            "Rerun the deterministic runtime lane proof harness or restore missing proof artifacts before promotion.",
+        )
     return {
         "schemaVersion": "runtime-proof-gate-summary.v1",
-        "status": str(readiness.get("overallStatus") or "contract_ready_live_unverified"),
-        "promotionBlocked": bool(readiness.get("promotionBlocked", True)),
+        "status": status,
+        "promotionBlocked": promotion_blocked,
         "blockingGateCount": int(
             readiness.get("blockingGateCount", 0)
             or sum(1 for gate in gates if gate.get("blocksPromotion"))
-        ),
+        )
+        + (1 if missing_artifact_count > 0 else 0),
         "passedGateCount": sum(1 for gate in gates if str(gate.get("status")) == "passed"),
         "liveValidationGateCount": sum(
             1 for gate in gates if str(gate.get("status")) == "needs_live_validation"
         ),
         "uncheckedGateCount": sum(1 for gate in gates if str(gate.get("status")) == "unchecked"),
+        "presentArtifactCount": int(artifact_integrity.get("presentCount") or 0),
+        "missingArtifactCount": missing_artifact_count,
+        "artifactComplete": missing_artifact_count == 0,
+        "missingArtifacts": [
+            str(item)
+            for item in artifact_integrity.get("missingArtifacts", [])
+            if str(item).strip()
+        ],
+        "missingGateArtifacts": [
+            str(item)
+            for item in artifact_integrity.get("missingGateArtifacts", [])
+            if str(item).strip()
+        ],
         "proofRunCommand": str(
             latest_proof.get("proofRunCommand")
             or f"python scripts/runtime_lane_proof_harness.py --run-id {latest_proof.get('runId', 'runtime-lane-proof')}"

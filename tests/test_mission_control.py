@@ -24,6 +24,7 @@ from grant_agent.mission_control import (
     _mission_title,
     _platform_path_for_windows_drive,
     _recover_evidence_path,
+    _runtime_proof_gate_summary,
     _sync_project_tree,
     build_harness_lab_snapshot,
     build_release_readiness_snapshot,
@@ -62,6 +63,83 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(len(workspaces), 1)
             saved = json.loads((control_dir / "workspaces.json").read_text(encoding="utf-8"))
             self.assertEqual(saved[0]["workspace_id"], workspaces[0].workspace_id)
+
+    def test_runtime_proof_gate_summary_blocks_missing_artifacts_without_double_counting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_path = root / "runtime_lane_proof.json"
+            scorecard_path = root / "route_scorecard.json"
+            proof_path.write_text("{}", encoding="utf-8")
+            latest_proof = {
+                "runId": "artifact-gap",
+                "proofRunCommand": "python scripts/runtime_lane_proof_harness.py --run-id artifact-gap",
+                "readinessSummary": {
+                    "overallStatus": "ready_for_supervised_live_run",
+                    "promotionBlocked": False,
+                    "blockingGateCount": 0,
+                },
+                "lanes": [
+                    {
+                        "runtimeId": "openclaw",
+                        "readiness": {
+                            "nextRecoveryAction": "",
+                            "gates": [
+                                {
+                                    "gateId": "route_scorecard_written",
+                                    "label": "Route scorecard written",
+                                    "status": "passed",
+                                    "proofArtifact": "route_scorecard.json",
+                                    "recoveryAction": "Restore route scorecard.",
+                                    "blocksPromotion": False,
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "artifactPaths": {
+                    "proof": str(proof_path),
+                    "route_scorecard": str(scorecard_path),
+                },
+                "artifactIntegrity": {
+                    "schemaVersion": "runtime-proof-artifact-integrity.v1",
+                    "presentCount": 1,
+                    "missingCount": 1,
+                    "artifactComplete": False,
+                    "gateRequiredCount": 1,
+                    "missingArtifacts": ["route_scorecard.json"],
+                    "missingGateArtifacts": ["route_scorecard.json"],
+                    "artifacts": [
+                        {
+                            "key": "proof",
+                            "name": "runtime_lane_proof.json",
+                            "path": str(proof_path),
+                            "exists": True,
+                            "requiredByGate": False,
+                        },
+                        {
+                            "key": "route_scorecard",
+                            "name": "route_scorecard.json",
+                            "path": str(scorecard_path),
+                            "exists": False,
+                            "requiredByGate": True,
+                        },
+                    ],
+                },
+            }
+
+            summary = _runtime_proof_gate_summary(latest_proof)
+
+        self.assertEqual(summary["status"], "artifact_incomplete")
+        self.assertTrue(summary["promotionBlocked"])
+        self.assertEqual(summary["blockingGateCount"], 1)
+        self.assertEqual(summary["missingArtifactCount"], 1)
+        self.assertEqual(summary["missingArtifacts"], ["route_scorecard.json"])
+        self.assertEqual(summary["missingGateArtifacts"], ["route_scorecard.json"])
+        self.assertFalse(summary["artifactComplete"])
+        self.assertIn(
+            "Rerun the deterministic runtime lane proof harness",
+            summary["nextRecoveryActions"][0],
+        )
 
     def test_workspace_store_reanchors_old_release_root_to_current_release(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1827,6 +1905,14 @@ class MissionControlTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (proof_dir / "RUNTIME_LANE_PROOF.md").write_text(
+                "# Runtime lane proof\n",
+                encoding="utf-8",
+            )
+            (proof_dir / "route_scorecard.json").write_text(
+                json.dumps({"schemaVersion": "benchmark-board-route-scorecard/v1"}),
+                encoding="utf-8",
+            )
 
             snapshot = build_harness_lab_snapshot(root)
 
@@ -1894,9 +1980,20 @@ class MissionControlTests(unittest.TestCase):
                 "runtime-proof-gate-summary.v1",
             )
             self.assertTrue(fused_runtime["proofGateSummary"]["promotionBlocked"])
-            self.assertEqual(fused_runtime["proofGateSummary"]["blockingGateCount"], 4)
+            self.assertEqual(fused_runtime["proofGateSummary"]["blockingGateCount"], 5)
             self.assertEqual(fused_runtime["proofGateSummary"]["liveValidationGateCount"], 2)
             self.assertEqual(fused_runtime["proofGateSummary"]["uncheckedGateCount"], 2)
+            self.assertEqual(fused_runtime["proofGateSummary"]["presentArtifactCount"], 3)
+            self.assertEqual(fused_runtime["proofGateSummary"]["missingArtifactCount"], 2)
+            self.assertFalse(fused_runtime["proofGateSummary"]["artifactComplete"])
+            self.assertIn(
+                "Rerun the deterministic runtime lane proof harness",
+                fused_runtime["proofGateSummary"]["nextRecoveryActions"][0],
+            )
+            self.assertIn(
+                "red_team_transcript.md",
+                fused_runtime["proofGateSummary"]["missingGateArtifacts"],
+            )
             self.assertIn(
                 "python scripts/runtime_lane_proof_harness.py --run-id runtime-lane-proof-test",
                 fused_runtime["proofGateSummary"]["proofRunCommand"],
@@ -1917,6 +2014,18 @@ class MissionControlTests(unittest.TestCase):
             )
             self.assertFalse(
                 fused_runtime["latestLaneProof"]["safetyContract"]["liveRuntimeExecution"]
+            )
+            artifact_integrity = fused_runtime["latestLaneProof"]["artifactIntegrity"]
+            self.assertEqual(
+                artifact_integrity["schemaVersion"],
+                "runtime-proof-artifact-integrity.v1",
+            )
+            self.assertEqual(artifact_integrity["presentCount"], 3)
+            self.assertEqual(artifact_integrity["missingCount"], 2)
+            self.assertFalse(artifact_integrity["artifactComplete"])
+            self.assertIn("runtime_session.events.jsonl", artifact_integrity["missingGateArtifacts"])
+            self.assertTrue(
+                all(item["exists"] for item in artifact_integrity["artifacts"])
             )
             lane_roles = {
                 item["runtimeId"]: item["role"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -22,8 +23,12 @@ from control_route_interaction_smoke import (
 )
 
 
-OUT_DIR = ROOT / "artifacts" / "pr86-fused-runtime-proof-gates"
+OUT_DIR = Path(os.environ.get("FLUXIO_PROOF_OUT_DIR", ROOT / "artifacts" / "pr99-runtime-lane-proof-contract"))
 CHECK_PATH = OUT_DIR / "runtime-proof-focused-check.json"
+RUNTIME_PROOF_SELECTORS = [
+    ".runtime-proof-flight-recorder",
+    ".runtime-proof-artifact-integrity",
+]
 
 
 def main() -> int:
@@ -59,13 +64,13 @@ def main() -> int:
         wait_for_control_shell(cdp)
         deadline = time.time() + 12
         while time.time() < deadline:
-            if cdp.eval('Boolean(document.querySelector(".runtime-proof-flight-recorder"))'):
+            if cdp.eval('Boolean(document.querySelector(".runtime-proof-flight-recorder")) && Boolean(document.querySelector(".runtime-proof-artifact-integrity"))'):
                 break
             cdp.eval("window.scrollBy(0, 420)")
             time.sleep(0.35)
         cdp.eval(
             """
-            document.querySelector(".runtime-proof-flight-recorder")
+            document.querySelector(".runtime-proof-artifact-integrity")
               ?.scrollIntoView({ block: "center", inline: "nearest" });
             """
         )
@@ -75,10 +80,13 @@ def main() -> int:
         final_path = OUT_DIR / "runtime-proof-focused.png"
         if screenshot_path != final_path:
             screenshot_path.replace(final_path)
-        visible_text = str(cdp.eval('document.querySelector(".runtime-proof-flight-recorder")?.innerText || ""'))
+        visible_text = str(cdp.eval('document.querySelector(".runtime-truth-contract")?.innerText || ""'))
         expected = [
             "RUNTIME PROOF FLIGHT RECORDER",
             "Promotion blocked",
+            "PROOF ARTIFACT INTEGRITY",
+            "Missing evidence",
+            "Missing gate proof:",
             "python scripts/runtime_lane_proof_harness.py",
         ]
         report = {
@@ -86,6 +94,7 @@ def main() -> int:
             "url": BASE_URL,
             "browser": str(CHROME),
             "screenshotPath": str(final_path.resolve()),
+            "requiredSelectors": RUNTIME_PROOF_SELECTORS,
             "expectedFragments": expected,
             "missingFragments": [fragment for fragment in expected if fragment not in visible_text],
         }
