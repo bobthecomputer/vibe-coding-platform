@@ -42,7 +42,7 @@ const RedTeamProofBoard = lazy(() =>
 const VisualProofReceiptGallery = lazy(() => import("./proof/VisualProofReceiptGallery.jsx"));
 const RuntimeTruth = lazy(() => import("./runtime/RuntimeTruthContract.jsx"));
 const VoiceCommandPanel = lazy(() =>
-  import("./voice/index.js").then(module => ({
+  import("./voice/VoiceCommandPanel.jsx").then(module => ({
     default: module.VoiceCommandPanel,
   })),
 );

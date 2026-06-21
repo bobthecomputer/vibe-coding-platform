@@ -425,6 +425,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("LazySurfaceFallback", shell)
         self.assertIn("generatedArtifacts={generatedImageArtifacts}", shell)
         self.assertIn("VoiceCommandPanel", shell)
+        self.assertIn('import("./voice/VoiceCommandPanel.jsx")', shell)
+        self.assertNotIn('import("./voice/index.js")', shell)
         self.assertIn('surface === "images"', shell)
         self.assertIn('surface === "voice"', shell)
         self.assertIn("handleImageStudioRequestDraft", shell)
