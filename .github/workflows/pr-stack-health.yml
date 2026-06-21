@@ -1,0 +1,56 @@
+name: PR Stack Health
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_chain:
+        description: "Maximum allowed open PR stack depth"
+        required: false
+        default: "5"
+  schedule:
+    - cron: "17 6 * * *"
+  pull_request:
+    paths:
+      - "scripts/pr_stack_health.py"
+      - "tests/test_pr_stack_health.py"
+      - ".github/workflows/pr-stack-health.yml"
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "scripts/pr_stack_health.py"
+      - "tests/test_pr_stack_health.py"
+      - ".github/workflows/pr-stack-health.yml"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-stack-health-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-stack-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Test PR stack guard
+        run: python -m unittest tests.test_pr_stack_health
+      - name: Check open PR stack depth
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_CHAIN: ${{ inputs.max_chain || '5' }}
+        run: |
+          mkdir -p artifacts/pr-stack-health
+          python scripts/pr_stack_health.py \
+            --max-chain "$MAX_CHAIN" \
+            --output artifacts/pr-stack-health/pr-stack-health.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-stack-health
+          path: artifacts/pr-stack-health/pr-stack-health.json
+          if-no-files-found: error
