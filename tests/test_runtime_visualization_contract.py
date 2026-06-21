@@ -73,8 +73,13 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Fused runtime truth contract" in runtime_contract
     assert "Runtime adapter added" in runtime_contract
     assert "Providers stay model routes, not runtime lanes" in runtime_contract
+    assert "Latest runtime lane proof" in runtime_contract
+    assert "live model calls:" in runtime_contract
+    assert "runtime adapter added:" in runtime_contract
     assert "runtime-truth-contract" in runtime_contract
+    assert "runtime-lane-proof-receipt" in runtime_contract
     assert ".runtime-truth-contract" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-lane-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert "supervisor_not_runtime_adapter" in fixtures
     assert "provider_model_route" in fixtures
 

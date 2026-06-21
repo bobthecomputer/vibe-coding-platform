@@ -218,7 +218,7 @@ const baseSnapshot = {
     fusedRuntime: {
       schemaVersion: 'fused-runtime-status.v1',
       status: 'operational',
-      summary: 'Fluxio hybrid has proof across the mission loop, delegated runtime lanes, and route contracts.',
+      summary: 'Fluxio hybrid has mission, delegated-lane, and route-contract proof.',
       productionHarness: 'fluxio_hybrid',
       compatibilityHarnesses: ['legacy_autonomous_engine'],
       supervisor: {
@@ -252,6 +252,12 @@ const baseSnapshot = {
         routeContractRunCount: 1,
         supervisorSessionCount: 1,
         fusedRuntimeRole: 'supervisor_not_runtime_adapter',
+      },
+      latestLaneProof: {
+        runId: 'lane-proof-fixture',
+        lanes: [{ runtimeId: 'openclaw', skill: 'jbheaven_godmode_lab', provider: 'openai-codex', model: 'gpt-5.4-mini' }],
+        artifactPaths: { proof: 'runtime_lane_proof.json' },
+        safetyContract: { liveModelCalls: false, runtimeAdapterAdded: false },
       },
       gaps: [],
     },

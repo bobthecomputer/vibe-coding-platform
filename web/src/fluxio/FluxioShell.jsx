@@ -548,9 +548,9 @@ function buildDefaultReferenceStudio(routeOverrides) {
         name: "JBHEAVEN Godmode Lab",
         summary: "Controlled Hermes/G0DM0D3 red-team pack with proof transcripts",
         description:
-          "Use the imported NAS Hermes Godmode/G0DM0D3 skill bundle for authorized JBHEAVEN, GBEH, Gandalf, and controlled model safety probing with transcript proof and explicit route decisions.",
+          "Use NAS Hermes Godmode/G0DM0D3 skills for authorized JBHEAVEN lab probes with transcript proof and explicit routes.",
         triggerConditions:
-          "Use this skill when the user mentions JBHEAVEN, GBEH, Gandalf, Godmode, G0DM0D3, Hermes red teaming, OpenCode model probes, or asks to package/prove the NAS Godmode skill bundle.",
+          "Use for JBHEAVEN, GBEH, Gandalf, Godmode, Hermes red teaming, OpenCode probes, or NAS Godmode proof.",
         instructions: [
           "Confirm the target is a controlled, authorized lab or local JBHEAVEN project before running probes.",
           "Start from the imported Hermes sources: red-teaming/godmode, mlops/inference/obliteratus, autonomous-ai-agents/opencode, and autonomous-ai-agents/hermes-agent.",
@@ -591,7 +591,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
         name: "Hermes Skill Packager",
         summary: "Select and zip the strongest NAS Hermes skills with a manifest",
         description:
-          "Select, package, and document imported NAS Hermes skills into portable review bundles with provenance, validation notes, and app-catalog mapping.",
+          "Package imported NAS Hermes skills into review bundles with provenance, validation notes, and catalog mapping.",
         triggerConditions:
           "Use this skill when the user asks to download, package, zip, promote, import, or review the best NAS Hermes skills for Fluxio/JBHEAVEN.",
         instructions: [
@@ -627,7 +627,7 @@ function buildDefaultReferenceStudio(routeOverrides) {
         name: "Runtime Loop Supervisor",
         summary: "Plan-act-observe-verify loops across Hermes, OpenClaw, OpenCodeGo, Codex, and MiniMax",
         description:
-          "Design and verify self-running agent loops that plan, act, observe, verify, route, and resume without hiding blockers, approvals, model choice, or proof.",
+          "Design agent loops that plan, act, observe, verify, route, and resume with visible blockers, approvals, model, and proof.",
         triggerConditions:
           "Use this skill when the user asks for automatic routing, loop systems, runtime integration, OpenClaw/Hermes/OpenCodeGo differentiation, long-running missions, or proof-backed retries.",
         instructions: [
@@ -6992,7 +6992,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       totalApps: asList(snapshot?.bridgeLab?.discoveredApps).length,
       recommendation:
         snapshot?.bridgeLab?.recommendation ||
-        "Bridge hand-offs between runtimes and connected apps will appear here.",
+        "Runtime and app hand-offs appear here.",
     };
   }, [bridgeSessions, snapshot?.bridgeLab?.discoveredApps, snapshot?.bridgeLab?.recommendation]);
   const selectedAgentRoute = useMemo(
@@ -15652,7 +15652,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <article className="builder-panel builder-panel-focus autonomy-guardrail-board">
                     <p className="eyebrow">Autonomy guardrails</p>
                     <h3>Continue until a real boundary</h3>
-                    <p>Normal blockers trigger inspection, safe branching, parallel work, and proof capture before the agent stops.</p>
+                    <p>Blockers trigger inspection, safe branching, parallel work, and proof before stopping.</p>
                     <div className="builder-thread-list">
                       {autonomyGuardrails.map(item => (
                         <article className="builder-thread-item tone-neutral" key={`autonomy-guardrail-${item.id}`}>
@@ -15674,7 +15674,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           ? snapshot.harnessLab.shadowCandidates.map(item => titleizeToken(item)).join(", ")
                           : "None"}
                       </span>
-                      <span>{snapshot.harnessLab?.fusedRuntime?.summary || snapshot.harnessLab?.recommendation || "Runtime truth visible."}</span>
+                      <span>{snapshot.harnessLab?.fusedRuntime?.summary || snapshot.harnessLab?.recommendation || "Runtime truth."}</span>
                       <span>
                         Sup: {snapshot.harnessLab?.fusedRuntime?.supervisor?.activeSessionCount || 0} active / {snapshot.harnessLab?.fusedRuntime?.supervisor?.waitingApprovalCount || 0} waiting
                       </span>

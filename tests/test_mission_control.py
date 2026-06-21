@@ -1558,6 +1558,53 @@ class MissionControlTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            proof_dir = root / "artifacts" / "runtime-lanes" / "runtime-lane-proof-test"
+            proof_dir.mkdir(parents=True)
+            (proof_dir / "runtime_lane_proof.json").write_text(
+                json.dumps(
+                    {
+                        "runId": "runtime-lane-proof-test",
+                        "mode": "deterministic-no-live-runtime-call",
+                        "createdAt": "2026-06-21T00:00:00Z",
+                        "lanes": [
+                            {
+                                "runtimeId": "openclaw",
+                                "label": "OpenClaw",
+                                "skill": "jbheaven_godmode_lab",
+                                "routeSummary": "OpenClaw / OpenAI Codex",
+                                "routeContract": {
+                                    "provider": "openai-codex",
+                                    "model": "gpt-5.4-mini",
+                                },
+                            },
+                            {
+                                "runtimeId": "hermes",
+                                "label": "Hermes",
+                                "skill": "jbheaven_godmode_lab",
+                                "routeSummary": "Hermes / MiniMax",
+                                "routeContract": {
+                                    "provider": "minimax",
+                                    "model": "MiniMax-M3",
+                                },
+                            },
+                        ],
+                        "artifactPaths": {
+                            "proof": str(proof_dir / "runtime_lane_proof.json"),
+                            "markdown": str(proof_dir / "RUNTIME_LANE_PROOF.md"),
+                            "route_scorecard": str(proof_dir / "route_scorecard.json"),
+                        },
+                        "safetyContract": {
+                            "liveModelCalls": False,
+                            "realTargets": False,
+                            "harmfulInstructions": False,
+                            "runtimeAdapterAdded": False,
+                            "openCodeGoRuntimeAdded": False,
+                        },
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
 
             snapshot = build_harness_lab_snapshot(root)
 
@@ -1592,6 +1639,20 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(
                 fused_runtime["proofSignals"]["fusedRuntimeRole"],
                 "supervisor_not_runtime_adapter",
+            )
+            self.assertEqual(
+                fused_runtime["latestLaneProof"]["runId"],
+                "runtime-lane-proof-test",
+            )
+            self.assertEqual(
+                fused_runtime["latestLaneProof"]["lanes"][0]["skill"],
+                "jbheaven_godmode_lab",
+            )
+            self.assertFalse(
+                fused_runtime["latestLaneProof"]["safetyContract"]["liveModelCalls"]
+            )
+            self.assertFalse(
+                fused_runtime["latestLaneProof"]["safetyContract"]["runtimeAdapterAdded"]
             )
             lane_roles = {
                 item["runtimeId"]: item["role"]

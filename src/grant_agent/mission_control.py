@@ -6208,6 +6208,65 @@ def _route_decision_fit(row: dict) -> tuple[str, str]:
     )
 
 
+def _latest_runtime_lane_proof(root: Path) -> dict | None:
+    artifact_root = root / "artifacts" / "runtime-lanes"
+    if not artifact_root.exists():
+        return None
+    proof_paths = sorted(
+        artifact_root.glob("*/runtime_lane_proof.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not proof_paths:
+        return None
+    proof_path = proof_paths[0]
+    payload = _load_json_file(proof_path)
+    if not isinstance(payload, dict):
+        return None
+    lanes = []
+    for lane in payload.get("lanes", []):
+        if not isinstance(lane, dict):
+            continue
+        route = lane.get("routeContract", {})
+        if not isinstance(route, dict):
+            route = {}
+        lanes.append(
+            {
+                "runtimeId": str(lane.get("runtimeId") or ""),
+                "label": str(lane.get("label") or lane.get("runtimeId") or ""),
+                "skill": str(lane.get("skill") or ""),
+                "provider": str(route.get("provider") or ""),
+                "model": str(route.get("model") or ""),
+                "routeSummary": str(lane.get("routeSummary") or ""),
+            }
+        )
+    artifact_paths = payload.get("artifactPaths", {})
+    if not isinstance(artifact_paths, dict):
+        artifact_paths = {}
+    safety_contract = payload.get("safetyContract", {})
+    if not isinstance(safety_contract, dict):
+        safety_contract = {}
+    return {
+        "runId": str(payload.get("runId") or proof_path.parent.name),
+        "mode": str(payload.get("mode") or ""),
+        "createdAt": str(payload.get("createdAt") or ""),
+        "path": str(proof_path),
+        "lanes": lanes[:4],
+        "artifactPaths": {
+            key: str(value)
+            for key, value in artifact_paths.items()
+            if isinstance(key, str) and isinstance(value, str)
+        },
+        "safetyContract": {
+            "liveModelCalls": bool(safety_contract.get("liveModelCalls")),
+            "realTargets": bool(safety_contract.get("realTargets")),
+            "harmfulInstructions": bool(safety_contract.get("harmfulInstructions")),
+            "runtimeAdapterAdded": bool(safety_contract.get("runtimeAdapterAdded")),
+            "openCodeGoRuntimeAdded": bool(safety_contract.get("openCodeGoRuntimeAdded")),
+        },
+    }
+
+
 def _benchmark_scorecard_fixture_path() -> Path:
     return (
         Path(__file__).resolve().parents[2]
@@ -6711,6 +6770,7 @@ def _fused_runtime_status(
             "fusedRuntimeRole": "supervisor_not_runtime_adapter",
             "openCodeGoRole": "route_lane_only",
         },
+        "latestLaneProof": _latest_runtime_lane_proof(root),
         "gaps": gaps,
     }
 

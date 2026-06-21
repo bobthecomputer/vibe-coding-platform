@@ -1107,6 +1107,43 @@ button.builder-sidebar-nexus:hover {
   overflow-wrap: anywhere;
 }
 
+.runtime-lane-proof-receipt {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid rgba(142, 203, 111, 0.18);
+  border-radius: 8px;
+  background: rgba(142, 203, 111, 0.055);
+  padding: 8px;
+}
+
+.runtime-lane-proof-receipt b,
+.runtime-lane-proof-receipt span,
+.runtime-lane-proof-receipt small,
+.runtime-lane-proof-receipt li {
+  overflow-wrap: anywhere;
+}
+
+.runtime-lane-proof-receipt ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-lane-proof-receipt li,
+.runtime-lane-proof-receipt span,
+.runtime-lane-proof-receipt small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.runtime-lane-proof-receipt span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .builder-metric-card {
   display: grid;
   gap: 4px;
