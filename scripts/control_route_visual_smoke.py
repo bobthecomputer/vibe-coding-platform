@@ -81,6 +81,17 @@ def decode_output(value: bytes | None) -> str:
     return (value or b"").decode("utf-8", errors="replace")
 
 
+def git_head() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def image_stats(path: Path) -> dict[str, object]:
     if Image is None:
         raise RuntimeError(f"Pillow is required for pixel checks: {PIL_IMPORT_ERROR}")
@@ -176,9 +187,13 @@ def main() -> int:
     expected = args.expect or ["Syntelos", "Agent", "Builder", "OpenClaw"]
     missing = [] if not dom_supported else [fragment for fragment in expected if fragment not in dom_text]
     skin_errors = []
+    proof_selectors = {}
+    placeholder_frame_paths = []
     if dom_supported:
         if 'class="fluxio-shell' not in dom_text:
             skin_errors.append("missing .fluxio-shell current app root")
+        if 'class="fluxio-shell' in dom_text and 'data-mode="builder"' not in dom_text:
+            skin_errors.append("missing .fluxio-shell[data-mode=\"builder\"] current builder app identity")
         if 'class="fluxio-error-screen' in dom_text:
             skin_errors.append("rendered Fluxio recoverable error screen")
         if "Fluxio hit a render failure" in dom_text:
@@ -187,11 +202,35 @@ def main() -> int:
             skin_errors.append("rendered removed .fluxos-shell reference skin")
         if 'class="grand-public-page' in dom_text:
             skin_errors.append("rendered public landing page instead of /control app")
+        proof_selectors = {
+            "fluxioBuilderRoot": 'class="fluxio-shell' in dom_text and 'data-mode="builder"' in dom_text,
+            "visualProofPacket": "builder-visual-proof-packet" in dom_text,
+            "visualProofReadiness": "builder-visual-proof-readiness" in dom_text,
+            "visualProofMapCanvas": "builder-visual-proof-map-canvas" in dom_text,
+            "visualProofReceipts": "builder-visual-proof-receipts" in dom_text,
+            "currentAppProof": "current-app-preview-proof.v1" in dom_text or "Current app proof" in dom_text,
+        }
+        placeholder_frame_paths = [
+            path
+            for path in ["screenshots/latest.png", "screenshots/previous.png"]
+            if path in dom_text
+        ]
+        if placeholder_frame_paths:
+            skin_errors.append(
+                "rendered placeholder screenshot proof path(s): "
+                + ", ".join(placeholder_frame_paths)
+            )
     stats = image_stats(screenshot_path)
     passed = not missing and not skin_errors and bool(stats["nonBlank"])
     report = {
         "checkedAt": datetime.now(timezone.utc).isoformat(),
         "url": args.url,
+        "locationHref": args.url,
+        "gitHead": git_head(),
+        "viewport": {
+            "width": args.width,
+            "height": args.height,
+        },
         "browser": browser,
         "browserFamily": family,
         "domSupported": dom_supported,
@@ -200,6 +239,8 @@ def main() -> int:
         "expectedFragments": expected,
         "missingFragments": missing,
         "skinErrors": skin_errors,
+        "proofSelectors": proof_selectors,
+        "placeholderFramePaths": placeholder_frame_paths,
         "image": stats,
         "passed": passed,
     }

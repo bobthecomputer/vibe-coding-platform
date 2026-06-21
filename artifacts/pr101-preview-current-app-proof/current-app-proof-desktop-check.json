@@ -1,0 +1,41 @@
+{
+  "checkedAt": "2026-06-21T10:27:28.062898+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&proofReload=pr101-current-app-proof-rerun",
+  "locationHref": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&proofReload=pr101-current-app-proof-rerun",
+  "gitHead": "eaf2a1142e4958a1032eaff469442e817f888022",
+  "viewport": {
+    "width": 1440,
+    "height": 1400
+  },
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr101-preview-current-app-proof\\current-app-proof-desktop.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr101-preview-current-app-proof\\current-app-proof-desktop.html",
+  "expectedFragments": [
+    "Preview + annotation proof",
+    "Current app proof",
+    "Capture URL:",
+    "Preview and annotation proof for current mission"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "proofSelectors": {
+    "fluxioBuilderRoot": true,
+    "visualProofPacket": true,
+    "visualProofReadiness": true,
+    "visualProofMapCanvas": true,
+    "visualProofReceipts": true,
+    "currentAppProof": true
+  },
+  "placeholderFramePaths": [],
+  "image": {
+    "width": 1440,
+    "height": 1400,
+    "sampleCount": 8460,
+    "uniqueSampleColors": 740,
+    "averageLuma": 33.8,
+    "nonBlank": true
+  },
+  "passed": true
+}

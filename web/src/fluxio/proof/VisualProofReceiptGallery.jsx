@@ -30,6 +30,14 @@ function timestampLabel(value) {
   return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function cleanFramePath(value) {
+  const source = String(value || "").trim();
+  if (!source || source === "screenshots/latest.png" || source === "screenshots/previous.png") {
+    return "";
+  }
+  return source;
+}
+
 function visualProofRows(receipts) {
   const seen = new Set();
   return asList(receipts)
@@ -38,8 +46,9 @@ function visualProofRows(receipts) {
     .map((receipt, index) => {
       const visualPacket = asRecord(receipt?.visualProofPacket);
       const taskContext = asRecord(receipt?.taskContext);
+      const currentAppProof = asRecord(visualPacket.currentAppProof || taskContext.currentAppProof);
       const screenshots = asList(taskContext.screenshots);
-      const framePath = visualPacket.framePath || screenshots[0] || "";
+      const framePath = cleanFramePath(visualPacket.framePath || screenshots[0] || "");
       const artifactPath = receipt?.artifactPath || "";
       const receiptKind = receipt?.receiptKind || "live_review_receipt";
       const isLiveReviewReceipt = ["live_review_visual_proof", "live_review_structured_feedback"].includes(receiptKind);
@@ -57,6 +66,16 @@ function visualProofRows(receipts) {
         framePath,
         frameUrl: resolveControlArtifactUrl(framePath),
         handoffId,
+        currentAppProof: {
+          appSurface: currentAppProof.appSurface || "Fluxio current control shell",
+          operatorLabel: currentAppProof.operatorLabel || "",
+          previewUrl: currentAppProof.previewUrl || taskContext.previewUrl || visualPacket.previewUrl || "",
+          isCurrentAppProof: Boolean(currentAppProof.isCurrentAppProof && framePath),
+          staleFrameReason:
+            currentAppProof.staleFrameReason ||
+            (framePath ? "" : "Synthetic or missing frame path blocked for current-app proof."),
+          schemaVersion: currentAppProof.schemaVersion || "current-app-preview-proof.v1",
+        },
         proofTarget: visualPacket.proofTarget || taskContext.reviewTargetId || "",
         receiptKind,
         status: receipt?.status || "received",
@@ -86,6 +105,11 @@ export function VisualProofReceiptGallery({ copyContextValue, receipts }) {
                   {row.status ? ` · ${row.status}` : ""}
                 </span>
                 <span>Event: {row.eventId || "none"} · Target: {row.proofTarget || "not captured"}</span>
+                <span>
+                  App: {row.currentAppProof.operatorLabel || row.currentAppProof.appSurface} ·{" "}
+                  {row.currentAppProof.isCurrentAppProof ? "current-app proof" : "stale-frame blocked"}
+                </span>
+                <span>Capture URL: {row.currentAppProof.previewUrl || "not captured"}</span>
               </div>
               <div className="builder-live-review-receipt-handles compact">
                 <button disabled={!row.artifactPath} onClick={() => copyContextValue(row.artifactPath)} title="Copy visual proof receipt artifact path" type="button">

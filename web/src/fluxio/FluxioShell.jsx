@@ -6722,6 +6722,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const selectedReplayMarker =
     selectedReplayMarkers[selectedReplayMarkerIndex] || selectedReplayMarkers[0] || null;
   const liveReviewAnnotationBlocks = asList(liveReviewStudio.annotationReadiness?.blocks);
+  const currentAppProof = asRecord(liveReviewStudio.currentAppProof);
   const visualProofPacket = useMemo(() => {
     const severeAnnotations = liveReviewAnnotationBlocks.filter(block =>
       ["high", "critical"].includes(String(block?.severity || "").toLowerCase()),
@@ -6753,6 +6754,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         (hasRealFrame ? "" : "No screenshot artifact is attached to this Live Review event."),
       hasRealFrame,
       previewUrl: livePreviewUrl,
+      currentAppProof: {
+        schemaVersion: currentAppProof.schemaVersion || "current-app-preview-proof.v1",
+        appSurface: currentAppProof.appSurface || "Fluxio current control shell",
+        operatorLabel: currentAppProof.operatorLabel || "Current Fluxio preview",
+        previewMode: currentAppProof.previewMode || previewMode,
+        previewUrl: currentAppProof.previewUrl || livePreviewUrl,
+        currentFramePath: currentAppProof.currentFramePath || (hasRealFrame ? framePath : ""),
+        capturedAt: currentAppProof.capturedAt || "",
+        isCurrentAppProof: Boolean(currentAppProof.isCurrentAppProof && hasRealFrame),
+        staleFrameBlocked: Boolean(currentAppProof.staleFrameBlocked || !hasRealFrame),
+        staleFrameReason:
+          currentAppProof.staleFrameReason ||
+          (hasRealFrame ? "" : "No real screenshot frame is attached to the current mission."),
+      },
       annotationCount: liveReviewAnnotationBlocks.length,
       severeAnnotationCount: severeAnnotations.length,
       mediumAnnotationCount: mediumAnnotations.length,
@@ -6774,6 +6789,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     };
   }, [
     builderSelectedReviewTarget?.id,
+    currentAppProof.appSurface,
+    currentAppProof.capturedAt,
+    currentAppProof.currentFramePath,
+    currentAppProof.isCurrentAppProof,
+    currentAppProof.operatorLabel,
+    currentAppProof.previewMode,
+    currentAppProof.previewUrl,
+    currentAppProof.schemaVersion,
+    currentAppProof.staleFrameBlocked,
+    currentAppProof.staleFrameReason,
     firstLiveReviewFrameEvent?.frameMissingReason,
     firstLiveReviewFrameEvent?.frameStatus,
     firstLiveReviewFrameEvent?.id,
@@ -6909,6 +6934,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           selectedEventKind: event.kind || "live_review",
           selectedEventLabel: event.label || "Live Review",
           operatorFeedback: followUp,
+          previewUrl: visualProofPacket.currentAppProof?.previewUrl || livePreviewUrl,
+          currentAppProof: visualProofPacket.currentAppProof,
           screenshots: asList(event.screenshotFrames).map(frame => frame?.path || frame?.thumbnailPath || "").filter(Boolean),
           timelapseMarkers: asList(event.replayMarkers).map(marker => marker?.snapshotPath || marker?.label || "").filter(Boolean),
           annotations: asList(liveReviewStudio.annotationReadiness?.blocks).map(block => ({
@@ -12642,6 +12669,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                   <b>{liveReviewStudio.statusLine || "Preview pending"}</b>
                                 </div>
                                 <div>
+                                  <span>Current app proof</span>
+                                  <b>
+                                    {visualProofPacket.currentAppProof?.isCurrentAppProof
+                                      ? visualProofPacket.currentAppProof.operatorLabel
+                                      : "stale frame blocked"}
+                                  </b>
+                                </div>
+                                <div>
                                   <span>Frame proof</span>
                                   <b>{visualProofPacket.hasRealFrame ? visualProofPacket.frameLabel : "missing frame"}</b>
                                 </div>
@@ -12662,6 +12697,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               </div>
                               <div className="preview-annotation-proof-foot">
                                 <span>Next proof action: {previewAnnotationProofNextAction}</span>
+                                <span>
+                                  Capture URL: {visualProofPacket.currentAppProof?.previewUrl || visualProofPacket.previewUrl || "not captured"}
+                                </span>
                                 <button className="mini-pill muted" onClick={() => void handleBuilderFeatureAction("open_builder")} type="button">
                                   Open preview controls
                                 </button>
@@ -13193,6 +13231,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                   {visualProofPacket.hasRealFrame
                                     ? visualProofPacket.framePath
                                     : visualProofPacket.frameMissingReason || "Frame evidence missing"}
+                                </small>
+                              </article>
+                              <article>
+                                <span>Current app proof</span>
+                                <strong>
+                                  {visualProofPacket.currentAppProof?.operatorLabel || "Current Fluxio preview"}
+                                </strong>
+                                <small>
+                                  {visualProofPacket.currentAppProof?.isCurrentAppProof
+                                    ? visualProofPacket.currentAppProof.previewUrl
+                                    : visualProofPacket.currentAppProof?.staleFrameReason || "Capture URL or frame missing"}
                                 </small>
                               </article>
                               <article>

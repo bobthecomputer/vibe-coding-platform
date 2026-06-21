@@ -2224,6 +2224,29 @@ function deriveLiveReviewStudio({
     timestamp: mission?.state?.previous_preview_refresh_at || mission?.updated_at || nowTimestamp,
   });
   const screenshotFrames = [latestScreenshotFrame, previousScreenshotFrame].filter(Boolean);
+  const hasRealLatestFrame = Boolean(latestScreenshotPath);
+  const hasPreviewUrl = Boolean(previewUrl && previewUrl !== "No preview URL captured");
+  const currentAppProof = {
+    schemaVersion: "current-app-preview-proof.v1",
+    appSurface: "Fluxio current control shell",
+    previewMode,
+    previewUrl,
+    captureSource: hasRealLatestFrame ? "mission_proof_latest_screenshot" : "missing_frame",
+    currentFramePath: latestScreenshotPath,
+    previousFramePath: previousScreenshotPath,
+    capturedAt: mission?.state?.last_preview_refresh_at || nowTimestamp,
+    isCurrentAppProof: hasRealLatestFrame && hasPreviewUrl,
+    staleFrameBlocked: !hasRealLatestFrame || !hasPreviewUrl,
+    staleFrameReason: hasRealLatestFrame
+      ? hasPreviewUrl
+        ? ""
+        : "No preview URL is attached to the current frame."
+      : "No real screenshot frame is attached to the current mission.",
+    operatorLabel:
+      previewMode === "live"
+        ? "Current live Fluxio surface"
+        : `${previewLabel(previewMode, snapshot?.previewMeta)} current-shell fixture`,
+  };
   const verificationStep =
     asList(mission?.state?.verification_failures).length > 0 ? "Verification blocked by failing checks" : "Verification checks in progress";
   const imageArtifacts = asList(mission?.proof?.artifacts)
@@ -2598,6 +2621,15 @@ function deriveLiveReviewStudio({
   };
   const proofGateChecks = [
     {
+      id: "current-app-proof",
+      label: "Current app identity",
+      passed: currentAppProof.isCurrentAppProof,
+      detail: currentAppProof.isCurrentAppProof
+        ? `${currentAppProof.appSurface} · ${currentAppProof.previewUrl}`
+        : currentAppProof.staleFrameReason,
+      recovery: "Capture the current Fluxio preview URL and frame before using this screenshot as proof.",
+    },
+    {
       id: "real-frame",
       label: "Real screenshot frame",
       passed: Boolean(latestScreenshotPath),
@@ -2645,6 +2677,7 @@ function deriveLiveReviewStudio({
       proofGateChecks.find(item => !item.passed)?.recovery ||
       "Use this receipt and annotation map as the next UI repair input.",
     gates: proofGateChecks,
+    currentAppProof,
     annotationMap: annotationReadiness.blocks.map((block, index) => ({
       id: block.id || `annotation-${index + 1}`,
       label: block.label || `Annotation ${index + 1}`,
@@ -2663,6 +2696,8 @@ function deriveLiveReviewStudio({
       previewMode === "live"
         ? `${isRefreshing ? "Refreshing" : "Live"} · ${liveSyncSeconds === "off" ? "manual sync" : `${liveSyncSeconds}s sync`}`
         : `${previewLabel(previewMode, snapshot?.previewMeta)} · repeatable review`,
+    previewUrl,
+    currentAppProof,
     targets: reviewTargets.slice(0, 6),
     compareHint:
       builderBoard.activeConversations.length > 0
