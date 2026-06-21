@@ -141,9 +141,10 @@
           "python -m pytest tests/test_runtime_lane_proof_harness.py"
         ],
         "proofArtifacts": [
-          "red_team_transcript.md",
-          "runtime_lane_proof.json",
-          "scorecard.json"
+          "sample_transcript.json",
+          "rubric.json",
+          "browser-proof.json",
+          "artifacts_index.json"
         ],
         "acceptanceGate": "A reviewer must see target scope, transcript proof, and safe-red-team rubric scores before route promotion."
       },

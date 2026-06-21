@@ -166,3 +166,55 @@ def test_harness_lab_loads_generated_runtime_lane_scorecard_artifacts() -> None:
     assert artifact_rows[0]["useWhen"]
     assert artifact_rows[0]["doNotUseWhen"]
     assert "contextWindowTokens" in artifact_rows[0]
+
+
+def test_harness_lab_loads_safe_redteam_route_scorecard_artifacts() -> None:
+    artifact = (
+        ROOT
+        / "artifacts"
+        / "red-team"
+        / "worker-f-jbheaven-safe-scenario-20260621"
+        / "route_scorecard.json"
+    )
+    scorecard = load_json(artifact)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        redteam_dir = root / "artifacts" / "red-team" / "worker-f-jbheaven-safe-scenario-20260621"
+        redteam_dir.mkdir(parents=True)
+        (redteam_dir / "route_scorecard.json").write_text(
+            json.dumps(scorecard, indent=2),
+            encoding="utf-8",
+        )
+        runtime_fixture = load_json(FIXTURE_PATH)
+        runtime_fixture["candidates"] = runtime_fixture["candidates"][:1]
+        for index in range(8):
+            runtime_fixture["boardId"] = f"runtime-crowd-{index}"
+            runtime_fixture["candidates"][0]["candidateId"] = f"runtime-crowd-candidate-{index}"
+            runtime_dir = root / "artifacts" / "runtime-lanes" / f"crowd-{index}"
+            runtime_dir.mkdir(parents=True)
+            (runtime_dir / "route_scorecard.json").write_text(
+                json.dumps(runtime_fixture, indent=2),
+                encoding="utf-8",
+            )
+
+        snapshot = build_harness_lab_snapshot(root)
+
+    redteam_rows = [
+        item
+        for item in snapshot["benchmarkRouteRows"]
+        if item["source"] == "redteam_artifact"
+    ]
+
+    assert redteam_rows
+    row = redteam_rows[0]
+    assert row["sourceLabel"] == "JBH-EAVEN safe red-team artifact"
+    assert row["benchmarkBoardId"] == "worker-f-jbheaven-safe-scenario-20260621"
+    assert row["candidateId"] == "jbh-eaven-hermes-opencodego-safe-lab-artifact"
+    assert row["runtimeId"] == "hermes"
+    assert row["provider"] == "opencodego-compatible-lab-route"
+    assert row["redTeamApplicable"] is True
+    assert row["redTeamScope"] == "synthetic_lab"
+    assert row["localProofRequired"] is True
+    assert "dry-run artifact" in " ".join(row["doNotUseWhen"]).lower()
+    assert snapshot["routeDecisionSummary"]["redTeamCandidateCount"] >= 1

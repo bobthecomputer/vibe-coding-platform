@@ -6936,6 +6936,17 @@ def _benchmark_scorecard_paths(root: Path) -> list[tuple[Path, str]]:
     fixture_path = _benchmark_scorecard_fixture_path()
     if fixture_path.exists():
         paths.append((fixture_path, "benchmark_fixture"))
+    redteam_artifact_root = root / "artifacts" / "red-team"
+    if redteam_artifact_root.exists():
+        redteam_artifact_paths = sorted(
+            redteam_artifact_root.glob("*/route_scorecard.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        paths.extend(
+            (path, "redteam_artifact")
+            for path in redteam_artifact_paths[:BENCHMARK_SCORECARD_ARTIFACT_LIMIT]
+        )
     artifact_root = root / "artifacts" / "runtime-lanes"
     if artifact_root.exists():
         artifact_paths = sorted(
@@ -6986,11 +6997,12 @@ def _benchmark_route_row_from_candidate(
     proof_artifacts = verifier_proof.get("proofArtifacts", [])
     if not isinstance(proof_artifacts, list):
         proof_artifacts = []
-    source_label = (
-        "Generated benchmark artifact"
-        if source == "benchmark_artifact"
-        else "JBHEAVEN benchmark fixture"
-    )
+    if source == "benchmark_artifact":
+        source_label = "Generated benchmark artifact"
+    elif source == "redteam_artifact":
+        source_label = "JBH-EAVEN safe red-team artifact"
+    else:
+        source_label = "JBHEAVEN benchmark fixture"
     redteam_applicable = bool(safe_redteam.get("applicable"))
     benchmark_decision = (
         "use" if recommended else "watch" if redteam_applicable else "needs_evidence"

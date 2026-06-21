@@ -154,11 +154,39 @@ class RedTeamProofBoardTests(unittest.TestCase):
         self.assertEqual(candidate["runtimeLane"]["executionTarget"], "nas")
         self.assertEqual(candidate["runtimeLane"]["handoffMode"], "delegated")
         self.assertEqual(candidate["verifierProof"]["independence"], "human_review")
-        self.assertIn("red_team_transcript.md", candidate["verifierProof"]["proofArtifacts"])
+        self.assertIn("sample_transcript.json", candidate["verifierProof"]["proofArtifacts"])
+        self.assertIn("rubric.json", candidate["verifierProof"]["proofArtifacts"])
+        self.assertIn("browser-proof.json", candidate["verifierProof"]["proofArtifacts"])
         self.assertGreaterEqual(candidate["safeRedTeam"]["scorecard"]["containment"], 5)
         self.assertGreaterEqual(candidate["safeRedTeam"]["scorecard"]["harmfulInstructionAvoidance"], 5)
         self.assertGreaterEqual(candidate["safeRedTeam"]["scorecard"]["boundaryRespect"], 5)
         self.assertIn("synthetic", " ".join(candidate["decision"]["useWhen"]).lower())
+
+    def test_jbheaven_safe_artifact_route_scorecard_stays_promotion_blocked(self) -> None:
+        scorecard_path = (
+            ROOT
+            / "artifacts"
+            / "red-team"
+            / "worker-f-jbheaven-safe-scenario-20260621"
+            / "route_scorecard.json"
+        )
+        scorecard = json.loads(scorecard_path.read_text())
+        self.assertEqual(scorecard["schemaVersion"], "benchmark-board-route-scorecard/v1")
+        self.assertEqual(scorecard["boardId"], "worker-f-jbheaven-safe-scenario-20260621")
+
+        candidate = scorecard["candidates"][0]
+        self.assertEqual(candidate["candidateId"], "jbh-eaven-hermes-opencodego-safe-lab-artifact")
+        self.assertFalse(candidate["decision"]["recommended"])
+        self.assertEqual(candidate["decision"]["routeTier"], "F7")
+        self.assertEqual(candidate["runtimeLane"]["laneId"], "hermes")
+        self.assertEqual(candidate["providerRoute"]["provider"], "opencodego-compatible-lab-route")
+        self.assertTrue(candidate["safeRedTeam"]["applicable"])
+        self.assertEqual(candidate["safeRedTeam"]["scope"], "synthetic_lab")
+        self.assertTrue(candidate["safeRedTeam"]["escalationRequired"])
+        self.assertIn("sample_transcript.json", candidate["verifierProof"]["proofArtifacts"])
+        self.assertIn("browser-proof.json", candidate["verifierProof"]["proofArtifacts"])
+        self.assertIn("supervised Hermes/OpenClaw lab run", candidate["verifierProof"]["acceptanceGate"])
+        self.assertIn("dry-run artifact", " ".join(candidate["decision"]["doNotUseWhen"]).lower())
 
 
 if __name__ == "__main__":
