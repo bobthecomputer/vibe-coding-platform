@@ -362,6 +362,7 @@ class DelegatedSessionSnapshot:
     execution_target_detail: str = ""
     session_path: str = ""
     log_path: str = ""
+    skill_payload_path: str = ""
     source_step_id: str = ""
     pid: int = 0
     supervisor_pid: int = 0
@@ -404,6 +405,7 @@ class DelegatedRuntimeSession:
     log_path: str = ""
     events_path: str = ""
     decision_path: str = ""
+    skill_payload_path: str = ""
     source_step_id: str = ""
     pid: int = 0
     supervisor_pid: int = 0

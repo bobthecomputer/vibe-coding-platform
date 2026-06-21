@@ -164,6 +164,9 @@ def _runtime_env(session_path: Path, cwd: Path) -> dict[str, str]:
     env["FLUXIO_EVENTS_FILE"] = str(Path(payload.get("events_path", session_path.with_suffix(".events.jsonl"))).resolve())
     env["FLUXIO_LOG_FILE"] = str(Path(payload.get("log_path", session_path.with_suffix(".log"))).resolve())
     env["FLUXIO_APPROVAL_FILE"] = str(Path(payload.get("decision_path", session_path.with_suffix(".approval.json"))).resolve())
+    skill_payload_path = str(payload.get("skill_payload_path") or "").strip()
+    if skill_payload_path:
+        env["FLUXIO_SKILL_PAYLOAD_FILE"] = str(Path(skill_payload_path).resolve())
     env["FLUXIO_EXECUTION_ROOT"] = str(cwd.resolve())
     env["PYTHONUNBUFFERED"] = "1"
     return env

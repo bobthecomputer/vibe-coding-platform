@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import subprocess
 import sys
@@ -395,6 +396,110 @@ class ActionExecutorTests(unittest.TestCase):
             )
 
             self.assertNotEqual(proposal.kind, "runtime_delegate")
+
+    @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
+    @mock.patch("grant_agent.action_executor.runtime_adapter_map")
+    def test_runtime_delegate_writes_selected_skill_payload_for_worker(
+        self,
+        runtime_supervisor_map: mock.Mock,
+        runtime_map: mock.Mock,
+    ) -> None:
+        class _FakeAdapter:
+            runtime_id = "hermes"
+
+            def detect(self, _: pathlib.Path):
+                return type("Status", (), {"detected": True, "doctor_summary": "ready"})()
+
+            def start_mission(self, mission, workspace):
+                script = (
+                    "import json, os, pathlib; "
+                    "payload=json.loads(pathlib.Path(os.environ['FLUXIO_SKILL_PAYLOAD_FILE']).read_text(encoding='utf-8')); "
+                    "pathlib.Path('observed_skill.json').write_text(json.dumps(payload), encoding='utf-8'); "
+                    "print(payload['selectedSkills'][0]['skillId'])"
+                )
+                return {
+                    "launch_command": f'"{sys.executable}" -c "{script}"',
+                    "workspace": workspace.root_path,
+                    "route_contract": {
+                        "phase": mission.state.current_cycle_phase,
+                        "role": "executor",
+                        "provider": "minimax",
+                        "model": "MiniMax-M3",
+                    },
+                }
+
+            def stream_events(self, mission):
+                return [{"kind": "runtime.stream", "missionId": mission.mission_id}]
+
+            def resume_mission(self, mission, workspace):
+                return self.start_mission(mission, workspace)
+
+        adapter_map = {"hermes": _FakeAdapter()}
+        runtime_map.return_value = adapter_map
+        runtime_supervisor_map.return_value = adapter_map
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(root, "mission_delegate_skill_payload", requested_scope="direct", profile_name="builder")
+            step = PlannedStep(step_id="step_redteam", title="Run controlled red-team proof")
+            selected_skill = {
+                "skillId": "jbheaven_godmode_lab",
+                "label": "JBHEAVEN Godmode Lab",
+                "sourceKind": "hermes_import",
+                "actionKinds": ["security_red_team", "runtime_routing", "proof_collection"],
+                "executionCapable": True,
+            }
+            proposal = build_action_proposal(
+                step=step,
+                objective="Run controlled JBHEAVEN synthetic red-team proof and save transcript.",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+                route_configs=[
+                    {
+                        "role": "executor",
+                        "provider": "minimax",
+                        "model": "MiniMax-M3",
+                        "effort": "high",
+                    }
+                ],
+                selected_skills=[selected_skill],
+            )
+
+            record = execute_action(
+                proposal,
+                root,
+                execution_scope=scope,
+                execution_policy=policy,
+            )
+
+            self.assertTrue(record.result.ok)
+            payload_path = pathlib.Path(record.result.payload["skillPayloadPath"])
+            self.assertTrue(payload_path.exists())
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            observed = json.loads((root / "observed_skill.json").read_text(encoding="utf-8"))
+            events_path = pathlib.Path(record.result.payload["delegatedSession"]["events_path"])
+            event_kinds = [
+                json.loads(line)["kind"]
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(payload["schemaVersion"], "fluxio.delegated-skill-payload.v1")
+            self.assertEqual(payload["selectedSkills"][0]["skillId"], "jbheaven_godmode_lab")
+            self.assertEqual(payload["skillExecutionPolicy"]["matchedSkills"][0]["skillId"], "jbheaven_godmode_lab")
+            self.assertEqual(observed["selectedSkills"][0]["skillId"], "jbheaven_godmode_lab")
+            self.assertIn("runtime.skill_payload", event_kinds)
+            self.assertEqual(
+                record.result.payload["delegatedSession"]["skill_payload_path"],
+                str(payload_path),
+            )
+            self.assertEqual(
+                record.result.payload["delegatedSnapshot"]["skill_payload_path"],
+                str(payload_path),
+            )
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     @mock.patch("grant_agent.action_executor.runtime_adapter_map")

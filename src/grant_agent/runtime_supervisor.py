@@ -107,6 +107,7 @@ class DelegatedRuntimeSupervisor:
         mission: Mission,
         workspace: WorkspaceProfile,
         source_step_id: str,
+        skill_payload: dict | None = None,
         resume: bool = False,
         handoff_reason: str = "",
         source_delegated_id: str = "",
@@ -123,6 +124,7 @@ class DelegatedRuntimeSupervisor:
         log_path = self.control_dir / f"{delegated_id}.log"
         events_path = self.control_dir / f"{delegated_id}.events.jsonl"
         decision_path = self.control_dir / f"{delegated_id}.approval.json"
+        skill_payload_path = self.control_dir / f"{delegated_id}.skill-payload.json"
         mission_scope = getattr(mission, "execution_scope", None)
         workspace_root = str(
             _coerce_platform_path(
@@ -153,8 +155,20 @@ class DelegatedRuntimeSupervisor:
             log_path=str(log_path),
             events_path=str(events_path),
             decision_path=str(decision_path),
+            skill_payload_path=str(skill_payload_path) if skill_payload else "",
             source_step_id=source_step_id,
         )
+        if skill_payload:
+            payload = {
+                **skill_payload,
+                "schemaVersion": "fluxio.delegated-skill-payload.v1",
+                "delegatedId": delegated_id,
+                "runtimeId": runtime_id,
+                "missionId": mission.mission_id,
+                "sourceStepId": source_step_id,
+                "objective": mission.objective,
+            }
+            _atomic_write_json(skill_payload_path, payload)
         _apply_execution_truth(session)
         self._write_session(session)
         self._append_structured_event(
@@ -175,6 +189,14 @@ class DelegatedRuntimeSupervisor:
                 message=route_summary,
                 status="queued",
                 data=route_contract_payload,
+            )
+        if session.skill_payload_path:
+            self._append_structured_event(
+                session,
+                kind="runtime.skill_payload",
+                message="Selected skill payload attached to delegated runtime session.",
+                status="queued",
+                data={"skill_payload_path": session.skill_payload_path},
             )
         session.target_phase = str(route_contract_payload.get("phase", "")).strip().lower()
         session.target_role = str(route_contract_payload.get("role", "")).strip().lower()
@@ -382,6 +404,11 @@ class DelegatedRuntimeSupervisor:
             mission=mission,
             workspace=workspace,
             source_step_id=source_step_id or current.source_step_id,
+            skill_payload=(
+                _load_json_file(Path(current.skill_payload_path))
+                if current.skill_payload_path and Path(current.skill_payload_path).exists()
+                else None
+            ),
             resume=False,
             handoff_reason=clean_reason,
             source_delegated_id=current.delegated_id,
@@ -498,6 +525,7 @@ class DelegatedRuntimeSupervisor:
             execution_target_detail=payload.execution_target_detail,
             session_path=payload.session_path,
             log_path=payload.log_path,
+            skill_payload_path=payload.skill_payload_path,
             source_step_id=payload.source_step_id,
             pid=payload.pid,
             supervisor_pid=payload.supervisor_pid,
@@ -676,6 +704,14 @@ def _read_json_with_retries(path: Path, retries: int = 8, delay: float = 0.02) -
                 break
             time.sleep(delay)
     raise RuntimeError(f"Unable to read delegated session state from {path}") from last_error
+
+
+def _load_json_file(path: Path) -> dict:
+    try:
+        payload = _read_json_with_retries(path)
+    except (OSError, RuntimeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _apply_execution_truth(session: DelegatedRuntimeSession) -> DelegatedRuntimeSession:

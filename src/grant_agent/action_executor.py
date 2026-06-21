@@ -268,6 +268,10 @@ class HybridExecutionAdapter(ExecutionAdapter):
         scope_root = Path(execution_scope.execution_root or workspace_root)
         target_path = _infer_target_path(objective, scope_root)
         skill_runtime_policy = _skill_runtime_policy(selected_skills or [])
+        skill_payload = _delegated_skill_payload(
+            selected_skills or [],
+            skill_runtime_policy=skill_runtime_policy,
+        )
 
         if _matches(step_text, VERIFY_HINTS):
             command = verification_commands[0] if verification_commands else "git diff --stat"
@@ -325,6 +329,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                         for item in (route_configs or [])
                     ],
                     "skill_execution_policy": skill_runtime_policy,
+                    "skill_payload": skill_payload,
                 },
             )
 
@@ -588,6 +593,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 mission=delegated_mission,
                 workspace=delegated_workspace,
                 source_step_id=proposal.source_step_id,
+                skill_payload=proposal.delegation_metadata.get("skill_payload"),
             )
             settle_deadline = time.monotonic() + 2.0
             while (
@@ -610,6 +616,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 payload={
                     "delegatedSession": session.__dict__,
                     "delegatedSnapshot": asdict(snapshot),
+                    "skillPayloadPath": session.skill_payload_path,
                     "events": events,
                 },
                 result_summary="Delegated runtime lane launched under Fluxio supervision.",
@@ -984,6 +991,43 @@ def _skill_runtime_policy(selected_skills: list[dict]) -> dict:
             if routing_skills
             else "No selected execution-capable runtime skill required delegation."
         ),
+    }
+
+
+def _delegated_skill_payload(
+    selected_skills: list[dict],
+    *,
+    skill_runtime_policy: dict,
+) -> dict:
+    normalized_skills: list[dict] = []
+    for skill in selected_skills:
+        if not isinstance(skill, dict):
+            continue
+        action_kinds = [
+            str(item).strip().lower()
+            for item in skill.get("actionKinds", skill.get("action_kinds", []))
+            if str(item).strip()
+        ]
+        normalized_skills.append(
+            {
+                "skillId": str(skill.get("skillId") or skill.get("skill_id") or ""),
+                "label": str(skill.get("label") or skill.get("name") or "Runtime skill"),
+                "sourceKind": str(skill.get("sourceKind") or skill.get("source_kind") or ""),
+                "actionKinds": sorted(dict.fromkeys(action_kinds)),
+                "executionCapable": bool(skill.get("executionCapable", skill.get("execution_capable", False))),
+                "guidanceOnly": bool(skill.get("guidanceOnly", skill.get("guidance_only", False))),
+            }
+        )
+    if not normalized_skills and not skill_runtime_policy.get("matchedSkills"):
+        return {}
+    return {
+        "selectedSkills": normalized_skills,
+        "skillExecutionPolicy": skill_runtime_policy,
+        "runtimeInstructions": [
+            "Read this payload before executing the delegated task.",
+            "Treat selected skills as routing and proof requirements, not hidden model output.",
+            "Record proof artifacts for any skill-driven runtime work.",
+        ],
     }
 
 
