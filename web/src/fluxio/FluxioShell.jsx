@@ -298,6 +298,8 @@ const ROUTE_MODEL_OPTIONS = [
   "gpt-5.4-mini",
   "MiniMax-M3",
   "MiniMax-M3-thinking",
+  "openrouter/z-ai/glm-5.2",
+  "opencode-go/glm-5.2",
   "opencode-go/kimi-k2.5",
   "opencode-go/glm-5",
   "opencode-go/minimax-m2.5",
@@ -5182,6 +5184,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     Object.fromEntries(PROVIDER_SECRET_OPTIONS.map(item => [item.id, ""])),
   );
   const [providerSecretSaving, setProviderSecretSaving] = useState({});
+  const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
@@ -15142,6 +15145,61 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "providers:capture-orchestration-contract") {
+        setSurface("settings");
+        setReferenceSettingsTab("providers");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture provider route proof.", "warn");
+          return;
+        }
+        const activeProvider =
+          activeEffectiveRoute?.provider ||
+          selectedAgentRoute?.provider ||
+          missionForm.modelProvider ||
+          "";
+        const activeModel =
+          activeEffectiveRoute?.model ||
+          selectedAgentRoute?.model ||
+          missionForm.model ||
+          "";
+        const taskBrief =
+          payload?.taskBrief ||
+          operatorDraft ||
+          missionForm.objective ||
+          mission?.objective ||
+          mission?.title ||
+          "Select the best provider/model route for the current Fluxio mission.";
+        try {
+          const response = await callBackend(
+            "get_provider_orchestration_command",
+            {
+              payload: {
+                root: null,
+                requestId: `provider-route-${Date.now()}`,
+                taskBrief,
+                activeProvider,
+                activeModel,
+              },
+            },
+            { throwOnError: true },
+          );
+          setProviderOrchestrationContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Provider route proof captured: ${pathLeaf(artifactPath)}.`
+              : "Provider route proof captured.",
+            "info",
+          );
+          await refreshAll("provider-orchestration");
+        } catch (error) {
+          pushToast(`Provider route proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "settings:run-action") {
         const action = payload?.action;
         if (!action?.actionId) {
@@ -15247,6 +15305,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     },
     [
       activeChatSessionId,
+      activeEffectiveRoute,
       clearOperatorAttachments,
       createChatSessionForWorkspace,
       activeCommentTarget,
@@ -15259,6 +15318,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       builderSchedulingQueue,
       markAction,
       mission,
+      missionForm.model,
+      missionForm.modelProvider,
+      missionForm.objective,
       operatorDraft,
       previewMode,
       profileId,
@@ -15270,6 +15332,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       runMissionAction,
       runWorkspaceActionSpec,
       selectLiveMission,
+      selectedAgentRoute,
       selectedMissionId,
       workspace?.default_runtime,
       workspace?.name,
@@ -19054,6 +19117,75 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     authOptions: {
       openai: OPENAI_CODEX_AUTH_OPTIONS,
       minimax: MINIMAX_AUTH_OPTIONS,
+    },
+    providerOrchestration: providerOrchestrationContract || {
+      schema: "fluxio.provider_orchestration_contract.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      requiredCapabilities: ["provider_exploration", "tool_use", "provider_fallback"],
+      selectedRole: agentRouteRole || "executor",
+      selectedRoute: {
+        role: agentRouteRole || "executor",
+        provider:
+          activeEffectiveRoute.provider ||
+          selectedAgentRoute.provider ||
+          launchRecommendation.modelProvider ||
+          missionForm.modelProvider ||
+          "openai-codex",
+        model:
+          activeEffectiveRoute.model ||
+          selectedAgentRoute.model ||
+          launchRecommendation.model ||
+          missionForm.model ||
+          "gpt-5.5",
+        effort:
+          activeEffectiveRoute.effort ||
+          selectedAgentRoute.effort ||
+          launchRecommendation.effort ||
+          missionForm.modelEffort ||
+          "high",
+        primaryRuntimeLane: "hermes",
+        fallbackRuntimeLanes: ["openclaw", "opencode"],
+        health: launchProviderReady ? "ready" : "auth_required",
+        reason: launchProviderQuotaDetail,
+      },
+      providers: [
+        {
+          provider: "openai-codex",
+          label: "OpenAI / Codex",
+          authPresent: openAICodexAuthReady,
+          health: openAICodexAuthReady ? "ready" : "auth_required",
+          models: ["gpt-5.5", "gpt-5.4"],
+          capabilities: ["planning", "coding", "verification", "tool_use"],
+        },
+        {
+          provider: "minimax",
+          label: "MiniMax",
+          authPresent: minimaxAuthReady,
+          health: minimaxAuthReady ? "ready" : "auth_required",
+          models: ["MiniMax-M3", "MiniMax-M3-thinking"],
+          capabilities: ["frontend_ui", "visual_polish", "coding"],
+        },
+        {
+          provider: "openrouter",
+          label: "OpenRouter / Z.AI",
+          authPresent: Boolean(providerSecretPresence.openrouter),
+          health: providerSecretPresence.openrouter ? "ready" : "auth_required",
+          models: ["openrouter/z-ai/glm-5.2", "openrouter/z-ai/glm-5"],
+          capabilities: ["vision", "ui_review", "coding", "provider_fallback"],
+        },
+        {
+          provider: "opencode-go",
+          label: "OpenCodeGo",
+          authPresent: openCodeGoAuthReady,
+          health: openCodeGoAuthReady ? "ready" : "auth_required",
+          models: ["opencode-go/glm-5.2", "opencode-go/glm-5"],
+          capabilities: ["coding", "provider_exploration", "tool_use"],
+        },
+      ],
+      proof: null,
+      nextAction: "Capture live route proof before claiming provider orchestration executed.",
     },
     chatgptConnection: {
       localApiUrl: localhostApiBaseUrl ? `${localhostApiBaseUrl}/v1/state` : "",

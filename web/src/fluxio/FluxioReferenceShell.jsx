@@ -11197,6 +11197,18 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const runtimes = asList(settingsState?.runtimes);
   const bridgeSessions = asList(settingsState?.bridgeSessions);
   const readyProviderCount = providers.filter(item => item.status || item.hasSecret).length;
+  const providerOrchestration =
+    settingsState?.providerOrchestration && typeof settingsState.providerOrchestration === "object"
+      ? settingsState.providerOrchestration
+      : {};
+  const providerRoute =
+    providerOrchestration?.selectedRoute && typeof providerOrchestration.selectedRoute === "object"
+      ? providerOrchestration.selectedRoute
+      : {};
+  const orchestrationProviders = asList(providerOrchestration?.providers).slice(0, 4);
+  const orchestrationProofPath = String(providerOrchestration?.proof?.artifactPath || "").trim();
+  const orchestrationStatus = String(providerRoute.health || providerOrchestration.status || "pending_live_capture");
+  const orchestrationReady = Boolean(orchestrationProofPath || !orchestrationStatus.includes("pending"));
   const openSettingsTab = tabId => {
     settingsState?.onSetTab?.(tabId);
   };
@@ -11275,6 +11287,71 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
           <strong>{routeEfforts.map(item => item.label || item.value).join(" / ") || "Not reported"}</strong>
         </article>
       </div>
+      <section
+        className={cx("fluxos-provider-orchestration", orchestrationReady ? "ready" : "pending")}
+        data-provider-orchestration-contract="true"
+        data-provider-orchestration-primary-lane={providerOrchestration.primaryRuntimeLane || "hermes"}
+        data-provider-orchestration-schema={providerOrchestration.schema || "fluxio.provider_orchestration_contract.v1"}
+      >
+        <div className="fluxos-provider-orchestration-head">
+          <div>
+            <span>Provider orchestration</span>
+            <strong>
+              {providerRoute.provider || "Route not captured"} / {providerRoute.model || "model pending"}
+            </strong>
+            <p>
+              Hermes is the primary lane. OpenClaw and OpenCode stay attached as fallback proof lanes when the selected route cannot run.
+            </p>
+          </div>
+          <button
+            className="fluxos-provider-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "providers:capture-orchestration-contract", {
+              taskBrief: "Select the best provider/model route for Fluxio provider orchestration and model switching.",
+            })}
+            type="button"
+          >
+            Capture route proof
+          </button>
+        </div>
+        <div className="fluxos-provider-route-health">
+          <article>
+            <span>Selected role</span>
+            <strong>{titleizeToken(providerRoute.role || providerOrchestration.selectedRole || "router")}</strong>
+          </article>
+          <article>
+            <span>Health</span>
+            <strong>{titleizeToken(orchestrationStatus)}</strong>
+          </article>
+          <article>
+            <span>Required capability</span>
+            <strong>{asList(providerOrchestration.requiredCapabilities).slice(0, 3).join(" / ") || "provider_exploration"}</strong>
+          </article>
+          <article>
+            <span>Fallback lanes</span>
+            <strong>{asList(providerRoute.fallbackRuntimeLanes || providerOrchestration.fallbackRuntimeLanes).join(" / ") || "openclaw / opencode"}</strong>
+          </article>
+        </div>
+        {orchestrationProviders.length ? (
+          <div className="fluxos-provider-route-list">
+            {orchestrationProviders.map(item => {
+              const providerId = item.provider || item.id || item.label || "provider";
+              return (
+                <article className={cx("fluxos-provider-route-card", item.authPresent && "ready")} key={providerId}>
+                  <span>{titleizeToken(item.health || (item.authPresent ? "ready" : "auth_required"))}</span>
+                  <strong>{item.label || titleizeToken(providerId)}</strong>
+                  <p>{asList(item.models).slice(0, 2).join(" / ") || "Model list not reported"}</p>
+                  <small>{asList(item.capabilities).slice(0, 4).join(" / ") || item.useWhen || "Capabilities not reported"}</small>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+        <p className="fluxos-provider-orchestration-foot">
+          {orchestrationProofPath
+            ? `Proof artifact: ${orchestrationProofPath}`
+            : providerOrchestration.nextAction || "Capture live route proof before claiming provider orchestration executed."}
+        </p>
+      </section>
       <div className="fluxos-settings-provider-grid" data-settings-provider-grid="true">
         {providers.map(provider => {
           const ready = Boolean(provider.status || provider.hasSecret);
