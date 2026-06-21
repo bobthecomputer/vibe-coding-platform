@@ -65,6 +65,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             """
             import {
               buildAccidentalSendGuard,
+              buildVoiceCommandPacket,
               parseVoiceCommand,
             } from './web/src/fluxio/voice/voiceCommandGrammar.js';
 
@@ -86,7 +87,23 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               command: send,
               transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [] },
             });
-            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, send, clear, guarded, confirmationGuard }));
+            const packet = buildVoiceCommandPacket({
+              command: send,
+              guard: guarded,
+              transcript: {
+                finalText: 'send message',
+                combinedText: 'send message',
+                reviewRequired: true,
+                averageConfidence: 0.81,
+                segments: [{ id: 'unclear', text: 'send massage', confidence: 0.52 }],
+                lowConfidenceSegments: [{ id: 'unclear', text: 'send massage', confidence: 0.52 }],
+                ambiguousSegments: [{ id: 'unclear', text: 'send massage', confidence: 0.52 }],
+                correctionLog: [{ id: 'fix', from: 'massage', to: 'message' }],
+                repairQueue: { status: 'review', nextSegmentId: 'unclear', nextSegmentText: 'send massage' },
+                warnings: ['review before send'],
+              },
+            });
+            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, send, clear, guarded, confirmationGuard, packet }));
             """
         )
 
@@ -103,6 +120,13 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["guarded"]["status"], "review_required")
         self.assertEqual(payload["guarded"]["reason"], "transcript_quality")
         self.assertEqual(payload["confirmationGuard"]["status"], "confirmation_required")
+        self.assertEqual(payload["packet"]["schemaVersion"], "fluxio.voice-command-packet.v1")
+        self.assertEqual(payload["packet"]["command"]["action"], "composer.send")
+        self.assertEqual(payload["packet"]["transcript"]["lowConfidenceCount"], 1)
+        self.assertEqual(payload["packet"]["transcript"]["ambiguousCount"], 1)
+        self.assertEqual(payload["packet"]["transcript"]["correctionCount"], 1)
+        self.assertIn("review_required", payload["packet"]["review"]["blockedBy"])
+        self.assertFalse(payload["packet"]["review"]["sendable"])
 
     def test_transcript_corrections_and_ambiguity_are_visible_metadata(self) -> None:
         payload = run_node(

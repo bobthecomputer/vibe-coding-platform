@@ -106,6 +106,10 @@ export function VoiceCommandPanel({
           : "Start capture, use system dictation, or paste text through the normal composer.";
   const [manualCorrectionDraft, setManualCorrectionDraft] = useState(nextRepairSegment?.text || "");
   const [manualDictationDraft, setManualDictationDraft] = useState("");
+  const commandPacket = voice.pendingCommand?.voicePacket || voice.lastCommand?.voicePacket || null;
+  const commandPacketReview = commandPacket?.review || {};
+  const commandPacketTranscript = commandPacket?.transcript || {};
+  const commandPacketBlockedBy = commandPacketReview.blockedBy || [];
 
   useEffect(() => {
     setManualCorrectionDraft(nextRepairSegment?.text || "");
@@ -163,8 +167,9 @@ export function VoiceCommandPanel({
     }
     voice.appendTranscript?.({
       text,
-      confidence: 1,
+      confidence: 0.83,
       isFinal: true,
+      ambiguityReasons: ["Manual dictation intake requires review before guarded actions."],
       source: "manual-dictation",
     });
     setManualDictationDraft("");
@@ -355,6 +360,42 @@ export function VoiceCommandPanel({
             Next repair: {repairQueue.nextSegmentText}
           </p>
         ) : null}
+      </div>
+
+      <div className="fluxio-voice-command-packet" aria-label="Voice command packet">
+        <div className="fluxio-voice-command-packet-head">
+          <div>
+            <span>Command packet</span>
+            <strong>{commandPacket?.command?.label || "No parsed command"}</strong>
+            <p>{commandPacket?.guard?.detail || "A parsed voice command will appear here before it reaches the shell."}</p>
+          </div>
+          <span data-status={commandPacket?.guard?.status || "idle"}>
+            {commandPacket?.guard?.status || "idle"}
+          </span>
+        </div>
+        <div className="fluxio-voice-command-packet-grid" aria-label="Voice command packet facts">
+          <span>Action: {commandPacket?.command?.action || "none"}</span>
+          <span>Risk: {commandPacket?.command?.riskLevel || "none"}</span>
+          <span>Segments: {commandPacketTranscript.segmentCount || 0}</span>
+          <span>Corrections: {commandPacketTranscript.correctionCount || 0}</span>
+          <span>Low confidence: {commandPacketTranscript.lowConfidenceCount || 0}</span>
+          <span>Ambiguous: {commandPacketTranscript.ambiguousCount || 0}</span>
+        </div>
+        <div className="fluxio-voice-command-packet-route">
+          <span>
+            {commandPacketReview.sendable
+              ? "Ready for shell handler"
+              : commandPacket
+                ? "Held by voice review"
+                : "Waiting for parser"}
+          </span>
+          <span>{commandPacketReview.confirmationRequired ? "Confirmation required" : "No confirmation pending"}</span>
+          <span>
+            {commandPacketBlockedBy.length
+              ? `Blocked by ${commandPacketBlockedBy.join(", ")}`
+              : "No packet blockers"}
+          </span>
+        </div>
       </div>
 
       <div

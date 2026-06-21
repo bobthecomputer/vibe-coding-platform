@@ -14325,6 +14325,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     ))}
                   </div>
                   <textarea
+                    aria-label="Agent message composer"
                     id="thread-note"
                     onChange={event => setOperatorDraft(event.target.value)}
                     onPaste={handleComposerPaste}

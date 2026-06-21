@@ -389,4 +389,95 @@ export function buildAccidentalSendGuard({ command, transcript } = {}) {
   };
 }
 
+function compactSegment(segment = {}) {
+  return {
+    id: segment.id || "",
+    text: segment.text || "",
+    confidence: typeof segment.confidence === "number" ? segment.confidence : null,
+    source: segment.source || "",
+    correctedFrom: segment.correctedFrom || "",
+    alternatives: Array.isArray(segment.alternatives)
+      ? segment.alternatives.slice(0, 3).map(item => ({
+          text: item.text || "",
+          confidence: typeof item.confidence === "number" ? item.confidence : null,
+        }))
+      : [],
+  };
+}
+
+export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
+  const safeCommand = command || {};
+  const safeTranscript = transcript || {};
+  const safeGuard = guard || buildAccidentalSendGuard({ command: safeCommand, transcript: safeTranscript });
+  const lowConfidenceSegments = Array.isArray(safeTranscript.lowConfidenceSegments)
+    ? safeTranscript.lowConfidenceSegments
+    : [];
+  const ambiguousSegments = Array.isArray(safeTranscript.ambiguousSegments)
+    ? safeTranscript.ambiguousSegments
+    : [];
+  const correctionLog = Array.isArray(safeTranscript.correctionLog) ? safeTranscript.correctionLog : [];
+  const repairQueue = safeTranscript.repairQueue || {};
+  const blockedBy = [
+    safeTranscript.interimText ? "interim_transcript" : "",
+    lowConfidenceSegments.length > 0 ? "low_confidence" : "",
+    ambiguousSegments.length > 0 ? "ambiguous_transcript" : "",
+    safeTranscript.reviewRequired ? "review_required" : "",
+    safeGuard.status === "blocked" ? safeGuard.reason || "guard_blocked" : "",
+  ].filter(Boolean);
+
+  return {
+    schemaVersion: "fluxio.voice-command-packet.v1",
+    createdAt: new Date().toISOString(),
+    command: {
+      matched: Boolean(safeCommand.matched),
+      intent: safeCommand.intent || "",
+      action: safeCommand.action || "",
+      label: safeCommand.label || "",
+      parameters: safeCommand.parameters || {},
+      sourceText: safeCommand.sourceText || "",
+      normalizedText: safeCommand.normalizedText || "",
+      confidence: typeof safeCommand.confidence === "number" ? safeCommand.confidence : null,
+      requiresConfirmation: Boolean(safeCommand.requiresConfirmation),
+      riskLevel: safeCommand.riskLevel || safeGuard.risk?.riskLevel || "low",
+      guardKind: safeCommand.guardKind || safeGuard.risk?.guardKind || "none",
+      blockedReason: safeCommand.blockedReason || "",
+    },
+    guard: {
+      status: safeGuard.status || "idle",
+      reason: safeGuard.reason || "",
+      label: safeGuard.label || "",
+      detail: safeGuard.detail || "",
+      risk: safeGuard.risk || getVoiceCommandRisk(safeCommand),
+    },
+    transcript: {
+      finalText: safeTranscript.finalText || "",
+      interimText: safeTranscript.interimText || "",
+      combinedText: safeTranscript.combinedText || "",
+      averageConfidence:
+        typeof safeTranscript.averageConfidence === "number" ? safeTranscript.averageConfidence : null,
+      segmentCount: Array.isArray(safeTranscript.segments) ? safeTranscript.segments.length : 0,
+      lowConfidenceCount: lowConfidenceSegments.length,
+      ambiguousCount: ambiguousSegments.length,
+      correctionCount: correctionLog.length || safeTranscript.correctionCount || 0,
+      reviewRequired: Boolean(safeTranscript.reviewRequired),
+      warnings: Array.isArray(safeTranscript.warnings) ? safeTranscript.warnings.slice(0, 5) : [],
+      lowConfidenceSegments: lowConfidenceSegments.slice(0, 5).map(compactSegment),
+      ambiguousSegments: ambiguousSegments.slice(0, 5).map(compactSegment),
+      repairQueue: {
+        status: repairQueue.status || "",
+        label: repairQueue.label || "",
+        nextSegmentId: repairQueue.nextSegmentId || "",
+        nextSegmentText: repairQueue.nextSegmentText || "",
+        nextRepairKind: repairQueue.nextRepairKind || "",
+      },
+    },
+    review: {
+      sendable: safeCommand.matched === true && !["blocked", "review_required"].includes(safeGuard.status),
+      confirmationRequired: safeGuard.status === "confirmation_required" || Boolean(safeCommand.requiresConfirmation),
+      blockedBy: Array.from(new Set(blockedBy)),
+      correctionCount: correctionLog.length || safeTranscript.correctionCount || 0,
+    },
+  };
+}
+
 export { SURFACE_ALIASES };

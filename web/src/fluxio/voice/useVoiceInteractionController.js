@@ -10,6 +10,7 @@ import {
 } from "./voiceTranscriptBuffer.js";
 import {
   buildAccidentalSendGuard,
+  buildVoiceCommandPacket,
   describeVoiceCommandResult,
   parseVoiceCommand,
 } from "./voiceCommandGrammar.js";
@@ -373,10 +374,17 @@ export function useVoiceInteractionController({
     async (text = state.transcript.combinedText, confidence = state.transcript.averageConfidence ?? 1) => {
       const command = parseVoiceCommand(text, { confidence, minConfidence });
       if (!command.matched) {
-        dispatch({ type: "error", message: command.recovery });
-        return command;
+        const guard = buildAccidentalSendGuard({ command, transcript: state.transcript });
+        const blockedCommand = {
+          ...command,
+          guard,
+          voicePacket: buildVoiceCommandPacket({ command, guard, transcript: state.transcript }),
+        };
+        dispatch({ type: "command.guardBlocked", command: blockedCommand, guard });
+        return blockedCommand;
       }
       const guard = buildAccidentalSendGuard({ command, transcript: state.transcript });
+      const voicePacket = buildVoiceCommandPacket({ command, guard, transcript: state.transcript });
       if (guard.status === "review_required" || guard.status === "blocked") {
         const blockedCommand = {
           ...command,
@@ -384,22 +392,28 @@ export function useVoiceInteractionController({
           blockedReason: guard.reason,
           recovery: guard.detail,
           guard,
+          voicePacket,
         };
         dispatch({ type: "command.guardBlocked", command: blockedCommand, guard });
         return blockedCommand;
       }
+      const commandWithPacket = {
+        ...command,
+        guard,
+        voicePacket,
+      };
       if (command.requiresConfirmation) {
-        dispatch({ type: "command.pending", command: { ...command, guard }, guard });
-        return command;
+        dispatch({ type: "command.pending", command: commandWithPacket, guard });
+        return commandWithPacket;
       }
       if (command.action === "voice.stop") {
         await stopListening();
       }
-      await onVoiceCommand?.(command);
-      dispatch({ type: "command.complete", command, guard });
-      return command;
+      await onVoiceCommand?.(commandWithPacket);
+      dispatch({ type: "command.complete", command: commandWithPacket, guard });
+      return commandWithPacket;
     },
-    [minConfidence, onVoiceCommand, state.transcript.averageConfidence, state.transcript.combinedText, stopListening],
+    [minConfidence, onVoiceCommand, state.transcript, stopListening],
   );
 
   const confirmPendingCommand = useCallback(async () => {

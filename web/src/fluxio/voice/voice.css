@@ -315,6 +315,82 @@
   padding: 4px 8px;
 }
 
+.fluxio-voice-command-packet {
+  display: grid;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(142, 203, 111, 0.2);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(142, 203, 111, 0.075), rgba(255, 255, 255, 0.018)),
+    var(--panel-soft, #161918);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  padding: 10px;
+}
+
+.fluxio-voice-command-packet-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fluxio-voice-command-packet-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fluxio-voice-command-packet-head span:first-child,
+.fluxio-voice-command-packet-head p,
+.fluxio-voice-command-packet-grid span,
+.fluxio-voice-command-packet-route span {
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxio-voice-command-packet-head span:first-child {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fluxio-voice-command-packet-head span:last-child {
+  flex: 0 0 auto;
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 999px;
+  color: var(--muted, #aaa395);
+  padding: 4px 8px;
+}
+
+.fluxio-voice-command-packet-head span:last-child[data-status="confirmation_required"],
+.fluxio-voice-command-packet-head span:last-child[data-status="review_required"],
+.fluxio-voice-command-packet-head span:last-child[data-status="blocked"] {
+  border-color: rgba(245, 158, 11, 0.34);
+  color: var(--warn, #f59e0b);
+}
+
+.fluxio-voice-command-packet-head span:last-child[data-status="ready"] {
+  border-color: rgba(34, 197, 94, 0.28);
+  color: var(--good, #22c55e);
+}
+
+.fluxio-voice-command-packet-grid,
+.fluxio-voice-command-packet-route {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fluxio-voice-command-packet-grid span,
+.fluxio-voice-command-packet-route span {
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 4px 8px;
+}
+
 .fluxio-voice-review-console {
   display: grid;
   gap: 10px;

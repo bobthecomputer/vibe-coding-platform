@@ -11,6 +11,7 @@ export {
 export {
   describeVoiceCommandResult,
   buildAccidentalSendGuard,
+  buildVoiceCommandPacket,
   getVoiceCommandExamples,
   getVoiceCommandRisk,
   parseVoiceCommand,
