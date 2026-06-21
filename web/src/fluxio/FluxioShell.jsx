@@ -15227,15 +15227,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
   const handleReferenceDictation = useCallback(async () => {
     markAction("reference:dictation");
-    if (previewMode === "live" && hasTauriBackend()) {
-      const config = await callBackend("get_dictation_config");
-      if (config?.os_fallback_hint || config?.osFallbackHint) {
-        pushToast(config.os_fallback_hint || config.osFallbackHint, "info");
-        return;
-      }
+    const config = previewMode === "live" || hasTauriBackend()
+      ? await callBackend("get_dictation_config", {
+          surface,
+          reviewBeforeSend: true,
+          ambiguityGuard: true,
+          correctionBuffer: true,
+        })
+      : null;
+    if (config?.os_fallback_hint || config?.osFallbackHint) {
+      pushToast(config.os_fallback_hint || config.osFallbackHint, "info");
+      return;
     }
-    pushToast("Use your system dictation shortcut if embedded capture is not configured.", "info");
-  }, [markAction, previewMode, pushToast]);
+    pushToast("Dictation repair mode is armed. Use system dictation, review the correction buffer, then send checked.", "info");
+  }, [markAction, previewMode, pushToast, surface]);
 
   const handleReferenceAppearanceChange = useCallback((key, value) => {
     setReferenceAppearance(current => ({

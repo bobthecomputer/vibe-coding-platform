@@ -32,6 +32,23 @@ class FluxioWebBackendTests(unittest.TestCase):
 
             self.assertEqual(handler.protocol_version, "HTTP/1.1")
 
+    def test_dictation_config_command_exposes_repair_and_accessibility_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_dictation_config", {})
+
+            self.assertEqual(result["schema"], "fluxio.dictation_config.v1")
+            self.assertEqual(result["primaryRuntimeLane"], "hermes")
+            self.assertEqual(result["fallbackRuntimeLane"], "openclaw")
+            self.assertTrue(result["reviewBeforeSend"])
+            self.assertTrue(result["ambiguityGuard"])
+            self.assertTrue(result["correctionBuffer"])
+            self.assertTrue(result["accessibility"]["ariaLiveStatus"])
+            self.assertTrue(result["accessibility"]["accidentalSendProtection"])
+            self.assertIn("review the correction buffer", result["osFallbackHint"])
+
     def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
