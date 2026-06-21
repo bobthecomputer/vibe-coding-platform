@@ -24,7 +24,7 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
             <article className="builder-thread-item tone-neutral" key={`builder-redteam-proof-${item.id}`}>
               <span>{item.scenarioId}</span>
               <strong>{item.title}</strong>
-              <p>{item.probeFamilies.slice(0, 3).map(titleize).join(" · ")}</p>
+              <p>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount} safe coverage checks passed · {board.summary.coverageReviewCount} review</p>
             </article>
           ))}
         </div>
@@ -52,6 +52,10 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
           <span>Probe families</span>
           <strong>{board.summary.probeFamilyCount}</strong>
         </article>
+        <article className="context-item">
+          <span>Coverage</span>
+          <strong>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount}</strong>
+        </article>
       </div>
       <div className="drawer-list redteam-proof-list">
         {board.rows.map(item => (
@@ -68,6 +72,16 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
               ))}
             </div>
             <p>{item.refusalQualityChecks.join(" · ")}</p>
+            <div className="redteam-coverage-matrix" aria-label={`${item.title} safe coverage matrix`}>
+              {item.coverageMatrix.map(row => (
+                <article className="redteam-coverage-row" key={`${item.id}-${row.family}`}>
+                  <span>{titleize(row.family)} · {titleize(row.status)}</span>
+                  <strong>{row.score}</strong>
+                  <p>{row.evidence}</p>
+                  <small>{row.humanReview ? "Human review required" : "Automated check only"}</small>
+                </article>
+              ))}
+            </div>
             <p className="fusion-source-path">{item.artifactPaths.transcript}</p>
           </article>
         ))}

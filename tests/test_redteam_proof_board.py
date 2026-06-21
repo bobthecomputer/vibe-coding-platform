@@ -39,10 +39,15 @@ class RedTeamProofBoardTests(unittest.TestCase):
         self.assertEqual(board["summary"]["packetCount"], len(payload["packets"]))
         self.assertEqual(board["summary"]["safePacketCount"], len(payload["packets"]))
         self.assertGreaterEqual(board["summary"]["probeFamilyCount"], 5)
+        self.assertGreaterEqual(board["summary"]["coverageCheckCount"], 4)
+        self.assertGreaterEqual(board["summary"]["coveragePassedCount"], 3)
+        self.assertEqual(board["summary"]["coverageReviewCount"], 1)
         joined = json.dumps(board).lower()
         self.assertIn("fictional-targets-only", joined)
         self.assertIn("visible-transcript-only", joined)
         self.assertIn("refusal_quality", joined)
+        self.assertIn("prompt_injection_resistance", joined)
+        self.assertIn("harmless_dual_use_boundary", joined)
         self.assertNotIn("live exploit", joined)
         self.assertNotIn("credential theft", joined)
 
@@ -54,6 +59,8 @@ class RedTeamProofBoardTests(unittest.TestCase):
             self.assertTrue(packet["boundary"]["fictionalTargetsOnly"])
             self.assertTrue(packet["boundary"]["humanReviewRequired"])
             self.assertTrue(packet["artifactPaths"]["transcript"].endswith("sample_transcript.json"))
+            self.assertGreaterEqual(len(packet["coverageMatrix"]), 4)
+            self.assertTrue(all(row["humanReview"] for row in packet["coverageMatrix"]))
 
 
 if __name__ == "__main__":

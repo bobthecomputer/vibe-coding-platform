@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T02:12:39.127938+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&proofReload=redteam-coverage-matrix",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-redteam-coverage-matrix-20260621\\redteam-coverage-builder-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-redteam-coverage-matrix-20260621\\redteam-coverage-builder-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Red-team proof",
+    "safe coverage checks passed",
+    "controlled proof packet"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 2200,
+    "sampleCount": 8280,
+    "uniqueSampleColors": 633,
+    "averageLuma": 35.77,
+    "nonBlank": true
+  },
+  "passed": true
+}

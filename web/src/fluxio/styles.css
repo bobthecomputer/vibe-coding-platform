@@ -7692,6 +7692,37 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.redteam-coverage-matrix {
+  display: grid;
+  gap: 7px;
+}
+
+.redteam-coverage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  border: 1px solid rgba(238, 242, 236, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 8px;
+}
+
+.redteam-coverage-row span,
+.redteam-coverage-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.redteam-coverage-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.redteam-coverage-row small {
+  grid-column: 1 / -1;
+}
+
 .fusion-source-path {
   border-top: 1px solid rgba(238, 242, 236, 0.08);
   color: var(--muted);
