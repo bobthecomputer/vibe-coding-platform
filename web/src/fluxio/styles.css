@@ -1202,6 +1202,51 @@ button.builder-sidebar-nexus:hover {
   text-transform: none;
 }
 
+.runtime-readiness-contract {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.045);
+  padding: 9px;
+}
+
+.runtime-readiness-contract > strong,
+.runtime-readiness-contract > p {
+  margin: 0;
+}
+
+.runtime-readiness-summary-list,
+.runtime-readiness-gate-list {
+  display: grid;
+  gap: 7px;
+}
+
+.runtime-readiness-summary-list article,
+.runtime-readiness-gate-list article {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 8px;
+}
+
+.runtime-readiness-summary-list span,
+.runtime-readiness-gate-list span,
+.runtime-readiness-summary-list small,
+.runtime-readiness-gate-list small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.runtime-readiness-summary-list b,
+.runtime-readiness-gate-list b,
+.runtime-readiness-gate-list p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .builder-metric-card {
   display: grid;
   gap: 4px;

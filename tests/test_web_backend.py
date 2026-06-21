@@ -378,7 +378,14 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(receipt["summary"]["elapsedMs"], 842)
             self.assertTrue(receipt["proofSignals"]["hasRuntimeReply"])
             self.assertTrue(receipt["proofSignals"]["hasRoute"])
+            self.assertFalse(receipt["proofSignals"]["hasProcessEvidence"])
+            self.assertFalse(receipt["safety"]["liveModelCallRecorded"])
             self.assertFalse(receipt["safety"]["runtimeAdapterAdded"])
+            self.assertEqual(receipt["processEvidence"], {})
+            self.assertEqual(
+                next(lane for lane in compartment["lanes"] if lane["role"] == "executor")["health"],
+                "proof-only",
+            )
             proof_path = pathlib.Path(receipt["artifacts"]["proofPath"])
             self.assertTrue(proof_path.exists())
             saved_receipt = json.loads(proof_path.read_text(encoding="utf-8"))
@@ -894,6 +901,12 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(calls[-1][1:4], ["infer", "model", "run"])
             self.assertIn("--prompt", calls[-1])
             self.assertIn("openai/gpt-5.3-codex", calls[-1])
+            receipt = result["compartment"]["runtimeProofReceipt"]
+            self.assertTrue(receipt["proofSignals"]["hasProcessEvidence"])
+            self.assertTrue(receipt["safety"]["liveModelCallRecorded"])
+            self.assertEqual(receipt["processEvidence"]["exitCode"], 0)
+            self.assertEqual(receipt["processEvidence"]["acceptedOutputField"], "reply")
+            self.assertIn("commandArgv", receipt["processEvidence"])
 
     def test_agent_chat_command_uses_codex_cli_for_openai_codex_route(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -932,6 +945,10 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(result["reply"], "pong")
             self.assertEqual(calls[-1][1], "exec")
             self.assertIn("gpt-5.3-codex", calls[-1])
+            receipt = result["compartment"]["runtimeProofReceipt"]
+            self.assertTrue(receipt["proofSignals"]["hasProcessEvidence"])
+            self.assertTrue(receipt["safety"]["liveModelCallRecorded"])
+            self.assertEqual(receipt["processEvidence"]["acceptedOutputField"], "output-last-message")
 
     def test_agent_chat_prefers_minimax_portal_when_oauth_profile_is_connected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1008,6 +1025,10 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(calls[-1][0], "wsl")
             self.assertEqual(calls[-1][1:3], ["bash", "-lc"])
             self.assertIn("hermes chat -q", calls[-1][3])
+            receipt = result["compartment"]["runtimeProofReceipt"]
+            self.assertTrue(receipt["proofSignals"]["hasProcessEvidence"])
+            self.assertTrue(receipt["safety"]["liveModelCallRecorded"])
+            self.assertEqual(receipt["processEvidence"]["acceptedOutputField"], "reply")
 
     def test_web_backend_starts_direct_openai_codex_oauth(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

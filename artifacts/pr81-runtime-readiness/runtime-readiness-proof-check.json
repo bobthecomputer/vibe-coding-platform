@@ -1,0 +1,16 @@
+{
+  "checkedAt": "2026-06-21T07:09:36.935237+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr81-runtime-readiness\\runtime-readiness-proof.png",
+  "scrolledTo": "Readiness: Contract Ready Live Unverified",
+  "expectedFragments": [
+    "FUSED RUNTIME TRUTH CONTRACT",
+    "Readiness:",
+    "Promotion blocked:",
+    "OpenClaw CLI available",
+    "Hermes CLI available",
+    "Run one bounded OpenClaw proving mission"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

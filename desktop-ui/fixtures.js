@@ -408,9 +408,90 @@ const baseSnapshot = {
       },
       latestLaneProof: {
         runId: 'lane-proof-fixture',
-        lanes: [{ runtimeId: 'openclaw', skill: 'jbheaven_godmode_lab', provider: 'openai-codex', model: 'gpt-5.4-mini' }],
-        artifactPaths: { proof: 'runtime_lane_proof.json' },
-        safetyContract: { liveModelCalls: false, runtimeAdapterAdded: false },
+        proofType: 'route_contract_proof',
+        readinessSummary: {
+          overallStatus: 'contract_ready_live_unverified',
+          promotionBlocked: true,
+          blockingGateCount: 6,
+          lanes: [
+            {
+              runtimeId: 'openclaw',
+              status: 'contract_ready_live_unverified',
+              blockingGateCount: 3,
+              nextRecoveryAction: 'Run one bounded OpenClaw proving mission and attach the runtime session events.',
+            },
+            {
+              runtimeId: 'hermes',
+              status: 'contract_ready_live_unverified',
+              blockingGateCount: 3,
+              nextRecoveryAction: 'Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.',
+            },
+          ],
+        },
+        lanes: [
+          {
+            runtimeId: 'openclaw',
+            skill: 'jbheaven_godmode_lab',
+            provider: 'openai-codex',
+            model: 'gpt-5.4-mini',
+            readiness: {
+              status: 'contract_ready_live_unverified',
+              promotionBlocked: true,
+              gates: [
+                {
+                  gateId: 'openclaw_cli_available',
+                  label: 'OpenClaw CLI available',
+                  status: 'unchecked',
+                  proofArtifact: 'runtime_lane_proof.json',
+                  recoveryAction: 'Run setup doctor or install OpenClaw before promoting this lane to live execution.',
+                  blocksPromotion: true,
+                },
+                {
+                  gateId: 'openclaw_contract_written',
+                  label: 'Route contract written',
+                  status: 'passed',
+                  proofArtifact: 'runtime_lane_proof.json',
+                  recoveryAction: 'Rebuild the deterministic lane proof if this gate disappears.',
+                  blocksPromotion: false,
+                },
+              ],
+            },
+          },
+          {
+            runtimeId: 'hermes',
+            skill: 'jbheaven_godmode_lab',
+            provider: 'minimax',
+            model: 'MiniMax-M3',
+            readiness: {
+              status: 'contract_ready_live_unverified',
+              promotionBlocked: true,
+              gates: [
+                {
+                  gateId: 'hermes_cli_available',
+                  label: 'Hermes CLI available',
+                  status: 'unchecked',
+                  proofArtifact: 'runtime_lane_proof.json',
+                  recoveryAction: 'Repair Hermes from setup or NAS runtime doctor before long-running delegated work.',
+                  blocksPromotion: true,
+                },
+                {
+                  gateId: 'hermes_skill_payload_visible',
+                  label: 'Skill payload visible',
+                  status: 'passed',
+                  proofArtifact: 'runtime_lane_proof.json',
+                  recoveryAction: 'Attach the selected skill payload before relaunching the Hermes lane.',
+                  blocksPromotion: false,
+                },
+              ],
+            },
+          },
+        ],
+        artifactPaths: {
+          proof: 'runtime_lane_proof.json',
+          markdown: 'RUNTIME_LANE_PROOF.md',
+          route_scorecard: 'route_scorecard.json',
+        },
+        safetyContract: { liveModelCalls: false, liveRuntimeExecution: false, runtimeAdapterAdded: false },
       },
       gaps: [],
     },

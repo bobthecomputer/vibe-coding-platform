@@ -1,0 +1,10 @@
+{
+  "runId": "runtime-readiness-recovery",
+  "root": "artifacts\\pr81-runtime-readiness\\runtime-readiness-recovery",
+  "paths": {
+    "proof": "artifacts\\pr81-runtime-readiness\\runtime-readiness-recovery\\runtime_lane_proof.json",
+    "markdown": "artifacts\\pr81-runtime-readiness\\runtime-readiness-recovery\\RUNTIME_LANE_PROOF.md",
+    "route_scorecard": "artifacts\\pr81-runtime-readiness\\runtime-readiness-recovery\\route_scorecard.json",
+    "artifact_index": "artifacts\\pr81-runtime-readiness\\runtime-readiness-recovery\\artifacts_index.json"
+  }
+}

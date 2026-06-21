@@ -36,17 +36,46 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
         self.assertIn("openclaw agent", lanes["openclaw"]["launchCommand"])
         self.assertIn("--json", lanes["openclaw"]["launchCommand"])
         self.assertEqual(
+            lanes["openclaw"]["readiness"]["status"],
+            "contract_ready_live_unverified",
+        )
+        self.assertTrue(lanes["openclaw"]["readiness"]["promotionBlocked"])
+        self.assertGreaterEqual(lanes["openclaw"]["readiness"]["blockingGateCount"], 1)
+        self.assertIn(
+            "OpenClaw CLI available",
+            {gate["label"] for gate in lanes["openclaw"]["readiness"]["gates"]},
+        )
+        self.assertEqual(
             lanes["openclaw"]["routeContract"]["canonical_model_id"],
             "openai-codex/gpt-5.4-mini",
         )
 
         self.assertIn("hermes chat", lanes["hermes"]["launchCommand"])
         self.assertIn("--provider minimax", lanes["hermes"]["launchCommand"])
+        self.assertEqual(
+            lanes["hermes"]["readiness"]["status"],
+            "contract_ready_live_unverified",
+        )
+        self.assertTrue(lanes["hermes"]["readiness"]["promotionBlocked"])
+        self.assertGreaterEqual(lanes["hermes"]["readiness"]["blockingGateCount"], 1)
+        self.assertIn(
+            "Hermes CLI available",
+            {gate["label"] for gate in lanes["hermes"]["readiness"]["gates"]},
+        )
         self.assertEqual(lanes["hermes"]["routeContract"]["provider"], "minimax")
 
         self.assertEqual(
             payload["fusedRuntime"]["role"],
             "supervisor_not_runtime_adapter",
+        )
+        self.assertEqual(
+            payload["fusedRuntime"]["readinessSummary"]["overallStatus"],
+            "contract_ready_live_unverified",
+        )
+        self.assertTrue(payload["fusedRuntime"]["readinessSummary"]["promotionBlocked"])
+        self.assertGreaterEqual(
+            payload["fusedRuntime"]["readinessSummary"]["blockingGateCount"],
+            2,
         )
         self.assertFalse(payload["fusedRuntime"]["runtimeAdapterAdded"])
         self.assertTrue(
@@ -78,6 +107,10 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
             self.assertFalse(candidate["runtimeLane"]["runtimeAdapterAdded"])
             self.assertEqual(candidate["verifierProof"]["proofType"], "route_contract_proof")
             self.assertFalse(candidate["verifierProof"]["liveRuntimeExecution"])
+            self.assertGreaterEqual(len(candidate["readinessGates"]), 3)
+            self.assertTrue(
+                any(gate["blocksPromotion"] for gate in candidate["readinessGates"])
+            )
 
     def test_writes_artifact_index_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -95,6 +128,9 @@ class RuntimeLaneProofHarnessTests(unittest.TestCase):
             self.assertIn("Hermes/OpenClaw Runtime Lane Proof", markdown)
             self.assertIn("Runtime adapter added: `False`", markdown)
             self.assertIn("Proof type: `route_contract_proof`", markdown)
+            self.assertIn("Readiness And Recovery", markdown)
+            self.assertIn("contract_ready_live_unverified", markdown)
+            self.assertIn("Promotion blocked: `True`", markdown)
 
             scorecard = json.loads(
                 pathlib.Path(payload["artifactPaths"]["route_scorecard"]).read_text(

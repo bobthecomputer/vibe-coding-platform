@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-06-21T07:10:10.809515+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr81-runtime-readiness\\runtime-readiness-proof-mobile.png",
+  "viewport": {
+    "width": 390,
+    "height": 900
+  },
+  "scrolledTo": "Readiness: Contract Ready Live Unverified",
+  "expectedFragments": [
+    "Readiness:",
+    "Promotion blocked:",
+    "OpenClaw CLI available",
+    "Hermes CLI available"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

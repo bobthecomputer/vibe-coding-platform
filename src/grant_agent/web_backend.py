@@ -553,6 +553,64 @@ def _run_process_capture(
     return payload, stdout, stderr, elapsed_ms
 
 
+def _tail_text(value: str, limit: int = 800) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return _redact_process_text(text)
+    return _redact_process_text(text[-limit:])
+
+
+def _redact_process_text(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(
+        r"(?i)(api[_-]?key|token|secret|password|authorization|bearer)(\s*[:=]\s*)([^\s\"']+)",
+        r"\1\2[redacted]",
+        text,
+    )
+    text = re.sub(r"(?i)\b(sk-[a-z0-9_-]{12,})\b", "[redacted-api-key]", text)
+    text = re.sub(r"(?i)\b([a-z0-9_-]{20,}\.[a-z0-9_-]{20,}\.[a-z0-9_-]{20,})\b", "[redacted-token]", text)
+    return text
+
+
+def _process_evidence_from_capture(
+    *,
+    args: list[str],
+    cwd: Path,
+    payload: dict[str, Any],
+    stdout: str,
+    stderr: str,
+    elapsed_ms: int,
+    accepted_output_field: str,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": "runtime-process-evidence.v1",
+        "commandArgv": [str(item) for item in args],
+        "resolvedRuntimeBinary": str(args[0] if args else ""),
+        "cwd": str(cwd),
+        "exitCode": 0,
+        "elapsedMs": int(elapsed_ms or 0),
+        "stdoutSha256": hashlib.sha256(str(stdout or "").encode("utf-8")).hexdigest(),
+        "stderrSha256": hashlib.sha256(str(stderr or "").encode("utf-8")).hexdigest(),
+        "stdoutTail": _tail_text(stdout),
+        "stderrTail": _tail_text(stderr),
+        "parsedJson": isinstance(payload, dict),
+        "acceptedOutputField": accepted_output_field,
+    }
+
+
+def _valid_process_evidence(evidence: object) -> bool:
+    if not isinstance(evidence, dict):
+        return False
+    command_argv = evidence.get("commandArgv")
+    return (
+        evidence.get("exitCode") == 0
+        and isinstance(command_argv, list)
+        and len(command_argv) > 0
+        and bool(str(evidence.get("resolvedRuntimeBinary") or "").strip())
+        and bool(str(evidence.get("acceptedOutputField") or "").strip())
+    )
+
+
 def _parse_json_objects_from_text(raw: str) -> list[dict[str, Any]]:
     objects: list[dict[str, Any]] = []
     for line in str(raw or "").splitlines():
@@ -694,57 +752,73 @@ def _wsl_has_command(command_name: str, timeout: int = 8) -> bool:
     return completed.returncode == 0
 
 
-def _extract_model_reply(payload: dict[str, Any]) -> str:
-    candidates: list[object] = [
-        payload.get("reply"),
-        payload.get("text"),
-        payload.get("outputText"),
-        payload.get("output_text"),
-        payload.get("content"),
-        payload.get("message"),
-        payload.get("response"),
-        payload.get("assistant"),
-        payload.get("completion"),
-        payload.get("data"),
-        payload.get("output"),
-        payload.get("result"),
-        payload.get("value"),
+def _extract_model_reply_with_source(payload: dict[str, Any]) -> tuple[str, str]:
+    candidate_fields = [
+        "reply",
+        "text",
+        "outputText",
+        "output_text",
+        "content",
+        "message",
+        "response",
+        "assistant",
+        "completion",
+        "data",
+        "output",
+        "result",
+        "value",
     ]
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-        if isinstance(candidate, dict):
-            nested = _extract_model_reply(candidate)
-            if nested:
-                return nested
-        if isinstance(candidate, list):
-            for item in candidate:
+
+    def scan(value: object, source: str) -> tuple[str, str]:
+        if isinstance(value, str) and value.strip():
+            return value.strip(), source
+        if isinstance(value, dict):
+            nested = _extract_model_reply_with_source(value)
+            if nested[0]:
+                return nested[0], f"{source}.{nested[1]}" if source else nested[1]
+        if isinstance(value, list):
+            for index, item in enumerate(value):
                 if isinstance(item, str) and item.strip():
-                    return item.strip()
+                    return item.strip(), f"{source}[{index}]"
                 if isinstance(item, dict):
-                    nested = _extract_model_reply(item)
-                    if nested:
-                        return nested
+                    nested = _extract_model_reply_with_source(item)
+                    if nested[0]:
+                        nested_source = f"{source}[{index}]"
+                        return nested[0], f"{nested_source}.{nested[1]}" if nested[1] else nested_source
+        return "", ""
+
+    for field in candidate_fields:
+        if field not in payload:
+            continue
+        reply, source = scan(payload.get(field), field)
+        if reply:
+            return reply, source
     choices = payload.get("choices")
     if isinstance(choices, list):
-        for choice in choices:
+        for index, choice in enumerate(choices):
             if isinstance(choice, dict):
-                nested = _extract_model_reply(choice)
-                if nested:
-                    return nested
+                reply, source = _extract_model_reply_with_source(choice)
+                if reply:
+                    return reply, f"choices[{index}].{source}" if source else f"choices[{index}]"
     messages = payload.get("messages")
     if isinstance(messages, list):
-        for message in reversed(messages):
+        for index, message in reversed(list(enumerate(messages))):
             if isinstance(message, dict):
-                nested = _extract_model_reply(message)
-                if nested:
-                    return nested
-    for value in payload.values():
+                reply, source = _extract_model_reply_with_source(message)
+                if reply:
+                    return reply, f"messages[{index}].{source}" if source else f"messages[{index}]"
+    for field, value in payload.items():
+        if field in candidate_fields or field in {"choices", "messages"}:
+            continue
         if isinstance(value, dict):
-            nested = _extract_model_reply(value)
-            if nested:
-                return nested
-    return ""
+            reply, source = _extract_model_reply_with_source(value)
+            if reply:
+                return reply, f"{field}.{source}" if source else field
+    return "", ""
+
+
+def _extract_model_reply(payload: dict[str, Any]) -> str:
+    return _extract_model_reply_with_source(payload)[0]
 
 
 def _safe_identifier(value: object, fallback: str = "syntelos") -> str:
@@ -3046,6 +3120,15 @@ class FluxioWebBackend:
             compartment.get("filesChanged") if isinstance(compartment.get("filesChanged"), list) else []
         )
         messages = compartment.get("messages") if isinstance(compartment.get("messages"), list) else []
+        process_evidence = (
+            compartment.get("processEvidence")
+            if isinstance(compartment.get("processEvidence"), dict)
+            else {}
+        )
+        live_model_call_recorded = (
+            _valid_process_evidence(process_evidence)
+            and any(item.get("role") == "assistant" for item in messages if isinstance(item, dict))
+        )
         receipt = {
             "schemaVersion": "runtime-compartment-proof.v1",
             "receiptKind": "runtime_compartment_proof",
@@ -3069,9 +3152,11 @@ class FluxioWebBackend:
                 "hasRoute": bool(route.get("provider") and route.get("model")),
                 "hasToolTimeline": len(timeline) > 0,
                 "hasChangedFiles": len(files_changed) > 0,
+                "hasProcessEvidence": _valid_process_evidence(process_evidence),
             },
+            "processEvidence": process_evidence,
             "safety": {
-                "liveModelCallRecorded": True,
+                "liveModelCallRecorded": live_model_call_recorded,
                 "runtimeAdapterAdded": False,
                 "fusedRuntimeRole": "evidence_layer_not_runtime_adapter",
                 "secretsIncluded": False,
@@ -3148,6 +3233,10 @@ class FluxioWebBackend:
             messages.append({"role": "operator", "text": operator_message, "at": now})
         if runtime_reply:
             messages.append({"role": "assistant", "text": runtime_reply, "at": now})
+        process_evidence = (
+            result.get("processEvidence") if isinstance(result.get("processEvidence"), dict) else {}
+        )
+        process_backed_reply = bool(runtime_reply and _valid_process_evidence(process_evidence))
         previous_files = previous.get("filesChanged") if isinstance(previous.get("filesChanged"), list) else []
         changed_files: list[str] = []
         seen_files: set[str] = set()
@@ -3169,10 +3258,10 @@ class FluxioWebBackend:
                     "provider": route.get("provider") or "openai-codex",
                     "model": route.get("model") or OPENAI_CODEX_DEFAULT_MODEL,
                     "effort": route.get("effort") or "medium",
-                    "health": "ready",
+                    "health": "ready" if process_backed_reply else "proof-only",
                     "active": role == active_role,
                     "authPath": "OpenAI Codex OAuth" if route.get("provider") == "openai-codex" else "provider route",
-                    "blocker": "",
+                    "blocker": "" if process_backed_reply else "No process-backed model evidence recorded.",
                 }
             )
         compartment = {
@@ -3186,6 +3275,7 @@ class FluxioWebBackend:
             "messages": messages[-40:],
             "toolTimeline": timeline[-30:],
             "lanes": lanes,
+            "processEvidence": process_evidence,
             "filesChanged": changed_files[:30],
             "approvals": [],
             "blockers": [],
@@ -3338,7 +3428,7 @@ class FluxioWebBackend:
             timeout=720,
             extra_env=env,
         )
-        reply = _extract_model_reply(result)
+        reply, reply_source = _extract_model_reply_with_source(result)
         if not reply:
             raise RuntimeError("OpenClaw finished without a readable model reply.")
         now = _utc_now()
@@ -3355,6 +3445,15 @@ class FluxioWebBackend:
             "route": route,
             "raw": result,
             "elapsedMs": elapsed_ms,
+            "processEvidence": _process_evidence_from_capture(
+                args=args,
+                cwd=workspace_path,
+                payload=result,
+                stdout=stdout,
+                stderr=_stderr,
+                elapsed_ms=elapsed_ms,
+                accepted_output_field=reply_source,
+            ),
             "toolTimeline": tool_timeline,
             "filesChanged": files_changed,
         }
@@ -3400,8 +3499,9 @@ class FluxioWebBackend:
                 reply = output_path.read_text(encoding="utf-8").strip()
             except OSError:
                 reply = ""
+            reply_source = "output-last-message"
             if not reply:
-                reply = _extract_model_reply(result)
+                reply, reply_source = _extract_model_reply_with_source(result)
             if not reply:
                 raise RuntimeError("Codex finished without a readable model reply.")
             now = _utc_now()
@@ -3418,6 +3518,15 @@ class FluxioWebBackend:
                 "route": route,
                 "raw": result,
                 "elapsedMs": elapsed_ms,
+                "processEvidence": _process_evidence_from_capture(
+                    args=args,
+                    cwd=workspace_path,
+                    payload=result,
+                    stdout=stdout,
+                    stderr=_stderr,
+                    elapsed_ms=elapsed_ms,
+                    accepted_output_field=reply_source,
+                ),
                 "toolTimeline": tool_timeline,
                 "filesChanged": files_changed,
             }
@@ -3460,7 +3569,7 @@ class FluxioWebBackend:
             timeout=720,
             extra_env=env,
         )
-        reply = _extract_model_reply(result)
+        reply, reply_source = _extract_model_reply_with_source(result)
         if not reply:
             raise RuntimeError("Hermes finished without a readable model reply.")
         now = _utc_now()
@@ -3481,6 +3590,15 @@ class FluxioWebBackend:
             },
             "raw": result,
             "elapsedMs": elapsed_ms,
+            "processEvidence": _process_evidence_from_capture(
+                args=args,
+                cwd=workspace_path,
+                payload=result,
+                stdout=stdout,
+                stderr=_stderr,
+                elapsed_ms=elapsed_ms,
+                accepted_output_field=reply_source,
+            ),
             "toolTimeline": tool_timeline,
             "filesChanged": files_changed,
         }

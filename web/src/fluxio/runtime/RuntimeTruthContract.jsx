@@ -27,6 +27,14 @@ export function RuntimeTruthContract({ fusedRuntime }) {
   const fusionPoints = asList(runtime.fusionPoints).slice(0, 4).map(titleizeToken);
   const proofLanes = asList(latestProof.lanes).filter(item => item.runtimeId || item.label);
   const proofArtifactCount = Object.keys(latestProof.artifactPaths || {}).length;
+  const readiness = latestProof.fusedRuntime?.readinessSummary || latestProof.readinessSummary || {};
+  const readinessRows = asList(readiness.lanes);
+  const laneReadinessRows = proofLanes.flatMap(item =>
+    asList(item.readiness?.gates).map(gate => ({
+      runtimeId: item.runtimeId || item.label,
+      ...gate,
+    })),
+  );
 
   return (
     <div className="runtime-truth-contract" aria-label="Fused runtime truth contract">
@@ -52,6 +60,35 @@ export function RuntimeTruthContract({ fusedRuntime }) {
             <small>
               {proofArtifactCount} artifact{proofArtifactCount === 1 ? "" : "s"} · live runtime execution: {latestProof.safetyContract?.liveRuntimeExecution ? "yes" : "no"} · live model calls: {latestProof.safetyContract?.liveModelCalls ? "yes" : "no"} · runtime adapter added: {latestProof.safetyContract?.runtimeAdapterAdded ? "yes" : "no"}
             </small>
+            <div className="runtime-readiness-contract" aria-label="Runtime readiness and recovery gates">
+              <strong>Readiness: {titleizeToken(readiness.overallStatus || "contract_ready_live_unverified")}</strong>
+              <p>
+                Promotion blocked: {readiness.promotionBlocked ? "yes" : "no"} · Blocking gates {readiness.blockingGateCount || 0}
+              </p>
+              {readinessRows.length > 0 ? (
+                <div className="runtime-readiness-summary-list">
+                  {readinessRows.map(item => (
+                    <article key={`runtime-readiness-summary-${item.runtimeId}`}>
+                      <span>{runtimeLabel(item.runtimeId)}</span>
+                      <b>{titleizeToken(item.status)}</b>
+                      <small>{item.nextRecoveryAction || "No recovery action recorded."}</small>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+              {laneReadinessRows.length > 0 ? (
+                <div className="runtime-readiness-gate-list">
+                  {laneReadinessRows.slice(0, 6).map(item => (
+                    <article key={`${item.runtimeId}-${item.gateId}`}>
+                      <span>{runtimeLabel(item.runtimeId)} · {titleizeToken(item.status)}</span>
+                      <b>{item.label}</b>
+                      <p>{item.recoveryAction}</p>
+                      <small>{item.proofArtifact} · blocks promotion: {item.blocksPromotion ? "yes" : "no"}</small>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </>
         ) : (
           <span>No runtime lane proof receipt found yet. Run the deterministic lane proof harness to attach one.</span>

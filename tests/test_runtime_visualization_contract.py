@@ -83,6 +83,12 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Runtime adapter added" in runtime_contract
     assert "Providers stay model routes, not runtime lanes" in runtime_contract
     assert "Latest runtime lane proof" in runtime_contract
+    assert "Runtime readiness and recovery gates" in runtime_contract
+    assert "runtime-readiness-contract" in runtime_contract
+    assert "runtime-readiness-summary-list" in runtime_contract
+    assert "runtime-readiness-gate-list" in runtime_contract
+    assert "Promotion blocked:" in runtime_contract
+    assert "blocks promotion:" in runtime_contract
     assert "proofType" in runtime_contract
     assert "live runtime execution:" in runtime_contract
     assert "live model calls:" in runtime_contract
@@ -95,8 +101,15 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "agent-runtime-proof-receipt" in source
     assert ".runtime-truth-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-lane-proof-receipt" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-readiness-contract" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-readiness-gate-list" in STYLES.read_text(encoding="utf-8")
     assert ".agent-runtime-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert "supervisor_not_runtime_adapter" in fixtures
+    assert "contract_ready_live_unverified" in fixtures
+    assert "OpenClaw CLI available" in fixtures
+    assert "Hermes CLI available" in fixtures
+    assert "Run one bounded OpenClaw proving mission" in fixtures
+    assert "Run a supervised synthetic lab transcript" in fixtures
     assert "provider_model_route" in fixtures
     assert "fixture_runtime_compartment_state" in fixtures
     assert "runtime-compartment-proof.v1" in fixtures

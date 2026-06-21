@@ -128,6 +128,77 @@ LANE_SCORECARD_CONTEXT = {
     },
 }
 
+LANE_READINESS_GATES = {
+    "openclaw": [
+        {
+            "gateId": "openclaw_cli_available",
+            "label": "OpenClaw CLI available",
+            "status": "unchecked",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Run setup doctor or install OpenClaw before promoting this lane to live execution.",
+            "blocksPromotion": True,
+        },
+        {
+            "gateId": "openai_codex_route_configured",
+            "label": "OpenAI/Codex route configured",
+            "status": "unchecked",
+            "proofArtifact": "route_scorecard.json",
+            "recoveryAction": "Connect Codex OAuth or configure the OpenAI route, then rerun provider health checks.",
+            "blocksPromotion": True,
+        },
+        {
+            "gateId": "openclaw_contract_written",
+            "label": "Route contract written",
+            "status": "passed",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Rebuild the deterministic lane proof if this gate disappears.",
+            "blocksPromotion": False,
+        },
+        {
+            "gateId": "openclaw_json_session_output",
+            "label": "JSON session output observed",
+            "status": "needs_live_validation",
+            "proofArtifact": "runtime_session.events.jsonl",
+            "recoveryAction": "Run one bounded OpenClaw proving mission and attach the runtime session events.",
+            "blocksPromotion": True,
+        },
+    ],
+    "hermes": [
+        {
+            "gateId": "hermes_cli_available",
+            "label": "Hermes CLI available",
+            "status": "unchecked",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Repair Hermes from setup or NAS runtime doctor before long-running delegated work.",
+            "blocksPromotion": True,
+        },
+        {
+            "gateId": "minimax_route_configured",
+            "label": "MiniMax route configured",
+            "status": "unchecked",
+            "proofArtifact": "route_scorecard.json",
+            "recoveryAction": "Connect the MiniMax/OpenClaw auth route or choose a cheaper verified model route.",
+            "blocksPromotion": True,
+        },
+        {
+            "gateId": "hermes_skill_payload_visible",
+            "label": "Skill payload visible",
+            "status": "passed",
+            "proofArtifact": "runtime_lane_proof.json",
+            "recoveryAction": "Attach the selected skill payload before relaunching the Hermes lane.",
+            "blocksPromotion": False,
+        },
+        {
+            "gateId": "hermes_transcript_proof_observed",
+            "label": "Transcript proof observed",
+            "status": "needs_live_validation",
+            "proofArtifact": "red_team_transcript.md",
+            "recoveryAction": "Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.",
+            "blocksPromotion": True,
+        },
+    ],
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -181,6 +252,24 @@ def _lane_payload(runtime_id: str) -> dict:
         "routeContract": launch["route_contract"],
         "routeSummary": launch["route_summary"],
         "proofMeaning": route.explanation,
+        "readiness": _lane_readiness(runtime_id),
+    }
+
+
+def _lane_readiness(runtime_id: str) -> dict:
+    gates = [dict(item) for item in LANE_READINESS_GATES[runtime_id]]
+    blocking = [item for item in gates if item["blocksPromotion"] and item["status"] != "passed"]
+    return {
+        "status": "contract_ready_live_unverified" if blocking else "ready_for_supervised_live_run",
+        "summary": (
+            "Deterministic route contract is present; live CLI/auth/session proof is still required."
+            if blocking
+            else "All readiness gates passed for a supervised live run."
+        ),
+        "promotionBlocked": bool(blocking),
+        "blockingGateCount": len(blocking),
+        "gates": gates,
+        "nextRecoveryAction": blocking[0]["recoveryAction"] if blocking else "Run the supervised mission and attach proof artifacts.",
     }
 
 
@@ -235,6 +324,24 @@ def _fused_runtime_payload(lanes: list[dict]) -> dict:
         "delegatedSessionFieldsPresent": {
             name: name in session_fields
             for name in required_fields
+        },
+        "readinessSummary": {
+            "overallStatus": (
+                "contract_ready_live_unverified"
+                if any(lane["readiness"]["promotionBlocked"] for lane in lanes)
+                else "ready_for_supervised_live_run"
+            ),
+            "promotionBlocked": any(lane["readiness"]["promotionBlocked"] for lane in lanes),
+            "blockingGateCount": sum(lane["readiness"]["blockingGateCount"] for lane in lanes),
+            "lanes": [
+                {
+                    "runtimeId": lane["runtimeId"],
+                    "status": lane["readiness"]["status"],
+                    "blockingGateCount": lane["readiness"]["blockingGateCount"],
+                    "nextRecoveryAction": lane["readiness"]["nextRecoveryAction"],
+                }
+                for lane in lanes
+            ],
         },
     }
 
@@ -297,6 +404,7 @@ def _scorecard_candidate(lane: dict, artifact_paths: dict) -> dict:
             ],
             "acceptanceGate": "Route metadata, runtime lane, and deterministic proof artifacts must exist before recommending this route.",
         },
+        "readinessGates": lane["readiness"]["gates"],
         "speedCostContext": {
             "contextWindowTokens": context["contextWindowTokens"],
             "expectedWallTimeBand": context["expectedWallTimeBand"],
@@ -386,6 +494,24 @@ def _markdown(payload: dict) -> str:
     for lane in payload["lanes"]:
         lines.append(
             f"| `{lane['runtimeId']}` | `{lane['routeSummary']}` | `{lane['skill']}` | {lane['proofMeaning']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Readiness And Recovery",
+            "",
+            f"- Overall status: `{payload['fusedRuntime']['readinessSummary']['overallStatus']}`",
+            f"- Promotion blocked: `{payload['fusedRuntime']['readinessSummary']['promotionBlocked']}`",
+            f"- Blocking gates: `{payload['fusedRuntime']['readinessSummary']['blockingGateCount']}`",
+            "",
+            "| Lane | Status | Blocking Gates | Next Recovery |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for lane in payload["lanes"]:
+        readiness = lane["readiness"]
+        lines.append(
+            f"| `{lane['runtimeId']}` | `{readiness['status']}` | `{readiness['blockingGateCount']}` | {readiness['nextRecoveryAction']} |"
         )
     lines.extend(
         [
