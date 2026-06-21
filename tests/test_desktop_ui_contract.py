@@ -26,6 +26,7 @@ VOICE_PANEL = ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx
 VOICE_CONTROLLER = ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js"
 VOICE_ADAPTERS = ROOT / "web" / "src" / "fluxio" / "voice" / "voiceCaptureAdapters.js"
 VOICE_INDEX = ROOT / "web" / "src" / "fluxio" / "voice" / "index.js"
+BASELINE_AUDIT = ROOT / "docs" / "cleanup" / "baseline-audit.md"
 
 
 def fluxio_shell_surface_source() -> str:
@@ -127,6 +128,15 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn("reference-preview-refresh", shell)
         self.assertNotIn("showBlockingSnapshotLoader", shell)
         self.assertNotIn("Loading live control-room state", shell)
+
+    def test_cleanup_baseline_does_not_reintroduce_deleted_ui_paths(self) -> None:
+        audit = BASELINE_AUDIT.read_text(encoding="utf-8")
+
+        self.assertNotIn("FluxioReferenceShell.jsx", audit)
+        self.assertNotIn("ImagePlayground.jsx", audit)
+        self.assertNotIn("imageProviderAdapters.js", audit)
+        self.assertIn("image-studio/ImageStudioPlayground.jsx", audit)
+        self.assertIn("voice/VoiceCommandPanel.jsx", audit)
 
     def test_current_shell_motion_layer_has_accessible_interaction_polish(self) -> None:
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")

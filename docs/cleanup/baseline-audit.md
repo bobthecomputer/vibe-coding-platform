@@ -53,12 +53,11 @@ Branch: `refactor/agent-workspace-cleanup-redesign`
 - `web/src/fluxio/FluxioShell.jsx`
   - imports legacy `desktop-ui` helpers/primitives/model builder
   - owns most application state, backend calls, forms, chat sessions, storage, surface switching, command dispatch, and render composition
-  - delegates larger redesigned surfaces to `FluxioReferenceShell`
-- `web/src/fluxio/FluxioReferenceShell.jsx`
-  - contains redesigned Agent, Builder, Skill Hub, Settings, Workbench, and preview surfaces
-  - currently a second large monolith rather than feature folders
-- `web/src/fluxio/ImagePlayground.jsx`
-  - image artifact surface backed by `imagePlaygroundState.js` and `imageProviderAdapters.js`
+  - lazy-loads larger builder drawers, image studio, voice, runtime truth, red-team, proof, provider, fusion, and subagent surfaces
+- `web/src/fluxio/image-studio/ImageStudioPlayground.jsx`
+  - current image studio surface backed by `imagePlaygroundState.js`, artifact serving checks, chroma-key preview, provider handoff metadata, and proof rows
+- `web/src/fluxio/voice/VoiceCommandPanel.jsx`
+  - current voice-first dictation review surface backed by browser/local voice capture adapters and guarded command parsing
 - `desktop-ui/*`
   - legacy helper/model primitive layer still imported by the web app
 - `src/grant_agent/*`
@@ -73,7 +72,7 @@ Branch: `refactor/agent-workspace-cleanup-redesign`
 - `get_control_room_snapshot_command` produces the core snapshot used by `buildMissionControlModel`.
 - Fixture mode uses `desktop-ui/fixtures.js` when `preview-control=1` and `fixture` is one of `live_review`, `first_run`, `verification_failure`, `approval_resumed`, or `long_run_resumed`.
 - UI mode/surface/chat/session options are persisted through many localStorage keys in `FluxioShell.jsx`.
-- Image workbench persists its project state through `imagePlaygroundState.js`.
+- Image studio persists its project state through `imagePlaygroundState.js`.
 
 ## Broken or Suspicious Areas
 
@@ -82,7 +81,7 @@ Branch: `refactor/agent-workspace-cleanup-redesign`
 - Rule Sets are present inside Skill Studio, not a first-class global surface.
 - Settings contains "Rules & Routing", which risks burying execution policy even though permissions are central to agent trust.
 - `FluxioShell.jsx` is 15,849 lines and mixes domain constants, storage, data fetching, reducers, rendering, and event handling.
-- `FluxioReferenceShell.jsx` is 5,340 lines and contains many separate screens in one file.
+- Large feature surfaces now live in lazily loaded modules, but `FluxioShell.jsx` still owns too much cross-surface state.
 - `styles.css` is 17,047 lines and mixes public marketing, shell layout, reference shell, drawer, image workbench, and state styling.
 - `FluxioApp.tsx` public page still reads like a landing page, while the product north star is a workstation-first agent shell.
 - Several route/surface states show synthetic/fixture data. Some labels are product-like but not clearly marked as fixture/dev when browsing the shell.
@@ -93,7 +92,7 @@ Branch: `refactor/agent-workspace-cleanup-redesign`
 
 ## Duplicated Components and Styles
 
-- `desktop-ui/MissionControlPrimitives.jsx` overlaps with custom components inside `FluxioShell.jsx` and `FluxioReferenceShell.jsx`.
+- `desktop-ui/MissionControlPrimitives.jsx` overlaps with custom components inside `FluxioShell.jsx` and the lazily loaded drawer/surface modules.
 - Status tone logic appears in `desktop-ui/fluxioHelpers.js`, `desktop-ui/missionControlModel.js`, and local UI render branches.
 - Model/provider/effort/route options are defined directly in `FluxioShell.jsx`.
 - Sidebar/nav/surface concepts are encoded in render logic rather than a single navigation model.
