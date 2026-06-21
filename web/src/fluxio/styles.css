@@ -1752,6 +1752,55 @@ button.builder-sidebar-nexus:hover {
   overflow-wrap: anywhere;
 }
 
+.runtime-recovery-proof-gate {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 9px;
+}
+
+.runtime-recovery-proof-gate[data-active="true"] {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(255, 255, 255, 0.035));
+}
+
+.runtime-recovery-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 7px;
+}
+
+.runtime-recovery-proof-grid > div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 7px;
+}
+
+.runtime-recovery-proof-gate p {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.runtime-recovery-proof-gate small {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.runtime-recovery-proof-gate b,
+.runtime-recovery-proof-gate code {
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
 .runtime-readiness-contract {
   display: grid;
   gap: 8px;

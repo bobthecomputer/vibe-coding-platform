@@ -86,6 +86,14 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Runtime readiness and recovery gates" in runtime_contract
     assert "Runtime proof flight recorder" in runtime_contract
     assert "Proof artifact integrity" in runtime_contract
+    assert "Runtime recovery proof gate" in runtime_contract
+    assert "Recovery proof gate" in runtime_contract
+    assert "missionSkillRecovery" in runtime_contract
+    assert "missionSkillRecoveryPlan" in runtime_contract
+    assert "recoveryRetryGuard" in runtime_contract
+    assert "Proof before retry:" in runtime_contract
+    assert "must attach before retry" in runtime_contract
+    assert "No mission recovery action is active right now." in runtime_contract
     assert "Runtime proof artifact integrity" in runtime_contract
     assert "missingGateArtifacts" in runtime_contract
     assert "Missing gate proof:" in runtime_contract
@@ -96,6 +104,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "runtime-proof-artifact-integrity" in runtime_contract
     assert "runtime-proof-artifact-list" in runtime_contract
     assert "runtime-proof-next-actions" in runtime_contract
+    assert "runtime-recovery-proof-gate" in runtime_contract
+    assert "runtime-recovery-proof-grid" in runtime_contract
     assert "runtime-readiness-contract" in runtime_contract
     assert "runtime-readiness-summary-list" in runtime_contract
     assert "runtime-readiness-gate-list" in runtime_contract
@@ -109,6 +119,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "runtime-lane-proof-receipt" in runtime_contract
     assert "runtimeProofReceipt" in source
     assert "runtimeProofGateSummary" in source
+    assert "missionSkillRecovery={missionSkillRecovery}" in source
+    assert "missionSkillRecoveryPlan={missionSkillRecoveryPlan}" in source
     assert "runtimeProofGateCommand" in source
     assert "Runtime proof receipt" in source
     assert "Open proof receipt" in source
@@ -138,6 +150,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert ".runtime-proof-artifact-list" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-proof-flight-grid" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-proof-next-actions" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-recovery-proof-gate" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-recovery-proof-grid" in STYLES.read_text(encoding="utf-8")
     assert ".agent-runtime-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-skill-proof-strip" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-skill-proof-grid" in STYLES.read_text(encoding="utf-8")

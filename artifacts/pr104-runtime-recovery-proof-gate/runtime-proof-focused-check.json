@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-06-21T10:51:42.983121+00:00",
+  "url": "http://127.0.0.1:1423/control?preview-control=1&fixture=verification_failure&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr104-runtime-recovery-proof-gate\\runtime-proof-focused.png",
+  "requiredSelectors": [
+    ".runtime-proof-flight-recorder",
+    ".runtime-proof-artifact-integrity",
+    ".runtime-recovery-proof-gate"
+  ],
+  "expectedFragments": [
+    "RUNTIME PROOF FLIGHT RECORDER",
+    "Promotion blocked",
+    "PROOF ARTIFACT INTEGRITY",
+    "RECOVERY PROOF GATE",
+    "Stuck State Recovery",
+    "Proof before retry:",
+    "Missing evidence",
+    "Missing gate proof:",
+    "python scripts/runtime_lane_proof_harness.py"
+  ],
+  "missingFragments": [],
+  "passed": true
+}

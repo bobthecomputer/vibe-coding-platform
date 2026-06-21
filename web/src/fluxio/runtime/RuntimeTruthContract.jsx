@@ -2,6 +2,10 @@ function asList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function titleizeToken(value) {
   return String(value || "")
     .replace(/[_-]+/g, " ")
@@ -17,8 +21,29 @@ function runtimeLabel(runtimeId) {
   return titleizeToken(runtimeId || "Runtime");
 }
 
-export function RuntimeTruthContract({ fusedRuntime }) {
+export function RuntimeTruthContract({ fusedRuntime, missionSkillRecovery, missionSkillRecoveryPlan }) {
   const runtime = fusedRuntime || {};
+  const recovery = asObject(missionSkillRecovery);
+  const recoveryPlan = asObject(missionSkillRecoveryPlan || recovery.recoveryPlan);
+  const recoveryTriggers = asList(recovery.triggers);
+  const recoveryActions = asList(recovery.recoveryActions);
+  const recoveryRecommendations = asList(recovery.recommendations);
+  const recoveryRouteSeparation = asObject(recovery.routeSeparation);
+  const recoveryProviderRoute = asObject(recoveryPlan.providerRoute || recoveryRouteSeparation.providerRoute);
+  const recoverySelectedSkill = asObject(recoveryPlan.selectedSkill || recoveryRecommendations[0]);
+  const recoveryProofRequirement = asObject(recoveryPlan.proofRequirement);
+  const recoveryProofArtifactPlan = asObject(recoveryPlan.proofArtifactPlan);
+  const recoveryRetryGuard = asObject(recoveryPlan.retryGuard);
+  const recoveryIsActive =
+    Boolean(recoveryPlan.schemaVersion) ||
+    String(recovery.status || "").toLowerCase() === "needs_recovery" ||
+    recoveryTriggers.length > 0;
+  const recoveryRuntimeLane = recoveryPlan.runtimeLane || recoveryRouteSeparation.runtimeLane || runtime.runtimeLanes?.[0]?.runtimeId || "";
+  const recoveryNextAction =
+    recoveryPlan.nextAction ||
+    recoveryActions[0]?.action ||
+    recoveryTriggers[0]?.recoveryAction ||
+    "No mission recovery action is active right now.";
   const proofSignals = runtime.proofSignals || {};
   const latestProof = runtime.latestLaneProof || {};
   const proofGateSummary = runtime.proofGateSummary || latestProof.proofGateSummary || {};
@@ -146,6 +171,52 @@ export function RuntimeTruthContract({ fusedRuntime }) {
                   ))}
                 </ul>
               ) : null}
+              <div className="runtime-recovery-proof-gate" data-active={recoveryIsActive} aria-label="Runtime recovery proof gate">
+                <div className="runtime-proof-flight-head">
+                  <span>Recovery proof gate</span>
+                  <strong>{recoveryIsActive ? "Recovery required" : "No recovery block"}</strong>
+                </div>
+                <div className="runtime-recovery-proof-grid">
+                  <div>
+                    <span>Selected skill</span>
+                    <b>{recoverySelectedSkill.label || titleizeToken(recoverySelectedSkill.skillId || "No recovery skill selected")}</b>
+                  </div>
+                  <div>
+                    <span>Loop step</span>
+                    <b>{titleizeToken(recoveryPlan.loopStep || recoveryTriggers[0]?.loopStep || "observe")}</b>
+                  </div>
+                  <div>
+                    <span>Runtime lane</span>
+                    <b>{runtimeLabel(recoveryRuntimeLane || "none")}</b>
+                  </div>
+                  <div>
+                    <span>Retry guard</span>
+                    <b>{recoveryRetryGuard.blockSameStepRetry ? "Blocked until proof" : "Clear"}</b>
+                  </div>
+                </div>
+                <p>{recoveryNextAction}</p>
+                <small>
+                  Proof before retry: {recoveryProofRequirement.label || recoveryProofArtifactPlan.artifactKind || "not required"}
+                  {recoveryProofArtifactPlan.mustAttachBeforeRetry ? " · must attach before retry" : ""}
+                </small>
+                {recoveryProviderRoute.provider || recoveryProviderRoute.model ? (
+                  <small>
+                    Route: {recoveryPlan.visibleRouteSummary ||
+                      [recoveryRuntimeLane, recoveryProviderRoute.provider, recoveryProviderRoute.model].filter(Boolean).join(" · ")}
+                  </small>
+                ) : null}
+                {recoveryRetryGuard.reason ? <code>{recoveryRetryGuard.reason}</code> : null}
+                {recoveryProofArtifactPlan.suggestedPath ? <code>{recoveryProofArtifactPlan.suggestedPath}</code> : null}
+                {recoveryActions.length > 0 ? (
+                  <ul className="runtime-proof-next-actions">
+                    {recoveryActions.slice(0, 3).map((action, index) => (
+                      <li key={`runtime-recovery-action-${action.action || action.label || index}`}>
+                        {action.action || action.label || action.recoveryAction}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
             </div>
             <div className="runtime-readiness-contract" aria-label="Runtime readiness and recovery gates">
               <strong>Readiness: {titleizeToken(readiness.overallStatus || "contract_ready_live_unverified")}</strong>

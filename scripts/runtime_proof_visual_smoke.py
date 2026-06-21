@@ -28,6 +28,7 @@ CHECK_PATH = OUT_DIR / "runtime-proof-focused-check.json"
 RUNTIME_PROOF_SELECTORS = [
     ".runtime-proof-flight-recorder",
     ".runtime-proof-artifact-integrity",
+    ".runtime-recovery-proof-gate",
 ]
 
 
@@ -64,13 +65,13 @@ def main() -> int:
         wait_for_control_shell(cdp)
         deadline = time.time() + 12
         while time.time() < deadline:
-            if cdp.eval('Boolean(document.querySelector(".runtime-proof-flight-recorder")) && Boolean(document.querySelector(".runtime-proof-artifact-integrity"))'):
+            if cdp.eval('Boolean(document.querySelector(".runtime-proof-flight-recorder")) && Boolean(document.querySelector(".runtime-proof-artifact-integrity")) && Boolean(document.querySelector(".runtime-recovery-proof-gate"))'):
                 break
             cdp.eval("window.scrollBy(0, 420)")
             time.sleep(0.35)
         cdp.eval(
             """
-            document.querySelector(".runtime-proof-artifact-integrity")
+            document.querySelector(".runtime-recovery-proof-gate")
               ?.scrollIntoView({ block: "center", inline: "nearest" });
             """
         )
@@ -85,6 +86,9 @@ def main() -> int:
             "RUNTIME PROOF FLIGHT RECORDER",
             "Promotion blocked",
             "PROOF ARTIFACT INTEGRITY",
+            "RECOVERY PROOF GATE",
+            "Stuck State Recovery",
+            "Proof before retry:",
             "Missing evidence",
             "Missing gate proof:",
             "python scripts/runtime_lane_proof_harness.py",

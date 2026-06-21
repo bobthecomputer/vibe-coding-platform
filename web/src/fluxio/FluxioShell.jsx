@@ -14352,7 +14352,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       </span>
                     </div>
                     <Suspense fallback={null}>
-                      <RuntimeTruth fusedRuntime={snapshot.harnessLab?.fusedRuntime} />
+                      <RuntimeTruth
+                        fusedRuntime={snapshot.harnessLab?.fusedRuntime}
+                        missionSkillRecovery={missionSkillRecovery}
+                        missionSkillRecoveryPlan={missionSkillRecoveryPlan}
+                      />
                     </Suspense>
                     <div className="builder-thread-list">
                       {asList(snapshot.harnessLab?.fusedRuntime?.runtimeLanes).map(item => (
