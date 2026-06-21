@@ -1543,6 +1543,88 @@ button.builder-sidebar-nexus:hover {
   text-transform: none;
 }
 
+.runtime-proof-flight-recorder {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 9px;
+  background:
+    linear-gradient(135deg, rgba(96, 165, 250, 0.07), transparent 58%),
+    rgba(255, 255, 255, 0.026);
+  padding: 9px;
+}
+
+.runtime-proof-flight-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-proof-flight-head span,
+.runtime-proof-flight-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runtime-proof-flight-head strong {
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: right;
+}
+
+.runtime-proof-flight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.runtime-proof-flight-grid div {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 7px;
+}
+
+.runtime-proof-flight-grid b {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.runtime-proof-flight-recorder code {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(238, 242, 236, 0.78);
+  display: block;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  padding: 8px;
+}
+
+.runtime-proof-next-actions {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.runtime-proof-next-actions li {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .runtime-readiness-contract {
   display: grid;
   gap: 8px;
@@ -4421,6 +4503,7 @@ button.builder-review-target:hover {
   .skill-recovery-plan-grid,
   .monitor-loop-strip,
   .runtime-skill-proof-grid,
+  .runtime-proof-flight-grid,
   .preview-annotation-proof-grid,
   .supervisor-intervention-strip,
   .monitor-loop-list,

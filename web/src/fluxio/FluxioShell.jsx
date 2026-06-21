@@ -8430,6 +8430,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const latestRuntimeProofSignals = asRecord(latestRuntimeProofReceipt.proofSignals);
   const latestRuntimeProofArtifacts = asRecord(latestRuntimeProofReceipt.artifacts);
   const latestFusedRuntimeProof = asRecord(snapshot.harnessLab?.fusedRuntime?.latestLaneProof);
+  const runtimeProofGateSummary = asRecord(snapshot.harnessLab?.fusedRuntime?.proofGateSummary);
   const latestFusedRuntimeProofSafety = asRecord(latestFusedRuntimeProof.safetyContract);
   const runtimeSkillProofRoute = asRecord(latestRuntimeProofReceipt.route);
   const runtimeSkillProofProvider =
@@ -8470,8 +8471,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     Boolean(missionSkillRecoveryProofArtifactPlan.mustAttachBeforeRetry || missionSkillRecoveryNeedsAction);
   const runtimeSkillProofNextAction =
     missionSkillRecoveryPlan.nextAction ||
+    asList(runtimeProofGateSummary.nextRecoveryActions)[0] ||
     asList(asRecord(latestFusedRuntimeProof.readinessSummary).lanes)[0]?.nextRecoveryAction ||
     "Continue plan-execute-verify with runtime proof visible.";
+  const runtimeProofGateStatus = runtimeProofGateSummary.status || asRecord(latestFusedRuntimeProof.readinessSummary).overallStatus || "proof pending";
+  const runtimeProofGateBlocked =
+    runtimeProofGateSummary.promotionBlocked !== undefined
+      ? Boolean(runtimeProofGateSummary.promotionBlocked)
+      : Boolean(asRecord(latestFusedRuntimeProof.readinessSummary).promotionBlocked);
+  const runtimeProofGateCommand =
+    runtimeProofGateSummary.proofRunCommand ||
+    latestFusedRuntimeProof.proofRunCommand ||
+    "python scripts/runtime_lane_proof_harness.py";
   const providerOAuthActionsAvailable =
     previewMode === "live" && hasCommandBackend();
   const providerOAuthUnavailableReason = !hasTauriBackend()
@@ -12366,6 +12377,16 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 <div>
                                   <span>Recovery skill</span>
                                   <b>{runtimeSkillProofSelectedSkill}</b>
+                                </div>
+                                <div>
+                                  <span>Promotion gates</span>
+                                  <b>
+                                    {runtimeProofGateBlocked ? "blocked" : "clear"} · {runtimeProofGateSummary.blockingGateCount || 0} blocking · {titleizeToken(runtimeProofGateStatus)}
+                                  </b>
+                                </div>
+                                <div>
+                                  <span>Proof command</span>
+                                  <b>{runtimeProofGateCommand}</b>
                                 </div>
                               </div>
                               <div className="runtime-skill-proof-foot">

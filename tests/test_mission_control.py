@@ -1718,23 +1718,96 @@ class MissionControlTests(unittest.TestCase):
                                 "runtimeId": "openclaw",
                                 "label": "OpenClaw",
                                 "skill": "jbheaven_godmode_lab",
+                                "launchCommand": "openclaw agent run --json",
+                                "proofMeaning": "OpenClaw route contract proof only.",
                                 "routeSummary": "OpenClaw / OpenAI Codex",
                                 "routeContract": {
                                     "provider": "openai-codex",
                                     "model": "gpt-5.4-mini",
+                                },
+                                "readiness": {
+                                    "status": "contract_ready_live_unverified",
+                                    "promotionBlocked": True,
+                                    "blockingGateCount": 2,
+                                    "nextRecoveryAction": "Run one bounded OpenClaw proving mission and attach the runtime session events.",
+                                    "gates": [
+                                        {
+                                            "gateId": "openclaw_cli_available",
+                                            "label": "OpenClaw CLI available",
+                                            "status": "unchecked",
+                                            "proofArtifact": "runtime_lane_proof.json",
+                                            "recoveryAction": "Run setup doctor or install OpenClaw before promoting this lane to live execution.",
+                                            "blocksPromotion": True,
+                                        },
+                                        {
+                                            "gateId": "openclaw_json_session_output",
+                                            "label": "JSON session output observed",
+                                            "status": "needs_live_validation",
+                                            "proofArtifact": "runtime_session.events.jsonl",
+                                            "recoveryAction": "Run one bounded OpenClaw proving mission and attach the runtime session events.",
+                                            "blocksPromotion": True,
+                                        },
+                                    ],
                                 },
                             },
                             {
                                 "runtimeId": "hermes",
                                 "label": "Hermes",
                                 "skill": "jbheaven_godmode_lab",
+                                "launchCommand": "hermes chat --provider minimax",
+                                "proofMeaning": "Hermes skill payload proof only.",
                                 "routeSummary": "Hermes / MiniMax",
                                 "routeContract": {
                                     "provider": "minimax",
                                     "model": "MiniMax-M3",
                                 },
+                                "readiness": {
+                                    "status": "contract_ready_live_unverified",
+                                    "promotionBlocked": True,
+                                    "blockingGateCount": 2,
+                                    "nextRecoveryAction": "Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.",
+                                    "gates": [
+                                        {
+                                            "gateId": "hermes_cli_available",
+                                            "label": "Hermes CLI available",
+                                            "status": "unchecked",
+                                            "proofArtifact": "runtime_lane_proof.json",
+                                            "recoveryAction": "Repair Hermes from setup or NAS runtime doctor before long-running delegated work.",
+                                            "blocksPromotion": True,
+                                        },
+                                        {
+                                            "gateId": "hermes_transcript_proof_observed",
+                                            "label": "Transcript proof observed",
+                                            "status": "needs_live_validation",
+                                            "proofArtifact": "red_team_transcript.md",
+                                            "recoveryAction": "Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.",
+                                            "blocksPromotion": True,
+                                        },
+                                    ],
+                                },
                             },
                         ],
+                        "fusedRuntime": {
+                            "readinessSummary": {
+                                "overallStatus": "contract_ready_live_unverified",
+                                "promotionBlocked": True,
+                                "blockingGateCount": 4,
+                                "lanes": [
+                                    {
+                                        "runtimeId": "openclaw",
+                                        "status": "contract_ready_live_unverified",
+                                        "blockingGateCount": 2,
+                                        "nextRecoveryAction": "Run one bounded OpenClaw proving mission and attach the runtime session events.",
+                                    },
+                                    {
+                                        "runtimeId": "hermes",
+                                        "status": "contract_ready_live_unverified",
+                                        "blockingGateCount": 2,
+                                        "nextRecoveryAction": "Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.",
+                                    },
+                                ],
+                            },
+                        },
                         "artifactPaths": {
                             "proof": str(proof_dir / "runtime_lane_proof.json"),
                             "markdown": str(proof_dir / "RUNTIME_LANE_PROOF.md"),
@@ -1803,6 +1876,38 @@ class MissionControlTests(unittest.TestCase):
             self.assertEqual(
                 fused_runtime["latestLaneProof"]["lanes"][0]["skill"],
                 "jbheaven_godmode_lab",
+            )
+            self.assertIn(
+                "readiness",
+                fused_runtime["latestLaneProof"]["lanes"][0],
+            )
+            self.assertEqual(
+                fused_runtime["latestLaneProof"]["lanes"][0]["launchCommand"],
+                "openclaw agent run --json",
+            )
+            self.assertEqual(
+                fused_runtime["latestLaneProof"]["readinessSummary"]["blockingGateCount"],
+                4,
+            )
+            self.assertEqual(
+                fused_runtime["proofGateSummary"]["schemaVersion"],
+                "runtime-proof-gate-summary.v1",
+            )
+            self.assertTrue(fused_runtime["proofGateSummary"]["promotionBlocked"])
+            self.assertEqual(fused_runtime["proofGateSummary"]["blockingGateCount"], 4)
+            self.assertEqual(fused_runtime["proofGateSummary"]["liveValidationGateCount"], 2)
+            self.assertEqual(fused_runtime["proofGateSummary"]["uncheckedGateCount"], 2)
+            self.assertIn(
+                "python scripts/runtime_lane_proof_harness.py --run-id runtime-lane-proof-test",
+                fused_runtime["proofGateSummary"]["proofRunCommand"],
+            )
+            self.assertIn(
+                "runtime_session.events.jsonl",
+                fused_runtime["proofGateSummary"]["requiredArtifacts"],
+            )
+            self.assertIn(
+                "Run one bounded OpenClaw proving mission",
+                fused_runtime["proofGateSummary"]["nextRecoveryActions"][0],
             )
             self.assertFalse(
                 fused_runtime["latestLaneProof"]["safetyContract"]["liveModelCalls"]

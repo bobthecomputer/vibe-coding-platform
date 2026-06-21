@@ -84,6 +84,12 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Providers stay model routes, not runtime lanes" in runtime_contract
     assert "Latest runtime lane proof" in runtime_contract
     assert "Runtime readiness and recovery gates" in runtime_contract
+    assert "Runtime proof flight recorder" in runtime_contract
+    assert "proofGateSummary" in runtime_contract
+    assert "proofRunCommand" in runtime_contract
+    assert "requiredArtifacts" in runtime_contract
+    assert "runtime-proof-flight-recorder" in runtime_contract
+    assert "runtime-proof-next-actions" in runtime_contract
     assert "runtime-readiness-contract" in runtime_contract
     assert "runtime-readiness-summary-list" in runtime_contract
     assert "runtime-readiness-gate-list" in runtime_contract
@@ -96,6 +102,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "runtime-truth-contract" in runtime_contract
     assert "runtime-lane-proof-receipt" in runtime_contract
     assert "runtimeProofReceipt" in source
+    assert "runtimeProofGateSummary" in source
+    assert "runtimeProofGateCommand" in source
     assert "Runtime proof receipt" in source
     assert "Open proof receipt" in source
     assert "agent-runtime-proof-receipt" in source
@@ -110,6 +118,8 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Runtime + skill proof" in source
     assert "Runtime and skill proof for current mission" in source
     assert "Proof before retry:" in source
+    assert "Promotion gates" in source
+    assert "Proof command" in source
     assert "Review recovery" in source
     assert "Inspect runtime" in source
     assert "Live execution" in source
@@ -117,6 +127,9 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert ".runtime-lane-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-gate-list" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-proof-flight-recorder" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-proof-flight-grid" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-proof-next-actions" in STYLES.read_text(encoding="utf-8")
     assert ".agent-runtime-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-skill-proof-strip" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-skill-proof-grid" in STYLES.read_text(encoding="utf-8")
@@ -129,6 +142,10 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "provider_model_route" in fixtures
     assert "fixture_runtime_compartment_state" in fixtures
     assert "runtime-compartment-proof.v1" in fixtures
+    assert "runtime-proof-gate-summary.v1" in fixtures
+    assert "Runtime proof flight recorder" in runtime_contract
+    assert "python scripts/runtime_lane_proof_harness.py --run-id lane-proof-fixture" in fixtures
+    assert "runtime-proof-flight-recorder" in (ROOT / "scripts" / "runtime_proof_visual_smoke.py").read_text(encoding="utf-8")
 
 
 def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:

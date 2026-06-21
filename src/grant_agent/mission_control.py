@@ -6788,6 +6788,9 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
         route = lane.get("routeContract", {})
         if not isinstance(route, dict):
             route = {}
+        readiness = lane.get("readiness", {})
+        if not isinstance(readiness, dict):
+            readiness = {}
         lanes.append(
             {
                 "runtimeId": str(lane.get("runtimeId") or ""),
@@ -6796,6 +6799,9 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
                 "provider": str(route.get("provider") or ""),
                 "model": str(route.get("model") or ""),
                 "routeSummary": str(lane.get("routeSummary") or ""),
+                "launchCommand": str(lane.get("launchCommand") or ""),
+                "proofMeaning": str(lane.get("proofMeaning") or ""),
+                "readiness": readiness,
             }
         )
     artifact_paths = payload.get("artifactPaths", {})
@@ -6804,13 +6810,22 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
     safety_contract = payload.get("safetyContract", {})
     if not isinstance(safety_contract, dict):
         safety_contract = {}
+    fused_runtime = payload.get("fusedRuntime", {})
+    if not isinstance(fused_runtime, dict):
+        fused_runtime = {}
+    readiness_summary = fused_runtime.get("readinessSummary", payload.get("readinessSummary", {}))
+    if not isinstance(readiness_summary, dict):
+        readiness_summary = {}
+    run_id = str(payload.get("runId") or proof_path.parent.name)
     return {
-        "runId": str(payload.get("runId") or proof_path.parent.name),
+        "runId": run_id,
         "mode": str(payload.get("mode") or ""),
         "proofType": str(payload.get("proofType") or safety_contract.get("proofType") or ""),
         "proofTruth": payload.get("proofTruth") if isinstance(payload.get("proofTruth"), dict) else {},
         "createdAt": str(payload.get("createdAt") or ""),
         "path": str(proof_path),
+        "proofRunCommand": f"python scripts/runtime_lane_proof_harness.py --run-id {run_id}",
+        "readinessSummary": readiness_summary,
         "lanes": lanes[:4],
         "artifactPaths": {
             key: str(value)
@@ -6826,6 +6841,83 @@ def _latest_runtime_lane_proof(root: Path) -> dict | None:
             "liveRuntimeExecution": bool(safety_contract.get("liveRuntimeExecution")),
             "proofType": str(safety_contract.get("proofType") or payload.get("proofType") or ""),
         },
+    }
+
+
+def _runtime_proof_gate_summary(latest_proof: dict | None) -> dict:
+    if not isinstance(latest_proof, dict) or not latest_proof:
+        return {
+            "schemaVersion": "runtime-proof-gate-summary.v1",
+            "status": "missing",
+            "promotionBlocked": True,
+            "blockingGateCount": 0,
+            "passedGateCount": 0,
+            "liveValidationGateCount": 0,
+            "uncheckedGateCount": 0,
+            "proofRunCommand": "python scripts/runtime_lane_proof_harness.py",
+            "requiredArtifacts": [
+                "runtime_lane_proof.json",
+                "RUNTIME_LANE_PROOF.md",
+                "route_scorecard.json",
+            ],
+            "nextRecoveryActions": [
+                "Run the deterministic runtime lane proof harness before promoting Hermes or OpenClaw lanes.",
+            ],
+        }
+    readiness = latest_proof.get("readinessSummary", {})
+    if not isinstance(readiness, dict):
+        readiness = {}
+    gates: list[dict] = []
+    next_actions: list[str] = []
+    for lane in latest_proof.get("lanes", []):
+        if not isinstance(lane, dict):
+            continue
+        lane_readiness = lane.get("readiness", {})
+        if not isinstance(lane_readiness, dict):
+            continue
+        action = str(lane_readiness.get("nextRecoveryAction") or "").strip()
+        if action:
+            next_actions.append(action)
+        for gate in lane_readiness.get("gates", []):
+            if isinstance(gate, dict):
+                gates.append(gate)
+                gate_action = str(gate.get("recoveryAction") or "").strip()
+                if gate_action and gate.get("blocksPromotion"):
+                    next_actions.append(gate_action)
+    required_artifacts = sorted(
+        {
+            Path(str(value)).name
+            for value in latest_proof.get("artifactPaths", {}).values()
+            if str(value).strip()
+        }
+        | {
+            str(gate.get("proofArtifact") or "").strip()
+            for gate in gates
+            if str(gate.get("proofArtifact") or "").strip()
+        }
+    )
+    if not next_actions:
+        next_actions.append("Review the latest runtime lane proof before assigning live work.")
+    return {
+        "schemaVersion": "runtime-proof-gate-summary.v1",
+        "status": str(readiness.get("overallStatus") or "contract_ready_live_unverified"),
+        "promotionBlocked": bool(readiness.get("promotionBlocked", True)),
+        "blockingGateCount": int(
+            readiness.get("blockingGateCount", 0)
+            or sum(1 for gate in gates if gate.get("blocksPromotion"))
+        ),
+        "passedGateCount": sum(1 for gate in gates if str(gate.get("status")) == "passed"),
+        "liveValidationGateCount": sum(
+            1 for gate in gates if str(gate.get("status")) == "needs_live_validation"
+        ),
+        "uncheckedGateCount": sum(1 for gate in gates if str(gate.get("status")) == "unchecked"),
+        "proofRunCommand": str(
+            latest_proof.get("proofRunCommand")
+            or f"python scripts/runtime_lane_proof_harness.py --run-id {latest_proof.get('runId', 'runtime-lane-proof')}"
+        ),
+        "proofPath": str(latest_proof.get("path") or ""),
+        "requiredArtifacts": required_artifacts,
+        "nextRecoveryActions": list(dict.fromkeys(next_actions))[:4],
     }
 
 
@@ -7348,6 +7440,7 @@ def _fused_runtime_status(
     if stale_heartbeat_count > 0:
         gaps.append(f"{stale_heartbeat_count} delegated runtime heartbeat(s) are stale.")
 
+    latest_lane_proof = _latest_runtime_lane_proof(root)
     return {
         "schemaVersion": "fused-runtime-status.v1",
         "status": status,
@@ -7385,7 +7478,8 @@ def _fused_runtime_status(
             "fusedRuntimeRole": "supervisor_not_runtime_adapter",
             "openCodeGoRole": "route_lane_only",
         },
-        "latestLaneProof": _latest_runtime_lane_proof(root),
+        "latestLaneProof": latest_lane_proof,
+        "proofGateSummary": _runtime_proof_gate_summary(latest_lane_proof),
         "gaps": gaps,
     }
 

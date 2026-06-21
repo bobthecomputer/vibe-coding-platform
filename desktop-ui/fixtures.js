@@ -409,6 +409,7 @@ const baseSnapshot = {
       latestLaneProof: {
         runId: 'lane-proof-fixture',
         proofType: 'route_contract_proof',
+        proofRunCommand: 'python scripts/runtime_lane_proof_harness.py --run-id lane-proof-fixture',
         readinessSummary: {
           overallStatus: 'contract_ready_live_unverified',
           promotionBlocked: true,
@@ -434,6 +435,8 @@ const baseSnapshot = {
             skill: 'jbheaven_godmode_lab',
             provider: 'openai-codex',
             model: 'gpt-5.4-mini',
+            launchCommand: 'openclaw agent run --json --model openai-codex/gpt-5.4-mini',
+            proofMeaning: 'OpenClaw route contract is visible, but live runtime execution still needs a bounded proof run.',
             readiness: {
               status: 'contract_ready_live_unverified',
               promotionBlocked: true,
@@ -462,6 +465,8 @@ const baseSnapshot = {
             skill: 'jbheaven_godmode_lab',
             provider: 'minimax',
             model: 'MiniMax-M3',
+            launchCommand: 'hermes chat --provider minimax --model MiniMax-M3',
+            proofMeaning: 'Hermes skill payload is visible, but transcript proof still needs a supervised synthetic lab run.',
             readiness: {
               status: 'contract_ready_live_unverified',
               promotionBlocked: true,
@@ -492,6 +497,22 @@ const baseSnapshot = {
           route_scorecard: 'route_scorecard.json',
         },
         safetyContract: { liveModelCalls: false, liveRuntimeExecution: false, runtimeAdapterAdded: false },
+      },
+      proofGateSummary: {
+        schemaVersion: 'runtime-proof-gate-summary.v1',
+        status: 'contract_ready_live_unverified',
+        promotionBlocked: true,
+        blockingGateCount: 6,
+        passedGateCount: 2,
+        liveValidationGateCount: 2,
+        uncheckedGateCount: 4,
+        proofRunCommand: 'python scripts/runtime_lane_proof_harness.py --run-id lane-proof-fixture',
+        proofPath: 'artifacts/runtime-lanes/lane-proof-fixture/runtime_lane_proof.json',
+        requiredArtifacts: ['RUNTIME_LANE_PROOF.md', 'red_team_transcript.md', 'route_scorecard.json', 'runtime_lane_proof.json'],
+        nextRecoveryActions: [
+          'Run one bounded OpenClaw proving mission and attach the runtime session events.',
+          'Run a supervised synthetic lab transcript and attach visible prompts, responses, scores, and reviewer notes.',
+        ],
       },
       gaps: [],
     },

@@ -21,6 +21,7 @@ export function RuntimeTruthContract({ fusedRuntime }) {
   const runtime = fusedRuntime || {};
   const proofSignals = runtime.proofSignals || {};
   const latestProof = runtime.latestLaneProof || {};
+  const proofGateSummary = runtime.proofGateSummary || latestProof.proofGateSummary || {};
   const lanes = asList(runtime.runtimeLanes)
     .map(item => item.label || runtimeLabel(item.runtimeId))
     .filter(Boolean);
@@ -35,6 +36,12 @@ export function RuntimeTruthContract({ fusedRuntime }) {
       ...gate,
     })),
   );
+  const proofPromotionBlocked =
+    proofGateSummary.promotionBlocked !== undefined
+      ? Boolean(proofGateSummary.promotionBlocked)
+      : Boolean(readiness.promotionBlocked);
+  const nextRecoveryActions = asList(proofGateSummary.nextRecoveryActions);
+  const requiredArtifacts = asList(proofGateSummary.requiredArtifacts);
 
   return (
     <div className="runtime-truth-contract" aria-label="Fused runtime truth contract">
@@ -60,6 +67,41 @@ export function RuntimeTruthContract({ fusedRuntime }) {
             <small>
               {proofArtifactCount} artifact{proofArtifactCount === 1 ? "" : "s"} · live runtime execution: {latestProof.safetyContract?.liveRuntimeExecution ? "yes" : "no"} · live model calls: {latestProof.safetyContract?.liveModelCalls ? "yes" : "no"} · runtime adapter added: {latestProof.safetyContract?.runtimeAdapterAdded ? "yes" : "no"}
             </small>
+            <div className="runtime-proof-flight-recorder" aria-label="Runtime proof gate flight recorder">
+              <div className="runtime-proof-flight-head">
+                <span>Runtime proof flight recorder</span>
+                <strong>{proofPromotionBlocked ? "Promotion blocked" : "Promotion clear"}</strong>
+              </div>
+              <div className="runtime-proof-flight-grid">
+                <div>
+                  <span>Gate status</span>
+                  <b>{titleizeToken(proofGateSummary.status || readiness.overallStatus || "contract_ready_live_unverified")}</b>
+                </div>
+                <div>
+                  <span>Blocking gates</span>
+                  <b>{proofGateSummary.blockingGateCount || readiness.blockingGateCount || 0}</b>
+                </div>
+                <div>
+                  <span>Live validation</span>
+                  <b>{proofGateSummary.liveValidationGateCount || 0} gate(s)</b>
+                </div>
+                <div>
+                  <span>Passed / unchecked</span>
+                  <b>{proofGateSummary.passedGateCount || 0} / {proofGateSummary.uncheckedGateCount || 0}</b>
+                </div>
+              </div>
+              <code>{proofGateSummary.proofRunCommand || latestProof.proofRunCommand || "python scripts/runtime_lane_proof_harness.py"}</code>
+              {requiredArtifacts.length > 0 ? (
+                <small>Artifacts: {requiredArtifacts.slice(0, 4).join(" · ")}</small>
+              ) : null}
+              {nextRecoveryActions.length > 0 ? (
+                <ul className="runtime-proof-next-actions">
+                  {nextRecoveryActions.slice(0, 3).map(action => (
+                    <li key={`runtime-proof-next-${action}`}>{action}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
             <div className="runtime-readiness-contract" aria-label="Runtime readiness and recovery gates">
               <strong>Readiness: {titleizeToken(readiness.overallStatus || "contract_ready_live_unverified")}</strong>
               <p>
