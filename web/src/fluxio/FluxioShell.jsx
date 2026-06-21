@@ -33,6 +33,11 @@ const ImageStudioPlayground = lazy(() =>
     default: module.ImageStudioPlayground,
   })),
 );
+const FusionWorkbenchPanel = lazy(() =>
+  import("./fusion/FusionWorkbenchPanel.jsx").then(module => ({
+    default: module.FusionWorkbenchPanel,
+  })),
+);
 const ProviderEcosystemPanel = lazy(() =>
   import("./provider/ProviderEcosystemPanel.jsx").then(module => ({
     default: module.ProviderEcosystemPanel,
@@ -11528,64 +11533,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </p>
           </section>
 
-          <section className="drawer-block">
-            <h3>Fusion contract preview</h3>
-            <p>
-              Read-only Solantir, Mind Tower, and JBH-EAVEN rows are visible before live adapters so provenance and risk labels stay attached.
-            </p>
-            <div className="context-grid compact-metrics">
-              <article className="context-item">
-                <span>Rows</span>
-                <strong>{fusionWorkbench.summary.totalRows}</strong>
-              </article>
-              <article className="context-item">
-                <span>Ready</span>
-                <strong>{fusionWorkbench.summary.readyRows}</strong>
-              </article>
-              <article className="context-item">
-                <span>Blocked</span>
-                <strong>{fusionWorkbench.summary.blockedRows}</strong>
-              </article>
-              <article className="context-item">
-                <span>Lanes</span>
-                <strong>{fusionWorkbench.summary.migrationLaneCount}</strong>
-              </article>
-            </div>
-            <div className="drawer-list fusion-migration-list">
-              {fusionWorkbench.migrationLanes.map(item => (
-                <article className="drawer-card fusion-migration-card" key={`fusion-migration-${item.id}`}>
-                  <span>{item.sourcePair} · {item.migrationStatus}</span>
-                  <strong>{item.title}</strong>
-                  <p>{item.duplicateArea}</p>
-                  <div className="pill-row">
-                    <span className="mini-pill">{item.targetRuntime}</span>
-                    <span className="mini-pill muted">{item.ownerRole}</span>
-                  </div>
-                  <p>{item.safeSlice}</p>
-                  <p className="fusion-source-path">{item.proofAction}</p>
-                </article>
-              ))}
-            </div>
-            <div className="drawer-list">
-              {fusionWorkbench.rows.map(item => (
-                <article
-                  className={`drawer-card fusion-contract-card ${toneClass(item.collectionMode === "blocked" ? "warn" : "neutral")}`}
-                  key={`fusion-contract-${item.id}`}
-                >
-                  <span>{item.sourceProject} · {item.collectionMode}</span>
-                  <strong>{item.title}</strong>
-                  <p>{item.summary}</p>
-                  <div className="pill-row">
-                    <span className="mini-pill">{item.riskLabel}</span>
-                    <span className="mini-pill muted">{item.status}</span>
-                    <span className="mini-pill muted">{item.lastVerifiedAt}</span>
-                  </div>
-                  <p>{item.proofNeed}</p>
-                  <p className="fusion-source-path">{item.sourcePath}</p>
-                </article>
-              ))}
-            </div>
-          </section>
+          <Suspense fallback={<LazySurfaceFallback label="Fusion contract" />}>
+            <FusionWorkbenchPanel fusionWorkbench={fusionWorkbench} />
+          </Suspense>
 
           <Suspense fallback={<LazySurfaceFallback label="Loading red-team proof" />}>
             <RedTeamProofBoard />
@@ -12247,8 +12197,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <h4>Supervisor intervention queue</h4>
                   <p>
                     {supervisorInterventionQueue.length > 0
-                      ? `${supervisorInterventionQueue.length} ranked action${supervisorInterventionQueue.length === 1 ? "" : "s"} before the next autonomous step.`
-                      : "No supervisor intervention is queued."}
+                      ? `${supervisorInterventionQueue.length} ranked before next step.`
+                      : "No intervention queued."}
                   </p>
                 </div>
                 <span className={`mini-pill ${toneClass((monitoringLoopStudio.criticalCount || 0) > 0 ? "warn" : "good")}`}>
@@ -12266,8 +12216,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ))
               ) : (
                 <article className="supervisor-intervention-card">
-                  <strong>Continue normal verification cadence</strong>
-                  <p>Monitor loops will queue an action when the mission is blocked, drifting, or missing proof.</p>
+                  <strong>Continue verification</strong>
+                  <p>Queue appears when blocked, drifting, or missing proof.</p>
                 </article>
               )}
             </div>
@@ -15773,11 +15723,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   </article>
 
                   <article className="builder-panel builder-panel-focus">
-                    <p className="eyebrow">Fusion preview</p>
-                    <h3>{fusionWorkbench.summary.readyRows} read-only fusion row{fusionWorkbench.summary.readyRows === 1 ? "" : "s"} ready</h3>
-                    <p>
-                      Solantir, Mind Tower, and JBH-EAVEN data stay fixture-backed until each adapter proves provenance, collection mode, and risk.
-                    </p>
+                    <p className="eyebrow">Fusion</p>
+                    <h3>{fusionWorkbench.summary.readyRows} row{fusionWorkbench.summary.readyRows === 1 ? "" : "s"} ready</h3>
                     <div className="builder-thread-list">
                       {fusionWorkbench.migrationLanes.slice(0, 3).map(item => (
                         <article className="builder-thread-item tone-neutral" key={`builder-fusion-migration-${item.id}`}>
@@ -15787,7 +15734,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         </article>
                       ))}
                     </div>
-                    <ActionButton onClick={() => setActiveDrawer("runtime")}>Open fusion contract</ActionButton>
                   </article>
 
                   <Suspense fallback={<LazySurfaceFallback label="Loading red-team proof" />}>

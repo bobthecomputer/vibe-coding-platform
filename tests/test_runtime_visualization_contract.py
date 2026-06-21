@@ -100,13 +100,22 @@ def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
     source = SHELL.read_text(encoding="utf-8")
     styles = STYLES.read_text(encoding="utf-8")
     fixtures = (ROOT / "web" / "src" / "fluxio" / "fusion" / "fusionFixtures.js").read_text(encoding="utf-8")
+    fusion_panel = (ROOT / "web" / "src" / "fluxio" / "fusion" / "FusionWorkbenchPanel.jsx").read_text(encoding="utf-8")
     desktop_fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
 
     assert "migrationLanes" in source
-    assert "fusion-migration-card" in source
-    assert "fusion-migration-list" in source
+    assert "FusionWorkbenchPanel" in source
+    assert 'import("./fusion/FusionWorkbenchPanel.jsx")' in source
+    assert "Explainable Solantir signals" in fusion_panel
+    assert "no order routing" in fusion_panel
+    assert "fusion-migration-card" in fusion_panel
+    assert "fusion-migration-list" in fusion_panel
+    assert "fusion-signal-card" in fusion_panel
     assert ".fusion-migration-card" in styles
+    assert ".fusion-signal-card" in styles
     assert "FUSION_MIGRATION_LANES" in fixtures
+    assert "SOLANTIR_SIGNAL_SNAPSHOTS" in fixtures
+    assert "no-trading-execution" in fixtures
     assert "Terminal and operator workbench shell" in fixtures
     assert "Synology monitoring and event records" in fixtures
     assert "Synthetic red-team proof lane" in fixtures

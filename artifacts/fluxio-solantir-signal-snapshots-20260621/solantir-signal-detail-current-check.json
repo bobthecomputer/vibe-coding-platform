@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-21T02:07:56.606430+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&drawer=runtime&proofReload=solantir-signal-snapshots",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-solantir-signal-snapshots-20260621\\solantir-signal-detail-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-solantir-signal-snapshots-20260621\\solantir-signal-detail-current.html",
+  "expectedFragments": [
+    "Syntelos",
+    "Explainable Solantir signals",
+    "no order routing",
+    "no-trading-execution",
+    "Fictional Energy Grid Supplier"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 6200,
+    "sampleCount": 8280,
+    "uniqueSampleColors": 684,
+    "averageLuma": 36.25,
+    "nonBlank": true
+  },
+  "passed": true
+}

@@ -133,6 +133,72 @@ export const FUSION_MIGRATION_LANES = Object.freeze([
   },
 ]);
 
+export const SOLANTIR_SIGNAL_SNAPSHOTS = Object.freeze([
+  {
+    id: "solantir-signal-energy-resilience",
+    entity: "Fictional Energy Grid Supplier",
+    direction: "upside-watch",
+    score: 72,
+    confidence: 0.68,
+    timestamp: "2026-06-21T00:00:00+02:00",
+    collectionMode: "seeded",
+    riskLabel: "no-trading-execution",
+    sourcePath: "C:\\Users\\paul\\projects\\Solantir\\legacy\\osint-platform\\backend\\solantir_api\\signals.py",
+    factors: [
+      { name: "supply-chain resilience", weight: 0.34, contribution: 18 },
+      { name: "defensive infrastructure demand", weight: 0.28, contribution: 15 },
+      { name: "source freshness", weight: 0.18, contribution: 8 },
+    ],
+    topDrivers: [
+      "Synthetic demand signal improved after maintenance-window reporting.",
+      "Source health remains sufficient for explainability, not live execution.",
+    ],
+    safetyLabels: ["no broker", "no order routing", "not investment advice"],
+  },
+  {
+    id: "solantir-signal-logistics-pressure",
+    entity: "Fictional Logistics Corridor Index",
+    direction: "risk-watch",
+    score: 41,
+    confidence: 0.61,
+    timestamp: "2026-06-21T00:00:00+02:00",
+    collectionMode: "seeded",
+    riskLabel: "no-trading-execution",
+    sourcePath: "C:\\Users\\paul\\projects\\Solantir\\packages\\contracts\\src\\solantir.ts",
+    factors: [
+      { name: "event pressure", weight: 0.36, contribution: -14 },
+      { name: "forecast dispersion", weight: 0.24, contribution: -9 },
+      { name: "confidence floor", weight: 0.2, contribution: 6 },
+    ],
+    topDrivers: [
+      "Synthetic observation volatility increased relative to the seeded baseline.",
+      "Forecast confidence remains above the fixture cutoff but below action quality.",
+    ],
+    safetyLabels: ["no broker", "no order routing", "not investment advice"],
+  },
+  {
+    id: "solantir-signal-source-health",
+    entity: "Solantir Source Health Composite",
+    direction: "neutral",
+    score: 55,
+    confidence: 0.74,
+    timestamp: "2026-06-21T00:00:00+02:00",
+    collectionMode: "read-only-adapter",
+    riskLabel: "no-trading-execution",
+    sourcePath: "C:\\Users\\paul\\projects\\Solantir\\packages\\contracts\\src\\solantir.ts",
+    factors: [
+      { name: "provenance coverage", weight: 0.4, contribution: 16 },
+      { name: "staleness penalty", weight: 0.22, contribution: -5 },
+      { name: "driver explainability", weight: 0.24, contribution: 11 },
+    ],
+    topDrivers: [
+      "Canonical contract fields cover observation, forecast, source, and provenance.",
+      "No live market feed or execution bridge is attached to this fixture.",
+    ],
+    safetyLabels: ["no broker", "no order routing", "not investment advice"],
+  },
+]);
+
 export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
   const providedRows = Array.isArray(fixtures) ? fixtures : [];
   const rowMap = new Map(FUSION_FIXTURES.map(item => [item.id, item]));
@@ -150,6 +216,7 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
   const blocked = rows.filter(item => item.collectionMode === "blocked" || item.status === "needs-policy");
   const proofRequired = rows.filter(item => item.proofNeed);
   const nextLane = migrationLanes.find(item => item.migrationStatus.includes("next")) || migrationLanes[0];
+  const signalSnapshots = SOLANTIR_SIGNAL_SNAPSHOTS;
   return {
     schemaVersion: FUSION_CONTRACT_VERSION,
     collectionModes: FUSION_COLLECTION_MODES,
@@ -162,14 +229,17 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
       proofRequiredRows: proofRequired.length,
       migrationLaneCount: migrationLanes.length,
       nextMigrationLane: nextLane?.title || "",
+      signalSnapshotCount: signalSnapshots.length,
     },
     rows,
     migrationLanes,
+    signalSnapshots,
     acceptanceRules: [
       "Every row must expose sourceProject, sourcePath, collectionMode, riskLabel, and lastVerifiedAt.",
       "Seeded or read-only rows must not imply live data, trading execution, credential access, or offensive red-team execution.",
       "Blocked rows must describe the missing policy or proof instead of inventing live status.",
       "Migration lanes must name duplicate areas, safe slices, target runtime, proof action, and owner role before code is copied.",
+      "Solantir signal snapshots must show factors, drivers, confidence, timestamp, source path, and no-trading-execution labels.",
     ],
   };
 }

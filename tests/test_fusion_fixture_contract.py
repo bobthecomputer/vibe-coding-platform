@@ -140,6 +140,37 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertIn("jbheaven-defensive-harness", payload["ids"])
         self.assertGreaterEqual(payload["totalRows"], 5)
 
+    def test_solantir_signal_snapshots_are_explainable_and_non_executing(self) -> None:
+        payload = run_node(
+            """
+            import { buildFusionWorkbench } from './web/src/fluxio/fusion/fusionFixtures.js';
+            const workbench = buildFusionWorkbench();
+            console.log(JSON.stringify({
+              summary: workbench.summary,
+              signals: workbench.signalSnapshots,
+              rules: workbench.acceptanceRules,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["summary"]["signalSnapshotCount"], len(payload["signals"]))
+        self.assertGreaterEqual(len(payload["signals"]), 3)
+        for signal in payload["signals"]:
+            self.assertIn(signal["collectionMode"], {"seeded", "read-only-adapter"})
+            self.assertEqual(signal["riskLabel"], "no-trading-execution")
+            self.assertTrue(signal["sourcePath"])
+            self.assertTrue(signal["timestamp"])
+            self.assertGreaterEqual(signal["confidence"], 0)
+            self.assertLessEqual(signal["confidence"], 1)
+            self.assertGreaterEqual(len(signal["factors"]), 3)
+            self.assertGreaterEqual(len(signal["topDrivers"]), 2)
+            self.assertIn("no order routing", signal["safetyLabels"])
+            self.assertIn("not investment advice", signal["safetyLabels"])
+        joined = json.dumps(payload).lower()
+        self.assertNotIn("broker enabled", joined)
+        self.assertNotIn("order routing enabled", joined)
+        self.assertIn("solantir signal snapshots", joined)
+
 
 if __name__ == "__main__":
     unittest.main()
