@@ -479,7 +479,7 @@ function buildOperationTimeline({ draft, draftValidation, routeAvailability, run
       id: "layer",
       label: "Layer handoff",
       status: hasLayer ? "complete" : hasArtifact ? "waiting" : hasBlockingRun ? "blocked" : "waiting",
-      detail: hasLayer ? "Generated layer was attached to the canvas model." : "Attach the generated artifact as a reviewable layer.",
+      detail: hasLayer ? "Generated layer was attached to the local composition preview." : "Attach the generated artifact as a reviewable layer.",
     },
   ];
 }
@@ -554,21 +554,24 @@ function ImageBreakdownWorkflow({ workflow }) {
         <b>{workflow.readyCount}/{workflow.stageCount} ready</b>
       </div>
       <p>{workflow.nextAction}</p>
-      <div className="image-studio-breakdown-rail">
-        {workflow.stages.map((stage, index) => (
-          <article
-            className={`image-studio-breakdown-step is-${stage.status}`}
-            key={stage.id}
-            style={{ "--image-studio-step-index": index }}
-          >
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            <strong>{stage.label}</strong>
-            <em>{stage.status.replace(/_/g, " ")}</em>
-            <p>{stage.detail}</p>
-            <code>{stage.evidence}</code>
-          </article>
-        ))}
-      </div>
+      <details className="image-studio-breakdown-details">
+        <summary>{workflow.stageCount} stage checks</summary>
+        <div className="image-studio-breakdown-rail">
+          {workflow.stages.map((stage, index) => (
+            <article
+              className={`image-studio-breakdown-step is-${stage.status}`}
+              key={stage.id}
+              style={{ "--image-studio-step-index": index }}
+            >
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <strong>{stage.label}</strong>
+              <em>{stage.status.replace(/_/g, " ")}</em>
+              <p>{stage.detail}</p>
+              <code>{stage.evidence}</code>
+            </article>
+          ))}
+        </div>
+      </details>
     </section>
   );
 }
@@ -750,13 +753,14 @@ export function ImageStudioPlayground({
         return bCurrent - aCurrent;
       });
     const deduped = new Map();
+    const liveSources = [...referenceSources, ...artifactSources, ...designSources, ...historySources];
     const sampleSource = {
       id: "synthetic:green-screen-sample",
-      label: "Synthetic green-screen sample",
+      label: "Sample only - synthetic green screen",
       src: SYNTHETIC_CHROMA_SAMPLE_URL,
       type: "synthetic-sample",
     };
-    for (const source of [sampleSource, ...referenceSources, ...artifactSources, ...designSources, ...historySources]) {
+    for (const source of [...liveSources, ...(liveSources.length ? [] : [sampleSource])]) {
       if (!deduped.has(source.src)) deduped.set(source.src, source);
     }
     return [...deduped.values()].slice(0, 12);
@@ -908,7 +912,7 @@ export function ImageStudioPlayground({
 
   function addMaskLayer() {
     setProject(current => createLayerFromSelection(current, { name: "Mask handoff layer", promptRole: "mask region" }));
-    setAnnouncement("Mask handoff layer added to the canvas model.");
+    setAnnouncement("Mask handoff layer added to the local composition preview.");
   }
 
   function toggleLayerVisibility(layerId) {
@@ -1062,33 +1066,7 @@ export function ImageStudioPlayground({
               id={fieldId("prompt")}
               value={project.prompt.text}
               onChange={event => updatePrompt({ text: event.target.value })}
-              rows={6}
-            />
-            <label htmlFor={fieldId("negative")}>Negative prompt</label>
-            <textarea
-              id={fieldId("negative")}
-              value={project.prompt.negative}
-              onChange={event => updatePrompt({ negative: event.target.value })}
-              rows={3}
-            />
-            <label htmlFor={fieldId("style")}>Style notes</label>
-            <input
-              id={fieldId("style")}
-              value={project.prompt.style}
-              onChange={event => updatePrompt({ style: event.target.value })}
-            />
-            <div className="image-studio-inline-field">
-              <label htmlFor={fieldId("strength")}>Prompt strength</label>
-              <output>{Math.round(project.prompt.strength * 100)}%</output>
-            </div>
-            <input
-              id={fieldId("strength")}
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={project.prompt.strength}
-              onChange={event => updatePrompt({ strength: Number(event.target.value) })}
+              rows={5}
             />
             <label className="image-studio-checkbox">
               <input
@@ -1098,6 +1076,35 @@ export function ImageStudioPlayground({
               />
               <span>Preserve manual composition</span>
             </label>
+            <details className="image-studio-advanced-disclosure">
+              <summary>Advanced prompt controls</summary>
+              <label htmlFor={fieldId("negative")}>Negative prompt</label>
+              <textarea
+                id={fieldId("negative")}
+                value={project.prompt.negative}
+                onChange={event => updatePrompt({ negative: event.target.value })}
+                rows={3}
+              />
+              <label htmlFor={fieldId("style")}>Style notes</label>
+              <input
+                id={fieldId("style")}
+                value={project.prompt.style}
+                onChange={event => updatePrompt({ style: event.target.value })}
+              />
+              <div className="image-studio-inline-field">
+                <label htmlFor={fieldId("strength")}>Prompt strength</label>
+                <output>{Math.round(project.prompt.strength * 100)}%</output>
+              </div>
+              <input
+                id={fieldId("strength")}
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={project.prompt.strength}
+                onChange={event => updatePrompt({ strength: Number(event.target.value) })}
+              />
+            </details>
           </section>
 
           <section className="image-studio-control-group" aria-labelledby="image-studio-route-label">
@@ -1115,44 +1122,47 @@ export function ImageStudioPlayground({
                 <option key={item.id} value={item.id}>{item.label}</option>
               ))}
             </select>
-            <dl className="image-studio-route-facts">
-              <div>
-                <dt>Model</dt>
-                <dd>{route.model}</dd>
-              </div>
-              <div>
-                <dt>Auth</dt>
-                <dd>{route.authMode}</dd>
-              </div>
-              <div>
-                <dt>Capabilities</dt>
-                <dd>{route.supports.join(", ")}</dd>
-              </div>
-              <div>
-                <dt>Availability</dt>
-                <dd>{routeAvailability.localStatus.replace(/_/g, " ")}</dd>
-              </div>
-            </dl>
-            <div className="image-studio-route-status" data-status={routeAvailability.localStatus}>
-              <strong>{routeAvailability.readyForRealRun ? "Provider run available" : "Draft handoff only"}</strong>
-              <p>{routeAvailability.claim}</p>
-              <p>{routeAvailability.proofLimit}</p>
-              {routeAvailability.blockedReason ? (
-                <code>{routeAvailability.blockedReason}</code>
-              ) : null}
-              {routeAvailability.checks.length > 0 ? (
-                <div className="image-studio-capability-checks" aria-label="Image generation capability checks">
-                  {routeAvailability.checks.slice(0, 4).map(check => (
-                    <span data-status={check.passed ? "ready" : "blocked"} key={check.checkId || check.label}>
-                      {check.label}
-                    </span>
-                  ))}
+            <details className="image-studio-advanced-disclosure image-studio-route-details">
+              <summary>Route details</summary>
+              <dl className="image-studio-route-facts">
+                <div>
+                  <dt>Model</dt>
+                  <dd>{route.model}</dd>
                 </div>
-              ) : null}
-              {routeAvailability.officialSources.length > 0 ? (
-                <small>{routeAvailability.officialSources.length} official source{routeAvailability.officialSources.length === 1 ? "" : "s"} recorded for review.</small>
-              ) : null}
-            </div>
+                <div>
+                  <dt>Auth</dt>
+                  <dd>{route.authMode}</dd>
+                </div>
+                <div>
+                  <dt>Capabilities</dt>
+                  <dd>{route.supports.join(", ")}</dd>
+                </div>
+                <div>
+                  <dt>Availability</dt>
+                  <dd>{routeAvailability.localStatus.replace(/_/g, " ")}</dd>
+                </div>
+              </dl>
+              <div className="image-studio-route-status" data-status={routeAvailability.localStatus}>
+                <strong>{routeAvailability.readyForRealRun ? "Provider run available" : "Draft handoff only"}</strong>
+                <p>{routeAvailability.claim}</p>
+                <p>{routeAvailability.proofLimit}</p>
+                {routeAvailability.blockedReason ? (
+                  <code>{routeAvailability.blockedReason}</code>
+                ) : null}
+                {routeAvailability.checks.length > 0 ? (
+                  <div className="image-studio-capability-checks" aria-label="Image generation capability checks">
+                    {routeAvailability.checks.slice(0, 4).map(check => (
+                      <span data-status={check.passed ? "ready" : "blocked"} key={check.checkId || check.label}>
+                        {check.label}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {routeAvailability.officialSources.length > 0 ? (
+                  <small>{routeAvailability.officialSources.length} official source{routeAvailability.officialSources.length === 1 ? "" : "s"} recorded for review.</small>
+                ) : null}
+              </div>
+            </details>
           </section>
 
           <section className="image-studio-control-group image-studio-chroma-card" aria-labelledby="image-studio-chroma-label">
@@ -1168,7 +1178,7 @@ export function ImageStudioPlayground({
               />
               <span>Prepare chroma-key removal</span>
             </label>
-            <div className="image-studio-color-field">
+            <div className="image-studio-color-field image-studio-color-field-compact">
               <label htmlFor={fieldId("chroma-key")}>Key color</label>
               <input
                 id={fieldId("chroma-key")}
@@ -1179,67 +1189,73 @@ export function ImageStudioPlayground({
               />
               <code>{project.chromaKey.keyColor}</code>
             </div>
-            {[
-              ["tolerance", "Tolerance", 100],
-              ["spillCleanup", "Spill cleanup", 100],
-              ["edgeFeather", "Edge feather", 64],
-            ].map(([field, label, max]) => (
-              <div className="image-studio-inline-field image-studio-slider-field" key={field}>
-                <label htmlFor={fieldId(`chroma-${field}`)}>{label}</label>
-                <output>{Math.round(project.chromaKey[field])}{field === "edgeFeather" ? "px" : "%"}</output>
-                <input
-                  id={fieldId(`chroma-${field}`)}
-                  type="range"
-                  min="0"
-                  max={max}
-                  step="1"
-                  value={project.chromaKey[field]}
-                  onChange={event => updateChromaKey(field, event.target.value)}
+            <p className="image-studio-matte-status">
+              {proofReview.chromaKey.ready ? "Matte proof ready" : "Matte needs review"} - {proofReview.chromaKey.providerInstruction}
+            </p>
+            <button type="button" className="image-studio-secondary-action" onClick={previewLocalMatte} disabled={!selectedMatteSource}>
+              Preview matte
+            </button>
+            <details className="image-studio-advanced-disclosure">
+              <summary>Advanced matte controls</summary>
+              <div className="image-studio-local-matte-controls" aria-label="Local chroma-key proof controls">
+                <label htmlFor={fieldId("matte-source")}>Proof source</label>
+                <select
+                  id={fieldId("matte-source")}
+                  value={selectedMatteSource?.id || ""}
+                  onChange={event => {
+                    setSession(current => ({ ...current, matteSourceId: event.target.value }));
+                    setMattePreview(null);
+                  }}
+                >
+                  {matteSources.length === 0 ? <option value="">Attach an image first</option> : null}
+                  {matteSources.map(source => (
+                    <option key={source.id} value={source.id}>
+                      {source.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="image-studio-chroma-proof" aria-label="Chroma-key proof status">
+                <span
+                  className="image-studio-chroma-swatch"
+                  style={{ background: project.chromaKey.keyColor }}
+                  aria-hidden="true"
                 />
+                <div>
+                  <strong>{proofReview.chromaKey.ready ? "Matte proof ready" : "Matte needs review"}</strong>
+                  <span>{proofReview.chromaKey.providerInstruction}</span>
+                </div>
               </div>
-            ))}
-            <label htmlFor={fieldId("chroma-intent")}>Replacement intent</label>
-            <textarea
-              id={fieldId("chroma-intent")}
-              value={project.chromaKey.replacementIntent}
-              onChange={event => updateChromaKey("replacementIntent", event.target.value)}
-              rows={2}
-            />
-            <div className="image-studio-chroma-proof" aria-label="Chroma-key proof status">
-              <span
-                className="image-studio-chroma-swatch"
-                style={{ background: project.chromaKey.keyColor }}
-                aria-hidden="true"
+              {[
+                ["tolerance", "Tolerance", 100],
+                ["spillCleanup", "Spill cleanup", 100],
+                ["edgeFeather", "Edge feather", 64],
+              ].map(([field, label, max]) => (
+                <div className="image-studio-inline-field image-studio-slider-field" key={field}>
+                  <label htmlFor={fieldId(`chroma-${field}`)}>{label}</label>
+                  <output>{Math.round(project.chromaKey[field])}{field === "edgeFeather" ? "px" : "%"}</output>
+                  <input
+                    id={fieldId(`chroma-${field}`)}
+                    type="range"
+                    min="0"
+                    max={max}
+                    step="1"
+                    value={project.chromaKey[field]}
+                    onChange={event => updateChromaKey(field, event.target.value)}
+                  />
+                </div>
+              ))}
+              <label htmlFor={fieldId("chroma-intent")}>Replacement intent</label>
+              <textarea
+                id={fieldId("chroma-intent")}
+                value={project.chromaKey.replacementIntent}
+                onChange={event => updateChromaKey("replacementIntent", event.target.value)}
+                rows={2}
               />
-              <div>
-                <strong>{proofReview.chromaKey.ready ? "Matte proof ready" : "Matte needs review"}</strong>
-                <span>{proofReview.chromaKey.providerInstruction}</span>
-              </div>
-            </div>
-            <ChromaMatteDiagnostics proof={chromaProof} />
-            <div className="image-studio-local-matte-controls" aria-label="Local chroma-key proof controls">
-              <label htmlFor={fieldId("matte-source")}>Proof source</label>
-              <select
-                id={fieldId("matte-source")}
-                value={selectedMatteSource?.id || ""}
-                onChange={event => {
-                  setSession(current => ({ ...current, matteSourceId: event.target.value }));
-                  setMattePreview(null);
-                }}
-              >
-                {matteSources.length === 0 ? <option value="">Attach an image first</option> : null}
-                {matteSources.map(source => (
-                  <option key={source.id} value={source.id}>
-                    {source.label}
-                  </option>
-                ))}
-              </select>
-              <button type="button" className="image-studio-secondary-action" onClick={previewLocalMatte} disabled={!selectedMatteSource}>
-                Preview matte
-              </button>
-            </div>
-            <ArtifactBackendHealthNote health={backendHealth} />
-            <ChromaMattePreviewPanel preview={mattePreview} />
+              <ChromaMatteDiagnostics proof={chromaProof} />
+              <ArtifactBackendHealthNote health={backendHealth} />
+              <ChromaMattePreviewPanel preview={mattePreview} />
+            </details>
           </section>
         </aside>
 
@@ -1275,11 +1291,14 @@ export function ImageStudioPlayground({
                 background: project.canvas.background,
               }}
               role="img"
-              aria-label={`Canvas model with ${project.layers.length} layers and ${project.selection.visible ? "one visible mask" : "no visible mask"}`}
+              aria-label={`Local composition preview, not provider output, with ${project.layers.length} layers and ${project.selection.visible ? "one visible mask" : "no visible mask"}`}
             >
               {project.layers.map(layer => (
                 <ProjectLayer key={layer.id} layer={layer} canvas={project.canvas} />
               ))}
+              <div className="image-studio-local-preview-badge">
+                Local composition preview - not provider output
+              </div>
               <SelectionOverlay selection={project.selection} canvas={project.canvas} mode={session.maskMode} />
               <AnnotationOverlay annotations={project.annotationReadiness} canvas={project.canvas} />
             </div>

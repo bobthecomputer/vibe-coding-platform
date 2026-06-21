@@ -42,10 +42,10 @@ export const DEFAULT_IMAGE_PROJECT = {
   },
   prompt: {
     mode: "generate",
-    text: "A cinematic product workspace for autonomous creative agents, elegant dark glass interface, precise lighting, high-end editorial design",
-    negative: "blurry, low quality, distorted typography",
-    style: "editorial photoreal, subtle gold accents, cinematic lighting",
-    strength: 0.72,
+    text: "A premium black AI image-editing workbench, clean central preview, subtle proof rails, real artifact handoff, minimal controls, editorial product screenshot",
+    negative: "blurry, fake object, toy blob, distorted typography, cluttered dashboard, excessive boxes",
+    style: "near-black product UI, restrained green status accents, sharp typography, clean glass edges",
+    strength: 0.58,
     preserveComposition: true,
   },
   provider: {
@@ -106,20 +106,20 @@ export const DEFAULT_IMAGE_PROJECT = {
   skillsEvidence: [],
   focusedHistoryId: "",
   opsThreads: [],
-  selectedLayerId: "layer-subject",
+  selectedLayerId: "layer-preview-frame",
   activeTool: "select",
   selection: {
-    x: 585,
-    y: 300,
-    width: 250,
-    height: 230,
-    feather: 18,
+    x: 650,
+    y: 372,
+    width: 228,
+    height: 168,
+    feather: 12,
     visible: true,
   },
   layers: [
     {
       id: "layer-background",
-      name: "Generated base",
+      name: "Local preview backdrop",
       type: "shape",
       locked: true,
       visible: true,
@@ -130,42 +130,59 @@ export const DEFAULT_IMAGE_PROJECT = {
       width: 1024,
       height: 1024,
       rotation: 0,
-      fill: "radial-gradient(circle at 28% 18%, rgba(214,168,79,.42), transparent 22%), radial-gradient(circle at 72% 42%, rgba(94,138,170,.30), transparent 28%), linear-gradient(135deg, #101313, #1c2221 58%, #0b0e0e)",
-      promptRole: "base image",
+      fill: "radial-gradient(circle at 18% 12%, rgba(238,242,236,.08), transparent 26%), radial-gradient(circle at 74% 28%, rgba(154,223,138,.12), transparent 28%), linear-gradient(135deg, #070808, #101414 58%, #050606)",
+      promptRole: "local preview backdrop, not provider output",
     },
     {
-      id: "layer-subject",
-      name: "Movable hero object",
+      id: "layer-preview-frame",
+      name: "Workbench preview frame",
+      type: "shape",
+      locked: false,
+      visible: true,
+      opacity: 1,
+      blendMode: "normal",
+      x: 168,
+      y: 150,
+      width: 688,
+      height: 574,
+      rotation: 0,
+      fill: "linear-gradient(180deg, rgba(238,242,236,.09), rgba(238,242,236,.02) 18%, rgba(7,9,9,.92) 19%), linear-gradient(90deg, rgba(154,223,138,.16) 0 24%, rgba(238,242,236,.035) 24% 25%, rgba(238,242,236,.045) 25% 100%), #0b0e0e",
+      radius: 28,
+      promptRole: "local editable workbench preview frame",
+    },
+    {
+      id: "layer-preview-canvas",
+      name: "Preview image surface",
       type: "shape",
       locked: false,
       visible: true,
       opacity: 0.96,
-      blendMode: "screen",
-      x: 354,
+      blendMode: "normal",
+      x: 404,
       y: 266,
-      width: 292,
-      height: 236,
-      rotation: -4,
-      fill: "linear-gradient(145deg, rgba(255,255,255,.72), rgba(214,168,79,.28) 52%, rgba(142,203,111,.12)), radial-gradient(circle at 35% 28%, rgba(255,255,255,.88), transparent 20%)",
-      radius: 36,
-      promptRole: "object to preserve after manual repositioning",
+      width: 344,
+      height: 300,
+      rotation: 0,
+      fill: "radial-gradient(circle at 34% 32%, rgba(214,168,79,.34), transparent 24%), linear-gradient(135deg, rgba(238,242,236,.085), rgba(154,223,138,.09) 52%, rgba(86,174,255,.06)), #101515",
+      radius: 20,
+      promptRole: "local preview image area",
     },
     {
-      id: "layer-shadow",
-      name: "Contact shadow",
+      id: "layer-proof-rail",
+      name: "Proof rail overlay",
       type: "shape",
       locked: false,
       visible: true,
-      opacity: 0.34,
-      blendMode: "multiply",
-      x: 330,
-      y: 486,
-      width: 350,
-      height: 74,
-      rotation: -4,
-      fill: "radial-gradient(ellipse, rgba(0,0,0,.95), rgba(0,0,0,0) 70%)",
-      radius: 999,
-      promptRole: "shadow / grounding",
+      opacity: 0.88,
+      blendMode: "normal",
+      x: 694,
+      y: 300,
+      width: 108,
+      height: 214,
+      rotation: 0,
+      fill: "linear-gradient(180deg, rgba(154,223,138,.22), rgba(238,242,236,.045)), linear-gradient(90deg, rgba(154,223,138,.42), transparent 2px), #0d1210",
+      radius: 16,
+      promptRole: "proof and annotation rail",
     },
   ],
   history: [
@@ -326,6 +343,16 @@ export function normalizeProject(project) {
   next.opsThreads = Array.isArray(next.opsThreads) ? next.opsThreads : base.opsThreads;
   next.selection = { ...base.selection, ...(next.selection || {}) };
   next.layers = Array.isArray(next.layers) && next.layers.length ? next.layers : base.layers;
+  const layerIds = next.layers.map(layer => String(layer?.id || ""));
+  const hasLegacyBlobPreview =
+    layerIds.includes("layer-subject") &&
+    layerIds.includes("layer-shadow") &&
+    layerIds.includes("layer-background");
+  if (next.id === base.id && hasLegacyBlobPreview) {
+    next.layers = base.layers;
+    next.selection = base.selection;
+    next.selectedLayerId = base.selectedLayerId;
+  }
   next.history = (Array.isArray(next.history) ? next.history : base.history).filter(isRealImageSession);
   for (const item of base.history) {
     if (!next.history.some(entry => entry?.id === item.id || entry?.requestId === item.requestId)) {
