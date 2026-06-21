@@ -1,0 +1,43 @@
+{
+  "checkedAt": "2026-06-21T16:00:16.228803+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder&sidebar=collapsed",
+  "locationHref": "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder&sidebar=collapsed",
+  "gitHead": "a6bbcd55d6c5c54742fd1c0dd1943da5db64e7cc",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-real-generated-image-desktop.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-real-generated-image-desktop.html",
+  "expectedFragments": [
+    "Image generation playground",
+    "Generated coastal retreat image",
+    "Generate image",
+    "Gallery",
+    "Outputs",
+    "Connect image provider"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "proofSelectors": {
+    "fluxioBuilderRoot": true,
+    "visualProofPacket": true,
+    "visualProofReadiness": true,
+    "visualProofMapCanvas": true,
+    "visualProofReceipts": true,
+    "currentAppProof": false
+  },
+  "placeholderFramePaths": [],
+  "image": {
+    "width": 1440,
+    "height": 900,
+    "sampleCount": 8100,
+    "uniqueSampleColors": 2180,
+    "averageLuma": 34.79,
+    "nonBlank": true
+  },
+  "passed": true
+}

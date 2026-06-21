@@ -113,6 +113,7 @@ function resolveImageStudioArtifactUrl(value) {
   if (!source) return "";
   if (/^(data:|blob:|https?:\/\/)/i.test(source)) return source;
   if (source.startsWith("/api/artifact")) return `${artifactBackendBaseUrl()}${source}`;
+  if (source.startsWith("/")) return source;
   const params = new URLSearchParams({ path: source });
   return `${artifactBackendBaseUrl()}/api/artifact?${params.toString()}`;
 }

@@ -47,6 +47,11 @@
       "id": "generator-cleanup-normal-mode",
       "passed": true,
       "detail": "Default Image Studio hides diagnostics/proof checklist UI, removes archived fake-looking history from default state, shows a prompt composer, and uses Generate image as the primary action."
+    },
+    {
+      "id": "real-generated-image-visible",
+      "passed": true,
+      "detail": "Default Image Studio now displays a real generated coastal-retreat bitmap in the canvas from web/public/image-studio/generated-coastal-retreat.png, with source metadata pointing back to the existing Codex-generated reference artifact."
     }
   ],
   "changedFiles": [
@@ -59,6 +64,7 @@
     "web/src/fluxio/image-studio/image-studio.css",
     "web/src/fluxio/image-studio/imageStudioModel.js",
     "web/src/fluxio/imagePlaygroundState.js",
+    "web/public/image-studio/generated-coastal-retreat.png",
     "scripts/image_studio_chroma_smoke.py",
     "tests/test_web_backend.py",
     "tests/test_desktop_ui_contract.py"
@@ -66,5 +72,8 @@
   "reviewCleanupDesktopScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-review-cleanup-desktop.png",
   "reviewCleanupMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-review-cleanup-mobile.png",
   "generatorCleanupDesktopScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-desktop.png",
-  "generatorCleanupMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-mobile.png"
+  "generatorCleanupMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-mobile.png",
+  "realGeneratedImageDesktopScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-real-generated-image-desktop.png",
+  "realGeneratedImageMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-real-generated-image-mobile.png",
+  "displayedGeneratedImageAsset": "C:\\Users\\paul\\projects\\vibe-coding-platform\\web\\public\\image-studio\\generated-coastal-retreat.png"
 }
