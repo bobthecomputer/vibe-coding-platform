@@ -3,13 +3,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
+DRAWER = ROOT / "web" / "src" / "fluxio" / "FluxioDrawerPanel.jsx"
 WORKSPACE_MODEL = ROOT / "web" / "src" / "fluxio" / "workspaceModel.js"
 STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
 MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
 
 
+def shell_surface_source() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (SHELL, DRAWER)
+        if path.exists()
+    )
+
+
 def test_workbench_runtime_ops_surface_is_first_class() -> None:
-    source = SHELL.read_text(encoding="utf-8")
+    source = shell_surface_source()
 
     assert "Runtime bridge" in source
     assert "Open runtime bridge" in source
@@ -42,7 +51,7 @@ def test_workbench_runtime_panel_is_not_trapped_in_top_grid_row() -> None:
 
 
 def test_workbench_state_exposes_runtime_update_and_auto_verify_counts() -> None:
-    source = SHELL.read_text(encoding="utf-8")
+    source = shell_surface_source()
     model_source = WORKSPACE_MODEL.read_text(encoding="utf-8")
 
     assert "runtimeOps" in source
@@ -61,7 +70,7 @@ def test_service_model_preserves_auto_run_verify_for_runtime_actions() -> None:
 
 
 def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_to_runtime() -> None:
-    source = SHELL.read_text(encoding="utf-8")
+    source = shell_surface_source()
     runtime_contract = (ROOT / "web" / "src" / "fluxio" / "runtime" / "RuntimeTruthContract.jsx").read_text(encoding="utf-8")
     fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
 
@@ -117,7 +126,7 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
 
 
 def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
-    source = SHELL.read_text(encoding="utf-8")
+    source = shell_surface_source()
     styles = STYLES.read_text(encoding="utf-8")
     fixtures = (ROOT / "web" / "src" / "fluxio" / "fusion" / "fusionFixtures.js").read_text(encoding="utf-8")
     fusion_panel = (ROOT / "web" / "src" / "fluxio" / "fusion" / "FusionWorkbenchPanel.jsx").read_text(encoding="utf-8")

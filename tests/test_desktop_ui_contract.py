@@ -11,6 +11,7 @@ MAIN_TSX = ROOT / "web" / "src" / "main.tsx"
 FLUXIO_APP = ROOT / "web" / "src" / "fluxio" / "FluxioApp.tsx"
 FLUXIO_BRIDGE = ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts"
 FLUXIO_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
+FLUXIO_DRAWER = ROOT / "web" / "src" / "fluxio" / "FluxioDrawerPanel.jsx"
 FLUXIO_STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
 HELPERS_JS = ROOT / "desktop-ui" / "fluxioHelpers.js"
 MISSION_MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
@@ -24,6 +25,14 @@ VOICE_PANEL = ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx
 VOICE_CONTROLLER = ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js"
 VOICE_ADAPTERS = ROOT / "web" / "src" / "fluxio" / "voice" / "voiceCaptureAdapters.js"
 VOICE_INDEX = ROOT / "web" / "src" / "fluxio" / "voice" / "index.js"
+
+
+def fluxio_shell_surface_source() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (FLUXIO_SHELL, FLUXIO_DRAWER)
+        if path.exists()
+    )
 
 
 class DesktopUiContractTests(unittest.TestCase):
@@ -189,7 +198,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("appearance: none", styles)
 
     def test_provider_auth_ui_does_not_fake_chatgpt_or_minimax_login(self) -> None:
-        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = fluxio_shell_surface_source()
 
         self.assertNotIn("chatgpt.com/auth/login", shell)
         self.assertNotIn("Connect ChatGPT", shell)
@@ -226,7 +235,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("MiniMax OpenClaw auth command copied", shell)
 
     def test_provider_ecosystem_is_visible_in_runtime_drawer(self) -> None:
-        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = fluxio_shell_surface_source()
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
         provider_panel = (ROOT / "web" / "src" / "fluxio" / "provider" / "ProviderEcosystemPanel.jsx").read_text(encoding="utf-8")
 
@@ -267,7 +276,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Capture proof", shell)
 
     def test_skills_drawer_surfaces_stuck_state_recovery_contract(self) -> None:
-        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = fluxio_shell_surface_source()
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
         fixtures = DESKTOP_FIXTURES.read_text(encoding="utf-8")
 
@@ -295,7 +304,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("verification_failure-verification_failure_receipt.json", fixtures)
 
     def test_builder_surfaces_external_monitor_loops(self) -> None:
-        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = fluxio_shell_surface_source()
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
         model = MISSION_MODEL.read_text(encoding="utf-8")
 
@@ -332,7 +341,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".supervisor-intervention-strip", styles)
 
     def test_builder_surfaces_subagent_command_center(self) -> None:
-        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = fluxio_shell_surface_source()
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
         model = MISSION_MODEL.read_text(encoding="utf-8")
         readiness = (ROOT / "web" / "src" / "fluxio" / "subagents" / "SubagentReadinessPanel.jsx").read_text(encoding="utf-8")
@@ -504,7 +513,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".fluxio-voice-correction-actions", voice_css)
 
     def test_builder_agent_modes_and_runtimes_remain_distinct(self) -> None:
-        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        shell = fluxio_shell_surface_source()
 
         self.assertIn("data-mode={uiMode}", shell)
         self.assertIn('setUiMode("agent")', shell)
