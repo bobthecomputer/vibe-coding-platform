@@ -19,6 +19,10 @@ PACKAGE_JSON = ROOT / "package.json"
 CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
 CONTROL_VISUAL_SMOKE = ROOT / "scripts" / "control_route_visual_smoke.py"
 CONTROL_INTERACTION_SMOKE = ROOT / "scripts" / "control_route_interaction_smoke.py"
+VOICE_PANEL = ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx"
+VOICE_CONTROLLER = ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js"
+VOICE_ADAPTERS = ROOT / "web" / "src" / "fluxio" / "voice" / "voiceCaptureAdapters.js"
+VOICE_INDEX = ROOT / "web" / "src" / "fluxio" / "voice" / "index.js"
 
 
 class DesktopUiContractTests(unittest.TestCase):
@@ -327,9 +331,12 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("GeneratedArtifactCard", image_studio)
         self.assertIn("No served generated image artifacts are available yet.", image_studio)
         self.assertIn(".image-studio-generated-artifact", image_css)
-        voice_panel = (ROOT / "web" / "src" / "fluxio" / "voice" / "VoiceCommandPanel.jsx").read_text(encoding="utf-8")
-        voice_controller = (ROOT / "web" / "src" / "fluxio" / "voice" / "useVoiceInteractionController.js").read_text(encoding="utf-8")
+        voice_panel = VOICE_PANEL.read_text(encoding="utf-8")
+        voice_controller = VOICE_CONTROLLER.read_text(encoding="utf-8")
+        voice_adapters = VOICE_ADAPTERS.read_text(encoding="utf-8")
+        voice_index = VOICE_INDEX.read_text(encoding="utf-8")
         voice_css = (ROOT / "web" / "src" / "fluxio" / "voice" / "voice.css").read_text(encoding="utf-8")
+        self.assertIn("speechAdapter", voice_panel)
         self.assertIn("Pre-send gate", voice_panel)
         self.assertIn("Capture source", voice_panel)
         self.assertIn("Voice capture diagnostics", voice_panel)
@@ -337,7 +344,16 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Mark reviewed", voice_panel)
         self.assertIn("correctTranscriptSegment", voice_panel)
         self.assertIn("describeVoiceCaptureStatus", voice_controller)
+        self.assertIn("createVoiceCaptureAdapter", voice_controller)
+        self.assertIn("onInterim", voice_controller)
+        self.assertIn("onFinal", voice_controller)
         self.assertIn("replaceTranscriptSegment", voice_controller)
+        self.assertIn("createBrowserSpeechAdapter", voice_adapters)
+        self.assertIn("createBridgeSpeechAdapter", voice_adapters)
+        self.assertIn("normalizeSpeechRecognitionResult", voice_adapters)
+        self.assertIn("SpeechRecognition", voice_adapters)
+        self.assertIn("__FLUXIO_VOICE_BRIDGE__", voice_adapters)
+        self.assertIn("createVoiceCaptureAdapter", voice_index)
         self.assertIn(".fluxio-voice-capture-diagnostics", voice_css)
         self.assertIn(".fluxio-voice-send-gate", voice_css)
         self.assertIn(".fluxio-voice-correction-actions", voice_css)

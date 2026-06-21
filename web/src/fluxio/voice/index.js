@@ -19,10 +19,17 @@ export {
 export {
   buildKeyboardParityLabel,
   buildVoiceErrorRecovery,
+  describeVoiceCaptureStatus,
   detectVoiceInputSupport,
   getVoiceMotionAffordance,
   getVoiceStatusCopy,
   prefersReducedMotion,
 } from "./voiceAccessibility.js";
+export {
+  createBridgeSpeechAdapter,
+  createBrowserSpeechAdapter,
+  createVoiceCaptureAdapter,
+  normalizeSpeechRecognitionResult,
+} from "./voiceCaptureAdapters.js";
 export { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 export { VoiceCommandPanel } from "./VoiceCommandPanel.jsx";

@@ -198,6 +198,129 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertIn("Keyboard: Ctrl+Enter", payload["label"])
         self.assertEqual(payload["reduced"]["data-motion"], "reduced")
 
+    def test_voice_capture_adapters_normalize_browser_and_bridge_results(self) -> None:
+        payload = run_node(
+            """
+            import {
+              createBridgeSpeechAdapter,
+              createBrowserSpeechAdapter,
+              createVoiceCaptureAdapter,
+              normalizeSpeechRecognitionResult,
+            } from './web/src/fluxio/voice/voiceCaptureAdapters.js';
+
+            const browserSegments = [];
+            class FakeSpeechRecognition {
+              constructor() {
+                FakeSpeechRecognition.instance = this;
+              }
+              start() {
+                const interim = [
+                  { transcript: 'open set', confidence: 0.62 },
+                  { transcript: 'open settings', confidence: 0.58 },
+                ];
+                interim.isFinal = false;
+                const finalResult = [
+                  { transcript: 'open settings', confidence: 0.94 },
+                  { transcript: 'open setting', confidence: 0.72 },
+                ];
+                finalResult.isFinal = true;
+                this.onresult({ resultIndex: 0, results: [interim, finalResult] });
+              }
+              stop() {
+                this.stopped = true;
+              }
+            }
+            const browserAdapter = createBrowserSpeechAdapter({ window: { SpeechRecognition: FakeSpeechRecognition } });
+            await browserAdapter.start({
+              onInterim: segment => browserSegments.push({ kind: 'interim', ...segment }),
+              onFinal: segment => browserSegments.push({ kind: 'final', ...segment }),
+            });
+            await browserAdapter.stop();
+
+            const bridgeSegments = [];
+            const bridgeAdapter = createBridgeSpeechAdapter({
+              window: {
+                __FLUXIO_VOICE_BRIDGE__: {
+                  startDictation(callbacks) {
+                    callbacks.onInterim({ text: 'show pro', confidence: 0.51 });
+                    callbacks.onFinal({ text: 'show proof', confidence: 0.92, alternatives: ['show proofs'] });
+                    return () => { this.unsubscribed = true; };
+                  },
+                  stopDictation() { this.stopped = true; },
+                },
+              },
+            });
+            await bridgeAdapter.start({
+              onInterim: segment => bridgeSegments.push({ kind: 'interim', ...segment }),
+              onFinal: segment => bridgeSegments.push({ kind: 'final', ...segment }),
+            });
+            await bridgeAdapter.stop();
+
+            const preferred = createVoiceCaptureAdapter({
+              window: {
+                SpeechRecognition: FakeSpeechRecognition,
+                __FLUXIO_VOICE_BRIDGE__: { start() {}, stop() {} },
+              },
+            });
+            const normalized = normalizeSpeechRecognitionResult(
+              Object.assign(
+                [
+                  { transcript: 'send message', confidence: 0.91 },
+                  { transcript: 'send massage', confidence: 0.68 },
+                ],
+                { isFinal: true },
+              ),
+              { source: 'test' },
+            );
+
+            console.log(JSON.stringify({
+              browserKinds: browserSegments.map(item => item.kind),
+              browserFinal: browserSegments.find(item => item.kind === 'final'),
+              browserStopped: FakeSpeechRecognition.instance.stopped,
+              bridgeKinds: bridgeSegments.map(item => item.kind),
+              bridgeFinal: bridgeSegments.find(item => item.kind === 'final'),
+              preferredName: preferred.name,
+              normalized,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["browserKinds"], ["interim", "final"])
+        self.assertEqual(payload["browserFinal"]["text"], "open settings")
+        self.assertEqual(payload["browserFinal"]["alternatives"][0]["text"], "open setting")
+        self.assertTrue(payload["browserStopped"])
+        self.assertEqual(payload["bridgeKinds"], ["interim", "final"])
+        self.assertEqual(payload["bridgeFinal"]["text"], "show proof")
+        self.assertEqual(payload["bridgeFinal"]["alternatives"][0]["text"], "show proofs")
+        self.assertEqual(payload["preferredName"], "fluxio-voice-bridge")
+        self.assertEqual(payload["normalized"]["text"], "send message")
+        self.assertEqual(payload["normalized"]["alternatives"][0]["text"], "send massage")
+
+    def test_voice_capture_adapter_errors_are_visible(self) -> None:
+        payload = run_node(
+            """
+            import { createBrowserSpeechAdapter } from './web/src/fluxio/voice/voiceCaptureAdapters.js';
+
+            class FakeSpeechRecognition {
+              constructor() {
+                FakeSpeechRecognition.instance = this;
+              }
+              start() {
+                this.onerror({ error: 'not-allowed', message: 'permission denied by test' });
+              }
+              stop() {}
+            }
+            const errors = [];
+            const adapter = createBrowserSpeechAdapter({ window: { webkitSpeechRecognition: FakeSpeechRecognition } });
+            await adapter.start({ onError: error => errors.push(error) });
+            console.log(JSON.stringify({ label: adapter.label, errors }));
+            """
+        )
+
+        self.assertEqual(payload["label"], "Browser speech adapter")
+        self.assertEqual(payload["errors"][0]["code"], "permission_denied")
+        self.assertIn("permission denied", payload["errors"][0]["message"])
+
     def test_image_studio_request_draft_reports_preview_and_annotation_proof(self) -> None:
         payload = run_node(
             """

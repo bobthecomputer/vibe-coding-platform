@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer } from "react";
+import { useCallback, useMemo, useReducer, useRef } from "react";
 
 import {
   appendTranscriptSegment,
@@ -19,6 +19,7 @@ import {
   detectVoiceInputSupport,
   getVoiceStatusCopy,
 } from "./voiceAccessibility.js";
+import { createVoiceCaptureAdapter } from "./voiceCaptureAdapters.js";
 
 function createInitialState(options = {}) {
   const support = detectVoiceInputSupport(options.runtime || globalThis);
@@ -191,9 +192,14 @@ export function useVoiceInteractionController({
   onVoiceCommand,
 } = {}) {
   const [state, dispatch] = useReducer(reducer, null, () => createInitialState({ runtime }));
+  const activeAdapterRef = useRef(null);
+  const resolvedSpeechAdapter = useMemo(
+    () => speechAdapter || createVoiceCaptureAdapter(runtime || globalThis),
+    [runtime, speechAdapter],
+  );
   const capture = useMemo(
-    () => describeVoiceCaptureStatus({ support: state.support, speechAdapter }),
-    [speechAdapter, state.support],
+    () => describeVoiceCaptureStatus({ support: state.support, speechAdapter: resolvedSpeechAdapter }),
+    [resolvedSpeechAdapter, state.support],
   );
 
   const refreshSupport = useCallback(() => {
@@ -203,7 +209,9 @@ export function useVoiceInteractionController({
   const startListening = useCallback(async () => {
     refreshSupport();
     const refreshedSupport = detectVoiceInputSupport(runtime || globalThis);
-    const refreshedCapture = describeVoiceCaptureStatus({ support: refreshedSupport, speechAdapter });
+    const activeAdapter = speechAdapter || resolvedSpeechAdapter || createVoiceCaptureAdapter(runtime || globalThis);
+    activeAdapterRef.current = activeAdapter;
+    const refreshedCapture = describeVoiceCaptureStatus({ support: refreshedSupport, speechAdapter: activeAdapter });
     if (!refreshedCapture.canStartLiveCapture) {
       dispatch({
         type: "error",
@@ -213,7 +221,16 @@ export function useVoiceInteractionController({
       return false;
     }
     try {
-      await speechAdapter.start();
+      await activeAdapter.start({
+        onInterim: segment => dispatch({ type: "transcript.append", segment: { ...segment, isFinal: false } }),
+        onFinal: segment => dispatch({ type: "transcript.append", segment: { ...segment, isFinal: true } }),
+        onError: error =>
+          dispatch({
+            type: "error",
+            code: error?.code || "capture_error",
+            message: error?.message || buildVoiceErrorRecovery(error?.code || "unknown"),
+          }),
+      });
       dispatch({ type: "listening", listening: true });
       return true;
     } catch (caught) {
@@ -223,12 +240,13 @@ export function useVoiceInteractionController({
       });
       return false;
     }
-  }, [refreshSupport, runtime, speechAdapter]);
+  }, [refreshSupport, resolvedSpeechAdapter, runtime, speechAdapter]);
 
   const stopListening = useCallback(async () => {
     try {
-      if (speechAdapter?.stop) {
-        await speechAdapter.stop();
+      const activeAdapter = speechAdapter || activeAdapterRef.current || resolvedSpeechAdapter;
+      if (activeAdapter?.stop) {
+        await activeAdapter.stop();
       }
       dispatch({ type: "listening", listening: false });
       return true;
@@ -239,7 +257,7 @@ export function useVoiceInteractionController({
       });
       return false;
     }
-  }, [speechAdapter]);
+  }, [resolvedSpeechAdapter, speechAdapter]);
 
   const appendTranscript = useCallback(segment => {
     dispatch({ type: "transcript.append", segment });

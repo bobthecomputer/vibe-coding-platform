@@ -14,8 +14,8 @@ import { getVoiceCommandExamples } from "./voiceCommandGrammar.js";
 import { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 import "./voice.css";
 
-export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = false }) {
-  const ownedController = useVoiceInteractionController({ onVoiceCommand });
+export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = false, speechAdapter = null }) {
+  const ownedController = useVoiceInteractionController({ onVoiceCommand, speechAdapter });
   const voice = controller || ownedController;
   const motion = getVoiceMotionAffordance(reducedMotion);
   const examples = getVoiceCommandExamples();
