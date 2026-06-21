@@ -374,6 +374,16 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("OpenCodeGo", shell)
         self.assertIn('<option value="opencode">OpenCodeGo</option>', shell)
 
+    def test_old_bitmap_assets_are_not_part_of_current_ui(self) -> None:
+        obsolete_assets = [
+            ROOT / "desktop-ui" / "logo-main.png",
+            ROOT / "desktop-ui" / "logo-mark.png",
+            ROOT / "web" / "src" / "fluxio" / "assets" / "grand-agent-topology.png",
+            ROOT / "web" / "src" / "fluxio" / "assets" / "grand-agent-nas-hero.png",
+        ]
+        for asset in obsolete_assets:
+            self.assertFalse(asset.exists(), f"{asset.name} should stay removed unless current UI imports it")
+
 
 if __name__ == "__main__":
     unittest.main()
