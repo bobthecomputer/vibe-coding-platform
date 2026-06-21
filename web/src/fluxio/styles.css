@@ -883,6 +883,32 @@ button.builder-sidebar-nexus:hover {
   justify-content: flex-end;
 }
 
+.subagent-command-strip {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(153, 235, 185, 0.15);
+  border-radius: 14px;
+  background:
+    linear-gradient(90deg, rgba(153, 235, 185, 0.07), transparent 50%),
+    rgba(255, 255, 255, 0.025);
+  padding: 10px;
+}
+
+.subagent-command-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.subagent-command-strip strong {
+  display: block;
+  margin-top: 2px;
+}
+
 .builder-summary-card {
   display: grid;
   gap: 6px;
@@ -909,6 +935,54 @@ button.builder-sidebar-nexus:hover {
 .builder-summary-card p {
   color: var(--muted);
   font-size: 12px;
+}
+
+.subagent-board-stack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.subagent-board-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(153, 235, 185, 0.14);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(153, 235, 185, 0.055), transparent 58%),
+    rgba(255, 255, 255, 0.028);
+  padding: 10px;
+}
+
+.subagent-board-card > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.subagent-board-card span,
+.subagent-board-card em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.subagent-board-card p,
+.subagent-board-card small {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.subagent-board-card small {
+  color: var(--muted);
+}
+
+.subagent-board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .builder-metric-card {
@@ -7276,12 +7350,92 @@ button.builder-review-target:hover {
   color: var(--muted);
 }
 
+.subagent-command-panel {
+  border-color: rgba(153, 235, 185, 0.18);
+}
+
+.subagent-lane-list,
+.subagent-scoreboard {
+  display: grid;
+  gap: 8px;
+}
+
+.subagent-lane-card,
+.subagent-lane-empty,
+.subagent-scoreboard article {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 10px;
+}
+
+.subagent-lane-card > div:first-child {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.subagent-lane-card span,
+.subagent-scoreboard span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.subagent-lane-card p,
+.subagent-lane-card small,
+.subagent-lane-empty p,
+.subagent-scoreboard p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.subagent-lane-card small {
+  color: var(--muted);
+}
+
+.subagent-lane-card dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.subagent-lane-card dl > div,
+.subagent-scoreboard {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.subagent-lane-card dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.subagent-lane-card dt {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.subagent-lane-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 760px) {
   .skill-recovery-head,
   .skill-recovery-strip,
   .skill-recovery-list,
   .monitor-loop-strip,
-  .monitor-loop-list {
+  .monitor-loop-list,
+  .subagent-command-strip,
+  .subagent-board-stack,
+  .subagent-scoreboard {
     grid-template-columns: minmax(0, 1fr);
   }
 

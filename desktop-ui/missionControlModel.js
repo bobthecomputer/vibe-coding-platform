@@ -2696,6 +2696,158 @@ function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQu
   };
 }
 
+function delegatedLaneTone(status, pendingApproval = false, heartbeatStatus = "") {
+  const normalizedStatus = String(status || "").toLowerCase();
+  const normalizedHeartbeat = String(heartbeatStatus || "").toLowerCase();
+  if (pendingApproval || normalizedStatus === "waiting_for_approval") {
+    return "warn";
+  }
+  if (["failed", "blocked", "cancelled", "stopped"].includes(normalizedStatus)) {
+    return "bad";
+  }
+  if (["running", "launching", "completed", "healthy", "passed"].includes(normalizedStatus)) {
+    return normalizedHeartbeat && ["stale", "missing", "failed"].includes(normalizedHeartbeat)
+      ? "warn"
+      : "good";
+  }
+  if (normalizedStatus === "queued") {
+    return "neutral";
+  }
+  return "neutral";
+}
+
+function deriveSubagentOrchestrationStudio({ mission, workspace }) {
+  const sessions = asList(mission?.delegated_runtime_sessions);
+  const routeTruth = mission?.state?.provider_runtime_truth || mission?.provider_runtime_truth || {};
+  const activeRoute =
+    routeTruth?.activeRoute ||
+    asList(mission?.effectiveRouteContract?.roles)[0] ||
+    mission?.state?.effective_route ||
+    {};
+  const mergeEvents = [
+    ...asList(mission?.state?.worker_merge_events),
+    ...asList(mission?.worker_merge_events),
+  ];
+  const latestMerge = mergeEvents[mergeEvents.length - 1] || {};
+  const parallelAgents = Math.max(
+    1,
+    asInt(
+      mission?.state?.parallel_agents ||
+        mission?.parallel_agents ||
+        mission?.missionLoop?.parallelAgents ||
+        sessions.length ||
+        1,
+      1,
+    ),
+  );
+  const mergePolicy =
+    mission?.state?.merge_policy ||
+    mission?.merge_policy ||
+    mission?.missionLoop?.mergePolicy ||
+    "best_score";
+  const activeCount = sessions.filter(item =>
+    ["running", "launching", "waiting_for_approval", "queued"].includes(
+      String(item?.status || "").toLowerCase(),
+    ),
+  ).length;
+  const blockedCount = sessions.filter(item =>
+    ["blocked", "failed", "waiting_for_approval"].includes(String(item?.status || "").toLowerCase()) ||
+    Object.keys(item?.pending_approval || {}).length > 0,
+  ).length;
+  const lanes = sessions.map((session, index) => {
+    const events = asList(session?.latest_events);
+    const latestEvent = events[events.length - 1] || {};
+    const routeEvent =
+      events
+        .slice()
+        .reverse()
+        .find(event =>
+          [
+            "runtime.route_contract",
+            "runtime.phase_entered",
+            "runtime.route_switch_reason",
+            "runtime.handoff",
+          ].includes(String(event?.kind || "").toLowerCase()),
+        ) || {};
+    const routeData = routeEvent?.data || {};
+    const status = session?.status || latestEvent?.status || "recorded";
+    const pendingApproval = Object.keys(session?.pending_approval || {}).length > 0;
+    const heartbeat = session?.heartbeat_status ||
+      (session?.heartbeat_age_seconds != null
+        ? `${session.heartbeat_age_seconds}s heartbeat`
+        : "heartbeat pending");
+    const eventSummary =
+      latestEvent?.message ||
+      session?.last_event ||
+      session?.detail ||
+      "No live event recorded yet.";
+    return {
+      id: session?.delegated_id || `delegated-lane-${index + 1}`,
+      label: session?.label || `Lane ${index + 1}`,
+      role:
+        routeData.role ||
+        session?.role ||
+        session?.agent_role ||
+        (index === 0 ? "lead_executor" : `worker_${index + 1}`),
+      status,
+      tone: delegatedLaneTone(status, pendingApproval, session?.heartbeat_status),
+      runtime: runtimeLabel(session?.runtime_id || mission?.runtime_id || "runtime"),
+      provider: titleizeToken(routeData.provider || session?.provider || activeRoute?.provider || "auto"),
+      model: routeData.model || session?.model || activeRoute?.model || "profile default",
+      heartbeat,
+      cwd:
+        session?.execution_root ||
+        session?.workspace_root ||
+        mission?.execution_scope?.execution_root ||
+        workspace?.root_path ||
+        "",
+      latestEvent: eventSummary,
+      eventCount: events.length,
+      proof:
+        asList(session?.changed_files)[0] ||
+        session?.proof_path ||
+        latestEvent?.event_id ||
+        session?.execution_target_detail ||
+        "Proof expected from delegated lane.",
+      nextAction: pendingApproval
+        ? "Open queue and resolve the delegated approval boundary."
+        : ["running", "launching", "queued"].includes(String(status).toLowerCase())
+          ? "Keep monitoring heartbeat, latest event, and proof output."
+          : ["completed", "stopped"].includes(String(status).toLowerCase())
+            ? "Review proof and merge or archive the lane result."
+            : "Inspect runtime events before assigning more work.",
+    };
+  });
+  const scoreboard = asList(latestMerge?.scoreboard).slice(0, 4).map(item => ({
+    id: item?.worker_id || item?.branch_type || item?.step || "worker",
+    label: `Worker ${item?.worker_id || "?"}`,
+    detail: item?.step || item?.branch_type || "No merged step recorded",
+    score: item?.score != null ? `${Math.round(Number(item.score) * 100)}%` : "n/a",
+  }));
+  const summary =
+    lanes.length > 0
+      ? `${lanes.length} delegated lane${lanes.length === 1 ? "" : "s"} visible. ${activeCount} active, ${blockedCount} need attention.`
+      : `No delegated lane is active; configured for ${parallelAgents} worker${parallelAgents === 1 ? "" : "s"} with ${titleizeToken(mergePolicy)} merging.`;
+  return {
+    headline: "Subagent command center",
+    summary,
+    configuredWorkers: parallelAgents,
+    activeCount,
+    blockedCount,
+    mergePolicy,
+    handoffCount: asInt(mission?.state?.handoff_count || mission?.handoff_count),
+    lastHandoffReason: mission?.state?.last_handoff_reason || mission?.handoff_reason || "No handoff pressure recorded.",
+    lanes,
+    scoreboard,
+    recommendedAction:
+      blockedCount > 0
+        ? "Resolve blocked delegated lanes before spawning more workers."
+        : activeCount > 0
+          ? "Let active lanes finish, then verify proof before merge."
+          : "Use subagents when the next task can be split into disjoint files or read-only research.",
+  };
+}
+
 export function buildRecentRuns(snapshot) {
   const missionRuns = asList(snapshot?.missions)
     .slice()
@@ -2770,6 +2922,10 @@ export function buildMissionControlModel({
     snapshot,
     pendingQuestions,
     pendingApprovals,
+  });
+  const subagentOrchestrationStudio = deriveSubagentOrchestrationStudio({
+    mission,
+    workspace,
   });
   const tutorialStudio = deriveTutorialStudio({
     mission,
@@ -3026,6 +3182,7 @@ export function buildMissionControlModel({
         tutorialStudio,
         recommendationStudio,
         monitoringLoopStudio,
+        subagentOrchestrationStudio,
         liveReviewStudio: deriveLiveReviewStudio({
           mission,
           workspace,

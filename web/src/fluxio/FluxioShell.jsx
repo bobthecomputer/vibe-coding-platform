@@ -6426,6 +6426,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
   const monitoringLoopStudio = viewModel.drawers.builder.monitoringLoopStudio || {};
   const monitoringLoops = asList(monitoringLoopStudio.loops);
+  const subagentOrchestrationStudio = viewModel.drawers.builder.subagentOrchestrationStudio || {};
+  const subagentLanes = asList(subagentOrchestrationStudio.lanes);
+  const subagentScoreboard = asList(subagentOrchestrationStudio.scoreboard);
   const continuationSupervisor = liveReviewStudio.continuationSupervisor || null;
   const connectedDeviceBridge = asRecord(snapshot.connectedDeviceBridge);
   const bridgeSyncRows = asList(connectedDeviceBridge.sync);
@@ -12210,6 +12213,90 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </div>
           </section>
 
+          <section className="drawer-block subagent-command-panel">
+            <div className="builder-live-review-panel-head compact">
+              <div>
+                <h3>{subagentOrchestrationStudio.headline || "Subagent command center"}</h3>
+                <p>{subagentOrchestrationStudio.summary || "Delegated lanes will appear here when the mission splits work."}</p>
+              </div>
+              <span className="mini-pill muted">
+                {titleizeToken(subagentOrchestrationStudio.mergePolicy || "best_score")}
+              </span>
+            </div>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Configured workers</span>
+                <strong>{subagentOrchestrationStudio.configuredWorkers || 1}</strong>
+              </article>
+              <article className="context-item">
+                <span>Active lanes</span>
+                <strong>{subagentOrchestrationStudio.activeCount || 0}</strong>
+              </article>
+              <article className="context-item">
+                <span>Blocked lanes</span>
+                <strong>{subagentOrchestrationStudio.blockedCount || 0}</strong>
+              </article>
+            </div>
+            <div className="subagent-lane-list">
+              {subagentLanes.length > 0 ? (
+                subagentLanes.map(item => (
+                  <article className={`subagent-lane-card ${toneClass(item.tone)}`} key={item.id}>
+                    <div>
+                      <span>{titleizeToken(item.role)}</span>
+                      <strong>{item.label}</strong>
+                    </div>
+                    <p>{item.latestEvent}</p>
+                    <dl>
+                      <div>
+                        <dt>Route</dt>
+                        <dd>{item.runtime} / {item.provider} / {item.model}</dd>
+                      </div>
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{titleizeToken(item.status)} · {item.heartbeat}</dd>
+                      </div>
+                      <div>
+                        <dt>Proof</dt>
+                        <dd>{item.proof}</dd>
+                      </div>
+                    </dl>
+                    <small>{item.nextAction}</small>
+                  </article>
+                ))
+              ) : (
+                <article className="subagent-lane-empty">
+                  <strong>No delegated lane active</strong>
+                  <p>{subagentOrchestrationStudio.recommendedAction}</p>
+                </article>
+              )}
+            </div>
+            {subagentScoreboard.length > 0 ? (
+              <div className="subagent-scoreboard">
+                {subagentScoreboard.map(item => (
+                  <article key={item.id}>
+                    <span>{item.label}</span>
+                    <strong>{item.score}</strong>
+                    <p>{item.detail}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            <p className="drawer-note">
+              Handoffs: {subagentOrchestrationStudio.handoffCount || 0} · {subagentOrchestrationStudio.lastHandoffReason}
+            </p>
+            <div className="drawer-actions">
+              <ActionButton onClick={() => setActiveDrawer("runtime")} type="button">
+                Inspect runtime
+              </ActionButton>
+              <ActionButton onClick={() => setActiveDrawer("queue")} type="button">
+                Resolve lane blocks
+              </ActionButton>
+              <ActionButton onClick={() => setActiveDrawer("proof")} type="button">
+                Verify merge proof
+              </ActionButton>
+            </div>
+          </section>
+
           <section className="drawer-block">
             <h3>Confidence engine</h3>
             <div className="confidence-headline">
@@ -14171,6 +14258,28 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 ))}
                               </div>
                             </div>
+                            <div className="subagent-command-strip" aria-label="Subagent command center">
+                              <div>
+                                <span>{subagentOrchestrationStudio.headline || "Subagent command center"}</span>
+                                <strong>
+                                  {subagentLanes.length > 0
+                                    ? `${subagentLanes.length} lane${subagentLanes.length === 1 ? "" : "s"} · ${subagentOrchestrationStudio.activeCount || 0} active`
+                                    : `${subagentOrchestrationStudio.configuredWorkers || 1} worker setup`}
+                                </strong>
+                              </div>
+                              <button className="mini-pill muted" onClick={() => setActiveDrawer("builder")} type="button">
+                                {titleizeToken(subagentOrchestrationStudio.mergePolicy || "best_score")} merge
+                              </button>
+                              <button
+                                className={`mini-pill ${toneClass((subagentOrchestrationStudio.blockedCount || 0) > 0 ? "warn" : "good")}`}
+                                onClick={() => setActiveDrawer((subagentOrchestrationStudio.blockedCount || 0) > 0 ? "queue" : "proof")}
+                                type="button"
+                              >
+                                {(subagentOrchestrationStudio.blockedCount || 0) > 0
+                                  ? `${subagentOrchestrationStudio.blockedCount} blocked`
+                                  : "Proof-ready"}
+                              </button>
+                            </div>
                             <h2>{builderPrimaryConversation.title}</h2>
                             <p>{builderPrimaryConversation.current}</p>
                             <p className="builder-conversation-path">
@@ -14189,6 +14298,33 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 <p>{builderPrimaryConversation.updatedAt ? `Updated ${timestampLabel(builderPrimaryConversation.updatedAt)}` : "Active now"}</p>
                               </article>
                             </div>
+                            {subagentLanes.length > 0 ? (
+                              <div className="subagent-board-stack" aria-label="Delegated lane roster">
+                                {subagentLanes.slice(0, 2).map(item => (
+                                  <article className={`subagent-board-card ${toneClass(item.tone)}`} key={`builder-${item.id}`}>
+                                    <div>
+                                      <span>{titleizeToken(item.role)}</span>
+                                      <strong>{item.label}</strong>
+                                      <em>{titleizeToken(item.status)} · {item.heartbeat}</em>
+                                    </div>
+                                    <p>{item.latestEvent}</p>
+                                    <small>{item.runtime} / {item.provider} / {item.model}</small>
+                                    <div className="subagent-board-actions">
+                                      <button className="mini-pill muted" onClick={() => setActiveDrawer("runtime")} type="button">
+                                        Inspect runtime
+                                      </button>
+                                      <button
+                                        className={`mini-pill ${toneClass(item.tone === "warn" ? "warn" : "neutral")}`}
+                                        onClick={() => setActiveDrawer(item.tone === "warn" ? "queue" : "proof")}
+                                        type="button"
+                                      >
+                                        {item.tone === "warn" ? "Resolve block" : "Review proof"}
+                                      </button>
+                                    </div>
+                                  </article>
+                                ))}
+                              </div>
+                            ) : null}
                           </>
                         ) : (
                           <>

@@ -245,6 +245,36 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".monitor-loop-card", styles)
         self.assertIn(".monitor-loop-strip", styles)
 
+    def test_builder_surfaces_subagent_command_center(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        model = MISSION_MODEL.read_text(encoding="utf-8")
+
+        for fragment in [
+            "deriveSubagentOrchestrationStudio",
+            "Subagent command center",
+            "delegatedLaneTone",
+            "configuredWorkers",
+            "mergePolicy",
+            "worker_merge_events",
+            "Resolve blocked delegated lanes",
+        ]:
+            self.assertIn(fragment, model)
+        for fragment in [
+            "subagentOrchestrationStudio",
+            "subagent-command-panel",
+            "subagent-command-strip",
+            "subagent-board-stack",
+            "Inspect runtime",
+            "Resolve lane blocks",
+            "Verify merge proof",
+            "Delegated lane roster",
+        ]:
+            self.assertIn(fragment, shell)
+        self.assertIn(".subagent-lane-card", styles)
+        self.assertIn(".subagent-command-strip", styles)
+        self.assertIn(".subagent-board-card", styles)
+
     def test_control_room_surfaces_live_agent_artifacts_compartments_and_deploy_readiness(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
