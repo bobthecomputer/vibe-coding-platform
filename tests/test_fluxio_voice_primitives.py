@@ -106,6 +106,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             """
             import {
               appendTranscriptSegment,
+              buildVoiceRepairQueue,
               buildTranscriptSnapshot,
               createVoiceTranscriptState,
               replaceTranscriptSegment,
@@ -124,6 +125,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               ambiguityReasons: ['message and massage sound similar'],
             });
             const before = buildTranscriptSnapshot(state);
+            const repairQueue = buildVoiceRepairQueue(before);
             state = replaceTranscriptSegment(state, 'phrase', {
               text: 'send message',
               reason: 'operator correction',
@@ -132,6 +134,8 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             console.log(JSON.stringify({
               needsReviewBefore: transcriptNeedsReview({ ...state, interim: { text: 'send mess', confidence: 0.9 } }),
               ambiguousCount: before.ambiguousSegments.length,
+              repairLabel: repairQueue.label,
+              nextRepair: repairQueue.nextSegmentText,
               correctionCount: after.correctionCount,
               correctedFrom: after.segments[0].correctedFrom,
               checkIds: after.qualityChecks.map(check => check.id),
@@ -141,6 +145,8 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
 
         self.assertTrue(payload["needsReviewBefore"])
         self.assertEqual(payload["ambiguousCount"], 1)
+        self.assertEqual(payload["repairLabel"], "Repair before send")
+        self.assertEqual(payload["nextRepair"], "send massage")
         self.assertEqual(payload["correctionCount"], 1)
         self.assertEqual(payload["correctedFrom"], "send massage")
         self.assertIn("ambiguity", payload["checkIds"])

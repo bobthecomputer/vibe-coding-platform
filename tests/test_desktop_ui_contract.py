@@ -398,6 +398,9 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Capture stopped by", voice_panel)
         self.assertIn("Voice capture diagnostics", voice_panel)
         self.assertIn("Live capture not wired", voice_panel)
+        self.assertIn("Dictation repair queue", voice_panel)
+        self.assertIn("Repair queue", voice_panel)
+        self.assertIn("Next repair", voice_panel)
         self.assertIn("Mark reviewed", voice_panel)
         self.assertIn("correctTranscriptSegment", voice_panel)
         self.assertIn("describeVoiceCaptureStatus", voice_controller)
@@ -415,6 +418,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("__FLUXIO_VOICE_BRIDGE__", voice_adapters)
         self.assertIn("createVoiceCaptureAdapter", voice_index)
         self.assertIn(".fluxio-voice-capture-diagnostics", voice_css)
+        self.assertIn(".fluxio-voice-repair-queue", voice_css)
+        self.assertIn(".fluxio-voice-repair-counts", voice_css)
         self.assertIn(".fluxio-voice-send-gate", voice_css)
         self.assertIn(".fluxio-voice-correction-actions", voice_css)
 

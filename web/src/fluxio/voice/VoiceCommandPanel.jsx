@@ -46,6 +46,17 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
     source: capture.source || capture.label,
   };
   const startDisabled = !capture.canStartLiveCapture && !voice.listening;
+  const repairQueue = voice.transcript.repairQueue || {
+    status: voice.transcript.reviewRequired ? "review" : voice.transcript.combinedText ? "ready" : "empty",
+    label: voice.transcript.reviewRequired ? "Repair before send" : "Ready after review",
+    summary: voice.transcript.reviewRequired
+      ? "Review highlighted dictation before running a command."
+      : "No dictation repair is queued.",
+    lowConfidenceCount: voice.transcript.lowConfidenceSegments?.length || 0,
+    ambiguousCount: voice.transcript.ambiguousSegments?.length || 0,
+    interimActive: Boolean(voice.transcript.interimText),
+    nextSegmentText: voice.transcript.lowConfidenceSegments?.[0]?.text || voice.transcript.ambiguousSegments?.[0]?.text || "",
+  };
 
   return (
     <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
@@ -184,6 +195,24 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
             {check.label}: {check.status}
           </span>
         ))}
+      </div>
+
+      <div className="fluxio-voice-repair-queue" data-status={repairQueue.status} aria-label="Dictation repair queue">
+        <div>
+          <span>Repair queue</span>
+          <strong>{repairQueue.label}</strong>
+          <p>{repairQueue.summary}</p>
+        </div>
+        <div className="fluxio-voice-repair-counts">
+          <span>Low confidence: {repairQueue.lowConfidenceCount}</span>
+          <span>Ambiguous: {repairQueue.ambiguousCount}</span>
+          <span>Interim: {repairQueue.interimActive ? "active" : "clear"}</span>
+        </div>
+        {repairQueue.nextSegmentText ? (
+          <p className="fluxio-voice-next-repair">
+            Next repair: {repairQueue.nextSegmentText}
+          </p>
+        ) : null}
       </div>
 
       <div className="fluxio-voice-actions">

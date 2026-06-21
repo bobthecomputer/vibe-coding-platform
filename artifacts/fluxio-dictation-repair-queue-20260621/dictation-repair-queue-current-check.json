@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-06-21T03:08:56.041872+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=voice",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-dictation-repair-queue-20260621\\dictation-repair-queue-current.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\fluxio-dictation-repair-queue-20260621\\dictation-repair-queue-current.html",
+  "expectedFragments": [
+    "Dictation review",
+    "Repair queue",
+    "Low confidence:",
+    "Ambiguous:",
+    "Pre-send gate"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 2200,
+    "sampleCount": 8280,
+    "uniqueSampleColors": 400,
+    "averageLuma": 28.08,
+    "nonBlank": true
+  },
+  "passed": true
+}

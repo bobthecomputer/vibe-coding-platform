@@ -238,6 +238,37 @@ export function buildTranscriptQualityChecks(state) {
   ];
 }
 
+export function buildVoiceRepairQueue(snapshot = {}) {
+  const lowConfidence = Array.isArray(snapshot.lowConfidenceSegments) ? snapshot.lowConfidenceSegments : [];
+  const ambiguous = Array.isArray(snapshot.ambiguousSegments) ? snapshot.ambiguousSegments : [];
+  const interim = snapshot.interim || (snapshot.interimText ? { text: snapshot.interimText } : null);
+  const reviewItems = [
+    ...lowConfidence.map(segment => ({ ...segment, repairKind: "low_confidence" })),
+    ...ambiguous
+      .filter(segment => !lowConfidence.some(item => item.id === segment.id))
+      .map(segment => ({ ...segment, repairKind: "ambiguity" })),
+  ];
+  const nextItem = reviewItems[0] || null;
+  const blocked = Boolean(interim?.text || reviewItems.length > 0);
+  return {
+    status: blocked ? "review" : snapshot.combinedText ? "ready" : "empty",
+    label: blocked ? "Repair before send" : snapshot.combinedText ? "Ready after review" : "No dictation yet",
+    summary: interim?.text
+      ? "Wait for final text or stop capture before running a command."
+      : reviewItems.length > 0
+        ? `${reviewItems.length} dictated segment${reviewItems.length === 1 ? "" : "s"} need review.`
+        : snapshot.combinedText
+          ? "Transcript can be parsed after operator review."
+          : "Dictate, paste, or connect a voice adapter.",
+    lowConfidenceCount: lowConfidence.length,
+    ambiguousCount: ambiguous.length,
+    interimActive: Boolean(interim?.text),
+    nextSegmentId: nextItem?.id || "",
+    nextSegmentText: nextItem?.text || interim?.text || "",
+    nextRepairKind: nextItem?.repairKind || (interim?.text ? "interim" : ""),
+  };
+}
+
 export function buildTranscriptSnapshot(state) {
   const current = state || createVoiceTranscriptState();
   const segments = Array.isArray(current.segments) ? current.segments : [];
@@ -278,7 +309,7 @@ export function buildTranscriptSnapshot(state) {
     warnings.push("Listening result is still changing. Wait for final text before launching an action.");
   }
 
-  return {
+  const snapshot = {
     segments,
     interim: current.interim,
     finalText,
@@ -294,6 +325,10 @@ export function buildTranscriptSnapshot(state) {
     reviewRequired: qualityChecks.some(check => check.status === "review" || check.status === "waiting"),
     isEmpty: !combinedText,
     revision: current.revision || 0,
+  };
+  return {
+    ...snapshot,
+    repairQueue: buildVoiceRepairQueue(snapshot),
   };
 }
 
