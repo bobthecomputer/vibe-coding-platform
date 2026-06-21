@@ -377,6 +377,10 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               chromaKey: draft.chromaKey,
               payloadChromaKey: draft.payload.chromaKey,
               reviewChromaKey: review.chromaKey,
+              matteChecklist: review.chromaKey.qaChecklist.map(item => [item.id, item.status]),
+              matteStrength: review.chromaKey.matteStrength,
+              edgeRisk: review.chromaKey.edgeRisk,
+              exportStatus: review.chromaKey.exportStatus,
               artifactIds: draft.proofArtifacts.map(item => item.id),
               openAiRouteStatus,
             }));
@@ -395,6 +399,11 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["chromaKey"]["keyColor"], "#00ff66")
         self.assertEqual(payload["payloadChromaKey"]["tolerance"], 28)
         self.assertIn("spill cleanup", payload["reviewChromaKey"]["providerInstruction"])
+        self.assertGreater(payload["matteStrength"], 0)
+        self.assertEqual(payload["edgeRisk"], "controlled")
+        self.assertIn("Transparent export plan ready", payload["exportStatus"])
+        self.assertIn(["comparison-artifact", "planned"], payload["matteChecklist"])
+        self.assertIn(["spill-cleanup", "ready"], payload["matteChecklist"])
         self.assertEqual(payload["openAiRouteStatus"]["model"], "gpt-image-2")
         self.assertEqual(payload["openAiRouteStatus"]["localStatus"], "connector_required")
         self.assertFalse(payload["openAiRouteStatus"]["runActionAvailable"])

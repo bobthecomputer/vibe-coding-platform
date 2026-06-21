@@ -146,6 +146,53 @@ export function buildChromaKeyProof(project = {}) {
   const edgeFeather = Math.max(0, Math.min(64, Number(chromaKey.edgeFeather) || 0));
   const enabled = Boolean(chromaKey.enabled);
   const ready = enabled && hasColor && tolerance > 0;
+  const replacementIntent = String(chromaKey.replacementIntent || "");
+  const hasReplacementIntent = replacementIntent.trim().length > 0;
+  const matteStrength = ready ? Math.min(96, Math.max(8, Math.round(tolerance * 1.45 + spillCleanup * 0.28))) : 0;
+  const edgeRisk =
+    !ready ? "blocked" :
+      edgeFeather < 6 ? "hard_edge_risk" :
+        spillCleanup < 24 ? "spill_risk" :
+          tolerance > 68 ? "over_key_risk" :
+            "controlled";
+  const qaChecklist = [
+    {
+      id: "key-color-sampled",
+      label: "Key color sampled",
+      status: enabled && hasColor ? "ready" : "blocked",
+      detail: hasColor ? `${keyColor} selected for the matte key.` : "Choose a valid six-digit key color.",
+    },
+    {
+      id: "tolerance-window",
+      label: "Tolerance window",
+      status: tolerance > 0 ? "ready" : "blocked",
+      detail: tolerance > 0 ? `${tolerance}% key tolerance recorded.` : "Set tolerance above zero before handoff.",
+    },
+    {
+      id: "spill-cleanup",
+      label: "Spill cleanup",
+      status: spillCleanup > 0 ? "ready" : "planned",
+      detail: spillCleanup > 0 ? `${spillCleanup}% suppression planned for green edge spill.` : "No spill suppression is planned.",
+    },
+    {
+      id: "edge-feather",
+      label: "Edge feather",
+      status: edgeFeather > 0 ? "ready" : "planned",
+      detail: edgeFeather > 0 ? `${edgeFeather}px soft edge planned.` : "No matte edge softening is planned.",
+    },
+    {
+      id: "background-replacement",
+      label: "Background replacement",
+      status: hasReplacementIntent ? "ready" : "empty",
+      detail: hasReplacementIntent ? replacementIntent : "No transparent/export replacement intent recorded.",
+    },
+    {
+      id: "comparison-artifact",
+      label: "Comparison artifact",
+      status: "planned",
+      detail: "Attach before/after image, provider receipt, and artifact hash after a real run.",
+    },
+  ];
   return {
     enabled,
     ready,
@@ -154,8 +201,16 @@ export function buildChromaKeyProof(project = {}) {
     spillCleanup,
     edgeFeather,
     matteMode: String(chromaKey.matteMode || "remove_background"),
-    replacementIntent: String(chromaKey.replacementIntent || ""),
+    replacementIntent,
     proofLabels: Array.isArray(chromaKey.proofLabels) ? chromaKey.proofLabels : [],
+    matteStrength,
+    edgeRisk,
+    qaChecklist,
+    exportStatus: ready
+      ? hasReplacementIntent
+        ? "Transparent export plan ready; provider proof still required."
+        : "Matte settings are ready, but replacement/export intent is missing."
+      : "Matte proof cannot be handed off until key color and tolerance are valid.",
     providerInstruction: enabled
       ? `Use chroma key ${keyColor || "unset"} with tolerance ${tolerance}, spill cleanup ${spillCleanup}, and ${edgeFeather}px edge feather before replacement.`
       : "Chroma-key matte preparation is disabled for this draft.",

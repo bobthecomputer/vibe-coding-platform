@@ -505,6 +505,224 @@
   line-height: 1.35;
 }
 
+.image-studio-chroma-diagnostics {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.48fr) minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+}
+
+.image-studio-matte-preview {
+  position: relative;
+  display: grid;
+  place-items: end center;
+  min-height: 132px;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    radial-gradient(circle at 50% 42%, var(--image-studio-key-color, #00ff66), transparent var(--image-studio-matte-strength, 42%)),
+    #050707;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0,
+    0 0,
+    0 0;
+  background-size:
+    16px 16px,
+    16px 16px,
+    16px 16px,
+    16px 16px,
+    auto,
+    auto;
+  padding: 9px;
+}
+
+.image-studio-matte-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.46) 48%, transparent 58%);
+  opacity: 0.38;
+  transform: translateX(-120%);
+  animation: image-studio-white-line-scan 2600ms ease-in-out infinite;
+}
+
+.image-studio-matte-subject {
+  position: absolute;
+  top: 25%;
+  left: 50%;
+  width: 48px;
+  height: 58px;
+  border-radius: 18px 18px 22px 22px;
+  background:
+    radial-gradient(circle at 38% 24%, rgba(255, 255, 255, 0.86), transparent 22%),
+    linear-gradient(145deg, rgba(238, 242, 236, 0.88), rgba(214, 168, 79, 0.36));
+  box-shadow:
+    0 0 0 var(--image-studio-matte-feather, 12px) rgba(255, 255, 255, 0.08),
+    0 16px 28px rgba(0, 0, 0, 0.32);
+  transform: translateX(-50%) rotate(-4deg);
+}
+
+.image-studio-matte-cutline {
+  position: absolute;
+  top: 22%;
+  left: calc(50% + 32px);
+  width: 1px;
+  height: 72px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.46);
+}
+
+.image-studio-matte-preview b {
+  z-index: 1;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.46);
+  color: rgba(238, 242, 236, 0.9);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 5px 7px;
+  text-align: center;
+}
+
+.image-studio-chroma-checklist {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(0, 255, 102, 0.13);
+  border-radius: 8px;
+  background: rgba(238, 242, 236, 0.028);
+  padding: 9px;
+}
+
+.image-studio-chroma-checklist strong,
+.image-studio-chroma-checklist span,
+.image-studio-chroma-checklist small {
+  overflow-wrap: anywhere;
+}
+
+.image-studio-chroma-checklist > div {
+  display: grid;
+  gap: 3px;
+}
+
+.image-studio-chroma-checklist > div span,
+.image-studio-chroma-checklist small {
+  color: var(--control-muted, #aab0a8);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.image-studio-chroma-checklist ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-studio-chroma-checklist li {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 0.82fr);
+  gap: 2px 7px;
+  min-width: 0;
+}
+
+.image-studio-chroma-checklist li > small {
+  grid-column: 1 / -1;
+}
+
+.image-studio-local-matte-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: end;
+  gap: 8px;
+}
+
+.image-studio-local-matte-controls button {
+  align-self: end;
+}
+
+.image-studio-local-matte-proof {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(238, 242, 236, 0.12);
+  border-radius: 8px;
+  background: rgba(238, 242, 236, 0.028);
+  padding: 9px;
+}
+
+.image-studio-local-matte-proof figure {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+}
+
+.image-studio-local-matte-proof img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 7px;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.08) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.08) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.08) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.08) 75%),
+    #050707;
+  background-position: 0 0, 0 7px, 7px -7px, -7px 0, 0 0;
+  background-size: 14px 14px, 14px 14px, 14px 14px, 14px 14px, auto;
+}
+
+.image-studio-local-matte-proof figcaption {
+  color: var(--control-muted, #aab0a8);
+  font-size: 11px;
+}
+
+.image-studio-local-matte-proof dl {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.image-studio-local-matte-proof dl div {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 7px;
+}
+
+.image-studio-local-matte-proof dt {
+  color: var(--control-muted, #aab0a8);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.image-studio-local-matte-proof dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--control-text, #eef2ec);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .image-studio-reference-list,
 .image-studio-history-list,
 .image-studio-generated-artifact-list,
@@ -767,6 +985,17 @@
   }
 }
 
+@keyframes image-studio-white-line-scan {
+  0%,
+  38% {
+    transform: translateX(-120%);
+  }
+  78%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+
 @media (max-width: 1180px) {
   .image-studio-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -809,6 +1038,16 @@
 
   .image-studio-reference-row,
   .image-studio-history-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .image-studio-chroma-diagnostics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .image-studio-local-matte-controls,
+  .image-studio-local-matte-proof,
+  .image-studio-local-matte-proof dl {
     grid-template-columns: minmax(0, 1fr);
   }
 }

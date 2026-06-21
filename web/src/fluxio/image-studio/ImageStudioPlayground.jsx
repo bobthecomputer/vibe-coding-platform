@@ -38,8 +38,21 @@ import "./image-studio.css";
 const EMPTY_SESSION = {
   routeId: "openai-gpt-image-2",
   maskMode: "replace",
+  matteSourceId: "",
   referenceAssets: [],
 };
+
+const SYNTHETIC_CHROMA_SAMPLE_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240">
+  <rect width="320" height="240" fill="#00ff66"/>
+  <ellipse cx="160" cy="180" rx="76" ry="14" fill="#04351e" opacity=".38"/>
+  <rect x="112" y="78" width="96" height="108" rx="30" fill="#eef2ec"/>
+  <circle cx="148" cy="118" r="8" fill="#18201d"/>
+  <circle cx="184" cy="118" r="8" fill="#18201d"/>
+  <path d="M138 146c14 13 32 13 46 0" fill="none" stroke="#18201d" stroke-width="8" stroke-linecap="round"/>
+  <path d="M118 92c18-30 70-34 90 0" fill="#d6a84f" opacity=".82"/>
+</svg>
+`)}`;
 
 function loadStudioSession() {
   if (typeof window === "undefined") return EMPTY_SESSION;
@@ -78,6 +91,157 @@ function saveStudioSession(session) {
 
 function fieldId(name) {
   return `image-studio-${name}`;
+}
+
+function artifactBackendBaseUrl() {
+  const configured =
+    import.meta.env?.VITE_FLUXIO_BACKEND_URL ||
+    globalThis.window?.__FLUXIO_BACKEND_URL__ ||
+    "";
+  return String(configured || "").trim().replace(/\/$/, "");
+}
+
+function resolveImageStudioArtifactUrl(value) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  if (/^(data:|blob:|https?:\/\/)/i.test(source)) return source;
+  if (source.startsWith("/api/artifact")) return `${artifactBackendBaseUrl()}${source}`;
+  const params = new URLSearchParams({ path: source });
+  return `${artifactBackendBaseUrl()}/api/artifact?${params.toString()}`;
+}
+
+function imageUrlForRecord(record) {
+  if (typeof record === "string") return resolveImageStudioArtifactUrl(record);
+  return resolveImageStudioArtifactUrl(
+    record?.artifactUrl ||
+      record?.servedUrl ||
+      record?.previewUrl ||
+      record?.generatedPreview ||
+      record?.previewSrc ||
+      record?.outputPreview ||
+      record?.imagePath ||
+      record?.outputArtifactPath ||
+      record?.artifactPath ||
+      record?.path ||
+      "",
+  );
+}
+
+function imageLabelForRecord(record, fallback = "image artifact") {
+  if (typeof record === "string") {
+    return record.split(/[\\/]/).filter(Boolean).pop() || fallback;
+  }
+  return (
+    record?.label ||
+    record?.title ||
+    record?.filename ||
+    record?.artifactId ||
+    record?.requestId ||
+    imageLabelForRecord(record?.artifactPath || record?.path || "", fallback)
+  );
+}
+
+function parseHexColor(value) {
+  const match = String(value || "").trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!match) return null;
+  const hex = match[1];
+  return {
+    r: Number.parseInt(hex.slice(0, 2), 16),
+    g: Number.parseInt(hex.slice(2, 4), 16),
+    b: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function loadImageForCanvas(src) {
+  return new Promise((resolve, reject) => {
+    if (!src) {
+      reject(new Error("No image source selected."));
+      return;
+    }
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("The selected image could not be loaded for local matte proof."));
+    if (!String(src).startsWith("blob:") && !String(src).startsWith("data:")) {
+      image.crossOrigin = "anonymous";
+    }
+    image.src = src;
+  });
+}
+
+function renderChromaMattePreview({ image, proof, source }) {
+  const key = parseHexColor(proof?.keyColor);
+  if (!key || !proof?.ready) {
+    throw new Error("Matte settings need a valid key color and non-zero tolerance.");
+  }
+  const maxSide = 420;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const canvas = document.createElement("canvas");
+  const maskCanvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+  if (!context || !maskContext) {
+    throw new Error("Canvas matte preview is unavailable in this browser.");
+  }
+  context.drawImage(image, 0, 0, width, height);
+  const frame = context.getImageData(0, 0, width, height);
+  const mask = maskContext.createImageData(width, height);
+  const tolerance = Math.max(1, Math.min(100, Number(proof.tolerance) || 0));
+  const threshold = 441.7 * (tolerance / 100);
+  const softThreshold = threshold + Math.max(4, Number(proof.edgeFeather) || 0) * 1.9;
+  const spillCleanup = Math.max(0, Math.min(1, Number(proof.spillCleanup) / 100 || 0));
+  let removedPixels = 0;
+  let softPixels = 0;
+  for (let index = 0; index < frame.data.length; index += 4) {
+    const red = frame.data[index];
+    const green = frame.data[index + 1];
+    const blue = frame.data[index + 2];
+    const distance = Math.hypot(red - key.r, green - key.g, blue - key.b);
+    let alpha = 255;
+    if (distance <= threshold) {
+      alpha = 0;
+      removedPixels += 1;
+    } else if (distance <= softThreshold) {
+      alpha = Math.round(255 * ((distance - threshold) / Math.max(1, softThreshold - threshold)));
+      softPixels += 1;
+    }
+    if (spillCleanup > 0 && green > red * 1.08 && green > blue * 1.08) {
+      const average = Math.round((red + blue) / 2);
+      frame.data[index + 1] = Math.round(green * (1 - spillCleanup) + average * spillCleanup);
+    }
+    frame.data[index + 3] = Math.min(frame.data[index + 3], alpha);
+    mask.data[index] = alpha;
+    mask.data[index + 1] = alpha;
+    mask.data[index + 2] = alpha;
+    mask.data[index + 3] = 255;
+  }
+  context.putImageData(frame, 0, 0);
+  maskContext.putImageData(mask, 0, 0);
+  const totalPixels = width * height;
+  return {
+    id: `matte-proof-${Date.now().toString(36)}`,
+    createdAt: new Date().toISOString(),
+    sourceId: source.id,
+    sourceLabel: source.label,
+    outputUrl: canvas.toDataURL("image/png"),
+    maskUrl: maskCanvas.toDataURL("image/png"),
+    width,
+    height,
+    removedPixels,
+    softPixels,
+    totalPixels,
+    removedPercent: totalPixels ? Math.round((removedPixels / totalPixels) * 1000) / 10 : 0,
+    softPercent: totalPixels ? Math.round((softPixels / totalPixels) * 1000) / 10 : 0,
+    keyColor: proof.keyColor,
+    tolerance: proof.tolerance,
+    spillCleanup: proof.spillCleanup,
+    edgeFeather: proof.edgeFeather,
+  };
 }
 
 function StatusMark({ status }) {
@@ -193,9 +357,9 @@ function HistoryRow({ item }) {
 }
 
 function GeneratedArtifactCard({ artifact }) {
-  const imageUrl = artifact?.servedUrl || artifact?.previewUrl || artifact?.imageUrl || "";
+  const imageUrl = imageUrlForRecord(artifact);
   const manifestUrl = artifact?.manifestUrl || "";
-  const label = artifact?.title || artifact?.label || artifact?.filename || artifact?.artifactId || "Generated image artifact";
+  const label = imageLabelForRecord(artifact, "Generated image artifact");
   const source = artifact?.provider || artifact?.source || artifact?.route || "served artifact";
   return (
     <article className="image-studio-generated-artifact">
@@ -245,10 +409,83 @@ function ProofReviewSummary({ review }) {
   );
 }
 
+function ChromaMatteDiagnostics({ proof }) {
+  if (!proof) return null;
+  const checklist = Array.isArray(proof.qaChecklist) ? proof.qaChecklist : [];
+  return (
+    <div className="image-studio-chroma-diagnostics" aria-label="Chroma-key matte diagnostics">
+      <div
+        className="image-studio-matte-preview"
+        style={{
+          "--image-studio-key-color": proof.keyColor || "#00ff66",
+          "--image-studio-matte-strength": `${Math.max(8, Number(proof.matteStrength) || 0)}%`,
+          "--image-studio-matte-feather": `${Math.min(28, Math.max(2, Number(proof.edgeFeather) || 0))}px`,
+        }}
+      >
+        <span className="image-studio-matte-subject" aria-hidden="true" />
+        <span className="image-studio-matte-cutline" aria-hidden="true" />
+        <b>Configuration estimate</b>
+      </div>
+      <div className="image-studio-chroma-checklist">
+        <div>
+          <strong>Matte QA checklist</strong>
+          <span>{proof.exportStatus}</span>
+        </div>
+        <ul>
+          {checklist.map(item => (
+            <li key={item.id}>
+              <StatusMark status={item.status} />
+              <span>{item.label}</span>
+              <small>{item.detail}</small>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function ChromaMattePreviewPanel({ preview }) {
+  if (!preview) {
+    return (
+      <p className="image-studio-empty">
+        Select an attached or served image, then preview the matte to create local pixel proof.
+      </p>
+    );
+  }
+  return (
+    <div className="image-studio-local-matte-proof" aria-label="Local matte proof preview">
+      <figure>
+        <img src={preview.outputUrl} alt="Local chroma-key transparent preview" />
+        <figcaption>Transparent preview</figcaption>
+      </figure>
+      <figure>
+        <img src={preview.maskUrl} alt="Local chroma-key black and white matte mask" />
+        <figcaption>Matte mask</figcaption>
+      </figure>
+      <dl>
+        <div>
+          <dt>Removed</dt>
+          <dd>{preview.removedPercent}%</dd>
+        </div>
+        <div>
+          <dt>Soft edge</dt>
+          <dd>{preview.softPercent}%</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{preview.sourceLabel}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
 export function ImageStudioPlayground({ generatedArtifacts = [], initialProject, onRequestDraft }) {
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
   const [draft, setDraft] = useState(null);
+  const [mattePreview, setMattePreview] = useState(null);
   const [announcement, setAnnouncement] = useState("Image studio ready.");
   const fileInputRef = useRef(null);
   const referenceAssetsRef = useRef([]);
@@ -260,7 +497,60 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
     [draft, project, route, session.referenceAssets],
   );
   const routeAvailability = proofReview.imageGenerationRouteStatus;
+  const chromaProof = proofReview.chromaKey;
   const servedGeneratedArtifacts = Array.isArray(generatedArtifacts) ? generatedArtifacts : [];
+  const matteSources = useMemo(() => {
+    const referenceSources = (session.referenceAssets || [])
+      .filter(asset => asset.previewUrl)
+      .map(asset => ({
+        id: `ref:${asset.id}`,
+        label: asset.name || "Reference image",
+        src: asset.previewUrl,
+        type: "reference",
+      }));
+    const artifactSources = servedGeneratedArtifacts
+      .map((artifact, index) => ({
+        id: `artifact:${artifact?.artifactId || artifact?.path || index}`,
+        label: imageLabelForRecord(artifact, `Served artifact ${index + 1}`),
+        src: imageUrlForRecord(artifact),
+        type: "artifact",
+      }))
+      .filter(item => item.src);
+    const historySources = (project.history || [])
+      .map((item, index) => ({
+        id: `history:${item?.id || item?.requestId || index}`,
+        label: imageLabelForRecord(item, `History artifact ${index + 1}`),
+        src: imageUrlForRecord(item),
+        type: "history",
+      }))
+      .filter(item => item.src);
+    const designSources = (project.designReferences || [])
+      .filter(item => item?.kind === "generated-image")
+      .map((item, index) => ({
+        id: `reference-artifact:${item?.artifactId || item?.id || index}`,
+        label: imageLabelForRecord(item, `Design reference ${index + 1}`),
+        src: imageUrlForRecord(item),
+        type: "design-reference",
+      }))
+      .filter(item => item.src)
+      .sort((a, b) => {
+        const aCurrent = a.src.includes("design_references") ? 1 : 0;
+        const bCurrent = b.src.includes("design_references") ? 1 : 0;
+        return bCurrent - aCurrent;
+      });
+    const deduped = new Map();
+    const sampleSource = {
+      id: "synthetic:green-screen-sample",
+      label: "Synthetic green-screen sample",
+      src: SYNTHETIC_CHROMA_SAMPLE_URL,
+      type: "synthetic-sample",
+    };
+    for (const source of [sampleSource, ...referenceSources, ...artifactSources, ...designSources, ...historySources]) {
+      if (!deduped.has(source.src)) deduped.set(source.src, source);
+    }
+    return [...deduped.values()].slice(0, 12);
+  }, [project.designReferences, project.history, servedGeneratedArtifacts, session.referenceAssets]);
+  const selectedMatteSource = matteSources.find(item => item.id === session.matteSourceId) || matteSources[0] || null;
 
   useEffect(() => {
     saveImageProject(project);
@@ -329,6 +619,7 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
         [field]: field === "enabled" ? Boolean(value) : field === "keyColor" || field === "replacementIntent" ? value : Number(value),
       },
     }));
+    setMattePreview(null);
   }
 
   function handleFilesSelected(event) {
@@ -382,6 +673,22 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
     setDraft(nextDraft);
     onRequestDraft?.(nextDraft);
     setAnnouncement("Provider request draft prepared. No image provider was called.");
+  }
+
+  async function previewLocalMatte() {
+    if (!selectedMatteSource) {
+      setAnnouncement("Attach a reference image or use a served artifact before previewing the matte.");
+      return;
+    }
+    try {
+      const image = await loadImageForCanvas(selectedMatteSource.src);
+      const preview = renderChromaMattePreview({ image, proof: chromaProof, source: selectedMatteSource });
+      setMattePreview(preview);
+      setAnnouncement(`Local matte proof ready for ${selectedMatteSource.label}.`);
+    } catch (error) {
+      setMattePreview(null);
+      setAnnouncement(error instanceof Error ? error.message : "Local matte proof failed.");
+    }
   }
 
   async function copyDraftJson() {
@@ -570,6 +877,29 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
                 <span>{proofReview.chromaKey.providerInstruction}</span>
               </div>
             </div>
+            <ChromaMatteDiagnostics proof={chromaProof} />
+            <div className="image-studio-local-matte-controls" aria-label="Local chroma-key proof controls">
+              <label htmlFor={fieldId("matte-source")}>Proof source</label>
+              <select
+                id={fieldId("matte-source")}
+                value={selectedMatteSource?.id || ""}
+                onChange={event => {
+                  setSession(current => ({ ...current, matteSourceId: event.target.value }));
+                  setMattePreview(null);
+                }}
+              >
+                {matteSources.length === 0 ? <option value="">Attach an image first</option> : null}
+                {matteSources.map(source => (
+                  <option key={source.id} value={source.id}>
+                    {source.label}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="image-studio-secondary-action" onClick={previewLocalMatte} disabled={!selectedMatteSource}>
+                Preview matte
+              </button>
+            </div>
+            <ChromaMattePreviewPanel preview={mattePreview} />
           </section>
         </aside>
 

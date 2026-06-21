@@ -15,9 +15,10 @@ The component persists its image project through `imagePlaygroundState.js` and s
 ## Scope
 
 - Builds prompt, provider route, reference asset, mask, layer, history, and proof artifact state.
+- Runs local browser-side chroma-key matte previews against attached images, served artifacts, or the clearly labeled synthetic green-screen sample so operators can inspect transparent output, mask output, removed pixels, and soft-edge coverage before provider handoff.
 - Produces a provider request draft through `buildImageStudioRequestDraft`.
-- Produces `proofReview` metadata that reports draft validity, preview layer counts, mask coverage, annotation counts, reference counts, and real artifact-history coverage.
+- Produces `proofReview` metadata that reports draft validity, preview layer counts, mask coverage, annotation counts, reference counts, chroma QA checklist, and real artifact-history coverage.
 - Renders annotation pins and rectangles only when they exist in project state; it does not invent proof marks.
-- Does not call an image provider, create fake generated images, or store secrets.
+- Does not call an image provider, create fake generated images, treat local matte previews as provider output, or store secrets.
 - Keeps provider execution blocked until a real connector supplies the run action and artifact receipt.
 - Tracks the OpenAI `gpt-image-2` route as connector-required. Official source links are stored in route metadata, but the local UI still reports draft handoff only until a real provider receipt, output manifest, and artifact hash exist.
