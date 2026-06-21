@@ -209,6 +209,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             } from './web/src/fluxio/voice/voiceCaptureAdapters.js';
 
             const browserSegments = [];
+            const browserStops = [];
             class FakeSpeechRecognition {
               constructor() {
                 FakeSpeechRecognition.instance = this;
@@ -234,7 +235,9 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             await browserAdapter.start({
               onInterim: segment => browserSegments.push({ kind: 'interim', ...segment }),
               onFinal: segment => browserSegments.push({ kind: 'final', ...segment }),
+              onStop: event => browserStops.push(event),
             });
+            FakeSpeechRecognition.instance.onend();
             await browserAdapter.stop();
 
             const bridgeSegments = [];
@@ -276,6 +279,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             console.log(JSON.stringify({
               browserKinds: browserSegments.map(item => item.kind),
               browserFinal: browserSegments.find(item => item.kind === 'final'),
+              browserStops,
               browserStopped: FakeSpeechRecognition.instance.stopped,
               bridgeKinds: bridgeSegments.map(item => item.kind),
               bridgeFinal: bridgeSegments.find(item => item.kind === 'final'),
@@ -288,6 +292,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["browserKinds"], ["interim", "final"])
         self.assertEqual(payload["browserFinal"]["text"], "open settings")
         self.assertEqual(payload["browserFinal"]["alternatives"][0]["text"], "open setting")
+        self.assertEqual(payload["browserStops"][0]["source"], "browser-speech-api")
         self.assertTrue(payload["browserStopped"])
         self.assertEqual(payload["bridgeKinds"], ["interim", "final"])
         self.assertEqual(payload["bridgeFinal"]["text"], "show proof")

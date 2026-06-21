@@ -9748,6 +9748,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (action === "voice.stop") {
+        return;
+      }
+
       if (action === "voice.clearTranscript") {
         pushToast("Voice transcript cleared.", "info");
         return;

@@ -31,6 +31,12 @@ function createInitialState(options = {}) {
     transcript,
     listening: false,
     error: "",
+    captureLifecycle: {
+      status: "idle",
+      label: "Idle",
+      detail: "Capture has not started.",
+      source: support.label,
+    },
     sendGuard: {
       status: "idle",
       reason: "no_command",
@@ -53,11 +59,36 @@ function reducer(state, action) {
     };
   }
   if (action.type === "listening") {
+    const listening = Boolean(action.listening);
     return {
       ...state,
-      listening: Boolean(action.listening),
+      listening,
       error: "",
-      status: getVoiceStatusCopy({ ...state, listening: Boolean(action.listening), error: "" }),
+      captureLifecycle: listening
+        ? {
+            status: "listening",
+            label: "Listening",
+            detail: "Live voice capture is active.",
+            source: action.source || state.captureLifecycle?.source || state.support.label,
+          }
+        : state.captureLifecycle,
+      status: getVoiceStatusCopy({ ...state, listening, error: "" }),
+    };
+  }
+  if (action.type === "capture.stopped") {
+    const source = action.event?.source || state.captureLifecycle?.source || state.support.label;
+    return {
+      ...state,
+      listening: false,
+      error: "",
+      captureLifecycle: {
+        status: "stopped",
+        label: "Capture stopped",
+        detail: action.event?.detail || "The active voice capture session ended.",
+        source,
+        stoppedAt: action.event?.stoppedAt || new Date().toISOString(),
+      },
+      status: getVoiceStatusCopy({ ...state, listening: false, error: "" }),
     };
   }
   if (action.type === "transcript.append") {
@@ -221,9 +252,18 @@ export function useVoiceInteractionController({
       return false;
     }
     try {
+      dispatch({ type: "listening", listening: true, source: activeAdapter.source || activeAdapter.name });
       await activeAdapter.start({
         onInterim: segment => dispatch({ type: "transcript.append", segment: { ...segment, isFinal: false } }),
         onFinal: segment => dispatch({ type: "transcript.append", segment: { ...segment, isFinal: true } }),
+        onStop: event =>
+          dispatch({
+            type: "capture.stopped",
+            event: {
+              source: event?.source || activeAdapter.source || activeAdapter.name,
+              detail: event?.detail || "The speech adapter reported that capture ended.",
+            },
+          }),
         onError: error =>
           dispatch({
             type: "error",
@@ -231,7 +271,6 @@ export function useVoiceInteractionController({
             message: error?.message || buildVoiceErrorRecovery(error?.code || "unknown"),
           }),
       });
-      dispatch({ type: "listening", listening: true });
       return true;
     } catch (caught) {
       dispatch({
@@ -248,7 +287,14 @@ export function useVoiceInteractionController({
       if (activeAdapter?.stop) {
         await activeAdapter.stop();
       }
-      dispatch({ type: "listening", listening: false });
+      activeAdapterRef.current = null;
+      dispatch({
+        type: "capture.stopped",
+        event: {
+          source: activeAdapter?.source || activeAdapter?.name || "voice-capture",
+          detail: "Capture was stopped by the operator.",
+        },
+      });
       return true;
     } catch (caught) {
       dispatch({
@@ -298,11 +344,14 @@ export function useVoiceInteractionController({
         dispatch({ type: "command.pending", command: { ...command, guard }, guard });
         return command;
       }
+      if (command.action === "voice.stop") {
+        await stopListening();
+      }
       await onVoiceCommand?.(command);
       dispatch({ type: "command.complete", command, guard });
       return command;
     },
-    [minConfidence, onVoiceCommand, state.transcript.averageConfidence, state.transcript.combinedText],
+    [minConfidence, onVoiceCommand, state.transcript.averageConfidence, state.transcript.combinedText, stopListening],
   );
 
   const confirmPendingCommand = useCallback(async () => {

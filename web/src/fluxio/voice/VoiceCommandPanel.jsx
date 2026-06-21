@@ -39,6 +39,12 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
     source: voice.support.label,
     status: voice.support.status,
   };
+  const captureLifecycle = voice.captureLifecycle || {
+    status: voice.listening ? "listening" : "idle",
+    label: voice.listening ? "Listening" : "Idle",
+    detail: voice.listening ? "Live capture is active." : "Capture has not started.",
+    source: capture.source || capture.label,
+  };
   const startDisabled = !capture.canStartLiveCapture && !voice.listening;
 
   return (
@@ -78,6 +84,10 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
           <span>Capture source</span>
           <strong>{capture.source || capture.label}</strong>
         </div>
+        <div className="fluxio-voice-quality-card">
+          <span>Capture state</span>
+          <strong>{captureLifecycle.label}</strong>
+        </div>
       </div>
 
       <div
@@ -88,8 +98,10 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
         <div>
           <strong>{capture.canStartLiveCapture ? "Live capture ready" : "Live capture not wired"}</strong>
           <p>{capture.status}</p>
+          <p>{captureLifecycle.detail}</p>
         </div>
         {capture.recovery ? <span>{capture.recovery}</span> : null}
+        {captureLifecycle.status === "stopped" ? <span>Capture stopped by {captureLifecycle.source}</span> : null}
       </div>
 
       <div className="fluxio-voice-transcript" aria-label="Current voice transcript">
