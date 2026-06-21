@@ -29,6 +29,7 @@ class FusionFixtureContractTests(unittest.TestCase):
               FUSION_COLLECTION_MODES,
               FUSION_FIXTURES,
               FUSION_MIGRATION_LANES,
+              FUSION_MIGRATION_PHASES,
               FUSION_RISK_LABELS,
               buildFusionWorkbench,
             } from './web/src/fluxio/fusion/fusionFixtures.js';
@@ -40,6 +41,8 @@ class FusionFixtureContractTests(unittest.TestCase):
               summary: workbench.summary,
               rows: FUSION_FIXTURES,
               lanes: FUSION_MIGRATION_LANES,
+              phases: FUSION_MIGRATION_PHASES,
+              gates: workbench.gateRows,
               rules: workbench.acceptanceRules,
             }));
             """
@@ -48,6 +51,10 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["totalRows"], len(payload["rows"]))
         self.assertGreaterEqual(payload["summary"]["readyRows"], 2)
         self.assertEqual(payload["summary"]["migrationLaneCount"], len(payload["lanes"]))
+        self.assertEqual(payload["summary"]["phaseCount"], len(payload["phases"]))
+        self.assertGreaterEqual(payload["summary"]["gateCount"], 10)
+        self.assertGreaterEqual(payload["summary"]["passedGateCount"], 6)
+        self.assertIn("Read-only adapters", payload["summary"]["activePhase"])
         self.assertIn("Synology monitoring", payload["summary"]["nextMigrationLane"])
         self.assertIn("read-only-adapter", payload["modes"])
         self.assertIn("no-trading-execution", payload["risks"])
@@ -82,11 +89,18 @@ class FusionFixtureContractTests(unittest.TestCase):
             "safeSlice",
             "proofAction",
             "ownerRole",
+            "phaseId",
+            "promotionGates",
         }
         for lane in payload["lanes"]:
             self.assertTrue(lane_required.issubset(lane), lane["id"])
             self.assertIn("->", lane["sourcePair"])
             self.assertTrue(lane["proofAction"])
+            self.assertGreaterEqual(len(lane["promotionGates"]), 3)
+
+        for gate in payload["gates"]:
+            self.assertIn(gate["status"], {"passed", "needed", "blocked"})
+            self.assertTrue(gate["evidence"])
 
     def test_fusion_fixtures_do_not_claim_live_or_write_access(self) -> None:
         payload = run_node(
@@ -139,6 +153,64 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertIn("solantir-signal-contract", payload["ids"])
         self.assertIn("jbheaven-defensive-harness", payload["ids"])
         self.assertGreaterEqual(payload["totalRows"], 5)
+
+    def test_backend_adapter_truth_survives_into_fusion_workbench(self) -> None:
+        payload = run_node(
+            """
+            import { buildFusionWorkbench } from './web/src/fluxio/fusion/fusionFixtures.js';
+            const workbench = buildFusionWorkbench({
+              adapter: {
+                adapterId: 'mindtower-readonly-sqlite',
+                sourceProject: 'Mind Tower',
+                sourcePath: 'C:/Users/paul/projects/mind-tower/data/mindtower.sqlite',
+                available: true,
+                readOnly: true,
+                writeActions: 0,
+                credentialValuesExposed: false,
+                status: 'ready',
+                detail: 'Read-only adapter found 4 records, 1 events, and 1 runtime-state rows.',
+                recordCounts: { sources: 2, 'summary-jobs': 2 },
+                eventCount: 1,
+                runtimeStateCount: 1,
+                credentialSummary: [{ keyName: 'openai', status: 'ready' }],
+                sourceHealth: [{ id: 'source-one', label: 'Example source', status: 'healthy' }],
+                summaryJobs: [{ id: 'summary-one', label: 'Morning review', status: 'ready' }],
+                recentEvents: [{ id: 'event-one', sourceType: 'rss', priorityScore: 3 }],
+                runtimeStatePreview: [{ namespace: 'worker', key: 'last_run', valuePreview: 'ok' }],
+              },
+              rows: [
+                {
+                  id: 'mindtower-readonly-sqlite-adapter',
+                  sourceProject: 'Mind Tower',
+                  sourcePath: 'C:/Users/paul/projects/mind-tower/data/mindtower.sqlite',
+                  sourceHashPrefix: '',
+                  collectionMode: 'read-only-adapter',
+                  riskLabel: 'no-credential-copy',
+                  status: 'ready-for-adapter-shape',
+                  title: 'Mind Tower read-only source and event adapter',
+                  summary: 'Read-only adapter found 4 records.',
+                  proofNeed: 'Credential values stay masked and no writes are exposed.',
+                  nextSlice: 'Promote source health rows into Fluxio bridge cards.',
+                  lastVerifiedAt: '2026-06-21',
+                }
+              ],
+            });
+            console.log(JSON.stringify({
+              adapter: workbench.adapter,
+              adapterSummary: workbench.adapterSummary,
+              summary: workbench.summary,
+            }));
+            """
+        )
+
+        self.assertTrue(payload["adapterSummary"]["available"])
+        self.assertEqual(payload["adapterSummary"]["status"], "ready")
+        self.assertEqual(payload["adapterSummary"]["recordTotal"], 4)
+        self.assertEqual(payload["adapterSummary"]["writeActions"], 0)
+        self.assertEqual(payload["adapterSummary"]["sourceHealthCount"], 1)
+        self.assertEqual(payload["adapterSummary"]["summaryJobCount"], 1)
+        self.assertEqual(payload["summary"]["adapterStatus"], "ready")
+        self.assertEqual(payload["summary"]["adapterRecordTotal"], 4)
 
     def test_solantir_signal_snapshots_are_explainable_and_non_executing(self) -> None:
         payload = run_node(

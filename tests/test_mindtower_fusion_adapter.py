@@ -54,7 +54,24 @@ class MindTowerFusionAdapterTests(unittest.TestCase):
                     (
                         "sources",
                         "source_one",
-                        json.dumps({"id": "source_one", "label": "Example source"}),
+                        json.dumps({"id": "source_one", "label": "Example source", "status": "healthy"}),
+                        now,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO records VALUES (?, ?, ?, ?, ?)",
+                    (
+                        "summary-jobs",
+                        "summary_one",
+                        json.dumps(
+                            {
+                                "id": "summary_one",
+                                "label": "Morning source review",
+                                "status": "ready",
+                                "api_token": "job-secret-token",
+                            }
+                        ),
                         now,
                         now,
                     ),
@@ -109,11 +126,20 @@ class MindTowerFusionAdapterTests(unittest.TestCase):
             self.assertEqual(snapshot["adapter"]["writeActions"], 0)
             self.assertFalse(snapshot["adapter"]["credentialValuesExposed"])
             self.assertEqual(snapshot["adapter"]["recordCounts"]["sources"], 1)
+            self.assertEqual(snapshot["adapter"]["recordCounts"]["summary-jobs"], 1)
             self.assertEqual(snapshot["adapter"]["eventCount"], 1)
             self.assertEqual(snapshot["adapter"]["runtimeStateCount"], 1)
             self.assertEqual(snapshot["adapter"]["credentialSummary"][0]["status"], "ready")
+            self.assertEqual(snapshot["adapter"]["sourceHealth"][0]["label"], "Example source")
+            self.assertEqual(snapshot["adapter"]["sourceHealth"][0]["status"], "healthy")
+            self.assertEqual(snapshot["adapter"]["summaryJobs"][0]["label"], "Morning source review")
+            self.assertEqual(snapshot["adapter"]["summaryJobs"][0]["status"], "ready")
+            self.assertEqual(snapshot["adapter"]["recentEvents"][0]["sourceType"], "rss")
+            self.assertEqual(snapshot["adapter"]["recentEvents"][0]["priorityScore"], 1)
+            self.assertEqual(snapshot["adapter"]["runtimeStatePreview"][0]["namespace"], "worker")
             joined = json.dumps(snapshot)
             self.assertNotIn("sk-test-secret-value", joined)
+            self.assertNotIn("job-secret-token", joined)
             self.assertEqual(snapshot["rows"][0]["id"], "mindtower-readonly-sqlite-adapter")
             self.assertEqual(snapshot["rows"][0]["collectionMode"], "read-only-adapter")
             self.assertIn("read-only mode", snapshot["rows"][0]["proofNeed"])
@@ -126,6 +152,8 @@ class MindTowerFusionAdapterTests(unittest.TestCase):
             self.assertFalse(snapshot["adapter"]["available"])
             self.assertEqual(snapshot["adapter"]["status"], "missing")
             self.assertEqual(snapshot["rows"], [])
+            self.assertEqual(snapshot["adapter"]["sourceHealth"], [])
+            self.assertEqual(snapshot["adapter"]["recentEvents"], [])
 
 
 if __name__ == "__main__":

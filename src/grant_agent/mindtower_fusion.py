@@ -32,6 +32,8 @@ SECRETISH_FIELDS = {
     "telegram_user_id",
 }
 
+PREVIEW_LIMIT = 4
+
 
 def _default_db_path(root: Path) -> Path:
     configured = os.environ.get("MINDTOWER_DB_PATH", "").strip()
@@ -112,6 +114,110 @@ def _credential_summary(connection: sqlite3.Connection) -> list[dict[str, str]]:
     return summary
 
 
+def _load_record_payloads(
+    connection: sqlite3.Connection,
+    resource: str,
+    *,
+    limit: int = PREVIEW_LIMIT,
+) -> list[dict[str, Any]]:
+    if not _table_exists(connection, "records"):
+        return []
+    cursor = connection.execute(
+        """
+        SELECT id, payload, updated_at
+        FROM records
+        WHERE resource = ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (resource, limit),
+    )
+    records: list[dict[str, Any]] = []
+    for record_id, raw_payload, updated_at in cursor.fetchall():
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        masked = _mask_payload(payload)
+        records.append(
+            {
+                "id": str(masked.get("id") or record_id),
+                "label": str(masked.get("label") or masked.get("name") or record_id),
+                "status": str(masked.get("status") or masked.get("state") or "unknown"),
+                "detail": str(
+                    masked.get("description")
+                    or masked.get("summary")
+                    or masked.get("details")
+                    or ""
+                )[:180],
+                "updatedAt": str(masked.get("updated_at") or updated_at or ""),
+            }
+        )
+    return records
+
+
+def _recent_events(connection: sqlite3.Connection, *, limit: int = PREVIEW_LIMIT) -> list[dict[str, Any]]:
+    if not _table_exists(connection, "events"):
+        return []
+    cursor = connection.execute(
+        """
+        SELECT id, source_type, source_id, author, published_at, content, url, priority_score
+        FROM events
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    events: list[dict[str, Any]] = []
+    for row in cursor.fetchall():
+        event_id, source_type, source_id, author, published_at, content, url, priority_score = row
+        events.append(
+            {
+                "id": str(event_id),
+                "sourceType": str(source_type),
+                "sourceId": str(source_id),
+                "author": str(author),
+                "publishedAt": str(published_at),
+                "contentPreview": str(content or "")[:180],
+                "url": str(url),
+                "priorityScore": int(priority_score or 0),
+            }
+        )
+    return events
+
+
+def _runtime_state_preview(
+    connection: sqlite3.Connection,
+    *,
+    limit: int = PREVIEW_LIMIT,
+) -> list[dict[str, str]]:
+    if not _table_exists(connection, "runtime_state"):
+        return []
+    cursor = connection.execute(
+        """
+        SELECT namespace, key, value, updated_at
+        FROM runtime_state
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    preview: list[dict[str, str]] = []
+    for namespace, key, value, updated_at in cursor.fetchall():
+        masked = _mask_payload({str(key): value})
+        preview.append(
+            {
+                "namespace": str(namespace),
+                "key": str(key),
+                "valuePreview": str(masked.get(str(key), ""))[:160],
+                "updatedAt": str(updated_at),
+            }
+        )
+    return preview
+
+
 def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> dict[str, Any]:
     database_path = db_path or _default_db_path(root)
     adapter: dict[str, Any] = {
@@ -127,6 +233,10 @@ def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> 
         "eventCount": 0,
         "runtimeStateCount": 0,
         "credentialSummary": [],
+        "sourceHealth": [],
+        "summaryJobs": [],
+        "recentEvents": [],
+        "runtimeStatePreview": [],
     }
     if not database_path.exists():
         adapter["detail"] = "Mind Tower SQLite database was not found; fixture rows remain the fallback."
@@ -140,6 +250,10 @@ def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> 
             adapter["eventCount"] = _count_rows(connection, "events")
             adapter["runtimeStateCount"] = _count_rows(connection, "runtime_state")
             adapter["credentialSummary"] = _credential_summary(connection)
+            adapter["sourceHealth"] = _load_record_payloads(connection, "sources")
+            adapter["summaryJobs"] = _load_record_payloads(connection, "summary-jobs")
+            adapter["recentEvents"] = _recent_events(connection)
+            adapter["runtimeStatePreview"] = _runtime_state_preview(connection)
         finally:
             connection.close()
     except sqlite3.Error as exc:

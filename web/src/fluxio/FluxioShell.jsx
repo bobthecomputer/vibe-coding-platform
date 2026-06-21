@@ -6352,8 +6352,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [snapshot?.bridgeLab?.connectedSessions],
   );
   const fusionWorkbench = useMemo(
-    () => buildFusionWorkbench(snapshot?.fusionWorkbench?.rows),
-    [snapshot?.fusionWorkbench?.rows],
+    () => buildFusionWorkbench(snapshot?.fusionWorkbench),
+    [snapshot?.fusionWorkbench],
   );
   const effectiveRouteRows = useMemo(
     () => (Array.isArray(mission?.effectiveRouteContract?.roles) ? mission.effectiveRouteContract.roles : []),

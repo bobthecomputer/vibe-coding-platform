@@ -106,6 +106,27 @@ Primary value: already captured architecture direction and UI/proof scaffolding.
 
 ## Ordered PR-Ready Migration Slices
 
+### PR 89 - Fusion Migration Gates And Adapter Truth
+
+Status: implemented as a Fluxio workbench slice on top of the initial inventory, fixture, Mind Tower adapter, Solantir signal, and JBH-EAVEN proof work.
+
+Files updated:
+
+- `web/src/fluxio/fusion/fusionFixtures.js`
+- `web/src/fluxio/fusion/FusionWorkbenchPanel.jsx`
+- `web/src/fluxio/FluxioShell.jsx`
+- `src/grant_agent/mindtower_fusion.py`
+- `scripts/fusion_migration_visual_smoke.py`
+
+Acceptance checks:
+
+- The fusion panel is a migration workbench, not just a static preview.
+- Migration phases show inventory, read-only adapter, promotion-proof, and cleanup state.
+- Each migration lane has explicit promotion gates with `passed`, `needed`, or `blocked` status.
+- The frontend preserves `snapshot.fusionWorkbench.adapter` so Mind Tower adapter availability, read-only status, write count, record count, event count, runtime-state count, and bounded previews can be shown.
+- Missing adapter data remains honest fixture-only or unavailable state.
+- Cleanup stays blocked/report-only until destructive approval exists.
+
 ### PR 1 - Fusion Inventory And Capability Map
 
 Status: this documentation slice.

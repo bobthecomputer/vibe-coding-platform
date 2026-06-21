@@ -4647,6 +4647,113 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.fusion-phase-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.fusion-phase-card,
+.fusion-next-lane,
+.fusion-adapter-preview-card {
+  border: 1px solid rgba(238, 242, 236, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
+.fusion-phase-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.fusion-phase-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: currentColor;
+  opacity: 0.8;
+}
+
+.fusion-phase-card span,
+.fusion-next-lane span,
+.fusion-adapter-preview-card span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fusion-phase-card strong,
+.fusion-next-lane strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.fusion-phase-card p,
+.fusion-next-lane p,
+.fusion-adapter-preview-card p {
+  margin: 6px 0 0;
+}
+
+.fusion-phase-card em {
+  display: block;
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.4;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.fusion-adapter-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(238, 242, 236, 0.1);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(0, 0, 0, 0.14);
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.fusion-adapter-panel h4,
+.fusion-adapter-panel p {
+  margin: 0;
+}
+
+.fusion-adapter-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fusion-adapter-preview-card {
+  display: grid;
+  gap: 6px;
+  min-height: 116px;
+}
+
+.fusion-adapter-preview-card strong {
+  color: var(--text);
+}
+
+.fusion-next-lane {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.fusion-gate-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .fusion-signal-panel {
   display: grid;
   gap: 10px;
@@ -6412,6 +6519,8 @@ button.builder-review-target:hover {
 
   .builder-studio-ribbon,
   .context-grid.compact-metrics,
+  .fusion-phase-strip,
+  .fusion-adapter-preview-grid,
   .runtime-auth-ledger,
   .agent-composer-toolbar {
     grid-template-columns: 1fr;

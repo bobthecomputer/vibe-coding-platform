@@ -207,13 +207,27 @@ def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
     assert "FusionWorkbenchPanel" in source
     assert 'import("./fusion/FusionWorkbenchPanel.jsx")' in source
     assert "Explainable Solantir signals" in fusion_panel
+    assert "Fusion migration workbench" in fusion_panel
+    assert "Mind Tower adapter truth" in fusion_panel
+    assert "Next safe slice" in fusion_panel
+    assert "fusion-phase-strip" in fusion_panel
+    assert "fusion-adapter-panel" in fusion_panel
+    assert "fusion-next-lane" in fusion_panel
+    assert "promotionGates" in fusion_panel
+    assert "adapterSummary" in fusion_panel
     assert "no order routing" in fusion_panel
     assert "fusion-migration-card" in fusion_panel
     assert "fusion-migration-list" in fusion_panel
     assert "fusion-signal-card" in fusion_panel
+    assert ".fusion-phase-strip" in styles
+    assert ".fusion-adapter-panel" in styles
+    assert ".fusion-next-lane" in styles
+    assert ".fusion-gate-list" in styles
     assert ".fusion-migration-card" in styles
     assert ".fusion-signal-card" in styles
     assert "FUSION_MIGRATION_LANES" in fixtures
+    assert "FUSION_MIGRATION_PHASES" in fixtures
+    assert "Promotion gates must show passed, needed, or blocked status" in fixtures
     assert "SOLANTIR_SIGNAL_SNAPSHOTS" in fixtures
     assert "no-trading-execution" in fixtures
     assert "Terminal and operator workbench shell" in fixtures

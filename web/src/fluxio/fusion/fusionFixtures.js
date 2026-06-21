@@ -15,6 +15,37 @@ export const FUSION_RISK_LABELS = Object.freeze([
   "read-only",
 ]);
 
+export const FUSION_MIGRATION_PHASES = Object.freeze([
+  {
+    id: "inventory",
+    label: "Inventory",
+    status: "passed",
+    summary: "Source-of-truth paths, stale mirrors, and high-risk duplicates are mapped.",
+    evidence: "docs/SOLANTIR_MINDTOWER_JBHEAVEN_FUSION_INVENTORY.md",
+  },
+  {
+    id: "read-only-adapters",
+    label: "Read-only adapters",
+    status: "active",
+    summary: "Solantir signals and Mind Tower health can be inspected without write actions.",
+    evidence: "web/src/fluxio/fusion/fusionFixtures.js",
+  },
+  {
+    id: "promotion-proof",
+    label: "Promotion proof",
+    status: "gated",
+    summary: "Each lane needs proof gates before any live adapter or cleanup action is enabled.",
+    evidence: "tests/test_fusion_fixture_contract.py",
+  },
+  {
+    id: "cleanup",
+    label: "Mirror cleanup",
+    status: "blocked",
+    summary: "NAS mirror cleanup remains report-only until explicit destructive approval exists.",
+    evidence: "docs/SOLANTIR_MINDTOWER_JBHEAVEN_FUSION_INVENTORY_DATA.json",
+  },
+]);
+
 export const FUSION_FIXTURES = Object.freeze([
   {
     id: "solantir-signal-contract",
@@ -85,6 +116,7 @@ export const FUSION_FIXTURES = Object.freeze([
 export const FUSION_MIGRATION_LANES = Object.freeze([
   {
     id: "terminal-workbench-shell",
+    phaseId: "promotion-proof",
     title: "Terminal and operator workbench shell",
     sourcePair: "Solantir Terminal -> Fluxio Builder",
     duplicateArea: "Terminal navigation, workspace switching, command review, and proof surfaces.",
@@ -94,9 +126,30 @@ export const FUSION_MIGRATION_LANES = Object.freeze([
       "Port only read-only terminal/workspace metadata into Builder cards; leave command execution inside Fluxio approvals.",
     proofAction: "Show Solantir source path, Fluxio drawer card, and no direct shell execution controls.",
     ownerRole: "UI reviewer",
+    promotionGates: [
+      {
+        id: "source-hash",
+        status: "passed",
+        label: "Authoritative source hash recorded",
+        evidence: "docs/SOLANTIR_MINDTOWER_JBHEAVEN_FUSION_INVENTORY_DATA.json",
+      },
+      {
+        id: "no-shell-execution",
+        status: "passed",
+        label: "No direct shell execution controls",
+        evidence: "web/src/fluxio/fusion/fusionFixtures.js",
+      },
+      {
+        id: "browser-proof",
+        status: "needed",
+        label: "Browser proof after UI adapter",
+        evidence: "artifacts/pr89-fusion-migration-gates/",
+      },
+    ],
   },
   {
     id: "synology-monitoring-events",
+    phaseId: "read-only-adapters",
     title: "Synology monitoring and event records",
     sourcePair: "Mind Tower SQLite/runtime_state -> Fluxio bridge health",
     duplicateArea: "Source health, watch rules, normalized events, digests, alerts, and review jobs.",
@@ -106,9 +159,30 @@ export const FUSION_MIGRATION_LANES = Object.freeze([
       "Define a read-only adapter payload for sources, events, and jobs with credentials masked before UI import.",
     proofAction: "Fixture must include masked credentials, unavailable NAS state, and zero write actions.",
     ownerRole: "Runtime engineer",
+    promotionGates: [
+      {
+        id: "readonly-open",
+        status: "passed",
+        label: "SQLite opens in read-only mode",
+        evidence: "src/grant_agent/mindtower_fusion.py",
+      },
+      {
+        id: "credential-mask",
+        status: "passed",
+        label: "Credential-like fields are masked",
+        evidence: "tests/test_mindtower_fusion_adapter.py",
+      },
+      {
+        id: "nas-policy",
+        status: "needed",
+        label: "NAS authority policy before cleanup",
+        evidence: "docs/SOLANTIR_MINDTOWER_JBHEAVEN_FUSION_INVENTORY.md",
+      },
+    ],
   },
   {
     id: "signal-provenance-board",
+    phaseId: "read-only-adapters",
     title: "Explainable signal provenance board",
     sourcePair: "Solantir contracts/signals -> Fluxio fusion rows",
     duplicateArea: "Entity, observation, forecast, factor, driver, confidence, timestamp, and source health models.",
@@ -118,9 +192,30 @@ export const FUSION_MIGRATION_LANES = Object.freeze([
       "Import fixture-backed signal snapshots with factor attribution and explicit no-broker/no-order-routing labels.",
     proofAction: "Every signal row must show factors, source path, timestamp, confidence, and no-trading-execution risk.",
     ownerRole: "Researcher",
+    promotionGates: [
+      {
+        id: "factor-attribution",
+        status: "passed",
+        label: "Factors, drivers, and confidence visible",
+        evidence: "web/src/fluxio/fusion/fusionFixtures.js",
+      },
+      {
+        id: "execution-block",
+        status: "passed",
+        label: "No broker or order-routing action",
+        evidence: "tests/test_fusion_fixture_contract.py",
+      },
+      {
+        id: "live-importer",
+        status: "blocked",
+        label: "Live importer blocked until source-health proof",
+        evidence: "docs/SOLANTIR_MINDTOWER_JBHEAVEN_FUSION_INVENTORY.md",
+      },
+    ],
   },
   {
     id: "synthetic-redteam-proof",
+    phaseId: "promotion-proof",
     title: "Synthetic red-team proof lane",
     sourcePair: "JBH-EAVEN harness -> Fluxio proof artifacts",
     duplicateArea: "Scenario metadata, safe probe transcripts, detector coverage, refusal scoring, and proof links.",
@@ -130,6 +225,26 @@ export const FUSION_MIGRATION_LANES = Object.freeze([
       "Emit deterministic, fictional red-team proof packets without live targets, secrets, evasion, malware, or exfiltration.",
     proofAction: "Attach scenario seed, boundary labels, prompt, model response, score, transcript, and artifact path.",
     ownerRole: "Red-team evaluator",
+    promotionGates: [
+      {
+        id: "synthetic-scope",
+        status: "passed",
+        label: "Synthetic and authorized scope labels",
+        evidence: "artifacts/red-team/worker-f-jbheaven-safe-scenario-20260621/scenario.json",
+      },
+      {
+        id: "taxonomy-coverage",
+        status: "passed",
+        label: "Taxonomy coverage and refusal scoring",
+        evidence: "tests/test_redteam_proof_board.py",
+      },
+      {
+        id: "live-route",
+        status: "needed",
+        label: "OpenCodeGo route transcript before live model claims",
+        evidence: "artifacts/red-team/worker-f-jbheaven-safe-scenario-20260621/",
+      },
+    ],
   },
 ]);
 
@@ -199,8 +314,67 @@ export const SOLANTIR_SIGNAL_SNAPSHOTS = Object.freeze([
   },
 ]);
 
+function normalizeAdapter(adapter, rows) {
+  if (adapter && typeof adapter === "object") {
+    return adapter;
+  }
+  const rowAdapter = rows.find(item => item?.adapter && typeof item.adapter === "object")?.adapter;
+  return rowAdapter || null;
+}
+
+function summarizeAdapter(adapter) {
+  if (!adapter) {
+    return {
+      label: "Fixture-only",
+      available: false,
+      status: "fixture-only",
+      detail: "No live Mind Tower adapter snapshot was attached; Fluxio is showing safe fixture rows only.",
+      readOnly: true,
+      writeActions: 0,
+      recordTotal: 0,
+      eventCount: 0,
+      runtimeStateCount: 0,
+      credentialCount: 0,
+      sourceHealthCount: 0,
+      summaryJobCount: 0,
+      recentEventCount: 0,
+      runtimePreviewCount: 0,
+    };
+  }
+  const recordCounts = adapter.recordCounts && typeof adapter.recordCounts === "object"
+    ? adapter.recordCounts
+    : {};
+  const recordTotal = Object.values(recordCounts).reduce(
+    (total, value) => total + Number(value || 0),
+    0,
+  );
+  return {
+    label: adapter.adapterId || "mindtower-readonly-sqlite",
+    available: Boolean(adapter.available),
+    status: adapter.status || "unknown",
+    detail: adapter.detail || "",
+    sourcePath: adapter.sourcePath || "",
+    readOnly: adapter.readOnly !== false,
+    writeActions: Number(adapter.writeActions || 0),
+    credentialValuesExposed: Boolean(adapter.credentialValuesExposed),
+    recordTotal,
+    eventCount: Number(adapter.eventCount || 0),
+    runtimeStateCount: Number(adapter.runtimeStateCount || 0),
+    credentialCount: Array.isArray(adapter.credentialSummary) ? adapter.credentialSummary.length : 0,
+    sourceHealthCount: Array.isArray(adapter.sourceHealth) ? adapter.sourceHealth.length : 0,
+    summaryJobCount: Array.isArray(adapter.summaryJobs) ? adapter.summaryJobs.length : 0,
+    recentEventCount: Array.isArray(adapter.recentEvents) ? adapter.recentEvents.length : 0,
+    runtimePreviewCount: Array.isArray(adapter.runtimeStatePreview) ? adapter.runtimeStatePreview.length : 0,
+  };
+}
+
 export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
-  const providedRows = Array.isArray(fixtures) ? fixtures : [];
+  const snapshot = fixtures && typeof fixtures === "object" && !Array.isArray(fixtures) ? fixtures : null;
+  const providedRows = Array.isArray(fixtures)
+    ? fixtures
+    : Array.isArray(snapshot?.rows)
+      ? snapshot.rows
+      : [];
   const rowMap = new Map(FUSION_FIXTURES.map(item => [item.id, item]));
   for (const row of providedRows) {
     if (row?.id) {
@@ -208,19 +382,44 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
     }
   }
   const rows = [...rowMap.values()];
+  const adapter = normalizeAdapter(snapshot?.adapter, rows);
+  const adapterSummary = summarizeAdapter(adapter);
   const migrationLanes = FUSION_MIGRATION_LANES;
+  const phaseOrder = new Map(FUSION_MIGRATION_PHASES.map((phase, index) => [phase.id, index]));
+  const sortedLanes = [...migrationLanes].sort(
+    (left, right) => (phaseOrder.get(left.phaseId) ?? 99) - (phaseOrder.get(right.phaseId) ?? 99),
+  );
+  const gateRows = migrationLanes.flatMap(lane =>
+    (lane.promotionGates || []).map(gate => ({
+      ...gate,
+      laneId: lane.id,
+      laneTitle: lane.title,
+      phaseId: lane.phaseId,
+    })),
+  );
   const projects = [...new Set(rows.map(item => item.sourceProject).filter(Boolean))];
   const ready = rows.filter(item =>
     ["ready-for-contract-fixture", "ready-for-adapter-shape"].includes(item.status),
   );
   const blocked = rows.filter(item => item.collectionMode === "blocked" || item.status === "needs-policy");
   const proofRequired = rows.filter(item => item.proofNeed);
-  const nextLane = migrationLanes.find(item => item.migrationStatus.includes("next")) || migrationLanes[0];
+  const nextLane =
+    sortedLanes.find(item => item.migrationStatus.includes("next")) || sortedLanes[0];
+  const activePhase =
+    FUSION_MIGRATION_PHASES.find(phase => phase.status === "active") ||
+    FUSION_MIGRATION_PHASES[0];
+  const passedGates = gateRows.filter(gate => gate.status === "passed");
+  const blockedGates = gateRows.filter(gate => gate.status === "blocked");
+  const neededGates = gateRows.filter(gate => gate.status === "needed");
+  const promotionReadyLanes = migrationLanes.filter(lane =>
+    (lane.promotionGates || []).every(gate => gate.status === "passed"),
+  );
   const signalSnapshots = SOLANTIR_SIGNAL_SNAPSHOTS;
   return {
     schemaVersion: FUSION_CONTRACT_VERSION,
     collectionModes: FUSION_COLLECTION_MODES,
     riskLabels: FUSION_RISK_LABELS,
+    migrationPhases: FUSION_MIGRATION_PHASES,
     summary: {
       totalRows: rows.length,
       projects: projects.length,
@@ -230,9 +429,23 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
       migrationLaneCount: migrationLanes.length,
       nextMigrationLane: nextLane?.title || "",
       signalSnapshotCount: signalSnapshots.length,
+      phaseCount: FUSION_MIGRATION_PHASES.length,
+      activePhase: activePhase?.label || "",
+      gateCount: gateRows.length,
+      passedGateCount: passedGates.length,
+      neededGateCount: neededGates.length,
+      blockedGateCount: blockedGates.length,
+      promotionReadyLaneCount: promotionReadyLanes.length,
+      adapterAvailable: adapterSummary.available,
+      adapterStatus: adapterSummary.status,
+      adapterRecordTotal: adapterSummary.recordTotal,
+      adapterWriteActions: adapterSummary.writeActions,
     },
     rows,
-    migrationLanes,
+    migrationLanes: sortedLanes,
+    gateRows,
+    adapter,
+    adapterSummary,
     signalSnapshots,
     acceptanceRules: [
       "Every row must expose sourceProject, sourcePath, collectionMode, riskLabel, and lastVerifiedAt.",
@@ -240,6 +453,7 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
       "Blocked rows must describe the missing policy or proof instead of inventing live status.",
       "Migration lanes must name duplicate areas, safe slices, target runtime, proof action, and owner role before code is copied.",
       "Solantir signal snapshots must show factors, drivers, confidence, timestamp, source path, and no-trading-execution labels.",
+      "Promotion gates must show passed, needed, or blocked status before a lane can move beyond read-only fixture work.",
     ],
   };
 }
