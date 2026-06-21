@@ -160,6 +160,33 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn("control-micro-line 3.6s", styles)
         self.assertNotIn("control-line-draw 4.8s", styles)
 
+    def test_black_shell_design_scale_guard_prevents_boxy_drift(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        image_css = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "image-studio.css").read_text(encoding="utf-8")
+        voice_css = (ROOT / "web" / "src" / "fluxio" / "voice" / "voice.css").read_text(encoding="utf-8")
+        design_plan = (ROOT / "docs" / "design-system" / "design-system-plan.md").read_text(encoding="utf-8")
+
+        self.assertEqual(shell.count('className="builder-cowork-status-grid"'), 1)
+        for fragment in [
+            "--color-bg-app: #070808",
+            "--color-bg-shell: #090b0b",
+            "--color-surface-panel: #0d1010",
+            "PR110 black-shell correction",
+            "--shell-hairline",
+            "premium-line-rise",
+            ".builder-cowork-status-card:first-child",
+            ".runtime-skill-proof-grid div:nth-child(2n + 1)",
+        ]:
+            self.assertIn(fragment, styles)
+        self.assertIn("canvas-first workbench", image_css)
+        self.assertIn(".image-studio-breakdown-rail::before", image_css)
+        self.assertIn(".image-studio-operation-timeline ol::before", image_css)
+        self.assertIn("command composer with inline", voice_css)
+        self.assertIn(".fluxio-voice-quality-card:first-child", voice_css)
+        self.assertIn("The active Fluxio shell must stay near-black", design_plan)
+        self.assertIn("Repeated status facts should collapse into one slim rail", design_plan)
+
     def test_browser_proof_scripts_reject_wrong_skins(self) -> None:
         smoke = CONTROL_SMOKE.read_text(encoding="utf-8")
         visual = CONTROL_VISUAL_SMOKE.read_text(encoding="utf-8")

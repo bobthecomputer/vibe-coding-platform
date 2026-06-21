@@ -1,10 +1,10 @@
 :root {
   color-scheme: dark;
-  --color-bg-app: #111313;
-  --color-bg-shell: #171a19;
-  --color-surface-panel: #202321;
-  --color-surface-soft: #161918;
-  --color-surface-raised: #262a28;
+  --color-bg-app: #070808;
+  --color-bg-shell: #090b0b;
+  --color-surface-panel: #0d1010;
+  --color-surface-soft: #0a0c0c;
+  --color-surface-raised: #121515;
   --color-border-subtle: rgba(234, 228, 214, 0.08);
   --color-border-strong: rgba(234, 228, 214, 0.2);
   --color-text-primary: #f4f0e8;
@@ -33,10 +33,10 @@
   --space-8: 20px;
   --space-9: 24px;
   --space-10: 32px;
-  --bg: #111313;
-  --bg-alt: #171a19;
-  --panel: #202321;
-  --panel-soft: #161918;
+  --bg: #070808;
+  --bg-alt: #090b0b;
+  --panel: #0d1010;
+  --panel-soft: #0a0c0c;
   --line: rgba(234, 228, 214, 0.08);
   --line-strong: rgba(234, 228, 214, 0.2);
   --text: #f4f0e8;
@@ -8913,6 +8913,281 @@ button.builder-digest-item:active {
   58% {
     opacity: 0.58;
     transform: translateX(42%);
+  }
+}
+
+/* PR110 black-shell correction: keep the current proof UI, but remove the
+   boxed prototype feel from the surfaces shown in the operator screenshots. */
+:root {
+  --control-bg: #070808;
+  --control-bg-soft: #0a0c0c;
+  --control-panel: rgba(13, 15, 15, 0.82);
+  --control-panel-raised: rgba(18, 21, 20, 0.9);
+  --control-line: rgba(238, 242, 236, 0.085);
+  --control-line-strong: rgba(238, 242, 236, 0.2);
+  --control-muted: rgba(238, 242, 236, 0.56);
+  --shell-hairline: rgba(238, 242, 236, 0.095);
+  --shell-hairline-bright: rgba(238, 242, 236, 0.34);
+}
+
+.fluxio-shell,
+.fluxio-shell[data-mode="builder"] .fluxio-main,
+.fluxio-shell[data-mode="agent"] .fluxio-main {
+  background:
+    radial-gradient(circle at 52% -24%, rgba(238, 242, 236, 0.04), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 20%),
+    var(--control-bg);
+}
+
+.fluxio-topbar,
+.fluxio-sidebar,
+.fluxio-drawer {
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.028), rgba(238, 242, 236, 0.006)),
+    #090b0b;
+  border-color: var(--shell-hairline);
+}
+
+.fluxio-main {
+  padding: 18px 26px 30px;
+}
+
+.fluxio-mode,
+.interaction-mode-rail {
+  border-color: rgba(238, 242, 236, 0.13);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.04), rgba(238, 242, 236, 0.01)),
+    #0a0c0c;
+}
+
+.topbar-shortcut,
+.action-btn {
+  border-radius: 999px;
+}
+
+.interaction-mode-rail button {
+  border-radius: 9px;
+}
+
+.global-rail-button,
+.fluxio-nav-item {
+  border-color: transparent;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.global-rail-icon,
+.nav-item-icon {
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  background: rgba(238, 242, 236, 0.035);
+}
+
+.global-rail-button:hover,
+.fluxio-nav-item:hover,
+.global-rail-button.active,
+.fluxio-nav-item.active {
+  border-color: rgba(238, 242, 236, 0.12);
+  background:
+    linear-gradient(90deg, rgba(238, 242, 236, 0.07), rgba(238, 242, 236, 0.014) 48%, transparent),
+    rgba(238, 242, 236, 0.018);
+  box-shadow: inset 1px 0 0 rgba(238, 242, 236, 0.28);
+}
+
+.builder-panel,
+.builder-head,
+.agent-compartment-box,
+.agent-compartment-lane,
+.runtime-account-card,
+.drawer-block,
+.builder-live-review-panel,
+.builder-live-review-sidepanel,
+.builder-live-review-focus,
+.builder-live-annotation-state,
+.builder-live-review-bridge,
+.builder-visual-proof-packet,
+.builder-live-review-planner-proof,
+.builder-live-review-supervisor {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.03), rgba(238, 242, 236, 0.006)),
+    rgba(10, 12, 12, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.038),
+    0 20px 48px rgba(0, 0, 0, 0.18);
+}
+
+.builder-panel::after,
+.builder-head::after,
+.agent-compartment-box::after,
+.agent-compartment-lane::after,
+.runtime-account-card::after,
+.drawer-block::after {
+  inset: 0 14px auto;
+  height: 1px;
+  border-radius: 0;
+  background: linear-gradient(90deg, transparent, rgba(238, 242, 236, 0.38), transparent);
+  opacity: 0.42;
+}
+
+.builder-cowork-status-grid {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 14px;
+  background: rgba(238, 242, 236, 0.018);
+}
+
+.builder-cowork-status-card {
+  min-height: 96px;
+  border: 0;
+  border-radius: 0;
+  border-left: 1px solid rgba(238, 242, 236, 0.075);
+  background: transparent;
+  box-shadow: none;
+  padding: 0.82rem;
+}
+
+.builder-cowork-status-card:first-child {
+  border-left: 0;
+}
+
+.builder-cowork-status-card::after {
+  display: none;
+}
+
+.builder-live-review-event,
+.builder-live-review-frame-thumb,
+.builder-live-review-marker-pill,
+.builder-live-proof-chip,
+.builder-review-target,
+.builder-visual-proof-receipt-row,
+.builder-live-review-receipt-history-row,
+.builder-visual-proof-grid article,
+.builder-visual-proof-gate,
+.builder-live-proof-impact-card,
+.builder-live-coworking-grid article,
+.agent-runtime-lane,
+.agent-compartment-event,
+.agent-artifact-card,
+.agent-nas-check {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.026), rgba(238, 242, 236, 0.006)),
+    rgba(238, 242, 236, 0.012);
+  box-shadow: none;
+}
+
+.builder-live-review-event.active,
+.builder-live-review-frame-thumb.active,
+.builder-live-review-marker-pill.active,
+.builder-live-proof-chip.active,
+.builder-review-target.active,
+.agent-runtime-lane.active {
+  border-color: rgba(238, 242, 236, 0.18);
+  background:
+    linear-gradient(90deg, rgba(154, 223, 138, 0.1), rgba(238, 242, 236, 0.012) 58%),
+    rgba(8, 12, 9, 0.86);
+}
+
+.agent-compartment-matrix,
+.agent-compartment-strip {
+  gap: 0;
+  border-color: rgba(238, 242, 236, 0.075);
+  background: rgba(238, 242, 236, 0.06);
+}
+
+.agent-compartment-matrix > div,
+.agent-compartment-strip > div {
+  background: rgba(8, 10, 10, 0.78);
+}
+
+.agent-runtime-proof-receipt,
+.builder-visual-proof-readiness,
+.builder-visual-proof-receipts,
+.builder-live-bridge-packet {
+  border-color: rgba(238, 242, 236, 0.09);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(238, 242, 236, 0.038), rgba(238, 242, 236, 0.008)),
+    rgba(7, 9, 9, 0.66);
+}
+
+.runtime-skill-proof-grid,
+.preview-annotation-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 10px;
+  background: rgba(238, 242, 236, 0.016);
+}
+
+.runtime-skill-proof-grid div,
+.preview-annotation-proof-grid div {
+  border: 0;
+  border-top: 1px solid rgba(238, 242, 236, 0.06);
+  border-left: 1px solid rgba(238, 242, 236, 0.06);
+  border-radius: 0;
+  background: transparent;
+  padding: 9px 10px;
+}
+
+.runtime-skill-proof-grid div:nth-child(-n + 2),
+.preview-annotation-proof-grid div:nth-child(-n + 2) {
+  border-top: 0;
+}
+
+.runtime-skill-proof-grid div:nth-child(2n + 1),
+.preview-annotation-proof-grid div:nth-child(2n + 1) {
+  border-left: 0;
+}
+
+.runtime-skill-proof-grid b,
+.preview-annotation-proof-grid b {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.runtime-skill-proof-strip,
+.preview-annotation-proof-strip {
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(238, 242, 236, 0.032), rgba(238, 242, 236, 0.007)),
+    rgba(7, 9, 9, 0.66);
+}
+
+.runtime-account-card::before,
+.builder-visual-proof-map-grid {
+  opacity: 0.18;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .builder-cowork-status-card,
+  .builder-live-review-event,
+  .agent-runtime-proof-receipt,
+  .builder-visual-proof-gate {
+    animation: premium-line-rise 360ms var(--motion-ease-premium) both;
+  }
+
+  .builder-cowork-status-card:hover,
+  .builder-live-review-event:hover,
+  .builder-visual-proof-gate:hover {
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes premium-line-rise {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

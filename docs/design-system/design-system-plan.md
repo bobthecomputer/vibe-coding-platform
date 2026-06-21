@@ -96,6 +96,11 @@ Governance:
 - No purple-dominant accent system.
 - Cards max 8px radius unless they are modal/shell containers.
 - Dense UI uses borders and dividers before heavy cards.
+- The active Fluxio shell must stay near-black: app `#070808`, shell `#090b0b`, panel `#0d1010`.
+- Proof should read as instrumentation over the workbench: ledgers, hairlines, nodes, and rails before boxed cards.
+- Repeated status facts should collapse into one slim rail; do not render the same proof/status summary twice.
+- Image Studio should stay canvas-first. Controls and proof are side rails unless the user opens a focused proof view.
+- Voice should feel like a command composer with inline diagnostics, not a grid of small status boxes.
 - Buttons use icons where function is recognizable.
 - Disabled controls must include a reason in tooltip, helper text, or adjacent copy.
 - Text must not overlap fixed-format controls on small screens.

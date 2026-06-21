@@ -13079,19 +13079,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         </div>
                       </div>
                       <p>{liveReviewStudio.summary}</p>
-                      <div className="builder-cowork-status-grid" aria-label="Co-working status">
-                        {[
-                          ["Side-by-side preview", browserToolbarState.device, browserToolbarState.viewport],
-                          ["Feedback bridge", mission ? "Agent thread ready" : "Start a mission", operatorDraft.trim() ? "draft loaded" : "awaiting note"],
-                          ["Evidence timeline", `${(liveReviewStudio.events || []).length} events`, selectedLiveReviewEvent?.label || "none selected"],
-                        ].map(([label, value, detail]) => (
-                          <article className="builder-cowork-status-card" key={label}>
-                            <span>{label}</span>
-                            <strong>{value}</strong>
-                            <small>{detail}</small>
-                          </article>
-                        ))}
-                      </div>
                       <div className="builder-browser-toolbar">
                         <span className="mini-pill">Browser status: {liveReviewStudio.statusLine}</span>
                         <select

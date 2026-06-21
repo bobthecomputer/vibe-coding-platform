@@ -1463,3 +1463,149 @@
     transition-duration: 1ms !important;
   }
 }
+
+/* PR110 design-scale guard: Image Studio is a canvas-first workbench, not a
+   wall of equal cards. Proof remains visible as a dark ledger with line nodes. */
+.image-studio-grid {
+  grid-template-columns: minmax(200px, 0.58fr) minmax(420px, 1.72fr) minmax(210px, 0.64fr);
+  gap: 14px;
+}
+
+.image-studio-topbar,
+.image-studio-proof-panel,
+.image-studio-panel {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.026), rgba(238, 242, 236, 0.006)),
+    rgba(8, 10, 10, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.034);
+}
+
+.image-studio-canvas-wrap,
+.image-studio-canvas {
+  border-color: rgba(238, 242, 236, 0.08);
+  border-radius: 12px;
+}
+
+.image-studio-canvas {
+  width: min(100%, 760px);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, 0.42);
+}
+
+.image-studio-proof-review {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 12px;
+  background: rgba(238, 242, 236, 0.016);
+}
+
+.image-studio-proof-review div {
+  border: 0;
+  border-left: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 0;
+  background: transparent;
+}
+
+.image-studio-proof-review div:first-child {
+  border-left: 0;
+}
+
+.image-studio-breakdown {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.024), rgba(238, 242, 236, 0.006)),
+    rgba(7, 9, 9, 0.68);
+}
+
+.image-studio-breakdown-rail {
+  position: relative;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 12px;
+  background: rgba(238, 242, 236, 0.014);
+}
+
+.image-studio-breakdown-rail::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  right: 18px;
+  left: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(154, 223, 138, 0.55), rgba(238, 242, 236, 0.12));
+}
+
+.image-studio-breakdown-step {
+  border: 0;
+  border-left: 1px solid rgba(238, 242, 236, 0.065);
+  border-radius: 0;
+  background: transparent;
+  min-height: 172px;
+  padding: 28px 11px 11px;
+}
+
+.image-studio-breakdown-step:first-child {
+  border-left: 0;
+}
+
+.image-studio-breakdown-step::before {
+  top: 15px;
+  left: 10px;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(238, 242, 236, 0.38);
+  border-radius: 50%;
+  background: #080a0a;
+}
+
+.image-studio-breakdown-step.is-ready::before {
+  background: var(--control-success, #8ecb6f);
+}
+
+.image-studio-operation-timeline {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.024), rgba(238, 242, 236, 0.006)),
+    rgba(7, 9, 9, 0.68);
+}
+
+.image-studio-operation-timeline ol {
+  position: relative;
+}
+
+.image-studio-operation-timeline ol::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  left: 13px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(238, 242, 236, 0.34), rgba(238, 242, 236, 0.07));
+}
+
+.image-studio-operation-timeline li {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 4px;
+}
+
+.image-studio-operation-timeline li + li {
+  border-top: 1px solid rgba(238, 242, 236, 0.055);
+}
+
+.image-studio-operation-timeline li > span {
+  position: relative;
+  z-index: 1;
+  width: 27px;
+  height: 27px;
+  background:
+    radial-gradient(circle, rgba(238, 242, 236, 0.09), rgba(7, 9, 9, 0.98));
+}

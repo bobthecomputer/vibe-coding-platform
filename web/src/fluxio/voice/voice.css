@@ -865,3 +865,67 @@
     flex-direction: column;
   }
 }
+
+/* PR110 design-scale guard: voice is treated as a command composer with inline
+   diagnostics, not as a stack of small status cards. */
+.fluxio-voice-panel {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.026), rgba(238, 242, 236, 0.006)),
+    rgba(8, 10, 10, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.034);
+}
+
+.fluxio-voice-quality-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 999px;
+  background: rgba(238, 242, 236, 0.018);
+}
+
+.fluxio-voice-quality-card {
+  min-width: 118px;
+  flex: 1 1 118px;
+  border: 0;
+  border-left: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 11px;
+}
+
+.fluxio-voice-quality-card:first-child {
+  border-left: 0;
+}
+
+.fluxio-voice-transcript,
+.fluxio-voice-manual-intake,
+.fluxio-voice-command-packet,
+.fluxio-voice-mode-checkpoint,
+.fluxio-voice-review-console,
+.fluxio-voice-send-gate {
+  border-color: rgba(238, 242, 236, 0.075);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.024), rgba(238, 242, 236, 0.006)),
+    rgba(7, 9, 9, 0.66);
+}
+
+.fluxio-voice-capture-diagnostics,
+.fluxio-voice-repair-queue,
+.fluxio-voice-guard {
+  border-radius: 10px;
+  background:
+    linear-gradient(90deg, rgba(245, 190, 92, 0.09), rgba(238, 242, 236, 0.012) 58%),
+    rgba(7, 9, 9, 0.66);
+}
+
+.fluxio-voice-capture-diagnostics[data-ready="true"],
+.fluxio-voice-repair-queue[data-status="ready"] {
+  background:
+    linear-gradient(90deg, rgba(154, 223, 138, 0.09), rgba(238, 242, 236, 0.012) 58%),
+    rgba(7, 9, 9, 0.66);
+}
