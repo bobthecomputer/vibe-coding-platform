@@ -7804,6 +7804,15 @@ function FluxioBuilderSurface(props) {
                 </article>
               ))}
             </div>
+            <section className="proof-side-by-side-diff preview-contract" aria-label="Side-by-side proof diff fixture contract">
+              <div className="proof-side-by-side-head">
+                <div>
+                  <span>Side-by-side proof diff</span>
+                  <strong>Preview fixture route is mounted</strong>
+                </div>
+                <p>Fixture-only receipt. Live proof rows appear only when the NAS mission detail provides captured evidence.</p>
+              </div>
+            </section>
           </section>
         ) : null}
         {isLiveBackend ? (
