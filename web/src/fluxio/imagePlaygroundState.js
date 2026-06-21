@@ -14,24 +14,6 @@ export const IMAGE_TOOL_DEFINITIONS = [
   { id: "compare", label: "Compare", hint: "Review previous generations." },
 ];
 
-export const IMAGEGEN_LIBRARY_ARTIFACT = {
-  id: "generated-coastal-retreat-reference",
-  title: "Generated coastal retreat image",
-  kind: "generated-image",
-  artifactPath: "web/public/image-studio/generated-coastal-retreat.png",
-  previewSrc: "/image-studio/generated-coastal-retreat.png",
-  sourceArtifactPath: ".agent_control/design_references/codex_image_artifacts/codex_image_playground_live_review_reference_20260511T071327Z.png",
-  manifestPath: ".agent_control/design_references/codex_image_artifacts/codex_image_playground_live_review_reference_20260511T071327Z.manifest.json",
-  requestId: "codex_image_playground_live_review_reference_20260511T071327Z",
-  artifactId: "generated-coastal-retreat-reference",
-  source: "codex_generated_design_reference_crop",
-  provider: "Generated image reference",
-  artifactSha256: "",
-  manifestSha256: "7b6fca2704c5b4c5e8bfc102cce95070af06174ba085208fe435f1d0f62e5c96",
-  selected: true,
-  rationale: "Real generated bitmap cropped from the existing Codex-generated Image Studio reference artifact for default visual proof.",
-};
-
 export const DEFAULT_IMAGE_PROJECT = {
   id: "image-project-local",
   title: "Untitled image workspace",
@@ -66,7 +48,7 @@ export const DEFAULT_IMAGE_PROJECT = {
     replacementIntent: "transparent alpha matte with clean product edges",
     proofLabels: ["key color sampled", "spill cleanup planned", "edge feather planned"],
   },
-  designReferences: [IMAGEGEN_LIBRARY_ARTIFACT],
+  designReferences: [],
   annotationReadiness: {
     pins: [],
     rectangles: [],
@@ -76,7 +58,7 @@ export const DEFAULT_IMAGE_PROJECT = {
   skillsEvidence: [],
   focusedHistoryId: "",
   opsThreads: [],
-  selectedLayerId: "layer-generated-image",
+  selectedLayerId: "layer-background",
   activeTool: "select",
   selection: {
     x: 650,
@@ -103,48 +85,8 @@ export const DEFAULT_IMAGE_PROJECT = {
       fill: "radial-gradient(circle at 18% 12%, rgba(238,242,236,.08), transparent 26%), radial-gradient(circle at 74% 28%, rgba(154,223,138,.12), transparent 28%), linear-gradient(135deg, #070808, #101414 58%, #050606)",
       promptRole: "local preview backdrop, not provider output",
     },
-    {
-      id: "layer-generated-image",
-      name: "Generated coastal retreat image",
-      type: "image",
-      locked: false,
-      visible: true,
-      opacity: 1,
-      blendMode: "normal",
-      x: 96,
-      y: 72,
-      width: 832,
-      height: 624,
-      rotation: 0,
-      src: "/image-studio/generated-coastal-retreat.png",
-      radius: 24,
-      promptRole: "real generated image reference displayed in the editable canvas",
-    },
   ],
-  history: [
-    {
-      id: "hist-generated-coastal-retreat-reference",
-      title: "Generated coastal retreat image",
-      prompt: "Modern coastal retreat at sunset, glass house on a cliff, infinity pool, warm interior lights, dramatic clouds, natural landscaping, photorealistic.",
-      provider: "Generated image reference",
-      providerId: "codex-generated-reference",
-      createdAt: "2026-05-11T07:13:27+02:00",
-      status: "generated",
-      requestId: "codex_image_playground_live_review_reference_20260511T071327Z",
-      providerStatus: "available",
-      outputArtifactPath: "web/public/image-studio/generated-coastal-retreat.png",
-      previewSrc: "/image-studio/generated-coastal-retreat.png",
-      manifestPath: ".agent_control/design_references/codex_image_artifacts/codex_image_playground_live_review_reference_20260511T071327Z.manifest.json",
-      manifestUrl: ".agent_control/design_references/codex_image_artifacts/codex_image_playground_live_review_reference_20260511T071327Z.manifest.json",
-      layerCount: 1,
-      receipt: {
-        promptHash: "generated-reference",
-        providerName: "Generated image reference",
-        source: "Existing generated bitmap artifact",
-        testStatus: "Displayed",
-      },
-    },
-  ],
+  history: [],
 };
 
 export function isRealImageSession(item) {
@@ -268,11 +210,6 @@ export function normalizeProject(project) {
   next.chromaKey.spillCleanup = Math.max(0, Math.min(100, Number(next.chromaKey.spillCleanup) || 0));
   next.chromaKey.edgeFeather = Math.max(0, Math.min(64, Number(next.chromaKey.edgeFeather) || 0));
   next.designReferences = Array.isArray(next.designReferences) ? next.designReferences : base.designReferences;
-  for (const reference of base.designReferences) {
-    if (!next.designReferences.some(item => item?.id === reference.id || item?.artifactId === reference.artifactId)) {
-      next.designReferences.unshift(reference);
-    }
-  }
   next.annotationReadiness = { ...base.annotationReadiness, ...(next.annotationReadiness || {}) };
   next.skillsEvidence = Array.isArray(next.skillsEvidence) ? next.skillsEvidence : base.skillsEvidence;
   next.focusedHistoryId = String(next.focusedHistoryId || "");
@@ -290,11 +227,6 @@ export function normalizeProject(project) {
     next.selectedLayerId = base.selectedLayerId;
   }
   next.history = (Array.isArray(next.history) ? next.history : base.history).filter(isRealImageSession);
-  for (const item of base.history) {
-    if (!next.history.some(entry => entry?.id === item.id || entry?.requestId === item.requestId)) {
-      next.history.unshift(item);
-    }
-  }
   next.history = next.history.filter(isRealImageSession);
   next.updatedAt = next.updatedAt || nowIso();
   return next;

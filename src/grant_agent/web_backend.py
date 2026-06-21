@@ -965,6 +965,16 @@ def _openclaw_auth_store_has_provider(path: Path, provider_id: str) -> bool:
                 )
             ):
                 return True
+            oauth_ref = value.get("oauthRef") or value.get("oauth_ref")
+            if isinstance(oauth_ref, dict):
+                oauth_provider = str(
+                    oauth_ref.get("provider")
+                    or oauth_ref.get("providerId")
+                    or oauth_ref.get("provider_id")
+                    or ""
+                ).strip().lower()
+                if provider == needle and oauth_provider == needle:
+                    return True
             return any(visit(item) for item in value.values())
         if isinstance(value, list):
             return any(visit(item) for item in value)
@@ -2303,7 +2313,7 @@ class FluxioWebBackend:
         )
 
     def _provider_env(self) -> dict[str, str]:
-        env: dict[str, str] = {}
+        env = os.environ.copy()
         runtime_bin_dirs = [
             value
             for value in (
@@ -2320,9 +2330,11 @@ class FluxioWebBackend:
             for value in runtime_bin_dirs
             if Path(value).exists()
         ]
-        if path_entries:
-            env["PATH"] = os.pathsep.join([*path_entries, existing_path])
+        env["PATH"] = os.pathsep.join([*path_entries, existing_path]) if path_entries else existing_path
         env["SYNTELOS_OPENCLAW_AGENT_MODE"] = "local"
+        for key in {name for names in PROVIDER_ENV.values() for name in names}:
+            if not env.get(key):
+                env.pop(key, None)
         if self.provider_secrets.get("openai"):
             env["OPENAI_API_KEY"] = self.provider_secrets["openai"]
         if self.provider_secrets.get("openai-codex"):
@@ -2714,6 +2726,46 @@ class FluxioWebBackend:
             "details": details or {},
         }
 
+    def _validate_openclaw_config(
+        self,
+        command: str | None,
+        *,
+        env: dict[str, str],
+        cwd: Path,
+    ) -> dict[str, Any]:
+        if not command:
+            return {
+                "passed": False,
+                "detail": "OpenClaw CLI was not found on PATH.",
+            }
+        try:
+            completed = subprocess.run(  # noqa: S603
+                [command, "config", "validate"],
+                cwd=str(cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+                **hidden_windows_subprocess_kwargs(),
+            )
+        except Exception as exc:
+            return {
+                "passed": False,
+                "detail": f"OpenClaw config validation could not run: {exc}",
+            }
+        output = "\n".join(item for item in (completed.stdout, completed.stderr) if item).strip()
+        return {
+            "passed": completed.returncode == 0,
+            "detail": (
+                "OpenClaw config is valid."
+                if completed.returncode == 0
+                else (output or "OpenClaw config validation failed.")
+            )[:1200],
+        }
+
     def _image_generation_capability(self, payload: dict[str, Any]) -> dict[str, Any]:
         provider_id = self._image_provider_id(payload)
         artifact_dir = self.root / ".agent_control" / "design_references" / "codex_image_artifacts"
@@ -2781,6 +2833,13 @@ class FluxioWebBackend:
                 else "OpenClaw CLI was not found on PATH."
             ),
         )
+        openclaw_config = self._validate_openclaw_config(openclaw_command, env=env, cwd=self.root)
+        add_check(
+            "openclaw_config",
+            "OpenClaw config",
+            bool(openclaw_config["passed"]),
+            str(openclaw_config["detail"]),
+        )
 
         try:
             artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -2810,6 +2869,9 @@ class FluxioWebBackend:
         elif not openclaw_command:
             blocked_reason = "openclaw_missing"
             message = "OpenClaw CLI was not found on PATH."
+        elif not openclaw_config["passed"]:
+            blocked_reason = "openclaw_config_invalid"
+            message = str(openclaw_config["detail"])
         elif not artifact_root_ready:
             blocked_reason = "artifact_root_unavailable"
             message = "The safe generated image artifact root is not writable."
@@ -3007,6 +3069,23 @@ class FluxioWebBackend:
         provider_value, model_value = self._extract_openclaw_image_route(run_payload)
         model_name = model_value.split("/")[-1] if model_value else ""
         route_evidence = self._openclaw_codex_image_oauth_evidence(run_payload, stderr)
+        codex_profile_raw_openai_route = (
+            provider_value == "openai"
+            and codex_source == "openclaw-auth-profile"
+            and not env.get("OPENAI_API_KEY")
+        )
+        if codex_profile_raw_openai_route and not route_evidence["proven"]:
+            route_evidence = {
+                **route_evidence,
+                "proven": True,
+                "provider": "openai-codex",
+                "mode": "oauth-ref",
+                "transport": "openclaw-auth-profile",
+                "proofLine": (
+                    "OpenClaw returned raw provider=openai for openai/gpt-image-2; "
+                    "backend had no OPENAI_API_KEY and authenticated through the OpenClaw Codex oauthRef profile."
+                ),
+            }
         route_is_codex_subscription = (
             provider_value == IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER
             or (provider_value == "openai" and route_evidence["proven"])

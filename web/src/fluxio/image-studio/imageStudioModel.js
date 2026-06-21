@@ -11,16 +11,16 @@ export const IMAGE_STUDIO_STORAGE_KEY = "fluxio.image_studio.session.v1";
 export const IMAGE_STUDIO_PROVIDER_ROUTES = [
   {
     id: "openai-gpt-image-2",
-    label: "OpenAI image route",
-    providerId: "openai",
+    label: "Codex subscription GPT-Image-2",
+    providerId: "codex_subscription_gpt_image2",
     model: "gpt-image-2",
-    status: "needs_connector",
-    authMode: "openai_api_or_codex",
+    status: "codex_subscription",
+    authMode: "codex_subscription_oauth",
     supports: ["generate", "edit", "mask"],
     proofArtifacts: ["request manifest", "provider receipt", "output manifest", "artifact hash"],
     availability: {
-      claim: "GPT Image 2 is available through the OpenAI API, and OpenAI announced availability in Codex.",
-      localStatus: "connector_required",
+      claim: "GPT-Image-2 runs through the local OpenClaw Codex subscription lane when backend capability proof is available.",
+      localStatus: "codex_subscription_pending",
       runActionAvailable: false,
       officialSources: [
         "https://developers.openai.com/api/docs/guides/image-generation",
@@ -97,8 +97,8 @@ export function getImageGenerationRouteStatus(route, options = {}) {
     : availability.localStatus || selected.status;
   return {
     routeId: selected.id,
-    providerId: selected.providerId,
-    model: selected.model,
+    providerId: capability?.providerId || selected.providerId,
+    model: capability?.model || selected.model,
     localStatus,
     runActionAvailable,
     readyForRealRun: runActionAvailable,

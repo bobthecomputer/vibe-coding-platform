@@ -1,0 +1,68 @@
+{
+  "requestId": "image-request-mqo0jyr4-6cse1e",
+  "artifactId": "image-request-mqo0jyr4-6cse1e",
+  "servedArtifactId": "65394746bde0dd55d54a56a6",
+  "artifactPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.png",
+  "artifactSha256": "2a629bc253030337528ac651d6e0f0ca2f8e93aba0b1d6a810efabca72645fc7",
+  "contentType": "image/png",
+  "providerId": "codex_subscription_gpt_image2",
+  "provider": "openai-codex",
+  "model": "gpt-image-2",
+  "route": "codex_subscription",
+  "authMode": "codex subscription",
+  "billingNote": "codex subscription",
+  "providerRoute": "openclaw infer image generate",
+  "safeArtifactArea": ".agent_control/design_references/codex_image_artifacts",
+  "localPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.png",
+  "nasPathCandidates": [
+    "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.png",
+    "/volume1/Saclay/projects/vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.png"
+  ],
+  "prompt": {
+    "mode": "generate",
+    "text": "Fresh app-button generation proof for Fluxio: matte black modular camera on basalt stone, amber rim light, precise glass reflections, premium dark editorial product photo, no text, no logo.",
+    "negative": "blurry, distorted geometry, extra buttons, warped lens, unreadable text, plastic toy finish",
+    "style": "studio product photography, restrained contrast, clean shadows, high-detail black materials",
+    "strength": 0.58,
+    "preserveComposition": true
+  },
+  "canvas": {
+    "width": 1024,
+    "height": 768,
+    "background": "#111313",
+    "zoom": 0.62
+  },
+  "createdAt": "2026-06-21T16:42:38.742119+00:00",
+  "provenance": {
+    "servedBy": "web-backend",
+    "safeEndpoint": "/api/artifact",
+    "allowedRoots": [
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\runtime_compartments",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\runtime_sessions",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\live_review_receipts",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\mission_async",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_runs",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts"
+    ],
+    "arbitraryWorkspaceFilesExposed": false,
+    "routeEvidence": {
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "rawProvider": "openai",
+      "rawModel": "gpt-image-2",
+      "authProvider": "openai-codex",
+      "authMode": "oauth-ref",
+      "transport": "openclaw-auth-profile",
+      "proofLine": "OpenClaw returned raw provider=openai for openai/gpt-image-2; backend had no OPENAI_API_KEY and authenticated through the OpenClaw Codex oauthRef profile."
+    }
+  },
+  "runtime": {
+    "host": "ASUS-ROG-STRIX",
+    "root": "C:\\Users\\paul\\projects\\vibe-coding-platform",
+    "artifactServer": "web-backend",
+    "elapsedMs": 87706
+  },
+  "manifestPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.manifest.json",
+  "manifestSha256": "c2d243cf85e40cbafba7adadad464b67ff8edafbbdbc0cfa3f37e2187bdd8e60"
+}

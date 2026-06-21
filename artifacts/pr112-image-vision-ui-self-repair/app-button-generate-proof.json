@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "image-studio-app-button-generate-proof.v1",
+  "createdAt": "2026-06-21T16:40:58.853119+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&mode=builder&surface=images&sidebar=collapsed&imageRoute=openai-gpt-image-2&diagnostics=1",
+  "backendUrl": "http://127.0.0.1:47880",
+  "prompt": "Fresh app-button generation proof for Fluxio: matte black modular camera on basalt stone, amber rim light, precise glass reflections, premium dark editorial product photo, no text, no logo.",
+  "proofKind": "browser_click_to_runtime_image_generation",
+  "status": "passed",
+  "beforeScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\app-button-generate-before.png",
+  "afterScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\app-button-generate-after.png",
+  "authState": {
+    "ok": true,
+    "status": 200,
+    "authenticated": true,
+    "user": {
+      "username": "admin",
+      "displayName": "Paul Admin",
+      "role": "account"
+    },
+    "error": ""
+  },
+  "readyState": {
+    "url": "http://127.0.0.1:1420/control?preview-control=1&mode=builder&surface=images&sidebar=collapsed&imageRoute=openai-gpt-image-2&diagnostics=1",
+    "title": "Fluxio | Agent operating system",
+    "bodyText": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nFile\nEdit\nView\nWindow\nHelp\nCONTROLS\n\u203a\n\u25ce\n\u2318\n\u2726\n\u25c7\n\u25a7\n\u25c9\n\u25eb\n\u2699\n\nIMAGE STUDIO\n\nImage generation playground\n\nGenerate, edit, mask, and compare images on a focused canvas. Connect a provider to run live generation.\n\nCodex subscription GPT-Image-2\ncodex subscription\nIMAGE BREAKDOWN\nneeds breakdown\n3/6 ready\nroute ready\n\nSource intake: Attach a reference, served artifact, or real history item before claiming visual grounding.\n\nPreferred OpenCode / Z.AI / GLM-5.2; active proof chain: image_vision_breakdown, leon_lin_design_taste, ui_self_repair_planner, self_repair_verifier. Current route: codex_subscription_gpt_image2 / gpt-image-2.\n\n6 REVIEW STEPS\nPrompt\nPrompt text\nGenerate image\nPreserve manual composition\nADVANCED PROMPT CONTROLS\nGenerator\nImage model\nCodex subscription GPT-Image-2\nExisting Codex image artifacts\nLocal request draft\nROUTE DETAILS\nGreen screen matte\nPrepare chroma-key removal\nKey color\n#00ff66\n\nMatte proof ready - Use chroma key #00ff66 with tolerance 28, spill cleanup 44, and 12px edge feather before replacement.\n\nPreview matte\nADVANCED MATTE CONTROLS\nPrompt\nMove\nEdit area\nMask\nCompare\nCanvas\nSquare 1024x1024\nPortrait 1024x1536\nLandscape 1536x1024\nWide 1792x1024\nCustom\nGenerate image\nPreview canvas\nMask\nMode\nReplace region\nPreserve region\nExtend canvas\nx\ny\nwidth\nheight\nfeather\nVisible\nAdd mask layer\nReferences\nGallery\nOutputs\nLayers\n\nDIAGNOSTICS\n\nProvider handoff trace\nPrepare request draft\nGenerate image\nCopy JSON\nOPERATION TIMELINE\n1/5 complete\nReady for proof\n01\nDraft prepared\n\nPrepare a request draft before claiming provider readiness.\n\nWAITING\n02\nProvider route\n\ngpt-image-2 can run when confirmed.\n\nCOMPLETE\n03\nProvider receipt\n\nNo provider receipt has been returned yet.\n\nWAITING\n04\nArtifact written\n\nRequires provider output manifest, image path, and hash.\n\nWAITING\n05\nLayer handoff\n\nAttach the generated artifact as a reviewable layer.\n\nWAITING\nPreview\n1/1 layers\nAnnotations\n0\nReferences\n0\nMatte\nReady\nProvider handoff\nNeeds review\ngpt-image-2\nA real provider run must still return a provider receipt, output manifest, and artifact hash.\nblocked\nDraft validity\nNo request draft prepared\nready\nPreview model\n1 layer on 1024x768 canvas.\nempty\nMask coverage\nNo visible mask region.\nempty\nAnnotation coverage\n0 pins, 0 rectangles, 0 comments.\nempty\nArtifact history\nNo real provider artifact is available for comparison.\nready\nGreen screen matte\n#00ff66 key, 28% tolerance, 44% spill cleanup, 12px feather\n\nPrepare a request draft to review the provider payload and proof plan.\n\nImage studio ready.",
+    "routeSummary": "Codex subscription GPT-Image-2 codex subscription",
+    "runResultText": "",
+    "runResultIsError": false,
+    "runResultIsBlocked": false,
+    "toastText": "Artifact backend readyServed artifact sources can load through /api/artifact.\nImage studio ready.",
+    "buttonItems": [
+      {
+        "text": "Generate image",
+        "disabled": false,
+        "className": "image-studio-primary-action image-studio-generate-action"
+      },
+      {
+        "text": "Generate image",
+        "disabled": false,
+        "className": "image-studio-primary-action image-studio-generate-action"
+      },
+      {
+        "text": "Generate image",
+        "disabled": false,
+        "className": "image-studio-primary-action"
+      }
+    ],
+    "promptText": "Fresh app-button generation proof for Fluxio: matte black modular camera on basalt stone, amber rim light, precise glass reflections, premium dark editorial product photo, no text, no logo.",
+    "quickPromptText": "Fresh app-button generation proof for Fluxio: matte black modular camera on basalt stone, amber rim light, precise glass reflections, premium dark editorial product photo, no text, no logo.",
+    "canvasLayerCount": 1,
+    "canvasLayerStyles": [
+      "left: 0%; top: 0%; width: 100%; height: 133.333%; transform: rotate(0deg); opacity: 1; mix-blend-mode: normal; background: radial-gradient(circle at 18% 12%, rgba(238, 242, 236, 0.08), transparent 26%), radial-gradient(circle at 74% 28%, rgba(154, 223, 138, 0.12), transparent 28%), linear-gradient(135deg, rgb(7, 8, 8), rgb(16, 20, 20) 58%, rgb(5, 6, 6));"
+    ],
+    "generatedLinks": [
+      "Preferred OpenCode / Z.AI / GLM-5.2; active proof chain: image_vision_breakdown, leon_lin_design_taste, ui_self_repair_planner, self_repair_verifier. Current route: codex_subscription_gpt_image2 / gpt-image-2.",
+      "gpt-image-2",
+      "Served artifact sources can load through /api/artifact.",
+      "gpt-image-2 can run when confirmed.",
+      "gpt-image-2"
+    ],
+    "artifactBackgrounds": []
+  },
+  "clickResult": {
+    "clicked": true,
+    "text": "Generate image",
+    "className": "image-studio-primary-action image-studio-generate-action"
+  },
+  "completedState": {
+    "url": "http://127.0.0.1:1420/control?preview-control=1&mode=builder&surface=images&sidebar=collapsed&imageRoute=openai-gpt-image-2&diagnostics=1",
+    "title": "Fluxio | Agent operating system",
+    "bodyText": "Thread and proofApps, previews, and bridge runsNeeds approval nowDecision queueTask navigatorTimelineContext, apps, and escalation\nFile\nEdit\nView\nWindow\nHelp\nCONTROLS\n\u203a\n\u25ce\n\u2318\n\u2726\n\u25c7\n\u25a7\n\u25c9\n\u25eb\n\u2699\n\nIMAGE STUDIO\n\nImage generation playground\n\nGenerate, edit, mask, and compare images on a focused canvas. Connect a provider to run live generation.\n\nCodex subscription GPT-Image-2\ncodex subscription\nIMAGE BREAKDOWN\nneeds breakdown\n4/6 ready\nroute ready\n\nRegion plan: Select a visible region or explicitly run full-canvas generation.\n\nPreferred OpenCode / Z.AI / GLM-5.2; active proof chain: image_vision_breakdown, leon_lin_design_taste, ui_self_repair_planner, self_repair_verifier. Current route: codex_subscription_gpt_image2 / gpt-image-2.\n\n6 REVIEW STEPS\nPrompt\nPrompt text\nGenerate image\nPreserve manual composition\nADVANCED PROMPT CONTROLS\nGenerator\nImage model\nCodex subscription GPT-Image-2\nExisting Codex image artifacts\nLocal request draft\nROUTE DETAILS\nGreen screen matte\nPrepare chroma-key removal\nKey color\n#00ff66\n\nMatte proof ready - Use chroma key #00ff66 with tolerance 28, spill cleanup 44, and 12px edge feather before replacement.\n\nPreview matte\nADVANCED MATTE CONTROLS\nPrompt\nMove\nEdit area\nMask\nCompare\nCanvas\nSquare 1024x1024\nPortrait 1024x1536\nLandscape 1536x1024\nWide 1792x1024\nCustom\nGenerate image\nPreview canvas\nMask\nMode\nReplace region\nPreserve region\nExtend canvas\nx\ny\nwidth\nheight\nfeather\nVisible\nAdd mask layer\nReferences\nGallery\nOutputs\nLayers\n\nDIAGNOSTICS\n\nProvider handoff trace\nPrepare request draft\nGenerate image\nCopy JSON\nGenerated PNG artifact was written and served through the Codex subscription route.\nopenai-codex - gpt-image-2\nsha 2a629bc25303\nOpen image\nManifest\nOPERATION TIMELINE\n5/5 complete\nReady for proof\n01\nDraft prepared\n\ngenerate payload image-request-mqo0jyr4-6cse1e\n\nCOMPLETE\n02\nProvider route\n\ngpt-image-2 can run when confirmed.\n\nCOMPLETE\n03\nProvider receipt\n\n874cec1b8610\n\nCOMPLETE\n04\nArtifact written\n\nC:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.png\n\nCOMPLETE\n05\nLayer handoff\n\nGenerated layer was attached to the local composition preview.\n\nCOMPLETE\nPreview\n2/2 layers\nAnnotations\n0\nReferences\n0\nMatte\nReady\nProvider handoff\nReady\ngpt-image-2\nA real provider run must still return a provider receipt, output manifest, and artifact hash.\nready\nDraft validity\nProvider payload validates locally.\nready\nPreview model\n2 layers on 1024x768 canvas.\nempty\nMask coverage\nNo visible mask region.\nempty\nAnnotation coverage\n0 pins, 0 rectangles, 0 comments.\nready\nArtifact history\n1 real image artifact available for comparison.\nready\nGreen screen matte\n#00ff66 key, 28% tolerance, 44% spill cleanup, 12px feather\nready\nRequest manifest\ngenerate payload with prompt, canvas, provider, layer, and route metadata\nempty\nReference inventory\n0 local reference assets\nempty\nMask geometry\nNo selected region is visible\nempty\nHistory link\nNo generated artifact history yet\nempty\nAnnotation review\nNo annotation pins, rectangles, or comments are attached\nready\nChroma-key matte\n#00ff66 key, 28% tolerance, 44% spill cleanup, 12px feather\nrequires provider\nrequest manifest\nCreated after a real provider run or artifact import\nrequires provider\nprovider receipt\nCreated after a real provider run or artifact import\nrequires provider\noutput manifest\nCreated after a real provider run or artifact import\nrequires provider\nartifact hash\nCreated after a real provider run or artifact import\nThis proof review describes local preview, annotation, and request readiness only. It is not a provider completion receipt.\nDraft valid\n{\n  \"id\": \"image-request-mqo0jyr4-6cse1e\",\n  \"createdAt\": \"2026-06-21T16:41:10.576Z\",\n  \"status\": \"draft_only\",\n  \"route\": {\n    \"id\": \"openai-gpt-image-2\",\n    \"label\": \"Codex subscription GPT-Image-2\",\n    \"providerId\": \"codex_subscription_gpt_image2\",\n    \"model\": \"gpt-image-2\",\n    \"status\": \"codex_subscription\",\n    \"authMode\": \"codex_subscription_oauth\",\n    \"supports\": [\n      \"generate\",\n      \"edit\",\n      \"mask\"\n    ],\n    \"availability\": {\n      \"routeId\": \"openai-gpt-image-2\",\n      \"providerId\": \"codex_subscription_gpt_image2\",\n      \"model\": \"gpt-image-2\",\n      \"localStatus\": \"codex_subscription_pending\",\n      \"runActionAvailable\": false,\n      \"readyForRealRun\": false,\n      \"handoffReady\": true,\n      \"needsConnector\": false,\n      \"needsAuth\": true,\n      \"claim\": \"GPT-Image-2 runs through the local OpenClaw Codex subscription lane when backend capability proof is available.\",\n      \"officialSources\": [\n        \"https://developers.openai.com/api/docs/guides/image-generation\",\n        \"https://developers.openai.com/api/docs/models/gpt-image-2\",\n        \"https://community.openai.com/t/introducing-gpt-image-2-available-today-in-the-api-and-codex/1379479\"\n      ],\n      \"capability\": null,\n      \"blockedReason\": \"\",\n      \"message\": \"\",\n      \"checks\": [],\n      \"proofLimit\": \"This local surface can prepare and validate a request draft, but it has not completed a provider image run.\"\n    }\n  },\n  \"operation\": \"generate\",\n  \"references\": [],\n  \"mask\": {\n    \"mode\": \"replace\",\n    \"selection\": {\n      \"x\": 650,\n      \"y\": 372,\n      \"width\": 228,\n      \"height\": 168,\n      \"feather\": 12\n    }\n  },\n  \"chromaKey\": {\n    \"enabled\": true,\n    \"ready\": true,\n    \"keyColor\": \"#00ff66\",\n    \"tolerance\": 28,\n    \"spillCleanup\": 44,\n    \"edgeFeather\": 12,\n    \"matteMode\": \"remove_background\",\n    \"replacementIntent\": \"transparent alpha matte with clean product edges\",\n    \"proofLabels\": [\n      \"key color sampled\",\n      \"spill cleanup planned\",\n      \"edge feather planned\"\n    ],\n    \"matteStrength\": 53,\n    \"edgeRisk\": \"controlled\",\n    \"qaChecklist\": [\n      {\n        \"id\": \"key-color-sampled\",\n        \"label\": \"Key color sampled\",\n        \"status\": \"ready\",\n        \"detail\": \"#00ff66 selected for the matte key.\"\n      },\n      {\n        \"id\": \"tolerance-window\",\n        \"label\": \"Tolerance window\",\n        \"status\"",
+    "routeSummary": "Codex subscription GPT-Image-2 codex subscription",
+    "runResultText": "Generated PNG artifact was written and served through the Codex subscription route. openai-codex - gpt-image-2 sha 2a629bc25303 Open image Manifest",
+    "runResultIsError": false,
+    "runResultIsBlocked": false,
+    "toastText": "Artifact backend readyServed artifact sources can load through /api/artifact.\nProvider image artifact recorded with receipt and manifest links.\nImage provider artifact recorded with receipt and manifest links.",
+    "buttonItems": [
+      {
+        "text": "Generate image",
+        "disabled": false,
+        "className": "image-studio-primary-action image-studio-generate-action"
+      },
+      {
+        "text": "Generate image",
+        "disabled": false,
+        "className": "image-studio-primary-action image-studio-generate-action"
+      },
+      {
+        "text": "Generate image",
+        "disabled": false,
+        "className": "image-studio-primary-action"
+      }
+    ],
+    "promptText": "Fresh app-button generation proof for Fluxio: matte black modular camera on basalt stone, amber rim light, precise glass reflections, premium dark editorial product photo, no text, no logo.",
+    "quickPromptText": "Fresh app-button generation proof for Fluxio: matte black modular camera on basalt stone, amber rim light, precise glass reflections, premium dark editorial product photo, no text, no logo.",
+    "canvasLayerCount": 2,
+    "canvasLayerStyles": [
+      "left: 0%; top: 0%; width: 100%; height: 133.333%; transform: rotate(0deg); opacity: 1; mix-blend-mode: normal; background: radial-gradient(circle at 18% 12%, rgba(238, 242, 236, 0.08), transparent 26%), radial-gradient(circle at 74% 28%, rgba(154, 223, 138, 0.12), transparent 28%), linear-gradient(135deg, rgb(7, 8, 8), rgb(16, 20, 20) 58%, rgb(5, 6, 6));",
+      "left: 0%; top: 0%; width: 100%; height: 100%; transform: rotate(0deg); opacity: 1; mix-blend-mode: normal; background: url(\"/api/artifact?id=65394746bde0dd55d54a56a6\") center center / cover no-repeat;"
+    ],
+    "generatedLinks": [
+      "Preferred OpenCode / Z.AI / GLM-5.2; active proof chain: image_vision_breakdown, leon_lin_design_taste, ui_self_repair_planner, self_repair_verifier. Current route: codex_subscription_gpt_image2 / gpt-image-2.",
+      "gpt-image-2",
+      "Served artifact sources can load through /api/artifact.",
+      "openai-codex - gpt-image-2",
+      "gpt-image-2 can run when confirmed.",
+      "C:\\Users\\paul\\projects\\vibe-coding-platform\\.agent_control\\design_references\\codex_image_artifacts\\image-request-mqo0jyr4-6cse1e.png",
+      "gpt-image-2"
+    ],
+    "artifactBackgrounds": [
+      "left: 0%; top: 0%; width: 100%; height: 100%; transform: rotate(0deg); opacity: 1; mix-blend-mode: normal; background: url(\"/api/artifact?id=65394746bde0dd55d54a56a6\") center center / cover no-repeat;"
+    ]
+  },
+  "route": {
+    "provider": "openai-codex",
+    "providerId": "codex_subscription_gpt_image2",
+    "model": "gpt-image-2",
+    "command": "image_playground_operation_command -> openclaw infer image generate --model openai/gpt-image-2"
+  }
+}
