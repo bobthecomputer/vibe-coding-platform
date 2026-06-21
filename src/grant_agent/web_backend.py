@@ -51,10 +51,33 @@ from .mission_control import (
     ControlRoomStore,
     hermes_auth_store_candidates,
 )
-from .models import MissionEvent
+from .models import MissionEvent, utc_now_iso
 from .mission_watchdog import ensure_watchdog_supervisor_loop
 from .port_safety import tcp_port_accepts_connection
 from .subprocess_utils import hidden_windows_subprocess_kwargs
+
+
+ANTI_DRIFT_BLOCKED_KINDS = {
+    "delegated_runtime_completed_unreconciled",
+    "delegated_runtime_process_gone",
+    "mission_blocked_or_failed",
+    "runtime_budget_exhausted",
+    "runtime_cycle_state_mismatch",
+    "stale_queue_blocker",
+}
+ANTI_DRIFT_DRIFT_KINDS = {
+    "delegated_runtime_completed_unreconciled",
+    "running_planner_loop_idle",
+    "stale_running_mission",
+    "stale_runtime_heartbeat",
+}
+ANTI_DRIFT_ROUTE_KINDS = {
+    "route_contract_incomplete",
+    "runtime_cycle_state_mismatch",
+}
+ANTI_DRIFT_PROOF_KINDS = {
+    "planned_scope_artifacts_not_ready",
+}
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -126,6 +149,32 @@ def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
         return max(minimum, int(str(os.environ.get(name, default)).strip()))
     except (TypeError, ValueError):
         return max(minimum, default)
+
+
+def _safe_json_object(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _issue_kind(issue: Any) -> str:
+    if not isinstance(issue, dict):
+        return ""
+    return str(issue.get("kind") or issue.get("type") or "").strip().lower()
+
+
+def _issue_severity(issue: Any) -> str:
+    if not isinstance(issue, dict):
+        return "info"
+    severity = str(issue.get("severity") or "info").strip().lower()
+    return severity if severity in {"bad", "warn", "info"} else "info"
+
+
+def _sanitize_artifact_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value.strip()).strip(".-")
+    return cleaned[:90] or f"guard-{secrets.token_hex(6)}"
 
 
 class _HandshakeSafeThreadingHTTPServer(ThreadingHTTPServer):
@@ -3982,6 +4031,169 @@ class FluxioWebBackend:
             )[:320],
         }
 
+    def _mission_anti_drift_guard_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        control_dir = root / ".agent_control"
+        report_path = control_dir / "mission_watchdog.json"
+        supervisor_path = control_dir / "mission_watchdog_supervisor.json"
+        watchdog_report = _safe_json_object(report_path) if report_path.exists() else {}
+        supervisor = _safe_json_object(supervisor_path) if supervisor_path.exists() else {}
+        summary = watchdog_report.get("summary") if isinstance(watchdog_report.get("summary"), dict) else {}
+
+        raw_issues: list[dict[str, Any]] = []
+        for source in (
+            watchdog_report.get("issues"),
+            (watchdog_report.get("problemRegistry") or {}).get("problems")
+            if isinstance(watchdog_report.get("problemRegistry"), dict)
+            else None,
+        ):
+            if not isinstance(source, list):
+                continue
+            for issue in source:
+                if isinstance(issue, dict):
+                    raw_issues.append(issue)
+
+        seen_issue_keys: set[str] = set()
+        issues: list[dict[str, Any]] = []
+        for index, issue in enumerate(raw_issues):
+            key = str(
+                issue.get("problemId")
+                or issue.get("issueId")
+                or f"{issue.get('missionId') or issue.get('mission_id') or 'mission'}:{_issue_kind(issue)}:{index}"
+            )
+            if key in seen_issue_keys:
+                continue
+            seen_issue_keys.add(key)
+            issues.append(issue)
+
+        def count_kinds(kinds: set[str]) -> int:
+            return sum(1 for issue in issues if _issue_kind(issue) in kinds)
+
+        blocked_count = count_kinds(ANTI_DRIFT_BLOCKED_KINDS)
+        drift_count = count_kinds(ANTI_DRIFT_DRIFT_KINDS)
+        route_count = count_kinds(ANTI_DRIFT_ROUTE_KINDS)
+        explicit_proof_count = count_kinds(ANTI_DRIFT_PROOF_KINDS)
+        artifact_gap_count = sum(
+            int(summary.get(key) or 0)
+            for key in ("artifactMissing", "artifactPartial")
+        )
+        proof_gap_count = explicit_proof_count + artifact_gap_count
+        bad_count = int(summary.get("bad") or sum(1 for issue in issues if _issue_severity(issue) == "bad"))
+        warn_count = int(summary.get("warn") or sum(1 for issue in issues if _issue_severity(issue) == "warn"))
+        issue_count = int(summary.get("issueCount") or len(issues))
+        queue_pressure = int(summary.get("queuePressure") or 0)
+        live_evidence = bool(watchdog_report.get("schema") == "fluxio.mission_watchdog.v1")
+
+        if not live_evidence:
+            status = "waiting_for_watchdog_evidence"
+            tone = "warn"
+            headline = "Waiting for live watchdog evidence"
+            next_action = "Run or refresh the mission watchdog before claiming monitoring is clear."
+        elif blocked_count or bad_count:
+            status = "intervention_required"
+            tone = "bad"
+            headline = "Intervention required before continuing"
+            next_action = str(watchdog_report.get("nextAction") or "Open the first watchdog problem and repair it.")
+        elif drift_count or route_count or proof_gap_count or warn_count:
+            status = "attention"
+            tone = "warn"
+            headline = "Guard sees drift risk"
+            next_action = str(watchdog_report.get("nextAction") or "Refresh the mission proof, route contract, and active runtime lane.")
+        else:
+            status = "clear"
+            tone = "good"
+            headline = "Mission can continue"
+            next_action = str(watchdog_report.get("nextAction") or "No watchdog issues found. Keep Hermes running.")
+
+        first_issue = issues[0] if issues else {}
+        signals = [
+            {
+                "id": "blocked_loop",
+                "label": "Blocked loop",
+                "status": "bad" if blocked_count else "clear",
+                "count": blocked_count,
+                "detail": "Runtime cannot advance without repair." if blocked_count else "No hard blocker reported.",
+            },
+            {
+                "id": "original_intent",
+                "label": "Original intent",
+                "status": "warn" if drift_count else "clear",
+                "count": drift_count,
+                "detail": "Planner/runtime movement is stale or idle." if drift_count else "No active drift signal.",
+            },
+            {
+                "id": "route_mismatch",
+                "label": "Route mismatch",
+                "status": "warn" if route_count else "clear",
+                "count": route_count,
+                "detail": "Planner, executor, or verifier route contract needs repair." if route_count else "Hermes route contract looks aligned.",
+            },
+            {
+                "id": "fake_proof",
+                "label": "Fake proof",
+                "status": "warn" if proof_gap_count else "clear",
+                "count": proof_gap_count,
+                "detail": "Artifact or completion proof is missing/partial." if proof_gap_count else "No proof gap reported.",
+            },
+        ]
+
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"anti-drift-{int(time.time())}")
+        )
+        generated_at = utc_now_iso()
+        artifact_dir = control_dir / "mission_anti_drift_guard"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+
+        guard = {
+            "schema": "fluxio.mission_anti_drift_guard.v1",
+            "ok": live_evidence,
+            "status": status,
+            "tone": tone,
+            "headline": headline,
+            "generatedAt": generated_at,
+            "root": str(root),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLane": "openclaw",
+            "routeProof": {
+                "command": command,
+                "source": "mission_watchdog_report",
+                "sourceReportPath": str(report_path),
+                "sourceReportPresent": live_evidence,
+                "supervisorPath": str(supervisor_path),
+                "supervisorActive": bool(supervisor.get("supervisorActive") or supervisor.get("loopActive")),
+                "loopStatus": str(supervisor.get("loopStatus") or watchdog_report.get("loopStatus") or "unknown"),
+            },
+            "summary": {
+                "issueCount": issue_count,
+                "bad": bad_count,
+                "warn": warn_count,
+                "queuePressure": queue_pressure,
+                "blockedLoopCount": blocked_count,
+                "driftRiskCount": drift_count,
+                "routeMismatchCount": route_count,
+                "proofGapCount": proof_gap_count,
+            },
+            "signals": signals,
+            "firstFinding": {
+                "kind": _issue_kind(first_issue),
+                "severity": _issue_severity(first_issue),
+                "title": str(first_issue.get("title") or first_issue.get("kind") or ""),
+                "detail": str(first_issue.get("detail") or ""),
+                "firstStep": str(first_issue.get("firstRepairStep") or first_issue.get("firstStep") or ""),
+            } if first_issue else {},
+            "nextAction": next_action,
+            "proof": {
+                "artifactPath": str(artifact_path),
+                "writtenAt": generated_at,
+                "purpose": "monitoring_anti_drift_runtime_guard",
+            },
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(guard, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return guard
+
     def _write_image_playground_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
         provider_id = self._image_provider_id(payload)
@@ -5766,6 +5978,8 @@ class FluxioWebBackend:
             return self._image_self_repair_loop_artifact(payload)
         if command == "ui_self_repair_loop_command":
             return self._ui_self_repair_loop_artifact(payload)
+        if command in {"mission_anti_drift_guard_command", "get_mission_anti_drift_guard_command"}:
+            return self._mission_anti_drift_guard_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

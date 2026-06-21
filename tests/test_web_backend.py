@@ -2290,6 +2290,67 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("--skill-id", run_cli.call_args.args[2])
             self.assertEqual(run_cli.call_args.kwargs["timeout"], 120)
 
+    def test_mission_anti_drift_guard_command_writes_watchdog_proof_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            (control_dir / "mission_watchdog.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.mission_watchdog.v1",
+                        "summary": {
+                            "issueCount": 3,
+                            "bad": 1,
+                            "warn": 2,
+                            "artifactMissing": 1,
+                            "artifactPartial": 0,
+                            "queuePressure": 1,
+                        },
+                        "issues": [
+                            {
+                                "kind": "mission_blocked_or_failed",
+                                "severity": "bad",
+                                "title": "Mission is blocked or failed",
+                                "detail": "The mission cannot continue without repair.",
+                                "firstStep": "Resume the Hermes lane after inspecting logs.",
+                            },
+                            {
+                                "kind": "route_contract_incomplete",
+                                "severity": "info",
+                                "title": "Mission route contract is incomplete",
+                                "firstStep": "Apply the task-aware route contract.",
+                            },
+                            {
+                                "kind": "planned_scope_artifacts_not_ready",
+                                "severity": "warn",
+                                "title": "Completed mission artifact scope is not ready",
+                            },
+                        ],
+                        "nextAction": "Repair the first watchdog issue.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "get_mission_anti_drift_guard_command",
+                {"root": str(root), "requestId": "mission4-test"},
+            )
+
+            self.assertEqual(result["schema"], "fluxio.mission_anti_drift_guard.v1")
+            self.assertEqual(result["primaryRuntimeLane"], "hermes")
+            self.assertEqual(result["fallbackRuntimeLane"], "openclaw")
+            self.assertEqual(result["status"], "intervention_required")
+            self.assertEqual(result["summary"]["blockedLoopCount"], 1)
+            self.assertEqual(result["summary"]["routeMismatchCount"], 1)
+            self.assertGreaterEqual(result["summary"]["proofGapCount"], 2)
+            self.assertTrue(result["routeProof"]["sourceReportPresent"])
+            proof_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(proof_path.exists())
+            self.assertIn("mission_anti_drift_guard", proof_path.read_text(encoding="utf-8"))
+
     def test_record_delivery_receipt_command_persists_browser_notification_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
