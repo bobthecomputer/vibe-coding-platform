@@ -6357,6 +6357,37 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     ],
   );
   const builderBoard = viewModel.drawers.builder.board;
+  const routeDecisionRows = asList(snapshot.harnessLab?.routeDecisionRows);
+  const benchmarkRouteRows = asList(snapshot.harnessLab?.benchmarkRouteRows);
+  const rawRouteDecisionSummary = asRecord(snapshot.harnessLab?.routeDecisionSummary);
+  const routeDecisionSummary = useMemo(() => {
+    if (Object.keys(rawRouteDecisionSummary).length > 0) {
+      return rawRouteDecisionSummary;
+    }
+    const rows = [...routeDecisionRows, ...benchmarkRouteRows];
+    const tierValue = row => {
+      const tier = String(row?.routeTier || "").replace(/^F/i, "");
+      const parsed = Number.parseInt(tier, 10);
+      return Number.isFinite(parsed) ? parsed : -1;
+    };
+    const highest = rows.reduce(
+      (current, row) => (tierValue(row) > tierValue(current) ? row : current),
+      rows[0] || {},
+    );
+    return {
+      localCount: routeDecisionRows.filter(item => !item?.benchmarkCandidate).length,
+      benchmarkCount: benchmarkRouteRows.length || routeDecisionRows.filter(item => item?.benchmarkCandidate).length,
+      proofGapCount: rows.filter(item => asList(item?.proofGaps).length > 0).length,
+      localProofRequiredCount: rows.filter(item => item?.localProofRequired).length,
+      highestRouteTier: highest?.routeTier || "F0",
+      highestRouteWorkClass: highest?.workClass || "unclassified_route",
+      highestRouteCostBand: highest?.costBand || asRecord(highest?.speedCostContext).costBand || "unknown",
+      highestRouteWallTimeBand: highest?.expectedWallTimeBand || asRecord(highest?.speedCostContext).expectedWallTimeBand || "unknown",
+      highestRouteProvider: highest?.provider || "",
+      highestRouteModel: highest?.model || "",
+      needsLocalProof: rows.some(item => item?.localProofRequired),
+    };
+  }, [benchmarkRouteRows, rawRouteDecisionSummary, routeDecisionRows]);
   const workspaceById = useMemo(
     () => new Map(workspaces.map(item => [item.workspace_id, item])),
     [workspaces],
@@ -13744,8 +13775,45 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                         </button>
                       ))}
                     </div>
+                    <div className={`benchmark-route-board ${toneClass(routeDecisionSummary.needsLocalProof ? "warn" : "good")}`} aria-label="Harness benchmark board">
+                      <div className="benchmark-route-board-head">
+                        <span>Harness benchmark board</span>
+                        <strong>{routeDecisionSummary.highestRouteTier || "F0"} · {titleizeToken(routeDecisionSummary.highestRouteWorkClass || "unclassified_route")}</strong>
+                      </div>
+                      <div className="benchmark-route-grid">
+                        <div>
+                          <span>Route source</span>
+                          <b>
+                            {routeDecisionSummary.localCount || 0} local · {routeDecisionSummary.benchmarkCount || benchmarkRouteRows.length} benchmark
+                          </b>
+                        </div>
+                        <div>
+                          <span>Proof gaps</span>
+                          <b>{routeDecisionSummary.proofGapCount || 0} gap(s)</b>
+                        </div>
+                        <div>
+                          <span>Cost / time</span>
+                          <b>
+                            {titleizeToken(routeDecisionSummary.highestRouteCostBand || "unknown")} · {titleizeToken(routeDecisionSummary.highestRouteWallTimeBand || "unknown")}
+                          </b>
+                        </div>
+                        <div>
+                          <span>Route candidate</span>
+                          <b>
+                            {[providerLabel(routeDecisionSummary.highestRouteProvider || ""), routeDecisionSummary.highestRouteModel]
+                              .filter(Boolean)
+                              .join(" / ") || "provider pending"}
+                          </b>
+                        </div>
+                      </div>
+                      <p>
+                        {routeDecisionSummary.needsLocalProof
+                          ? `${routeDecisionSummary.localProofRequiredCount || 0} route candidate(s) need a local proof run before default promotion.`
+                          : "Local proof is attached for the shown benchmark route candidates."}
+                      </p>
+                    </div>
                     <div className="route-decision-grid" aria-label="Local route decision scorecards">
-                      {asList(snapshot.harnessLab?.routeDecisionRows).slice(0, 3).map(item => {
+                      {routeDecisionRows.slice(0, 3).map(item => {
                         const decisionTone =
                           item.decision === "use"
                             ? "good"

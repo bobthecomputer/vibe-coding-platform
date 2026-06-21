@@ -102,6 +102,21 @@ def test_harness_lab_uses_fixture_benchmark_candidates_when_local_runs_are_missi
 
     assert snapshot["routeDecisionSummary"]["localCount"] == 0
     assert snapshot["routeDecisionSummary"]["benchmarkCount"] >= 2
+    assert snapshot["routeDecisionSummary"]["candidateCount"] >= 2
+    assert snapshot["routeDecisionSummary"]["benchmarkShownCount"] >= 1
+    assert snapshot["routeDecisionSummary"]["proofGapCount"] >= 1
+    assert snapshot["routeDecisionSummary"]["localProofRequiredCount"] >= 1
+    assert snapshot["routeDecisionSummary"]["redTeamCandidateCount"] >= 1
+    assert snapshot["routeDecisionSummary"]["highestRouteTier"].startswith("F")
+    assert snapshot["routeDecisionSummary"]["highestRouteWorkClass"] in {
+        "normal_repo_execution",
+        "controlled_red_team_lab",
+        "hard_or_frontier_mission",
+        "cheap_or_deterministic_work",
+        "unclassified_route",
+    }
+    assert snapshot["routeDecisionSummary"]["highestRouteCostBand"] in {"low", "balanced", "high", "unknown"}
+    assert snapshot["routeDecisionSummary"]["needsLocalProof"] is True
     assert rows
     assert benchmark_rows
     assert rows[0]["benchmarkCandidate"] is True

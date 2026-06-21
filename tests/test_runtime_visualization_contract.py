@@ -138,7 +138,15 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
 
     assert "routeDecisionRows" in source
     assert "benchmarkRouteRows" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
+    assert "_route_decision_summary" in (ROOT / "src" / "grant_agent" / "mission_control.py").read_text(encoding="utf-8")
     assert "Local route decision scorecards" in source
+    assert "Harness benchmark board" in source
+    assert "benchmark-route-board" in source
+    assert "routeDecisionSummary" in source
+    assert "highestRouteTier" in source
+    assert "highestRouteWorkClass" in source
+    assert "localProofRequiredCount" in source
+    assert "needsLocalProof" in source
     assert "route-decision-card" in source
     assert "route-decision-meta" in source
     assert "route-outcome-scorecard" in source
@@ -147,7 +155,13 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert ".route-decision-card" in styles
     assert ".route-decision-meta" in styles
     assert ".route-outcome-scorecard" in styles
+    assert ".benchmark-route-board" in styles
+    assert ".benchmark-route-grid" in styles
     assert "harnessId" in fixtures
+    assert "routeDecisionSummary" in fixtures
+    assert "Benchmark F7" in fixtures
+    assert "MiniMax-M3" in fixtures
+    assert "JBHEAVEN benchmark fixture" in fixtures
     assert "High confidence" in fixtures
     assert "Needs proof" in fixtures
     assert "totalTokens" in fixtures

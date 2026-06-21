@@ -6582,6 +6582,61 @@ def _benchmark_work_class(route_tier: str, safe_redteam: dict) -> str:
     return "unclassified_route"
 
 
+def _route_tier_value(route_tier: str) -> int:
+    tier = str(route_tier or "").strip().upper()
+    if tier.startswith("F"):
+        tier = tier[1:]
+    try:
+        return int(tier)
+    except ValueError:
+        return -1
+
+
+def _route_decision_summary(
+    *,
+    local_route_decision_rows: list[dict],
+    benchmark_route_rows: list[dict],
+    route_decision_rows: list[dict],
+) -> dict:
+    local_count = len(local_route_decision_rows)
+    benchmark_count = len(benchmark_route_rows)
+    all_rows = [*local_route_decision_rows, *benchmark_route_rows]
+    shown_rows = list(route_decision_rows)
+    highest_tier_row = max(
+        all_rows or shown_rows,
+        key=lambda item: _route_tier_value(str(item.get("routeTier", "") or "")),
+        default={},
+    )
+    recommended_rows = [
+        item
+        for item in all_rows
+        if item.get("decision") == "use" or "recommended" in str(item.get("label", "")).lower()
+    ]
+    return {
+        "localCount": local_count,
+        "benchmarkCount": benchmark_count,
+        "totalShown": len(shown_rows),
+        "candidateCount": len(all_rows),
+        "benchmarkShownCount": sum(1 for item in shown_rows if item.get("benchmarkCandidate")),
+        "recommendedCount": len(recommended_rows),
+        "proofGapCount": sum(1 for item in all_rows if item.get("proofGaps")),
+        "localProofRequiredCount": sum(1 for item in all_rows if item.get("localProofRequired")),
+        "redTeamCandidateCount": sum(1 for item in all_rows if item.get("redTeamApplicable")),
+        "highestRouteTier": str(highest_tier_row.get("routeTier", "") or "F0"),
+        "highestRouteLabel": str(
+            highest_tier_row.get("fitLabel")
+            or highest_tier_row.get("label")
+            or "No benchmark route"
+        ),
+        "highestRouteWorkClass": str(highest_tier_row.get("workClass", "") or "unclassified_route"),
+        "highestRouteCostBand": str(highest_tier_row.get("costBand", "") or "unknown"),
+        "highestRouteWallTimeBand": str(highest_tier_row.get("expectedWallTimeBand", "") or "unknown"),
+        "highestRouteProvider": str(highest_tier_row.get("provider", "") or ""),
+        "highestRouteModel": str(highest_tier_row.get("model", "") or ""),
+        "needsLocalProof": any(item.get("localProofRequired") for item in all_rows),
+    }
+
+
 def _latest_runtime_lane_proof(root: Path) -> dict | None:
     artifact_root = root / "artifacts" / "runtime-lanes"
     if not artifact_root.exists():
@@ -6841,6 +6896,20 @@ def _proof_artifact_score(run: dict) -> tuple[int, int]:
     return artifact_count, 3
 
 
+def _local_route_tier(row: dict) -> str:
+    role = str(row.get("role", "") or "").lower()
+    runtime_id = str(row.get("runtimeId", "") or "").lower()
+    if "red" in role or "redteam" in role:
+        return "F7"
+    if row.get("decision") == "use":
+        return "F5" if int(row.get("delegatedLaneCount", 0) or 0) > 0 else "F4"
+    if row.get("decision") == "watch":
+        return "F5"
+    if runtime_id in {"hermes", "openclaw"}:
+        return "F4"
+    return "F3"
+
+
 def _build_run_outcome_scorecard(payload: dict, metadata: dict | None) -> dict:
     state = payload.get("state", {}) if isinstance(payload.get("state"), dict) else {}
     context = payload.get("context", {}) if isinstance(payload.get("context"), dict) else {}
@@ -6918,6 +6987,9 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
             key,
             {
                 "id": key,
+                "sourceKind": "local",
+                "sourceLabel": "Local Fluxio runs",
+                "benchmarkCandidate": False,
                 "harnessId": clean_harness,
                 "runtimeId": clean_runtime,
                 "provider": clean_provider,
@@ -7028,9 +7100,11 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
             "proofArtifactCount": int(row.pop("proofArtifactCount", 0) or 0),
             "proofArtifactRequiredCount": int(row.pop("proofArtifactRequiredCount", 0) or 0),
         }
-        row["routeTier"] = "local"
+        row["routeTier"] = _local_route_tier(row)
         row["workClass"] = (
-            "proven_local_route"
+            "controlled_red_team_lab"
+            if "red" in str(row.get("role", "") or "").lower()
+            else "normal_repo_execution"
             if row["decision"] == "use"
             else "local_route_needs_evidence"
         )
@@ -7336,11 +7410,11 @@ def build_harness_lab_snapshot(root: Path) -> dict:
         "fusedRuntime": fused_runtime,
         "routeDecisionRows": route_decision_rows,
         "benchmarkRouteRows": benchmark_route_rows,
-        "routeDecisionSummary": {
-            "localCount": len(local_route_decision_rows),
-            "benchmarkCount": len(benchmark_route_rows),
-            "totalShown": len(route_decision_rows),
-        },
+        "routeDecisionSummary": _route_decision_summary(
+            local_route_decision_rows=local_route_decision_rows,
+            benchmark_route_rows=benchmark_route_rows,
+            route_decision_rows=route_decision_rows,
+        ),
         "recentRuns": recent_runs,
         "harnessCounts": harness_counts,
         "statusCounts": status_counts,

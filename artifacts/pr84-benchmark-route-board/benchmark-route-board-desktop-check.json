@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T07:34:01.308256+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr84-benchmark-route-board\\benchmark-route-board-desktop.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr84-benchmark-route-board\\benchmark-route-board-desktop.html",
+  "expectedFragments": [
+    "Harness benchmark board",
+    "F7",
+    "MiniMax-M3",
+    "Proof gaps"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 1440,
+    "height": 1400,
+    "sampleCount": 8460,
+    "uniqueSampleColors": 801,
+    "averageLuma": 33.92,
+    "nonBlank": true
+  },
+  "passed": true
+}
