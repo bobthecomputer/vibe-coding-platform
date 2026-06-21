@@ -2598,6 +2598,7 @@ class DesktopUiContractTests(unittest.TestCase):
     def test_responsive_visual_smoke_covers_phone_tablet_desktop(self) -> None:
         responsive = RESPONSIVE_SMOKE.read_text(encoding="utf-8")
         visual = VISUAL_SMOKE.read_text(encoding="utf-8")
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
         fixtures = (ROOT / "desktop-ui" / "fixtures.js").read_text(encoding="utf-8")
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
 
@@ -2616,12 +2617,14 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("proof-pane", visual)
         self.assertIn("--long-history-fixture", responsive)
         self.assertIn("--long-history-fixture", visual)
-        self.assertIn('"surface": "workbench"', visual)
+        self.assertIn('"surface": "builder"', visual)
         self.assertIn('"drawer": "proof"', visual)
         self.assertIn("long-history-mission-switch", visual)
         self.assertIn("long-history-proof-pane", visual)
         self.assertIn("long_history", fixtures)
         self.assertIn("Long-History Proof Load", fixtures)
+        self.assertIn("Side-by-side proof diff fixture contract", reference_shell)
+        self.assertIn("Fixture-only receipt", reference_shell)
         self.assertIn("verify:long-history", package["scripts"])
         self.assertIn("verify:live-detail-performance", package["scripts"])
         self.assertIn("--long-history-fixture", package["scripts"]["verify:long-history"])
