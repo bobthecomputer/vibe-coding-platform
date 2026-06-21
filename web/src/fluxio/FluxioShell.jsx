@@ -33,6 +33,11 @@ const ImageStudioPlayground = lazy(() =>
     default: module.ImageStudioPlayground,
   })),
 );
+const RedTeamProofBoard = lazy(() =>
+  import("./redteam/RedTeamProofBoard.jsx").then(module => ({
+    default: module.RedTeamProofBoard,
+  })),
+);
 const VoiceCommandPanel = lazy(() =>
   import("./voice/index.js").then(module => ({
     default: module.VoiceCommandPanel,
@@ -11623,6 +11628,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </div>
           </section>
 
+          <Suspense fallback={<LazySurfaceFallback label="Loading red-team proof" />}>
+            <RedTeamProofBoard />
+          </Suspense>
+
           <section className="drawer-block">
             <h3>Setup controls</h3>
             <div className="drawer-actions">
@@ -15751,6 +15760,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     </div>
                     <ActionButton onClick={() => setActiveDrawer("runtime")}>Open fusion contract</ActionButton>
                   </article>
+
+                  <Suspense fallback={<LazySurfaceFallback label="Loading red-team proof" />}>
+                    <RedTeamProofBoard variant="builder" onOpenRuntime={() => setActiveDrawer("runtime")} />
+                  </Suspense>
 
                   <article className="builder-panel builder-panel-focus">
                     <p className="eyebrow">Feature backlog</p>

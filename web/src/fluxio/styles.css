@@ -7549,6 +7549,14 @@ button.builder-review-target:hover {
   gap: 8px;
 }
 
+.redteam-proof-list {
+  margin-bottom: 12px;
+}
+
+.redteam-proof-card {
+  gap: 8px;
+}
+
 .fusion-source-path {
   border-top: 1px solid rgba(238, 242, 236, 0.08);
   color: var(--muted);

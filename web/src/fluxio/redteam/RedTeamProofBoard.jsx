@@ -1,0 +1,77 @@
+import React, { useMemo } from "react";
+
+import { buildRedTeamProofBoard } from "./redTeamProofFixtures.js";
+
+function titleize(value) {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } = {}) {
+  const board = useMemo(() => buildRedTeamProofBoard(), []);
+
+  if (variant === "builder") {
+    return (
+      <article className="builder-panel builder-panel-focus">
+        <p className="eyebrow">Red-team proof</p>
+        <h3>{board.summary.safePacketCount} controlled proof packet{board.summary.safePacketCount === 1 ? "" : "s"}</h3>
+        <p>
+          Fictional targets, no live model calls, no network activity, and visible transcript proof stay attached to JBH-EAVEN routes.
+        </p>
+        <div className="builder-thread-list">
+          {board.rows.slice(0, 2).map(item => (
+            <article className="builder-thread-item tone-neutral" key={`builder-redteam-proof-${item.id}`}>
+              <span>{item.scenarioId}</span>
+              <strong>{item.title}</strong>
+              <p>{item.probeFamilies.slice(0, 3).map(titleize).join(" · ")}</p>
+            </article>
+          ))}
+        </div>
+        <button className="action-btn" onClick={onOpenRuntime} type="button">Open red-team proof</button>
+      </article>
+    );
+  }
+
+  return (
+    <section className="drawer-block">
+      <h3>Controlled red-team proof</h3>
+      <p>
+        JBH-EAVEN probes stay synthetic, fictional, transcript-backed, and human-reviewed before any live model route is promoted.
+      </p>
+      <div className="context-grid compact-metrics">
+        <article className="context-item">
+          <span>Packets</span>
+          <strong>{board.summary.packetCount}</strong>
+        </article>
+        <article className="context-item">
+          <span>Safe</span>
+          <strong>{board.summary.safePacketCount}</strong>
+        </article>
+        <article className="context-item">
+          <span>Probe families</span>
+          <strong>{board.summary.probeFamilyCount}</strong>
+        </article>
+      </div>
+      <div className="drawer-list redteam-proof-list">
+        {board.rows.map(item => (
+          <article className="drawer-card redteam-proof-card" key={`redteam-proof-${item.id}`}>
+            <span>{item.boundary.authorization} · {item.route.model}</span>
+            <strong>{item.title}</strong>
+            <p>
+              Fictional targets only: {item.boundary.fictionalTargetsOnly ? "yes" : "no"} · Live model calls:{" "}
+              {item.route.liveModelCalls ? "yes" : "no"} · Network activity: {item.boundary.networkActivity ? "yes" : "no"}
+            </p>
+            <div className="pill-row">
+              {item.probeFamilies.slice(0, 4).map(family => (
+                <span className="mini-pill" key={`${item.id}-${family}`}>{titleize(family)}</span>
+              ))}
+            </div>
+            <p>{item.refusalQualityChecks.join(" · ")}</p>
+            <p className="fusion-source-path">{item.artifactPaths.transcript}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}

@@ -109,3 +109,22 @@ def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
     assert "Terminal and operator workbench shell" in fixtures
     assert "Synology monitoring and event records" in fixtures
     assert "Synthetic red-team proof lane" in fixtures
+
+
+def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:
+    source = SHELL.read_text(encoding="utf-8")
+    styles = STYLES.read_text(encoding="utf-8")
+    component = (ROOT / "web" / "src" / "fluxio" / "redteam" / "RedTeamProofBoard.jsx").read_text(encoding="utf-8")
+    fixtures = (ROOT / "web" / "src" / "fluxio" / "redteam" / "redTeamProofFixtures.js").read_text(encoding="utf-8")
+
+    assert "RedTeamProofBoard" in source
+    assert 'import("./redteam/RedTeamProofBoard.jsx")' in source
+    assert "buildRedTeamProofBoard" in component
+    assert "Controlled red-team proof" in component
+    assert "redteam-proof-card" in component
+    assert ".redteam-proof-card" in styles
+    assert "RED_TEAM_PROOF_PACKETS" in fixtures
+    assert "fictional-targets-only" in fixtures
+    assert "liveModelCalls: false" in fixtures
+    assert "networkActivity: false" in fixtures
+    assert "sample_transcript.json" in fixtures
