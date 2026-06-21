@@ -850,6 +850,39 @@ button.builder-sidebar-nexus:hover {
   gap: 10px;
 }
 
+.monitor-loop-strip {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.42fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background:
+    linear-gradient(90deg, rgba(244, 240, 232, 0.06), transparent 52%),
+    rgba(255, 255, 255, 0.025);
+  padding: 10px;
+}
+
+.monitor-loop-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.monitor-loop-strip strong {
+  display: block;
+  margin-top: 2px;
+}
+
+.monitor-loop-strip-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .builder-summary-card {
   display: grid;
   gap: 6px;
@@ -7205,11 +7238,55 @@ button.builder-review-target:hover {
   margin-top: 2px;
 }
 
+.monitor-loop-panel {
+  border-color: rgba(86, 174, 255, 0.18);
+}
+
+.monitor-loop-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.monitor-loop-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 10px;
+}
+
+.monitor-loop-card span,
+.monitor-loop-card em {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.monitor-loop-card p,
+.monitor-loop-card small {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.monitor-loop-card small {
+  color: var(--muted);
+}
+
 @media (max-width: 760px) {
   .skill-recovery-head,
   .skill-recovery-strip,
-  .skill-recovery-list {
+  .skill-recovery-list,
+  .monitor-loop-strip,
+  .monitor-loop-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .monitor-loop-strip-items {
+    justify-content: flex-start;
   }
 }
 

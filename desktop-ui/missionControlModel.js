@@ -2590,6 +2590,112 @@ function deriveMissionActivityPulse({ mission, workspace, snapshot, pendingQuest
   };
 }
 
+function deriveMonitoringLoopStudio({ mission, builderBoard, snapshot, pendingQuestions, pendingApprovals }) {
+  const activeConversations = asList(builderBoard?.activeConversations);
+  const stuckThreads = asList(builderBoard?.stuckThreads);
+  const latestActivity = asList(snapshot?.activity)[0] || {};
+  const latestActivityAt = latestActivity?.timestamp || deriveMissionLatestTimestamp(mission);
+  const latestActivityMs = timeValue(latestActivityAt);
+  const silenceMinutes = Number.isFinite(latestActivityMs)
+    ? Math.max(0, Math.round((Date.now() - latestActivityMs) / 60000))
+    : null;
+  const silenceIsStaleFixture = silenceMinutes != null && silenceMinutes > 24 * 60;
+  const silenceTrigger = silenceMinutes == null
+    ? "No activity timestamp"
+    : silenceIsStaleFixture
+      ? "Last activity is stale; waiting for a fresh runtime event"
+      : `${silenceMinutes} minute(s) since last activity`;
+  const silenceNextAction = silenceIsStaleFixture
+    ? "Confirm the runtime event stream is connected before treating silence as operator inactivity."
+    : silenceMinutes != null && silenceMinutes > 35
+      ? "Post a progress update with changed files, blocker, tests, and next action."
+      : "Progress cadence is inside the expected window.";
+  const verificationFailures = asList(mission?.state?.verification_failures);
+  const approvalCount = asList(pendingApprovals).length + asList(mission?.proof?.pending_approvals).length;
+  const questionCount = asList(pendingQuestions).length;
+  const replanReason = mission?.state?.last_replan_reason || mission?.missionLoop?.lastReplanReason || "";
+  const routeChangeCount = asInt(mission?.state?.route_change_count || mission?.missionLoop?.routeChangeCount);
+  const completedCount = activeConversations.filter(item => item.statusLabel === "Completed").length +
+    (mission?.state?.status === "completed" ? 1 : 0);
+  const loops = [
+    {
+      id: "blocked-state-sentry",
+      label: "Blocked-state sentry",
+      status: stuckThreads.length > 0 || approvalCount > 0 || questionCount > 0 ? "warning" : "watching",
+      tone: stuckThreads.length > 0 || approvalCount > 0 || questionCount > 0 ? "warn" : "good",
+      trigger: `${stuckThreads.length} stuck thread(s), ${approvalCount} approval(s), ${questionCount} question(s)`,
+      nextAction:
+        stuckThreads[0]?.reason ||
+        (approvalCount > 0 ? "Open the queue and resolve the approval boundary." : "No blocked-state correction needed."),
+      cadence: "important_only",
+      activation: "manual_or_blocked",
+    },
+    {
+      id: "intent-drift-sentry",
+      label: "Intent-drift sentry",
+      status: routeChangeCount >= 2 || replanReason ? "warning" : "watching",
+      tone: routeChangeCount >= 2 || replanReason ? "warn" : "good",
+      trigger: `${routeChangeCount} route change(s)${replanReason ? ` · ${replanReason}` : ""}`,
+      nextAction:
+        routeChangeCount >= 2 || replanReason
+          ? "Compare the latest plan against the original user objective before continuing."
+          : "Original intent is not showing drift signals.",
+      cadence: "on_replan_or_route_change",
+      activation: "optional_monitor",
+    },
+    {
+      id: "silence-watchdog",
+      label: "Long-silence watchdog",
+      status: silenceMinutes == null ? "standby" : silenceMinutes > 35 ? "warning" : "watching",
+      tone: silenceMinutes == null ? "neutral" : silenceMinutes > 35 ? "warn" : "good",
+      trigger: silenceTrigger,
+      nextAction: silenceNextAction,
+      cadence: "10_20_min_progress_window",
+      activation: "optional_monitor",
+    },
+    {
+      id: "verification-sentinel",
+      label: "Verification sentinel",
+      status: verificationFailures.length > 0 ? "warning" : "watching",
+      tone: verificationFailures.length > 0 ? "bad" : "good",
+      trigger: verificationFailures.length > 0 ? verificationFailures.slice(0, 2).join(" | ") : "No failing checks reported",
+      nextAction:
+        verificationFailures.length > 0
+          ? "Run the smallest failing check and attach output before retrying implementation."
+          : "Keep normal build/test proof cadence.",
+      cadence: "on_test_or_build_result",
+      activation: "always_when_tests_run",
+    },
+    {
+      id: "milestone-notifier",
+      label: "Milestone notifier",
+      status: completedCount > 0 ? "ready" : "standby",
+      tone: completedCount > 0 ? "good" : "neutral",
+      trigger: `${completedCount} completed milestone(s)`,
+      nextAction:
+        completedCount > 0
+          ? "Summarize completed work with proof links and next cleanup."
+          : "Wait for a completed mission or PR proof artifact.",
+      cadence: "on_completion",
+      activation: "important_only",
+    },
+  ];
+  const warningCount = loops.filter(item => item.status === "warning").length;
+  const activeCount = loops.filter(item => ["watching", "warning", "ready"].includes(item.status)).length;
+  return {
+    headline: "External monitor loops",
+    summary:
+      warningCount > 0
+        ? `${warningCount} monitor loop(s) want attention before the next autonomous step.`
+        : "Monitor loops are quiet and configured for important-only warnings.",
+    activationMode: "important_only",
+    defaultState: "off_until_enabled_or_blocked",
+    activeCount,
+    warningCount,
+    loops,
+  };
+}
+
 export function buildRecentRuns(snapshot) {
   const missionRuns = asList(snapshot?.missions)
     .slice()
@@ -2658,6 +2764,13 @@ export function buildMissionControlModel({
     builderOps,
   });
   const builderBoard = deriveBuilderBoard({ mission, workspace, snapshot, confidence, uiMode });
+  const monitoringLoopStudio = deriveMonitoringLoopStudio({
+    mission,
+    builderBoard,
+    snapshot,
+    pendingQuestions,
+    pendingApprovals,
+  });
   const tutorialStudio = deriveTutorialStudio({
     mission,
     snapshot,
@@ -2912,6 +3025,7 @@ export function buildMissionControlModel({
         },
         tutorialStudio,
         recommendationStudio,
+        monitoringLoopStudio,
         liveReviewStudio: deriveLiveReviewStudio({
           mission,
           workspace,

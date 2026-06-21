@@ -13,6 +13,7 @@ FLUXIO_BRIDGE = ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts"
 FLUXIO_SHELL = ROOT / "web" / "src" / "fluxio" / "FluxioShell.jsx"
 FLUXIO_STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
 HELPERS_JS = ROOT / "desktop-ui" / "fluxioHelpers.js"
+MISSION_MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
 TAURI_CONF = ROOT / "src-tauri" / "tauri.conf.json"
 PACKAGE_JSON = ROOT / "package.json"
 CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
@@ -215,6 +216,34 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("skill-recovery-panel", styles)
         self.assertIn("skill-recovery-strip", styles)
         self.assertIn("skill-recovery-list", styles)
+
+    def test_builder_surfaces_external_monitor_loops(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        model = MISSION_MODEL.read_text(encoding="utf-8")
+
+        for fragment in [
+            "deriveMonitoringLoopStudio",
+            "blocked-state-sentry",
+            "intent-drift-sentry",
+            "silence-watchdog",
+            "verification-sentinel",
+            "milestone-notifier",
+            "off_until_enabled_or_blocked",
+        ]:
+            self.assertIn(fragment, model)
+        for fragment in [
+            "monitoringLoopStudio",
+            "External monitor loops",
+            "Review blockers",
+            "Review proof",
+            "Review context",
+            "monitor-loop-strip",
+            "monitor-loop-panel",
+        ]:
+            self.assertIn(fragment, shell)
+        self.assertIn(".monitor-loop-card", styles)
+        self.assertIn(".monitor-loop-strip", styles)
 
     def test_control_room_surfaces_live_agent_artifacts_compartments_and_deploy_readiness(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")

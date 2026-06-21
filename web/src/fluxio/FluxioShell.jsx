@@ -6424,6 +6424,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const tutorialStudio = viewModel.drawers.builder.tutorialStudio;
   const recommendationStudio = viewModel.drawers.builder.recommendationStudio;
   const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
+  const monitoringLoopStudio = viewModel.drawers.builder.monitoringLoopStudio || {};
+  const monitoringLoops = asList(monitoringLoopStudio.loops);
   const continuationSupervisor = liveReviewStudio.continuationSupervisor || null;
   const connectedDeviceBridge = asRecord(snapshot.connectedDeviceBridge);
   const bridgeSyncRows = asList(connectedDeviceBridge.sync);
@@ -12160,6 +12162,54 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </div>
           </div>
 
+          <section className="drawer-block monitor-loop-panel">
+            <div className="builder-live-review-panel-head compact">
+              <div>
+                <h3>{monitoringLoopStudio.headline || "External monitor loops"}</h3>
+                <p>{monitoringLoopStudio.summary || "Monitor loops are waiting for mission state."}</p>
+              </div>
+              <span className="mini-pill muted">
+                {titleizeToken(monitoringLoopStudio.activationMode || "important_only")}
+              </span>
+            </div>
+            <div className="context-grid compact-metrics">
+              <article className="context-item">
+                <span>Active monitors</span>
+                <strong>{monitoringLoopStudio.activeCount || 0}</strong>
+              </article>
+              <article className="context-item">
+                <span>Warnings</span>
+                <strong>{monitoringLoopStudio.warningCount || 0}</strong>
+              </article>
+              <article className="context-item">
+                <span>Default</span>
+                <strong>{titleizeToken(monitoringLoopStudio.defaultState || "off_until_enabled_or_blocked")}</strong>
+              </article>
+            </div>
+            <div className="monitor-loop-list">
+              {monitoringLoops.map(item => (
+                <article className={`monitor-loop-card ${toneClass(item.tone)}`} key={item.id}>
+                  <span>{titleizeToken(item.status)}</span>
+                  <strong>{item.label}</strong>
+                  <p>{item.trigger}</p>
+                  <small>{item.nextAction}</small>
+                  <em>{titleizeToken(item.cadence)} · {titleizeToken(item.activation)}</em>
+                </article>
+              ))}
+            </div>
+            <div className="drawer-actions">
+              <ActionButton onClick={() => setActiveDrawer("queue")} type="button">
+                Review blockers
+              </ActionButton>
+              <ActionButton onClick={() => setActiveDrawer("proof")} type="button">
+                Review proof
+              </ActionButton>
+              <ActionButton onClick={() => setActiveDrawer("context")} type="button">
+                Review context
+              </ActionButton>
+            </div>
+          </section>
+
           <section className="drawer-block">
             <h3>Confidence engine</h3>
             <div className="confidence-headline">
@@ -14098,6 +14148,28 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               </button>
                               <span className="mini-pill muted">Now: {viewModel.thread.activityPulse?.current || builderPrimaryConversation.current}</span>
                               <span className="mini-pill muted">Next: {viewModel.thread.activityPulse?.next || builderPrimaryConversation.next}</span>
+                            </div>
+                            <div className="monitor-loop-strip" aria-label="External monitor loops">
+                              <div>
+                                <span>{monitoringLoopStudio.headline || "External monitor loops"}</span>
+                                <strong>
+                                  {(monitoringLoopStudio.warningCount || 0) > 0
+                                    ? `${monitoringLoopStudio.warningCount} warning loop(s)`
+                                    : "Quiet, important-only"}
+                                </strong>
+                              </div>
+                              <div className="monitor-loop-strip-items">
+                                {monitoringLoops.slice(0, 3).map(item => (
+                                  <button
+                                    className={`mini-pill ${toneClass(item.tone)}`}
+                                    key={`monitor-strip-${item.id}`}
+                                    onClick={() => setActiveDrawer(item.id === "verification-sentinel" ? "proof" : item.id === "silence-watchdog" ? "context" : "queue")}
+                                    type="button"
+                                  >
+                                    {item.label}: {titleizeToken(item.status)}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                             <h2>{builderPrimaryConversation.title}</h2>
                             <p>{builderPrimaryConversation.current}</p>
