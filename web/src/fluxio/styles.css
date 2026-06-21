@@ -7827,6 +7827,19 @@ button.builder-review-target:hover {
   margin-top: 0;
 }
 
+.lazy-surface-fallback {
+  align-content: start;
+  min-height: 220px;
+}
+
+.lazy-surface-fallback strong {
+  font-size: clamp(1.25rem, 2vw, 1.8rem);
+}
+
+.lazy-surface-fallback span {
+  color: var(--muted);
+}
+
 .runtime-account-card {
   position: relative;
   overflow: hidden;

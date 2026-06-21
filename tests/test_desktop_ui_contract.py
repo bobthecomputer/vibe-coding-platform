@@ -303,6 +303,9 @@ class DesktopUiContractTests(unittest.TestCase):
         styles = FLUXIO_STYLES.read_text(encoding="utf-8")
 
         self.assertIn("ImageStudioPlayground", shell)
+        self.assertIn("lazy(() =>", shell)
+        self.assertIn("Suspense", shell)
+        self.assertIn("LazySurfaceFallback", shell)
         self.assertIn("generatedArtifacts={generatedImageArtifacts}", shell)
         self.assertIn("VoiceCommandPanel", shell)
         self.assertIn('surface === "images"', shell)
@@ -312,6 +315,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn('label="Images"', shell)
         self.assertIn('label="Voice"', shell)
         self.assertIn(".voice-studio-grid", styles)
+        self.assertIn(".lazy-surface-fallback", styles)
         image_studio = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "ImageStudioPlayground.jsx").read_text(encoding="utf-8")
         image_css = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "image-studio.css").read_text(encoding="utf-8")
         self.assertIn("Served artifacts", image_studio)

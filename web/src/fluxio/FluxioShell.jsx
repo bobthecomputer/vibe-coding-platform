@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -19,8 +19,6 @@ import {
 import { ActionButton, Field, Modal, StatusPill } from "../../../desktop-ui/MissionControlPrimitives.jsx";
 import { buildMissionControlModel } from "../../../desktop-ui/missionControlModel.js";
 import { buildFusionWorkbench } from "./fusion/fusionFixtures.js";
-import { ImageStudioPlayground } from "./image-studio/ImageStudioPlayground.jsx";
-import { VoiceCommandPanel } from "./voice/index.js";
 import {
   EXECUTION_TARGET_OPTIONS,
   MODEL_EFFORT_OPTIONS,
@@ -29,6 +27,17 @@ import {
   WORKSPACE_SURFACE_IDS,
   deriveRuntimeOperations,
 } from "./workspaceModel.js";
+
+const ImageStudioPlayground = lazy(() =>
+  import("./image-studio/ImageStudioPlayground.jsx").then(module => ({
+    default: module.ImageStudioPlayground,
+  })),
+);
+const VoiceCommandPanel = lazy(() =>
+  import("./voice/index.js").then(module => ({
+    default: module.VoiceCommandPanel,
+  })),
+);
 
 function uniq(items) {
   return [...new Set((Array.isArray(items) ? items : []).filter(Boolean))];
@@ -2141,6 +2150,16 @@ function MenuButton({ label, onClick }) {
     <button className="app-menu-button" onClick={onClick} type="button">
       {label}
     </button>
+  );
+}
+
+function LazySurfaceFallback({ label }) {
+  return (
+    <article className="builder-panel lazy-surface-fallback" aria-live="polite">
+      <p className="eyebrow">Loading surface</p>
+      <strong>{label}</strong>
+      <span>Preparing the workspace controls.</span>
+    </article>
   );
 }
 
@@ -13694,10 +13713,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           {!mission ? (
             uiMode === "builder" && surface === "images" ? (
               <section className="builder-shell image-studio-shell">
-                <ImageStudioPlayground
-                  generatedArtifacts={generatedImageArtifacts}
-                  onRequestDraft={handleImageStudioRequestDraft}
-                />
+                <Suspense fallback={<LazySurfaceFallback label="Image Playground" />}>
+                  <ImageStudioPlayground
+                    generatedArtifacts={generatedImageArtifacts}
+                    onRequestDraft={handleImageStudioRequestDraft}
+                  />
+                </Suspense>
               </section>
             ) : uiMode === "builder" && surface === "voice" ? (
               <section className="builder-shell voice-studio-shell">
@@ -13719,7 +13740,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   </div>
                 </header>
                 <div className="voice-studio-grid">
-                  <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                  <Suspense fallback={<LazySurfaceFallback label="Voice command panel" />}>
+                    <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                  </Suspense>
                   <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
                     <p className="eyebrow">Accessible operation</p>
                     <h2>Built for low typing</h2>
@@ -14123,10 +14146,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             )
           ) : uiMode === "builder" && surface === "images" ? (
             <section className="builder-shell image-studio-shell">
-              <ImageStudioPlayground
-                generatedArtifacts={generatedImageArtifacts}
-                onRequestDraft={handleImageStudioRequestDraft}
-              />
+              <Suspense fallback={<LazySurfaceFallback label="Image Playground" />}>
+                <ImageStudioPlayground
+                  generatedArtifacts={generatedImageArtifacts}
+                  onRequestDraft={handleImageStudioRequestDraft}
+                />
+              </Suspense>
             </section>
           ) : uiMode === "builder" && surface === "voice" ? (
             <section className="builder-shell voice-studio-shell">
@@ -14148,7 +14173,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </div>
               </header>
               <div className="voice-studio-grid">
-                <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                <Suspense fallback={<LazySurfaceFallback label="Voice command panel" />}>
+                  <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                </Suspense>
                 <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
                   <p className="eyebrow">Accessible operation</p>
                   <h2>Built for low typing</h2>
