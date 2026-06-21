@@ -2247,6 +2247,7 @@ function VoiceControlCheckpoint({
   const capture = voice?.capture || {};
   const captureLifecycle = voice?.captureLifecycle || {};
   const guard = voice?.sendGuard || {};
+  const inputMode = voice?.inputMode || transcript.inputMode || "command";
   const canStartCapture = Boolean(capture.canStartLiveCapture);
   const reviewBlocked =
     Boolean(transcript.interimText) ||
@@ -2291,8 +2292,10 @@ function VoiceControlCheckpoint({
       </div>
       <div className="voice-control-checkpoint-grid" aria-label="Voice command readiness">
         <span>Source: {capture.source || capture.label || "not checked"}</span>
+        <span>Mode: {inputMode}</span>
         <span>Guard: {guard.label || "No command"}</span>
         <span>Low confidence: {repairQueue.lowConfidenceCount || 0}</span>
+        <span>Unknown confidence: {repairQueue.unknownConfidenceCount || 0}</span>
         <span>Ambiguous: {repairQueue.ambiguousCount || 0}</span>
         <span>Interim: {repairQueue.interimActive ? "active" : "clear"}</span>
         <span>Corrections: {transcript.correctionCount || 0}</span>

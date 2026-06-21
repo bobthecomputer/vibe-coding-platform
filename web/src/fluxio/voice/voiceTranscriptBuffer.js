@@ -68,10 +68,17 @@ function normalizeSegment(input = {}, fallback = {}) {
     revision: Number.isInteger(input.revision) ? input.revision : fallback.revision || 0,
     alternatives: normalizeAlternatives(input.alternatives ?? fallback.alternatives),
     ambiguityReasons: normalizeTextList(input.ambiguityReasons ?? fallback.ambiguityReasons),
+    reviewReasons: normalizeTextList(input.reviewReasons ?? fallback.reviewReasons),
+    reviewedAt: input.reviewedAt || fallback.reviewedAt || "",
+    reviewedBy: input.reviewedBy || fallback.reviewedBy || "",
     correctionOf: input.correctionOf || fallback.correctionOf || "",
     correctedFrom: normalizeText(input.correctedFrom ?? fallback.correctedFrom ?? ""),
     correctedAt: input.correctedAt || fallback.correctedAt || "",
   };
+}
+
+function isReviewedSegment(segment = {}) {
+  return Boolean(segment.reviewedAt || segment.reviewedBy);
 }
 
 export function createVoiceTranscriptState(options = {}) {
@@ -130,8 +137,9 @@ export function replaceTranscriptSegment(state, segmentId, patch = {}) {
     return current;
   }
   const normalizedPatch = normalizeSegment(patch, {
+    ...target,
     id: segmentId,
-    revision: 1,
+    revision: target.revision + 1,
     correctedFrom: target.text,
     correctionOf: segmentId,
   });
@@ -158,6 +166,8 @@ export function replaceTranscriptSegment(state, segmentId, patch = {}) {
         correctionOf: segment.id,
         correctedFrom: target.text,
         correctedAt: correctionEntry.at,
+        reviewedAt: normalizedPatch.reviewedAt || target.reviewedAt,
+        reviewedBy: normalizedPatch.reviewedBy || target.reviewedBy,
         revision: segment.revision + 1,
       };
     }),
@@ -186,9 +196,18 @@ export function buildTranscriptQualityChecks(state) {
   const ambiguityConfidenceThreshold =
     current.ambiguityConfidenceThreshold ?? DEFAULT_AMBIGUITY_CONFIDENCE_THRESHOLD;
   const lowConfidenceSegments = segments.filter(
-    segment => typeof segment.confidence === "number" && segment.confidence < lowConfidenceThreshold,
+    segment =>
+      !isReviewedSegment(segment) &&
+      typeof segment.confidence === "number" &&
+      segment.confidence < lowConfidenceThreshold,
+  );
+  const unknownConfidenceSegments = segments.filter(
+    segment => !isReviewedSegment(segment) && segment.text && typeof segment.confidence !== "number",
   );
   const ambiguousSegments = segments.filter(segment => {
+    if (isReviewedSegment(segment)) {
+      return false;
+    }
     const hasAlternatives = Array.isArray(segment.alternatives) && segment.alternatives.length > 0;
     const hasExplicitReason = Array.isArray(segment.ambiguityReasons) && segment.ambiguityReasons.length > 0;
     const confidenceNeedsAttention =
@@ -218,6 +237,15 @@ export function buildTranscriptQualityChecks(state) {
           : "No final segment is below the review threshold.",
     },
     {
+      id: "unknown-confidence",
+      label: "Unknown confidence",
+      status: unknownConfidenceSegments.length > 0 ? "review" : "ready",
+      detail:
+        unknownConfidenceSegments.length > 0
+          ? `${unknownConfidenceSegments.length} segment${unknownConfidenceSegments.length === 1 ? "" : "s"} came from a source without confidence.`
+          : "Every unreviewed segment has a confidence score.",
+    },
+    {
       id: "ambiguity",
       label: "Ambiguity",
       status: ambiguousSegments.length > 0 ? "review" : "ready",
@@ -240,12 +268,20 @@ export function buildTranscriptQualityChecks(state) {
 
 export function buildVoiceRepairQueue(snapshot = {}) {
   const lowConfidence = Array.isArray(snapshot.lowConfidenceSegments) ? snapshot.lowConfidenceSegments : [];
+  const unknownConfidence = Array.isArray(snapshot.unknownConfidenceSegments) ? snapshot.unknownConfidenceSegments : [];
   const ambiguous = Array.isArray(snapshot.ambiguousSegments) ? snapshot.ambiguousSegments : [];
   const interim = snapshot.interim || (snapshot.interimText ? { text: snapshot.interimText } : null);
   const reviewItems = [
     ...lowConfidence.map(segment => ({ ...segment, repairKind: "low_confidence" })),
-    ...ambiguous
+    ...unknownConfidence
       .filter(segment => !lowConfidence.some(item => item.id === segment.id))
+      .map(segment => ({ ...segment, repairKind: "unknown_confidence" })),
+    ...ambiguous
+      .filter(
+        segment =>
+          !lowConfidence.some(item => item.id === segment.id) &&
+          !unknownConfidence.some(item => item.id === segment.id),
+      )
       .map(segment => ({ ...segment, repairKind: "ambiguity" })),
   ];
   const nextItem = reviewItems[0] || null;
@@ -261,6 +297,7 @@ export function buildVoiceRepairQueue(snapshot = {}) {
           ? "Transcript can be parsed after operator review."
           : "Dictate, paste, or connect a voice adapter.",
     lowConfidenceCount: lowConfidence.length,
+    unknownConfidenceCount: unknownConfidence.length,
     ambiguousCount: ambiguous.length,
     interimActive: Boolean(interim?.text),
     nextSegmentId: nextItem?.id || "",
@@ -283,10 +320,17 @@ export function buildTranscriptSnapshot(state) {
     : null;
   const lowConfidenceSegments = segments.filter(
     segment =>
+      !isReviewedSegment(segment) &&
       typeof segment.confidence === "number" &&
       segment.confidence < (current.lowConfidenceThreshold ?? DEFAULT_LOW_CONFIDENCE_THRESHOLD),
   );
+  const unknownConfidenceSegments = segments.filter(
+    segment => !isReviewedSegment(segment) && segment.text && typeof segment.confidence !== "number",
+  );
   const ambiguousSegments = segments.filter(segment => {
+    if (isReviewedSegment(segment)) {
+      return false;
+    }
     const hasAlternatives = Array.isArray(segment.alternatives) && segment.alternatives.length > 0;
     const hasExplicitReason = Array.isArray(segment.ambiguityReasons) && segment.ambiguityReasons.length > 0;
     const confidenceNeedsAttention =
@@ -301,6 +345,9 @@ export function buildTranscriptSnapshot(state) {
   const warnings = [];
   if (lowConfidenceSegments.length > 0) {
     warnings.push("Some dictated words were unclear. Review the highlighted transcript before sending.");
+  }
+  if (unknownConfidenceSegments.length > 0) {
+    warnings.push("Some dictated text has no confidence score. Review it before running a command.");
   }
   if (ambiguousSegments.length > 0) {
     warnings.push("Speech recognition recorded alternatives or ambiguous confidence. Check the transcript before sending.");
@@ -317,6 +364,7 @@ export function buildTranscriptSnapshot(state) {
     combinedText,
     averageConfidence,
     lowConfidenceSegments,
+    unknownConfidenceSegments,
     ambiguousSegments,
     correctionLog,
     correctionCount: correctionLog.length,

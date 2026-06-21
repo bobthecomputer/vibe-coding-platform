@@ -5,6 +5,8 @@ const GUARDED_ACTIONS = new Set([
   "mission.pause",
   "mission.resume",
 ]);
+const VOICE_INPUT_MODES = new Set(["command", "dictation", "correction"]);
+const COMMAND_LIKE_START = /^(?:send|submit|post|approve|deny|reject|pause|stop|resume|continue|open|show|go to|switch to|start|clear|reset|discard)\b/;
 
 const SURFACE_ALIASES = {
   home: ["home", "start", "dashboard", "overview"],
@@ -325,13 +327,81 @@ export function getVoiceCommandRisk(command = {}) {
   };
 }
 
-export function buildAccidentalSendGuard({ command, transcript } = {}) {
+export function normalizeVoiceInputMode(mode = "command") {
+  const normalized = String(mode || "command").toLowerCase();
+  return VOICE_INPUT_MODES.has(normalized) ? normalized : "command";
+}
+
+export function buildVoiceModeCheckpoint({ text = "", transcript = {}, activeMode = "command", command = null } = {}) {
+  const normalizedMode = normalizeVoiceInputMode(activeMode);
+  const sourceText = text || transcript?.combinedText || transcript?.finalText || "";
+  const normalizedText = normalizeCommandText(sourceText);
+  const parsedCommand = command || parseVoiceCommand(sourceText, { confidence: transcript?.averageConfidence ?? 1 });
+  const commandLike = Boolean(parsedCommand?.matched) || COMMAND_LIKE_START.test(normalizedText);
+  const guardedIntent = Boolean(parsedCommand?.requiresConfirmation) || getVoiceCommandRisk(parsedCommand).guarded;
+  const dictationConflict = normalizedMode === "dictation" && commandLike;
+  const correctionConflict = normalizedMode === "correction" && guardedIntent;
+  const modeConflict = dictationConflict || correctionConflict;
+
+  return {
+    schemaVersion: "fluxio.voice-mode-checkpoint.v1",
+    activeMode: normalizedMode,
+    label:
+      normalizedMode === "dictation"
+        ? "Dictation mode"
+        : normalizedMode === "correction"
+          ? "Correction mode"
+          : "Command mode",
+    commandLike,
+    guardedIntent,
+    modeConflict,
+    reason: modeConflict
+      ? dictationConflict
+        ? "dictation_contains_command"
+        : "correction_contains_guarded_intent"
+      : commandLike
+        ? "command_intent_detected"
+        : normalizedText
+          ? "freeform_dictation"
+          : "empty_transcript",
+    route:
+      modeConflict
+        ? "hold_for_mode_review"
+        : commandLike && normalizedMode === "command"
+          ? "parse_as_command"
+          : "keep_as_dictation",
+    detail: modeConflict
+      ? "The dictated text looks like a command in a non-command mode. Review or switch mode before it can run."
+      : commandLike
+        ? "The text looks command-like and will use the command parser when the transcript gate is clear."
+        : "The text is treated as dictation until the operator switches to command mode.",
+  };
+}
+
+export function buildAccidentalSendGuard({ command, transcript, activeMode = "command" } = {}) {
   if (!command?.matched) {
     return {
       status: "blocked",
       reason: command?.blockedReason || "unmatched_command",
       label: "Command blocked",
       detail: command?.recovery || "The voice command did not match a runnable action.",
+    };
+  }
+
+  const modeCheckpoint = buildVoiceModeCheckpoint({
+    text: command.sourceText || transcript?.combinedText || "",
+    transcript,
+    activeMode,
+    command,
+  });
+  if (modeCheckpoint.modeConflict) {
+    return {
+      status: "review_required",
+      reason: modeCheckpoint.reason,
+      label: "Check mode",
+      detail: modeCheckpoint.detail,
+      modeCheckpoint,
+      risk: getVoiceCommandRisk(command),
     };
   }
 
@@ -342,6 +412,7 @@ export function buildAccidentalSendGuard({ command, transcript } = {}) {
       reason: "low_risk_command",
       label: "Ready",
       detail: "This command does not perform a risky send, approval, or mission action.",
+      modeCheckpoint,
       risk,
     };
   }
@@ -352,6 +423,7 @@ export function buildAccidentalSendGuard({ command, transcript } = {}) {
       reason: "interim_transcript",
       label: "Review first",
       detail: "The dictated command is still changing. Wait for final text before running it.",
+      modeCheckpoint,
       risk,
     };
   }
@@ -366,6 +438,7 @@ export function buildAccidentalSendGuard({ command, transcript } = {}) {
       reason: "transcript_quality",
       label: "Review first",
       detail: "The transcript has low-confidence or ambiguous text. Correct it before this guarded action can run.",
+      modeCheckpoint,
       risk,
     };
   }
@@ -376,6 +449,7 @@ export function buildAccidentalSendGuard({ command, transcript } = {}) {
       reason: "guarded_action",
       label: "Confirm",
       detail: command.confirmationPrompt || "Confirm this guarded voice command before it runs.",
+      modeCheckpoint,
       risk,
     };
   }
@@ -385,6 +459,7 @@ export function buildAccidentalSendGuard({ command, transcript } = {}) {
     reason: "guard_passed",
     label: "Ready",
     detail: "The guarded command passed transcript review.",
+    modeCheckpoint,
     risk,
   };
 }
@@ -396,6 +471,8 @@ function compactSegment(segment = {}) {
     confidence: typeof segment.confidence === "number" ? segment.confidence : null,
     source: segment.source || "",
     correctedFrom: segment.correctedFrom || "",
+    reviewedAt: segment.reviewedAt || "",
+    reviewedBy: segment.reviewedBy || "",
     alternatives: Array.isArray(segment.alternatives)
       ? segment.alternatives.slice(0, 3).map(item => ({
           text: item.text || "",
@@ -409,8 +486,19 @@ export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
   const safeCommand = command || {};
   const safeTranscript = transcript || {};
   const safeGuard = guard || buildAccidentalSendGuard({ command: safeCommand, transcript: safeTranscript });
+  const modeCheckpoint =
+    safeGuard.modeCheckpoint ||
+    buildVoiceModeCheckpoint({
+      text: safeCommand.sourceText || safeTranscript.combinedText || "",
+      transcript: safeTranscript,
+      activeMode: safeTranscript.inputMode || safeTranscript.activeMode || "command",
+      command: safeCommand,
+    });
   const lowConfidenceSegments = Array.isArray(safeTranscript.lowConfidenceSegments)
     ? safeTranscript.lowConfidenceSegments
+    : [];
+  const unknownConfidenceSegments = Array.isArray(safeTranscript.unknownConfidenceSegments)
+    ? safeTranscript.unknownConfidenceSegments
     : [];
   const ambiguousSegments = Array.isArray(safeTranscript.ambiguousSegments)
     ? safeTranscript.ambiguousSegments
@@ -420,6 +508,7 @@ export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
   const blockedBy = [
     safeTranscript.interimText ? "interim_transcript" : "",
     lowConfidenceSegments.length > 0 ? "low_confidence" : "",
+    unknownConfidenceSegments.length > 0 ? "unknown_confidence" : "",
     ambiguousSegments.length > 0 ? "ambiguous_transcript" : "",
     safeTranscript.reviewRequired ? "review_required" : "",
     safeGuard.status === "blocked" ? safeGuard.reason || "guard_blocked" : "",
@@ -448,6 +537,7 @@ export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
       label: safeGuard.label || "",
       detail: safeGuard.detail || "",
       risk: safeGuard.risk || getVoiceCommandRisk(safeCommand),
+      modeCheckpoint,
     },
     transcript: {
       finalText: safeTranscript.finalText || "",
@@ -457,11 +547,13 @@ export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
         typeof safeTranscript.averageConfidence === "number" ? safeTranscript.averageConfidence : null,
       segmentCount: Array.isArray(safeTranscript.segments) ? safeTranscript.segments.length : 0,
       lowConfidenceCount: lowConfidenceSegments.length,
+      unknownConfidenceCount: unknownConfidenceSegments.length,
       ambiguousCount: ambiguousSegments.length,
       correctionCount: correctionLog.length || safeTranscript.correctionCount || 0,
       reviewRequired: Boolean(safeTranscript.reviewRequired),
       warnings: Array.isArray(safeTranscript.warnings) ? safeTranscript.warnings.slice(0, 5) : [],
       lowConfidenceSegments: lowConfidenceSegments.slice(0, 5).map(compactSegment),
+      unknownConfidenceSegments: unknownConfidenceSegments.slice(0, 5).map(compactSegment),
       ambiguousSegments: ambiguousSegments.slice(0, 5).map(compactSegment),
       repairQueue: {
         status: repairQueue.status || "",
@@ -470,12 +562,14 @@ export function buildVoiceCommandPacket({ command, guard, transcript } = {}) {
         nextSegmentText: repairQueue.nextSegmentText || "",
         nextRepairKind: repairQueue.nextRepairKind || "",
       },
+      inputMode: modeCheckpoint.activeMode,
     },
     review: {
-      sendable: safeCommand.matched === true && !["blocked", "review_required"].includes(safeGuard.status),
+      sendable: safeCommand.matched === true && safeGuard.status === "ready",
       confirmationRequired: safeGuard.status === "confirmation_required" || Boolean(safeCommand.requiresConfirmation),
-      blockedBy: Array.from(new Set(blockedBy)),
+      blockedBy: Array.from(new Set([...blockedBy, modeCheckpoint.modeConflict ? modeCheckpoint.reason : ""])).filter(Boolean),
       correctionCount: correctionLog.length || safeTranscript.correctionCount || 0,
+      modeCheckpoint,
     },
   };
 }

@@ -25,7 +25,7 @@ import { createVoiceCaptureAdapter } from "./voiceCaptureAdapters.js";
 function createInitialState(options = {}) {
   const support = detectVoiceInputSupport(options.runtime || globalThis);
   const transcriptState = createVoiceTranscriptState(options.transcript || {});
-  const transcript = buildTranscriptSnapshot(transcriptState);
+  const transcript = { ...buildTranscriptSnapshot(transcriptState), inputMode: "command" };
   return {
     support,
     transcriptState,
@@ -44,6 +44,7 @@ function createInitialState(options = {}) {
       label: "No command",
       detail: "Dictate or type a command before running it.",
     },
+    inputMode: "command",
     pendingCommand: null,
     lastCommand: null,
     status: getVoiceStatusCopy({ support, transcript }),
@@ -135,7 +136,7 @@ function reducer(state, action) {
   }
   if (action.type === "transcript.append") {
     const transcriptState = appendTranscriptSegment(state.transcriptState, action.segment);
-    const transcript = buildTranscriptSnapshot(transcriptState);
+    const transcript = { ...buildTranscriptSnapshot(transcriptState), inputMode: state.inputMode };
     return {
       ...state,
       transcriptState,
@@ -155,7 +156,7 @@ function reducer(state, action) {
   }
   if (action.type === "transcript.finalize") {
     const transcriptState = finalizeInterimTranscript(state.transcriptState, action.patch);
-    const transcript = buildTranscriptSnapshot(transcriptState);
+    const transcript = { ...buildTranscriptSnapshot(transcriptState), inputMode: state.inputMode };
     return {
       ...state,
       transcriptState,
@@ -174,7 +175,7 @@ function reducer(state, action) {
   }
   if (action.type === "transcript.correct") {
     const transcriptState = replaceTranscriptSegment(state.transcriptState, action.segmentId, action.patch);
-    const transcript = buildTranscriptSnapshot(transcriptState);
+    const transcript = { ...buildTranscriptSnapshot(transcriptState), inputMode: state.inputMode };
     return {
       ...state,
       transcriptState,
@@ -193,7 +194,7 @@ function reducer(state, action) {
   }
   if (action.type === "transcript.clear") {
     const transcriptState = clearTranscriptBuffer(state.transcriptState, action.reason);
-    const transcript = buildTranscriptSnapshot(transcriptState);
+    const transcript = { ...buildTranscriptSnapshot(transcriptState), inputMode: state.inputMode };
     return {
       ...state,
       transcriptState,
@@ -206,6 +207,33 @@ function reducer(state, action) {
         detail: "The transcript was cleared.",
       },
       status: getVoiceStatusCopy({ ...state, transcript, pendingCommand: null }),
+    };
+  }
+  if (action.type === "inputMode.set") {
+    const inputMode = action.inputMode === "dictation" || action.inputMode === "correction" ? action.inputMode : "command";
+    const transcript = { ...state.transcript, inputMode };
+    return {
+      ...state,
+      inputMode,
+      transcript,
+      pendingCommand: null,
+      sendGuard: {
+        status: "idle",
+        reason: "mode_changed",
+        label: inputMode === "dictation" ? "Dictation mode" : inputMode === "correction" ? "Correction mode" : "Command mode",
+        detail:
+          inputMode === "dictation"
+            ? "Command-like phrases will be held for review until command mode is restored."
+            : inputMode === "correction"
+              ? "Use this mode to repair dictated text before running a command."
+              : "Reviewed text can be parsed as a command.",
+      },
+      status:
+        inputMode === "dictation"
+          ? "Dictation mode is active. Command-like phrases will be reviewed before running."
+          : inputMode === "correction"
+            ? "Correction mode is active. Repair the transcript before running commands."
+            : "Command mode is active. Reviewed transcript can be parsed as a command.",
     };
   }
   if (action.type === "command.pending") {
@@ -370,11 +398,15 @@ export function useVoiceInteractionController({
     dispatch({ type: "transcript.clear", reason });
   }, []);
 
+  const setInputMode = useCallback(inputMode => {
+    dispatch({ type: "inputMode.set", inputMode });
+  }, []);
+
   const runTranscriptCommand = useCallback(
     async (text = state.transcript.combinedText, confidence = state.transcript.averageConfidence ?? 1) => {
       const command = parseVoiceCommand(text, { confidence, minConfidence });
       if (!command.matched) {
-        const guard = buildAccidentalSendGuard({ command, transcript: state.transcript });
+        const guard = buildAccidentalSendGuard({ command, transcript: state.transcript, activeMode: state.inputMode });
         const blockedCommand = {
           ...command,
           guard,
@@ -383,7 +415,7 @@ export function useVoiceInteractionController({
         dispatch({ type: "command.guardBlocked", command: blockedCommand, guard });
         return blockedCommand;
       }
-      const guard = buildAccidentalSendGuard({ command, transcript: state.transcript });
+      const guard = buildAccidentalSendGuard({ command, transcript: state.transcript, activeMode: state.inputMode });
       const voicePacket = buildVoiceCommandPacket({ command, guard, transcript: state.transcript });
       if (guard.status === "review_required" || guard.status === "blocked") {
         const blockedCommand = {
@@ -413,7 +445,7 @@ export function useVoiceInteractionController({
       dispatch({ type: "command.complete", command: commandWithPacket, guard });
       return commandWithPacket;
     },
-    [minConfidence, onVoiceCommand, state.transcript, stopListening],
+    [minConfidence, onVoiceCommand, state.inputMode, state.transcript, stopListening],
   );
 
   const confirmPendingCommand = useCallback(async () => {
@@ -451,6 +483,7 @@ export function useVoiceInteractionController({
       correctTranscriptSegment,
       finalizeTranscript,
       clearTranscript,
+      setInputMode,
       runTranscriptCommand,
       confirmPendingCommand,
     }),
@@ -463,6 +496,7 @@ export function useVoiceInteractionController({
       finalizeTranscript,
       refreshSupport,
       runTranscriptCommand,
+      setInputMode,
       startListening,
       state,
       stopListening,

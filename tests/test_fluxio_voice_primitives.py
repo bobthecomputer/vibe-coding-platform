@@ -65,6 +65,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
             """
             import {
               buildAccidentalSendGuard,
+              buildVoiceModeCheckpoint,
               buildVoiceCommandPacket,
               parseVoiceCommand,
             } from './web/src/fluxio/voice/voiceCommandGrammar.js';
@@ -87,12 +88,28 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
               command: send,
               transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [] },
             });
+            const confirmationPacket = buildVoiceCommandPacket({
+              command: send,
+              guard: confirmationGuard,
+              transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [], combinedText: 'send message' },
+            });
+            const dictationModeCheckpoint = buildVoiceModeCheckpoint({
+              text: 'send message',
+              activeMode: 'dictation',
+              command: send,
+            });
+            const dictationModeGuard = buildAccidentalSendGuard({
+              command: send,
+              activeMode: 'dictation',
+              transcript: { reviewRequired: false, lowConfidenceSegments: [], ambiguousSegments: [], combinedText: 'send message' },
+            });
             const packet = buildVoiceCommandPacket({
               command: send,
-              guard: guarded,
+              guard: dictationModeGuard,
               transcript: {
                 finalText: 'send message',
                 combinedText: 'send message',
+                inputMode: 'dictation',
                 reviewRequired: true,
                 averageConfidence: 0.81,
                 segments: [{ id: 'unclear', text: 'send massage', confidence: 0.52 }],
@@ -103,7 +120,7 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
                 warnings: ['review before send'],
               },
             });
-            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, send, clear, guarded, confirmationGuard, packet }));
+            console.log(JSON.stringify({ navigation, lowConfidence, approval, unknown, send, clear, guarded, confirmationGuard, confirmationPacket, dictationModeCheckpoint, dictationModeGuard, packet }));
             """
         )
 
@@ -120,12 +137,19 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["guarded"]["status"], "review_required")
         self.assertEqual(payload["guarded"]["reason"], "transcript_quality")
         self.assertEqual(payload["confirmationGuard"]["status"], "confirmation_required")
+        self.assertTrue(payload["confirmationPacket"]["review"]["confirmationRequired"])
+        self.assertFalse(payload["confirmationPacket"]["review"]["sendable"])
+        self.assertTrue(payload["dictationModeCheckpoint"]["modeConflict"])
+        self.assertEqual(payload["dictationModeCheckpoint"]["route"], "hold_for_mode_review")
+        self.assertEqual(payload["dictationModeGuard"]["reason"], "dictation_contains_command")
         self.assertEqual(payload["packet"]["schemaVersion"], "fluxio.voice-command-packet.v1")
         self.assertEqual(payload["packet"]["command"]["action"], "composer.send")
+        self.assertEqual(payload["packet"]["transcript"]["inputMode"], "dictation")
         self.assertEqual(payload["packet"]["transcript"]["lowConfidenceCount"], 1)
         self.assertEqual(payload["packet"]["transcript"]["ambiguousCount"], 1)
         self.assertEqual(payload["packet"]["transcript"]["correctionCount"], 1)
-        self.assertIn("review_required", payload["packet"]["review"]["blockedBy"])
+        self.assertIn("dictation_contains_command", payload["packet"]["review"]["blockedBy"])
+        self.assertEqual(payload["packet"]["review"]["modeCheckpoint"]["activeMode"], "dictation")
         self.assertFalse(payload["packet"]["review"]["sendable"])
 
     def test_transcript_corrections_and_ambiguity_are_visible_metadata(self) -> None:
@@ -177,6 +201,52 @@ class FluxioVoicePrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["correctionCount"], 1)
         self.assertEqual(payload["correctedFrom"], "send massage")
         self.assertIn("ambiguity", payload["checkIds"])
+
+    def test_unknown_confidence_requires_review_without_faking_stt_confidence(self) -> None:
+        payload = run_node(
+            """
+            import {
+              appendTranscriptSegment,
+              buildTranscriptSnapshot,
+              createVoiceTranscriptState,
+              replaceTranscriptSegment,
+            } from './web/src/fluxio/voice/voiceTranscriptBuffer.js';
+
+            let state = createVoiceTranscriptState();
+            state = appendTranscriptSegment(state, {
+              id: 'local-stt',
+              text: 'send message',
+              source: 'tauri-local-stt',
+            });
+            const before = buildTranscriptSnapshot(state);
+            state = replaceTranscriptSegment(state, 'local-stt', {
+              text: 'send message',
+              reason: 'operator reviewed local STT',
+              reviewedAt: '2026-06-21T06:00:00.000Z',
+              reviewedBy: 'operator',
+            });
+            const after = buildTranscriptSnapshot(state);
+            console.log(JSON.stringify({
+              beforeUnknown: before.unknownConfidenceSegments.length,
+              beforeReviewRequired: before.reviewRequired,
+              beforeQueueKind: before.repairQueue.nextRepairKind,
+              afterUnknown: after.unknownConfidenceSegments.length,
+              afterReviewRequired: after.reviewRequired,
+              rawConfidence: after.segments[0].confidence,
+              reviewedBy: after.segments[0].reviewedBy,
+              checkIds: before.qualityChecks.map(check => check.id),
+            }));
+            """
+        )
+
+        self.assertEqual(payload["beforeUnknown"], 1)
+        self.assertTrue(payload["beforeReviewRequired"])
+        self.assertEqual(payload["beforeQueueKind"], "unknown_confidence")
+        self.assertEqual(payload["afterUnknown"], 0)
+        self.assertFalse(payload["afterReviewRequired"])
+        self.assertIsNone(payload["rawConfidence"])
+        self.assertEqual(payload["reviewedBy"], "operator")
+        self.assertIn("unknown-confidence", payload["checkIds"])
 
     def test_accessibility_helpers_do_not_claim_live_voice_without_checked_support(self) -> None:
         payload = run_node(

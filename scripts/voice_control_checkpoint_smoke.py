@@ -21,7 +21,7 @@ from control_route_interaction_smoke import (
 )
 
 
-OUT_DIR = ROOT / "artifacts" / "pr87-voice-control-checkpoint"
+OUT_DIR = ROOT / "artifacts" / "pr91-voice-dictation-repair-flow"
 CHECK_PATH = OUT_DIR / "voice-control-checkpoint-check.json"
 URL = "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=agent&surface=agent"
 
@@ -32,6 +32,22 @@ def capture(cdp: Cdp, path: Path) -> None:
     if not isinstance(data, str):
         raise RuntimeError("Screenshot capture failed for voice control checkpoint.")
     path.write_bytes(base64.b64decode(data))
+
+
+def click_button(cdp: Cdp, label: str) -> bool:
+    return bool(
+        cdp.eval(
+            f"""
+            (() => {{
+              const button = Array.from(document.querySelectorAll("button"))
+                .find(item => (item.textContent || "").trim() === {json.dumps(label)});
+              if (!button || button.disabled) return false;
+              button.click();
+              return true;
+            }})()
+            """
+        )
+    )
 
 
 def main() -> int:
@@ -79,24 +95,81 @@ def main() -> int:
         )
         time.sleep(0.45)
         assert_current_control_shell(cdp)
-        visible_text = str(cdp.eval('document.querySelector(".voice-control-checkpoint")?.innerText || ""'))
+        checkpoint_text = str(cdp.eval('document.querySelector(".voice-control-checkpoint")?.innerText || ""'))
+        opened_review = click_button(cdp, "Open voice review")
+        time.sleep(0.8)
+        wait_for_control_shell(cdp)
+        cdp.eval(
+            """
+            (() => {
+              const field = document.querySelector("#fluxio-voice-manual-dictation");
+              if (!field) return false;
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+              if (setter) setter.call(field, "send message");
+              else field.value = "send message";
+              field.dispatchEvent(new Event("input", { bubbles: true }));
+              return true;
+            })()
+            """
+        )
+        time.sleep(0.25)
+        added_dictation = click_button(cdp, "Add to review")
+        time.sleep(0.8)
+        cdp.eval(
+            """
+            document.querySelector(".fluxio-voice-mode-checkpoint")
+              ?.scrollIntoView({ block: "center", inline: "nearest" });
+            """
+        )
+        time.sleep(0.45)
+        visible_text = f"{checkpoint_text}\n{str(cdp.eval('document.body.innerText || \"\"'))}"
+        run_disabled = bool(
+            cdp.eval(
+                """
+                (() => {
+                  const run = Array.from(document.querySelectorAll("button"))
+                    .find(item => (item.textContent || "").trim() === "Run");
+                  return Boolean(run?.disabled);
+                })()
+                """
+            )
+        )
+        mode_switch_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-mode-switch"))'))
+        mode_checkpoint_found = bool(cdp.eval('Boolean(document.querySelector(".fluxio-voice-mode-checkpoint"))'))
         screenshot_path = OUT_DIR / "voice-control-checkpoint.png"
         capture(cdp, screenshot_path)
         expected = [
             "VOICE CONTROL CHECKPOINT",
             "Open voice review",
+            "Mode:",
+            "Unknown confidence:",
             "System dictation",
-            "Guard:",
+            "MODE CHECKPOINT",
+            "Dictation mode",
+            "hold_for_mode_review",
         ]
         report = {
             "checkedAt": datetime.now(timezone.utc).isoformat(),
             "url": URL,
             "browser": str(CHROME),
             "screenshotPath": str(screenshot_path.resolve()),
+            "openedReview": opened_review,
+            "addedDictation": added_dictation,
+            "runDisabledAfterRiskyDictation": run_disabled,
+            "modeSwitchFound": mode_switch_found,
+            "modeCheckpointFound": mode_checkpoint_found,
+            "checkpointText": checkpoint_text,
             "expectedFragments": expected,
             "missingFragments": [fragment for fragment in expected if fragment not in visible_text],
         }
-        report["passed"] = not report["missingFragments"]
+        report["passed"] = (
+            not report["missingFragments"]
+            and opened_review
+            and added_dictation
+            and run_disabled
+            and mode_switch_found
+            and mode_checkpoint_found
+        )
         CHECK_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))
         return 0 if report["passed"] else 1

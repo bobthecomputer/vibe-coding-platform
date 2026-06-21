@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { buildKeyboardParityLabel, getVoiceMotionAffordance } from "./voiceAccessibility.js";
-import { getVoiceCommandExamples } from "./voiceCommandGrammar.js";
+import { buildVoiceModeCheckpoint, getVoiceCommandExamples } from "./voiceCommandGrammar.js";
 import { installTauriVoiceBridge } from "./tauriVoiceBridge.js";
 import { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 import "./voice.css";
@@ -33,6 +33,7 @@ export function VoiceCommandPanel({
     typeof voice.transcript.averageConfidence === "number"
       ? `${Math.round(voice.transcript.averageConfidence * 100)}%`
       : "No final text";
+  const activeInputMode = voice.inputMode || voice.transcript.inputMode || "command";
   const segmentList = voice.transcript.segments || [];
   const sendGateLabel =
     voice.sendGuard?.status === "confirmation_required"
@@ -62,6 +63,7 @@ export function VoiceCommandPanel({
       ? "Review highlighted dictation before running a command."
       : "No dictation repair is queued.",
     lowConfidenceCount: voice.transcript.lowConfidenceSegments?.length || 0,
+    unknownConfidenceCount: voice.transcript.unknownConfidenceSegments?.length || 0,
     ambiguousCount: voice.transcript.ambiguousSegments?.length || 0,
     interimActive: Boolean(voice.transcript.interimText),
     nextSegmentText: voice.transcript.lowConfidenceSegments?.[0]?.text || voice.transcript.ambiguousSegments?.[0]?.text || "",
@@ -70,6 +72,7 @@ export function VoiceCommandPanel({
     const seen = new Set();
     return [
       ...(voice.transcript.lowConfidenceSegments || []),
+      ...(voice.transcript.unknownConfidenceSegments || []),
       ...(voice.transcript.ambiguousSegments || []),
     ].filter(segment => {
       if (!segment?.id || seen.has(segment.id)) {
@@ -78,7 +81,7 @@ export function VoiceCommandPanel({
       seen.add(segment.id);
       return true;
     });
-  }, [voice.transcript.ambiguousSegments, voice.transcript.lowConfidenceSegments]);
+  }, [voice.transcript.ambiguousSegments, voice.transcript.lowConfidenceSegments, voice.transcript.unknownConfidenceSegments]);
   const nextRepairSegment =
     reviewSegments.find(segment => segment.id === repairQueue.nextSegmentId) ||
     reviewSegments[0] ||
@@ -112,6 +115,30 @@ export function VoiceCommandPanel({
   const commandPacketReview = commandPacket?.review || {};
   const commandPacketTranscript = commandPacket?.transcript || {};
   const commandPacketBlockedBy = commandPacketReview.blockedBy || [];
+  const modeCheckpoint =
+    commandPacketReview.modeCheckpoint ||
+    commandPacket?.guard?.modeCheckpoint ||
+    buildVoiceModeCheckpoint({
+      transcript: voice.transcript,
+      activeMode: activeInputMode,
+    });
+  const modeOptions = [
+    {
+      id: "command",
+      label: "Command",
+      detail: "Parse reviewed text as an app command.",
+    },
+    {
+      id: "dictation",
+      label: "Dictation",
+      detail: "Keep text as spoken content until reviewed.",
+    },
+    {
+      id: "correction",
+      label: "Correction",
+      detail: "Repair transcript before running commands.",
+    },
+  ];
 
   useEffect(() => {
     setManualCorrectionDraft(nextRepairSegment?.text || "");
@@ -135,8 +162,10 @@ export function VoiceCommandPanel({
     }
     voice.correctTranscriptSegment?.(nextRepairSegment.id, {
       text: correctedText,
-      confidence: Math.max(nextRepairSegment.confidence ?? 0.92, 0.92),
+      confidence: nextRepairSegment.confidence,
       reason: "manual dictation repair",
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: "operator",
     });
   };
   const manualCorrectionChanged =
@@ -167,6 +196,7 @@ export function VoiceCommandPanel({
     if (!text) {
       return;
     }
+    voice.setInputMode?.("dictation");
     voice.appendTranscript?.({
       text,
       confidence: 0.83,
@@ -199,10 +229,29 @@ export function VoiceCommandPanel({
         {voice.status}
       </p>
 
+      <div className="fluxio-voice-mode-switch" aria-label="Voice input mode">
+        {modeOptions.map(option => (
+          <button
+            aria-pressed={activeInputMode === option.id}
+            className={activeInputMode === option.id ? "active" : ""}
+            key={option.id}
+            onClick={() => voice.setInputMode?.(option.id)}
+            title={option.detail}
+            type="button"
+          >
+            <span>{option.label}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="fluxio-voice-quality-grid" aria-label="Transcription quality checks">
         <div className="fluxio-voice-quality-card">
           <span>Confidence</span>
           <strong>{confidenceLabel}</strong>
+        </div>
+        <div className="fluxio-voice-quality-card">
+          <span>Input mode</span>
+          <strong>{modeCheckpoint.label}</strong>
         </div>
         <div className="fluxio-voice-quality-card">
           <span>Review</span>
@@ -271,6 +320,7 @@ export function VoiceCommandPanel({
               <li
                 className={
                   voice.transcript.lowConfidenceSegments?.some(item => item.id === segment.id) ||
+                  voice.transcript.unknownConfidenceSegments?.some(item => item.id === segment.id) ||
                   voice.transcript.ambiguousSegments?.some(item => item.id === segment.id)
                     ? "needs-review"
                     : ""
@@ -283,6 +333,7 @@ export function VoiceCommandPanel({
                     ? `${Math.round(segment.confidence * 100)}% confidence`
                     : "No confidence score"}
                   {segment.correctedFrom ? ` - corrected from "${segment.correctedFrom}"` : ""}
+                  {segment.reviewedAt ? " - reviewed by operator" : ""}
                 </span>
                 {segment.alternatives?.length ? (
                   <small>Alternatives: {segment.alternatives.map(item => item.text).join(", ")}</small>
@@ -296,6 +347,8 @@ export function VoiceCommandPanel({
                           text: alternative.text,
                           confidence: alternative.confidence ?? segment.confidence,
                           reason: "selected speech alternative",
+                          reviewedAt: new Date().toISOString(),
+                          reviewedBy: "operator",
                         })
                       }
                       type="button"
@@ -307,8 +360,10 @@ export function VoiceCommandPanel({
                     onClick={() =>
                       voice.correctTranscriptSegment?.(segment.id, {
                         text: segment.text,
-                        confidence: Math.max(segment.confidence ?? 0.92, 0.92),
+                        confidence: segment.confidence,
                         reason: "operator reviewed text",
+                        reviewedAt: new Date().toISOString(),
+                        reviewedBy: "operator",
                       })
                     }
                     type="button"
@@ -354,8 +409,10 @@ export function VoiceCommandPanel({
         </div>
         <div className="fluxio-voice-repair-counts">
           <span>Low confidence: {repairQueue.lowConfidenceCount}</span>
+          <span>Unknown confidence: {repairQueue.unknownConfidenceCount || 0}</span>
           <span>Ambiguous: {repairQueue.ambiguousCount}</span>
           <span>Interim: {repairQueue.interimActive ? "active" : "clear"}</span>
+          <span>Mode: {modeCheckpoint.label}</span>
         </div>
         {repairQueue.nextSegmentText ? (
           <p className="fluxio-voice-next-repair">
@@ -381,6 +438,7 @@ export function VoiceCommandPanel({
           <span>Segments: {commandPacketTranscript.segmentCount || 0}</span>
           <span>Corrections: {commandPacketTranscript.correctionCount || 0}</span>
           <span>Low confidence: {commandPacketTranscript.lowConfidenceCount || 0}</span>
+          <span>Unknown confidence: {commandPacketTranscript.unknownConfidenceCount || 0}</span>
           <span>Ambiguous: {commandPacketTranscript.ambiguousCount || 0}</span>
         </div>
         <div className="fluxio-voice-command-packet-route">
@@ -400,6 +458,20 @@ export function VoiceCommandPanel({
         </div>
       </div>
 
+      <div className="fluxio-voice-mode-checkpoint" data-route={modeCheckpoint.route} aria-label="Voice mode checkpoint">
+        <div>
+          <span>Mode checkpoint</span>
+          <strong>{modeCheckpoint.label}</strong>
+          <p>{modeCheckpoint.detail}</p>
+        </div>
+        <div className="fluxio-voice-mode-checkpoint-facts">
+          <span>Route: {modeCheckpoint.route}</span>
+          <span>Reason: {modeCheckpoint.reason}</span>
+          <span>Command-like: {modeCheckpoint.commandLike ? "yes" : "no"}</span>
+          <span>Guarded intent: {modeCheckpoint.guardedIntent ? "yes" : "no"}</span>
+        </div>
+      </div>
+
       <div
         className="fluxio-voice-review-console"
         data-status={reviewConsoleStatus}
@@ -416,6 +488,7 @@ export function VoiceCommandPanel({
         <div className="fluxio-voice-review-checks" aria-label="Dictation send readiness">
           <span data-status={voice.transcript.interimText ? "waiting" : "ready"}>Final text</span>
           <span data-status={repairQueue.lowConfidenceCount > 0 ? "review" : "ready"}>Confidence</span>
+          <span data-status={(repairQueue.unknownConfidenceCount || 0) > 0 ? "review" : "ready"}>Known score</span>
           <span data-status={repairQueue.ambiguousCount > 0 ? "review" : "ready"}>Command ambiguity</span>
           <span data-status={voice.sendGuard?.status === "blocked" ? "blocked" : "ready"}>Accidental-send check</span>
         </div>
@@ -442,8 +515,10 @@ export function VoiceCommandPanel({
                 onClick={() =>
                   voice.correctTranscriptSegment?.(nextRepairSegment.id, {
                     text: nextRepairSegment.text,
-                    confidence: Math.max(nextRepairSegment.confidence ?? 0.92, 0.92),
+                    confidence: nextRepairSegment.confidence,
                     reason: "operator reviewed text",
+                    reviewedAt: new Date().toISOString(),
+                    reviewedBy: "operator",
                   })
                 }
                 type="button"
