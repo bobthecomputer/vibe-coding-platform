@@ -1,6 +1,6 @@
 {
   "schemaVersion": "self-repair-verifier.v1",
-  "generatedAt": "2026-06-21T13:50:18.1887280Z",
+  "generatedAt": "2026-06-21T13:50:18.188728Z",
   "skillId": "self_repair_verifier",
   "passed": true,
   "beforeScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\before-image-studio.png",
@@ -30,17 +30,41 @@
     },
     {
       "id": "no-fake-success",
-      "detail": "UI shows fallback logged when route is unavailable and keeps provider status as needs connector.",
+      "detail": "Normal UI shows Connect image provider / live generation off until a real provider receipt and artifact are returned; no fake generated image is shown.",
       "passed": true
+    },
+    {
+      "id": "review-cleanup-topbar",
+      "passed": true,
+      "detail": "Top row reduced to File/Edit/View/Window/Help; Web/Local/Mouse and Agent/Builder controls moved into a collapsed controls strip."
+    },
+    {
+      "id": "review-cleanup-collapsible-space",
+      "passed": true,
+      "detail": "Left rail has a persisted collapse state and Image Studio secondary rail uses collapsed References/Gallery/Outputs/Layers sections."
+    },
+    {
+      "id": "generator-cleanup-normal-mode",
+      "passed": true,
+      "detail": "Default Image Studio hides diagnostics/proof checklist UI, removes archived fake-looking history from default state, shows a prompt composer, and uses Generate image as the primary action."
     }
   ],
   "changedFiles": [
     "src/grant_agent/web_backend.py",
     "config/skills.json",
     "scripts/image_vision_self_repair_proof.py",
+    "web/src/fluxio/FluxioShell.jsx",
+    "web/src/fluxio/styles.css",
     "web/src/fluxio/image-studio/ImageStudioPlayground.jsx",
     "web/src/fluxio/image-studio/image-studio.css",
+    "web/src/fluxio/image-studio/imageStudioModel.js",
+    "web/src/fluxio/imagePlaygroundState.js",
+    "scripts/image_studio_chroma_smoke.py",
     "tests/test_web_backend.py",
     "tests/test_desktop_ui_contract.py"
-  ]
+  ],
+  "reviewCleanupDesktopScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-review-cleanup-desktop.png",
+  "reviewCleanupMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-review-cleanup-mobile.png",
+  "generatorCleanupDesktopScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-desktop.png",
+  "generatorCleanupMobileScreenshot": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-mobile.png"
 }

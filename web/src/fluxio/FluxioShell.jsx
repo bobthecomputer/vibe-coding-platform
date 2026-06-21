@@ -67,6 +67,7 @@ const STORAGE_KEYS = {
   missionSearch: "fluxio.sidebar.mission.search",
   workspaceOrder: "fluxio.sidebar.workspace.order",
   missionOrder: "fluxio.sidebar.mission.order",
+  sidebarCollapsed: "fluxio.sidebar.collapsed",
   splitViewEnabled: "fluxio.agent.split.enabled",
   splitMissionId: "fluxio.agent.split.mission_id",
   localTasks: "fluxio.tasks.local",
@@ -2322,12 +2323,13 @@ function VoiceControlCheckpoint({
 function GlobalRailButton({ active = false, icon = null, label, onClick, subtle = false }) {
   return (
     <button
+      aria-label={label}
       className={`global-rail-button ${active ? "active" : ""} ${subtle ? "subtle" : ""}`.trim()}
       onClick={onClick}
       type="button"
     >
       {icon ? <span aria-hidden="true" className="global-rail-icon">{icon}</span> : null}
-      <span>{label}</span>
+      <span className="global-rail-label">{label}</span>
     </button>
   );
 }
@@ -3109,6 +3111,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   });
   const storedDebugEvents = loadStoredJson(STORAGE_KEYS.debugEvents, []);
   const storedUiState = loadStoredJson(STORAGE_KEYS.persistedUiState, {});
+  const storedSidebarCollapsed =
+    searchParams.get("sidebar") === "collapsed" ||
+    localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === "true" ||
+    Boolean(storedUiState.sidebarCollapsed);
   const storedControlRoomSnapshot = loadStoredJson(STORAGE_KEYS.controlRoomSnapshot, null);
   const storedChatSessions = normalizeChatSessions(
     loadStoredJson(STORAGE_KEYS.chatSessions, []),
@@ -3151,6 +3157,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ? initialSurface
       : "home",
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(storedSidebarCollapsed);
   const [agentScene, setAgentScene] = useState(
     ["idle", "run", "live"].includes(requestedAgentScene) ? requestedAgentScene : "idle",
   );
@@ -3471,6 +3478,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [missionOrder]);
 
   useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.sidebarCollapsed, sidebarCollapsed ? "true" : "false");
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
     localStorage.setItem(
       STORAGE_KEYS.chatSessions,
       JSON.stringify(normalizeChatSessions(chatSessions)),
@@ -3538,6 +3549,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         referenceAppearance,
         referenceSettingsTab,
         referenceStudio,
+        sidebarCollapsed,
       }),
     );
   }, [
@@ -3549,6 +3561,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     referenceAppearance,
     referenceSettingsTab,
     referenceStudio,
+    sidebarCollapsed,
     selectedReviewTargetId,
     selectedLiveReviewEventId,
   ]);
@@ -11507,13 +11520,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       data-drawer={showPersistentDrawer ? "open" : "collapsed"}
       data-mode={uiMode}
       data-profile={profileId}
+      data-sidebar={sidebarCollapsed ? "collapsed" : "open"}
     >
       <header className="fluxio-topbar">
         <div className="topbar-app">
           <div className="app-menu">
-            <button aria-label="Syntelos menu" className="app-menu-glyph" type="button">
-              +
-            </button>
             <MenuButton label="File" onClick={() => setShowWorkspaceDialog(true)} />
             <MenuButton
               label="Edit"
@@ -11547,113 +11558,135 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               }}
             />
           </div>
-
-          <div className="topbar-context">
-            <strong>{mission?.title || mission?.objective || workspace?.name || "Syntelos workspace"}</strong>
-            <span>{workspace?.name || "Select a workspace"}</span>
-            <div className="topbar-context-actions">
-              {workspace?.workspace_id ? (
-                <ActionButton
-                  onClick={() => copyContextValue(workspace.workspace_id)}
-                  type="button"
-                >
-                  Copy workspace ID
-                </ActionButton>
-              ) : null}
-              {mission?.mission_id ? (
-                <ActionButton
-                  onClick={() => copyContextValue(mission.mission_id)}
-                  type="button"
-                >
-                  Copy mission ID
-                </ActionButton>
-              ) : null}
-            </div>
-          </div>
         </div>
-
-        <div aria-label="Syntelos mode" className="fluxio-mode" role="tablist">
-          {["agent", "builder"].map(mode => (
-            <button
-              aria-selected={uiMode === mode}
-              className={uiMode === mode ? "active" : ""}
-              key={mode}
-              onClick={() => {
-                markAction(`mode:${mode}`);
-                setUiMode(mode);
-                if (mode === "builder") {
-                  setActiveDrawer(null);
-                  return;
-                }
-                setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : null);
-              }}
-              role="tab"
-              type="button"
-            >
-              {titleizeToken(mode)}
-            </button>
-          ))}
-        </div>
-
-        <div aria-label="Interaction modes" className="interaction-mode-rail">
-          {interactionModeOptions.map(item => (
-            <button
-              aria-pressed={item.active}
-              className={item.active ? "active" : ""}
-              key={item.id}
-              onClick={() => {
-                markAction(`interaction:${item.id}`);
-                if (item.id === "mouse") {
-                  setUiMode("builder");
-                  setSurface("workbench");
-                  setActiveDrawer("builder");
-                  return;
-                }
-                setPreviewMode("live");
-                setActiveDrawer(item.id === "local" ? "runtime" : null);
-              }}
-              title={`${item.label}: ${item.detail}`}
-              type="button"
-            >
-              <span>{item.label}</span>
-              <small>{item.detail}</small>
-            </button>
-          ))}
-        </div>
-
-        <div className="topbar-shortcuts">
-          <TopbarShortcut
-            active={showPersistentDrawer}
-            label={showPersistentDrawer && activeDrawerMeta ? `${activeDrawerMeta.label} panel` : "Open panel"}
-            onClick={() => {
-              markAction("toggle:panel");
-              if (uiMode === "builder") {
-                setActiveDrawer(current => (current ? null : "builder"));
-                return;
-              }
-              if (agentBlockedState.isBlocked) {
-                setActiveDrawer(agentBlockedState.defaultDrawer);
-              }
-            }}
-            tone="neutral"
-          />
-        </div>
-
-        <div className="topbar-confidence">
-          <span>{topbarStatus.label}</span>
-          <strong className={toneClass(topbarStatus.tone)}>
-            {topbarStatus.value}
-          </strong>
-        </div>
-
-        <ActionButton onClick={handlePrimaryAction} variant="primary">
-          {viewModel.topBar.primaryAction.label}
-        </ActionButton>
       </header>
+
+      <section className="fluxio-control-strip" aria-label="Workspace controls">
+        <details className="fluxio-control-details">
+          <summary>
+            <span>Controls</span>
+          </summary>
+          <div className="fluxio-control-panel">
+            <div className="topbar-context">
+              <strong>{mission?.title || mission?.objective || workspace?.name || "Syntelos workspace"}</strong>
+              <span>{workspace?.name || "Select a workspace"}</span>
+              <div className="topbar-context-actions">
+                {workspace?.workspace_id ? (
+                  <ActionButton
+                    onClick={() => copyContextValue(workspace.workspace_id)}
+                    type="button"
+                  >
+                    Copy workspace ID
+                  </ActionButton>
+                ) : null}
+                {mission?.mission_id ? (
+                  <ActionButton
+                    onClick={() => copyContextValue(mission.mission_id)}
+                    type="button"
+                  >
+                    Copy mission ID
+                  </ActionButton>
+                ) : null}
+              </div>
+            </div>
+
+            <div aria-label="Syntelos mode" className="fluxio-mode" role="tablist">
+              {["agent", "builder"].map(mode => (
+                <button
+                  aria-selected={uiMode === mode}
+                  className={uiMode === mode ? "active" : ""}
+                  key={mode}
+                  onClick={() => {
+                    markAction(`mode:${mode}`);
+                    setUiMode(mode);
+                    if (mode === "builder") {
+                      setActiveDrawer(null);
+                      return;
+                    }
+                    setActiveDrawer(agentBlockedState.isBlocked ? agentBlockedState.defaultDrawer : null);
+                  }}
+                  role="tab"
+                  type="button"
+                >
+                  {titleizeToken(mode)}
+                </button>
+              ))}
+            </div>
+
+            <div aria-label="Interaction modes" className="interaction-mode-rail">
+              {interactionModeOptions.map(item => (
+                <button
+                  aria-pressed={item.active}
+                  className={item.active ? "active" : ""}
+                  key={item.id}
+                  onClick={() => {
+                    markAction(`interaction:${item.id}`);
+                    if (item.id === "mouse") {
+                      setUiMode("builder");
+                      setSurface("workbench");
+                      setActiveDrawer("builder");
+                      return;
+                    }
+                    setPreviewMode("live");
+                    setActiveDrawer(item.id === "local" ? "runtime" : null);
+                  }}
+                  title={`${item.label}: ${item.detail}`}
+                  type="button"
+                >
+                  <span>{item.label}</span>
+                  <small>{item.detail}</small>
+                </button>
+              ))}
+            </div>
+
+            <div className="topbar-shortcuts">
+              <TopbarShortcut
+                active={showPersistentDrawer}
+                label={showPersistentDrawer && activeDrawerMeta ? `${activeDrawerMeta.label} panel` : "Open panel"}
+                onClick={() => {
+                  markAction("toggle:panel");
+                  if (uiMode === "builder") {
+                    setActiveDrawer(current => (current ? null : "builder"));
+                    return;
+                  }
+                  if (agentBlockedState.isBlocked) {
+                    setActiveDrawer(agentBlockedState.defaultDrawer);
+                  }
+                }}
+                tone="neutral"
+              />
+            </div>
+
+            <div className="topbar-confidence">
+              <span>{topbarStatus.label}</span>
+              <strong className={toneClass(topbarStatus.tone)}>
+                {topbarStatus.value}
+              </strong>
+            </div>
+
+            <ActionButton onClick={handlePrimaryAction} variant="primary">
+              {viewModel.topBar.primaryAction.label}
+            </ActionButton>
+          </div>
+        </details>
+      </section>
 
       <div className="fluxio-body">
         <aside className="fluxio-sidebar">
           <div className="fluxio-sidebar-scroll">
+            <button
+              aria-expanded={!sidebarCollapsed}
+              className="sidebar-collapse-toggle"
+              onClick={() => {
+                markAction(sidebarCollapsed ? "sidebar:expand" : "sidebar:collapse");
+                setSidebarCollapsed(current => !current);
+              }}
+              title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+              type="button"
+            >
+              <span aria-hidden="true">{sidebarCollapsed ? "›" : "‹"}</span>
+              <strong>{sidebarCollapsed ? "Expand" : "Collapse"}</strong>
+            </button>
             <section className="sidebar-surface-list">
               <GlobalRailButton
                 active={uiMode === "agent"}

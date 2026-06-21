@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-06-21T15:53:34.089804+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder&sidebar=collapsed",
+  "locationHref": "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder&sidebar=collapsed",
+  "gitHead": "8edabfe2e944d186a1b046bdf231831f8c9f13fa",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-mobile.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr112-image-vision-ui-self-repair\\after-generator-cleanup-mobile.html",
+  "expectedFragments": [
+    "Image generation playground",
+    "Prompt",
+    "Generate image",
+    "Generator",
+    "Connect image provider"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "proofSelectors": {
+    "fluxioBuilderRoot": true,
+    "visualProofPacket": true,
+    "visualProofReadiness": true,
+    "visualProofMapCanvas": true,
+    "visualProofReceipts": true,
+    "currentAppProof": false
+  },
+  "placeholderFramePaths": [],
+  "image": {
+    "width": 390,
+    "height": 844,
+    "sampleCount": 9212,
+    "uniqueSampleColors": 413,
+    "averageLuma": 21.64,
+    "nonBlank": true
+  },
+  "passed": true
+}

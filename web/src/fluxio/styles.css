@@ -9043,6 +9043,168 @@ button.builder-digest-item:active {
     #0a0c0c;
 }
 
+/* PR112 review cleanup: keep the first top row as an app menu only.
+   Operational controls remain available in a collapsed strip below it. */
+.fluxio-shell {
+  grid-template-rows: 36px auto minmax(0, 1fr);
+}
+
+.fluxio-topbar {
+  min-height: 36px;
+  padding-block: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.topbar-app {
+  align-self: center;
+}
+
+.topbar-context,
+.fluxio-mode,
+.interaction-mode-rail,
+.topbar-shortcuts,
+.topbar-confidence {
+  min-width: 0;
+}
+
+.fluxio-control-strip {
+  border-bottom: 1px solid var(--control-line);
+  background:
+    linear-gradient(180deg, rgba(238, 242, 236, 0.018), rgba(238, 242, 236, 0.004)),
+    #090b0b;
+}
+
+.fluxio-control-details {
+  display: grid;
+  min-width: 0;
+}
+
+.fluxio-control-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 28px;
+  margin-left: 16px;
+  padding: 3px 0;
+  cursor: pointer;
+  color: var(--control-muted);
+  font-size: 11px;
+  list-style: none;
+}
+
+.fluxio-control-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fluxio-control-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 999px;
+  background: rgba(238, 242, 236, 0.34);
+}
+
+.fluxio-control-details > summary span {
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 999px;
+  color: rgba(238, 242, 236, 0.72);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.fluxio-control-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 10px;
+}
+
+.sidebar-collapse-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(238, 242, 236, 0.075);
+  border-radius: 10px;
+  background: rgba(238, 242, 236, 0.024);
+  color: var(--control-muted);
+  cursor: pointer;
+  padding: 6px 10px;
+}
+
+.sidebar-collapse-toggle span {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 999px;
+  color: var(--control-text);
+}
+
+.sidebar-collapse-toggle strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxio-shell[data-sidebar="collapsed"] .fluxio-body,
+.fluxio-shell[data-sidebar="collapsed"][data-mode="agent"] .fluxio-body,
+.fluxio-shell[data-sidebar="collapsed"][data-mode="builder"] .fluxio-body,
+.fluxio-shell[data-sidebar="collapsed"][data-drawer="collapsed"][data-mode="agent"] .fluxio-body,
+.fluxio-shell[data-sidebar="collapsed"][data-drawer="collapsed"][data-mode="builder"] .fluxio-body {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.fluxio-shell[data-sidebar="collapsed"][data-drawer="open"][data-mode="agent"] .fluxio-body {
+  grid-template-columns: 64px minmax(0, 1fr) 340px;
+}
+
+.fluxio-shell[data-sidebar="collapsed"][data-drawer="open"][data-mode="builder"] .fluxio-body {
+  grid-template-columns: 64px minmax(0, 1fr) 402px;
+}
+
+.fluxio-shell[data-sidebar="collapsed"] .fluxio-sidebar-scroll,
+.fluxio-shell[data-sidebar="collapsed"] .fluxio-sidebar-bottom {
+  padding-inline: 8px;
+}
+
+.fluxio-shell[data-sidebar="collapsed"] .sidebar-collapse-toggle {
+  grid-template-columns: 1fr;
+  padding-inline: 6px;
+}
+
+.fluxio-shell[data-sidebar="collapsed"] .sidebar-collapse-toggle strong,
+.fluxio-shell[data-sidebar="collapsed"] .global-rail-label,
+.fluxio-shell[data-sidebar="collapsed"] .fluxio-nav-section,
+.fluxio-shell[data-sidebar="collapsed"] .builder-sidebar-metrics,
+.fluxio-shell[data-sidebar="collapsed"] .builder-sidebar-nexus-list,
+.fluxio-shell[data-sidebar="collapsed"] .builder-sidebar-bridge {
+  display: none;
+}
+
+.fluxio-shell[data-sidebar="collapsed"] .global-rail-button {
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+  padding: 8px;
+}
+
+.fluxio-shell[data-sidebar="collapsed"] .global-rail-icon {
+  width: 24px;
+  height: 24px;
+}
+
 .topbar-shortcut,
 .action-btn {
   border-radius: 999px;

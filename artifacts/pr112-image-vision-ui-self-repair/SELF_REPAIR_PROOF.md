@@ -21,10 +21,19 @@
 - beforeScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\before-image-studio.png
 - afterDesktopScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\after-image-studio-desktop.png
 - afterMobileScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\after-image-studio-mobile.png
+- reviewCleanupDesktopScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\after-review-cleanup-desktop.png
+- reviewCleanupMobileScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\after-review-cleanup-mobile.png
+- generatorCleanupDesktopScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\after-generator-cleanup-desktop.png
+- generatorCleanupMobileScreenshot: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\after-generator-cleanup-mobile.png
 - verifier: C:\Users\paul\projects\vibe-coding-platform\artifacts\pr112-image-vision-ui-self-repair\self_repair_verifier.json
 
 ## Verification
 - Desktop preview smoke: passed, active proof chain visible.
 - Mobile preview smoke: passed, active proof chain visible.
+- Review cleanup desktop preview smoke: passed, menu-only top row and collapsed sidebar route rendered.
+- Review cleanup mobile preview smoke: passed, compact controls retained.
+- Generator cleanup desktop preview smoke: passed; normal UI shows prompt, generator controls, collapsed rail sections, and no proof checklist/status-card clutter.
+- Generator cleanup mobile preview smoke: passed; prompt and Generate action are visible in the mobile generator flow.
+- Real image generation status: no live provider image was faked. The UI shows `Connect image provider` / `live generation off` until an actual connector returns a provider receipt and artifact.
 - Python tests: `tests/test_web_backend.py tests/test_desktop_ui_contract.py` passed.
 - Frontend build: `npm run frontend:build` passed.

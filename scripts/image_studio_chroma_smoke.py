@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = Path(os.environ.get("FLUXIO_PROOF_OUT_DIR", ROOT / "artifacts" / "pr105-image-operation-timeline"))
 URL = os.environ.get(
     "FLUXIO_CONTROL_URL",
-    "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder",
+    "http://127.0.0.1:1420/control?preview-control=1&surface=images&fixture=live_review&mode=builder&diagnostics=1",
 )
 
 
@@ -121,8 +121,8 @@ def read_state(cdp: Cdp) -> object:
   hasOperationTimeline: Boolean(document.querySelector('.image-studio-operation-timeline')),
   timelineSteps: document.querySelectorAll('.image-studio-operation-timeline li').length,
   timelineText: document.querySelector('.image-studio-operation-timeline')?.innerText || '',
-  runButtonText: Array.from(document.querySelectorAll('button')).find(item => item.innerText.includes('Run provider image') || item.innerText.includes('Running provider'))?.innerText.trim() || '',
-  runButtonDisabled: Boolean(Array.from(document.querySelectorAll('button')).find(item => item.innerText.includes('Run provider image'))?.disabled),
+  runButtonText: Array.from(document.querySelectorAll('button')).find(item => item.innerText.includes('Generate image') || item.innerText.includes('Generating'))?.innerText.trim() || '',
+  runButtonDisabled: Boolean(Array.from(document.querySelectorAll('button')).find(item => item.innerText.includes('Generate image'))?.disabled),
   proofImages: document.querySelectorAll('.image-studio-local-matte-proof img').length,
   proofSource: document.querySelector('#image-studio-matte-source')?.value || '',
   text: document.body.innerText.slice(0, 2000),
@@ -164,7 +164,7 @@ def main() -> int:
         cdp.send("Page.navigate", {"url": URL})
         time.sleep(1.5)
         wait_for_ready(cdp)
-        wait_for_text(cdp, "Provider-ready image playground", timeout=18)
+        wait_for_text(cdp, "Image generation playground", timeout=18)
         assert_current_control_shell(cdp)
         wait_for_text(cdp, "Matte QA checklist")
         before = read_state(cdp)
@@ -218,7 +218,7 @@ def main() -> int:
                 )
                 and bool(after.get("hasLocalProof"))
                 and int(after.get("proofImages") or 0) >= 2
-                and "Run provider image" in str(after.get("runButtonText") or "")
+                and "Generate image" in str(after.get("runButtonText") or "")
                 and bool(after.get("runButtonDisabled"))
             ),
         }

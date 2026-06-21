@@ -121,6 +121,9 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn(".syntelos-app-preview", styles)
         self.assertIn('className="fluxio-shell"', shell)
         self.assertIn("data-mode={uiMode}", shell)
+        self.assertIn('data-sidebar={sidebarCollapsed ? "collapsed" : "open"}', shell)
+        self.assertIn("sidebar-collapse-toggle", shell)
+        self.assertIn("fluxio-control-details", shell)
         self.assertIn("control-preview-refresh", shell)
         self.assertIn("interactionModeOptions", shell)
         self.assertIn('aria-label="Interaction modes"', shell)
@@ -148,6 +151,10 @@ class DesktopUiContractTests(unittest.TestCase):
             ".interaction-mode-rail",
             ".fluxio-mode::before",
             ".fluxio-shell[data-mode=\"builder\"] .fluxio-mode::before",
+            ".fluxio-control-strip",
+            ".fluxio-control-details > summary",
+            ".fluxio-shell[data-sidebar=\"collapsed\"] .fluxio-body",
+            ".sidebar-collapse-toggle",
             ".app-menu::-webkit-scrollbar",
             "grid-template-columns: repeat(3, minmax(0, 1fr))",
             "control-topbar-scan",
@@ -597,9 +604,14 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".lazy-surface-fallback", styles)
         image_studio = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "ImageStudioPlayground.jsx").read_text(encoding="utf-8")
         image_css = (ROOT / "web" / "src" / "fluxio" / "image-studio" / "image-studio.css").read_text(encoding="utf-8")
-        self.assertIn("Served artifacts", image_studio)
+        self.assertIn("Image generation playground", image_studio)
+        self.assertIn("showDiagnostics", image_studio)
+        self.assertIn("Outputs", image_studio)
         self.assertIn("GeneratedArtifactCard", image_studio)
-        self.assertIn("No served generated image artifacts are available yet.", image_studio)
+        self.assertIn("Generated images will appear here.", image_studio)
+        self.assertIn("Generator", image_studio)
+        self.assertIn("Image model", image_studio)
+        self.assertIn("image-studio-prompt-strip", image_studio)
         self.assertIn("Green screen matte", image_studio)
         self.assertIn("Prepare chroma-key removal", image_studio)
         self.assertIn("Key color", image_studio)
@@ -612,6 +624,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("ImageBreakdownWorkflow", image_studio)
         self.assertIn("Image breakdown", image_studio)
         self.assertIn("image-studio-breakdown", image_studio)
+        self.assertIn("image-studio-rail-section", image_studio)
+        self.assertIn("<details className=\"image-studio-control-group image-studio-rail-section\"", image_studio)
         self.assertIn("OpenCode / Z.AI / GLM-5.2", image_studio)
         self.assertIn("active proof chain", image_studio)
         self.assertIn("image_vision_breakdown", image_studio)
@@ -620,7 +634,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn("SelfRepairLoopPanel", image_studio)
         self.assertIn("buildImageBreakdownWorkflow", image_studio)
         self.assertIn("onRunImageOperation", image_studio)
-        self.assertIn("Run provider image", image_studio)
+        self.assertIn("Generate image", image_studio)
+        self.assertIn("Generate image", image_studio)
         self.assertIn("ProviderRunResult", image_studio)
         self.assertIn("OperationTimeline", image_studio)
         self.assertIn("buildOperationTimeline", image_studio)
@@ -629,8 +644,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("Provider receipt", image_studio)
         self.assertIn("Artifact written", image_studio)
         self.assertIn("Layer handoff", image_studio)
-        self.assertIn("Local composition preview", image_studio)
-        self.assertIn("not provider output", image_studio)
+        self.assertIn("Preview canvas", image_studio)
+        self.assertNotIn("Local composition preview, not provider output", image_studio)
         self.assertIn("Advanced prompt controls", image_studio)
         self.assertIn("Advanced matte controls", image_studio)
         self.assertIn("buildImageStudioOperationPayload", image_studio)
@@ -658,6 +673,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".image-studio-breakdown-rail", image_css)
         self.assertIn(".image-studio-breakdown-badges", image_css)
         self.assertIn(".image-studio-breakdown-route", image_css)
+        self.assertIn(".image-studio-rail-section", image_css)
+        self.assertIn(".image-studio-rail-section:not([open])", image_css)
         self.assertNotIn(".image-studio-self-repair", image_css)
         self.assertIn('grid-template-areas:', image_css)
         self.assertIn('"stage rail"', image_css)
@@ -677,6 +694,11 @@ class DesktopUiContractTests(unittest.TestCase):
         image_state = (ROOT / "web" / "src" / "fluxio" / "imagePlaygroundState.js").read_text(encoding="utf-8")
         self.assertIn("Local preview backdrop", image_state)
         self.assertIn("Workbench preview frame", image_state)
+        self.assertIn("Side highlight panel", image_state)
+        self.assertIn("history: []", image_state)
+        self.assertIn("designReferences: []", image_state)
+        self.assertNotIn("ImageGen gallery artifact", image_state)
+        self.assertNotIn("Codex ImageGen skill", image_state)
         self.assertNotIn("Movable hero object", image_state)
         self.assertNotIn("Contact shadow", image_state)
         skills = (ROOT / "config" / "skills.json").read_text(encoding="utf-8")

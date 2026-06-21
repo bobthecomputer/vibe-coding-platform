@@ -554,7 +554,7 @@ function ImageBreakdownWorkflow({ workflow, route, routeAvailability }) {
         </div>
         <div className="image-studio-breakdown-badges">
           <b>{workflow.readyCount}/{workflow.stageCount} ready</b>
-          <b>{routeReady ? "route ready" : "fallback logged"}</b>
+          <b>{routeReady ? "route ready" : "provider pending"}</b>
         </div>
       </div>
       <p>{workflow.nextAction}</p>
@@ -564,7 +564,7 @@ function ImageBreakdownWorkflow({ workflow, route, routeAvailability }) {
         {route?.providerId || route?.provider || "provider"} / {routeAvailability?.model || route?.model || "model"}.
       </p>
       <details className="image-studio-breakdown-details">
-        <summary>{workflow.stageCount} stage checks</summary>
+        <summary>{workflow.stageCount} review steps</summary>
         <div className="image-studio-breakdown-rail">
           {workflow.stages.map((stage, index) => (
             <article
@@ -678,6 +678,11 @@ export function ImageStudioPlayground({
   onRequestDraft,
   onRunImageOperation,
 }) {
+  const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
+  const showDiagnostics =
+    searchParams.get("diagnostics") === "1" ||
+    searchParams.get("proof") === "1" ||
+    searchParams.get("debug") === "1";
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
   const [draft, setDraft] = useState(null);
@@ -716,6 +721,13 @@ export function ImageStudioPlayground({
     [draft, imageGenerationCapability, project, route, session.referenceAssets],
   );
   const routeAvailability = proofReview.imageGenerationRouteStatus;
+  const visibleProviderRoutes = useMemo(
+    () =>
+      showDiagnostics
+        ? IMAGE_STUDIO_PROVIDER_ROUTES
+        : IMAGE_STUDIO_PROVIDER_ROUTES.filter(item => item.status !== "available_for_existing_artifacts"),
+    [showDiagnostics],
+  );
   const chromaProof = proofReview.chromaKey;
   const operationTimeline = useMemo(
     () => buildOperationTimeline({ draft, draftValidation, routeAvailability, runState, project }),
@@ -1049,19 +1061,21 @@ export function ImageStudioPlayground({
       <div className="image-studio-topbar">
         <div>
           <p className="image-studio-kicker">Image studio</p>
-          <h2 id="image-studio-title">Provider-ready image playground</h2>
+          <h2 id="image-studio-title">Image generation playground</h2>
           <p className="image-studio-subtitle">
-            Compose prompts, reference assets, mask geometry, route metadata, and proof records before a real provider run.
+            Generate, edit, mask, and compare images on a focused canvas. Connect a provider to run live generation.
           </p>
         </div>
         <div className="image-studio-route-summary" aria-label="Selected provider route">
           <ShieldCheck size={20} aria-hidden="true" />
-          <span>{route.label}</span>
-          <b>{route.status.replace(/_/g, " ")}</b>
+          <span>{routeAvailability.readyForRealRun ? route.label : "Connect image provider"}</span>
+          <b>{routeAvailability.readyForRealRun ? route.status.replace(/_/g, " ") : "live generation off"}</b>
         </div>
       </div>
 
-      <ImageBreakdownWorkflow workflow={breakdownWorkflow} route={route} routeAvailability={routeAvailability} />
+      {showDiagnostics ? (
+        <ImageBreakdownWorkflow workflow={breakdownWorkflow} route={route} routeAvailability={routeAvailability} />
+      ) : null}
 
       <div className="image-studio-grid">
         <aside className="image-studio-panel image-studio-controls" aria-label="Prompt and route controls">
@@ -1077,6 +1091,16 @@ export function ImageStudioPlayground({
               onChange={event => updatePrompt({ text: event.target.value })}
               rows={5}
             />
+            <button
+              type="button"
+              className="image-studio-primary-action image-studio-generate-action"
+              onClick={runProviderImage}
+              disabled={runState.status === "running" || !routeAvailability.readyForRealRun}
+              title={!routeAvailability.readyForRealRun ? routeAvailability.proofLimit : ""}
+            >
+              <ImageSquare size={17} aria-hidden="true" />
+              {runState.status === "running" ? "Generating" : "Generate image"}
+            </button>
             <label className="image-studio-checkbox">
               <input
                 type="checkbox"
@@ -1119,15 +1143,15 @@ export function ImageStudioPlayground({
           <section className="image-studio-control-group" aria-labelledby="image-studio-route-label">
             <div className="image-studio-section-title">
               <SlidersHorizontal size={18} aria-hidden="true" />
-              <h3 id="image-studio-route-label">Provider route</h3>
+              <h3 id="image-studio-route-label">Generator</h3>
             </div>
-            <label htmlFor={fieldId("route")}>Route</label>
+            <label htmlFor={fieldId("route")}>Image model</label>
             <select
               id={fieldId("route")}
               value={route.id}
               onChange={event => setSession(current => ({ ...current, routeId: event.target.value }))}
             >
-              {IMAGE_STUDIO_PROVIDER_ROUTES.map(item => (
+              {visibleProviderRoutes.map(item => (
                 <option key={item.id} value={item.id}>{item.label}</option>
               ))}
             </select>
@@ -1269,6 +1293,15 @@ export function ImageStudioPlayground({
         </aside>
 
         <main className="image-studio-panel image-studio-stage" aria-label="Canvas and mask workspace">
+          <div className="image-studio-prompt-strip">
+            <label htmlFor={fieldId("prompt-quick")}>Prompt</label>
+            <textarea
+              id={fieldId("prompt-quick")}
+              value={project.prompt.text}
+              onChange={event => updatePrompt({ text: event.target.value })}
+              rows={2}
+            />
+          </div>
           <div className="image-studio-stage-toolbar">
             <div className="image-studio-tool-tabs" role="tablist" aria-label="Image tools">
               {IMAGE_TOOL_DEFINITIONS.map(tool => (
@@ -1290,6 +1323,16 @@ export function ImageStudioPlayground({
               ))}
               <option value="custom">Custom</option>
             </select>
+            <button
+              type="button"
+              className="image-studio-primary-action image-studio-generate-action"
+              onClick={runProviderImage}
+              disabled={runState.status === "running" || !routeAvailability.readyForRealRun}
+              title={!routeAvailability.readyForRealRun ? routeAvailability.proofLimit : ""}
+            >
+              <ImageSquare size={17} aria-hidden="true" />
+              {runState.status === "running" ? "Generating" : "Generate image"}
+            </button>
           </div>
 
           <div className="image-studio-canvas-wrap">
@@ -1300,13 +1343,13 @@ export function ImageStudioPlayground({
                 background: project.canvas.background,
               }}
               role="img"
-              aria-label={`Local composition preview, not provider output, with ${project.layers.length} layers and ${project.selection.visible ? "one visible mask" : "no visible mask"}`}
+              aria-label={`Preview canvas with ${project.layers.length} layers and ${project.selection.visible ? "one visible mask" : "no visible mask"}`}
             >
               {project.layers.map(layer => (
                 <ProjectLayer key={layer.id} layer={layer} canvas={project.canvas} />
               ))}
               <div className="image-studio-local-preview-badge">
-                Local composition preview - not provider output
+                Preview canvas
               </div>
               <SelectionOverlay selection={project.selection} canvas={project.canvas} mode={session.maskMode} />
               <AnnotationOverlay annotations={project.annotationReadiness} canvas={project.canvas} />
@@ -1356,12 +1399,12 @@ export function ImageStudioPlayground({
           </div>
         </main>
 
-        <aside className="image-studio-panel image-studio-right-rail" aria-label="References, history, and proof">
-          <section className="image-studio-control-group" aria-labelledby="image-studio-reference-label">
-            <div className="image-studio-section-title">
+        <aside className="image-studio-panel image-studio-right-rail" aria-label="References, gallery, outputs, and layers">
+          <details className="image-studio-control-group image-studio-rail-section">
+            <summary className="image-studio-section-title">
               <Stack size={18} aria-hidden="true" />
               <h3 id="image-studio-reference-label">References</h3>
-            </div>
+            </summary>
             <input
               ref={fileInputRef}
               type="file"
@@ -1383,13 +1426,13 @@ export function ImageStudioPlayground({
             ) : (
               <p className="image-studio-empty">No local references attached.</p>
             )}
-          </section>
+          </details>
 
-          <section className="image-studio-control-group" aria-labelledby="image-studio-history-label">
-            <div className="image-studio-section-title">
+          <details className="image-studio-control-group image-studio-rail-section">
+            <summary className="image-studio-section-title">
               <ClockCounterClockwise size={18} aria-hidden="true" />
-              <h3 id="image-studio-history-label">History</h3>
-            </div>
+              <h3 id="image-studio-history-label">Gallery</h3>
+            </summary>
             {project.history.length > 0 ? (
               <ul className="image-studio-history-list">
                 {project.history.slice(0, 5).map(item => (
@@ -1399,13 +1442,13 @@ export function ImageStudioPlayground({
             ) : (
               <p className="image-studio-empty">No real image artifact history is available.</p>
             )}
-          </section>
+          </details>
 
-          <section className="image-studio-control-group" aria-labelledby="image-studio-served-artifacts-label">
-            <div className="image-studio-section-title">
+          <details className="image-studio-control-group image-studio-rail-section">
+            <summary className="image-studio-section-title">
               <FileImage size={18} aria-hidden="true" />
-              <h3 id="image-studio-served-artifacts-label">Served artifacts</h3>
-            </div>
+              <h3 id="image-studio-served-artifacts-label">Outputs</h3>
+            </summary>
             {servedGeneratedArtifacts.length > 0 ? (
               <div className="image-studio-generated-artifact-list">
                 {servedGeneratedArtifacts.slice(0, 4).map((artifact, index) => (
@@ -1413,15 +1456,15 @@ export function ImageStudioPlayground({
                 ))}
               </div>
             ) : (
-              <p className="image-studio-empty">No served generated image artifacts are available yet.</p>
+              <p className="image-studio-empty">Generated images will appear here.</p>
             )}
-          </section>
+          </details>
 
-          <section className="image-studio-control-group" aria-labelledby="image-studio-layers-label">
-            <div className="image-studio-section-title">
+          <details className="image-studio-control-group image-studio-rail-section">
+            <summary className="image-studio-section-title">
               <Stack size={18} aria-hidden="true" />
               <h3 id="image-studio-layers-label">Layers</h3>
-            </div>
+            </summary>
             <ul className="image-studio-layer-list">
               {project.layers.map(layer => (
                 <li key={layer.id}>
@@ -1432,14 +1475,15 @@ export function ImageStudioPlayground({
                 </li>
               ))}
             </ul>
-          </section>
+          </details>
         </aside>
       </div>
 
+      {showDiagnostics ? (
       <section className="image-studio-proof-panel" aria-labelledby="image-studio-proof-label">
         <div>
-          <p className="image-studio-kicker">Proof artifacts</p>
-          <h3 id="image-studio-proof-label">Request handoff</h3>
+          <p className="image-studio-kicker">Diagnostics</p>
+          <h3 id="image-studio-proof-label">Provider handoff trace</h3>
         </div>
         <div className="image-studio-proof-actions">
           <button type="button" className="image-studio-primary-action" onClick={prepareDraft}>
@@ -1454,7 +1498,7 @@ export function ImageStudioPlayground({
             title={!routeAvailability.readyForRealRun ? routeAvailability.proofLimit : ""}
           >
             <ImageSquare size={17} aria-hidden="true" />
-            {runState.status === "running" ? "Running provider" : "Run provider image"}
+            {runState.status === "running" ? "Generating" : "Generate image"}
           </button>
           <button type="button" className="image-studio-secondary-action" onClick={copyDraftJson} disabled={!draft}>
             Copy JSON
@@ -1499,6 +1543,7 @@ export function ImageStudioPlayground({
           <p className="image-studio-empty">Prepare a request draft to review the provider payload and proof plan.</p>
         )}
       </section>
+      ) : null}
 
       <p className="image-studio-sr-status" role="status" aria-live="polite">{announcement}</p>
     </section>

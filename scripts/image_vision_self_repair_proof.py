@@ -280,7 +280,7 @@ def build_local_breakdown(*, screenshot_path: Path | None, route_result: dict[st
         "modelReplyExcerpt": reply[:1800],
         "findings": findings,
         "firstFocus": "Current Image Studio canvas and active self-repair compartment.",
-        "realControls": ["Prepare request draft", "Run provider image when connector-ready", "Preview matte", "Add reference", "Copy JSON"],
+        "realControls": ["Generate image when connector-ready", "Preview matte", "Add reference", "Copy JSON"],
         "decorativeOrSecondaryControls": ["full stage grid", "history list", "served artifact list", "layer visibility list"],
         "removeOrMerge": [
             "Merge six visible breakdown cards into a compact self-repair loop receipt.",

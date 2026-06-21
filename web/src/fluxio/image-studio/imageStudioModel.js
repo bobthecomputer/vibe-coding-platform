@@ -11,7 +11,7 @@ export const IMAGE_STUDIO_STORAGE_KEY = "fluxio.image_studio.session.v1";
 export const IMAGE_STUDIO_PROVIDER_ROUTES = [
   {
     id: "openai-gpt-image-2",
-    label: "OpenAI GPT Image 2",
+    label: "OpenAI image route",
     providerId: "openai",
     model: "gpt-image-2",
     status: "needs_connector",
@@ -31,7 +31,7 @@ export const IMAGE_STUDIO_PROVIDER_ROUTES = [
   },
   {
     id: "codex-imagegen-skill",
-    label: "Codex ImageGen skill",
+    label: "Existing Codex image artifacts",
     providerId: "codex-imagegen-skill",
     model: "imagegen-skill",
     status: "available_for_existing_artifacts",
