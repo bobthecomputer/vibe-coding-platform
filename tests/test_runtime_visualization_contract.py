@@ -142,6 +142,10 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert "Local route decision scorecards" in source
     assert "Harness benchmark board" in source
     assert "benchmark-route-board" in source
+    assert "Provider update flight check" in source
+    assert "provider-flight-check" in source
+    assert "Open provider ecosystem" in source
+    assert "provider-flight-check" in (ROOT / "scripts" / "provider_flight_visual_smoke.py").read_text(encoding="utf-8")
     assert "routeDecisionSummary" in source
     assert "highestRouteTier" in source
     assert "highestRouteWorkClass" in source
@@ -157,8 +161,13 @@ def test_builder_runtime_leaders_show_local_route_decision_rows() -> None:
     assert ".route-outcome-scorecard" in styles
     assert ".benchmark-route-board" in styles
     assert ".benchmark-route-grid" in styles
+    assert ".provider-flight-check" in styles
+    assert ".provider-flight-grid" in styles
     assert "harnessId" in fixtures
     assert "routeDecisionSummary" in fixtures
+    assert "sourceFreshness" in fixtures
+    assert "routeExposure" in fixtures
+    assert "provider-catalog-refresh/v1" in fixtures
     assert "Benchmark F7" in fixtures
     assert "MiniMax-M3" in fixtures
     assert "JBHEAVEN benchmark fixture" in fixtures

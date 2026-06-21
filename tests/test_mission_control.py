@@ -542,11 +542,39 @@ class MissionControlTests(unittest.TestCase):
                 "updateReadinessReadyCount",
                 snapshot["providerEcosystem"]["summary"],
             )
+            self.assertIn("sourceFreshness", snapshot["providerEcosystem"])
+            self.assertEqual(
+                snapshot["providerEcosystem"]["sourceFreshness"]["status"],
+                "current",
+            )
+            self.assertTrue(
+                snapshot["providerEcosystem"]["sourceFreshness"]["reviewOnly"]
+            )
+            self.assertEqual(
+                snapshot["providerEcosystem"]["summary"]["catalogSourceCount"],
+                len(snapshot["providerEcosystem"]["sources"]),
+            )
+            refresh_proof = snapshot["providerEcosystem"]["updatePolicy"][
+                "refreshProof"
+            ]
+            self.assertEqual(
+                refresh_proof["schemaVersion"],
+                "provider-catalog-refresh/v1",
+            )
+            self.assertTrue(refresh_proof["reviewOnly"])
+            self.assertFalse(refresh_proof["writesDefaults"])
+            self.assertFalse(refresh_proof["writesCredentials"])
+            self.assertFalse(refresh_proof["writesProviderRegistry"])
             openai_provider = next(
                 item
                 for item in snapshot["providerEcosystem"]["providers"]
                 if item["providerId"] == "openai"
             )
+            self.assertEqual(
+                openai_provider["routeExposure"]["level"],
+                "first_class_route",
+            )
+            self.assertEqual(openai_provider["sourceFreshness"]["status"], "current")
             self.assertIn("updateSafety", openai_provider)
             self.assertIn("compatibilityWarnings", openai_provider)
             self.assertIn("healthCheck", openai_provider)

@@ -52,6 +52,9 @@ def _dynamic_source_snapshot(fetch_ai_gateway: bool) -> list[dict]:
                 "sourceId": "vercel_ai_gateway_models",
                 "url": AI_GATEWAY_MODELS_URL,
                 "status": "not_fetched",
+                "liveFetchPerformed": False,
+                "modelCount": None,
+                "error": "",
                 "reason": "Live fetch disabled. Run with --fetch-ai-gateway to collect a review artifact.",
             }
         ]
@@ -63,6 +66,8 @@ def _dynamic_source_snapshot(fetch_ai_gateway: bool) -> list[dict]:
                 "sourceId": "vercel_ai_gateway_models",
                 "url": AI_GATEWAY_MODELS_URL,
                 "status": "fetch_failed",
+                "liveFetchPerformed": True,
+                "modelCount": None,
                 "error": str(exc),
             }
         ]
@@ -86,7 +91,9 @@ def _dynamic_source_snapshot(fetch_ai_gateway: bool) -> list[dict]:
             "sourceId": "vercel_ai_gateway_models",
             "url": AI_GATEWAY_MODELS_URL,
             "status": "fetched",
+            "liveFetchPerformed": True,
             "modelCount": len(models),
+            "error": "",
             "sample": sample,
         }
     ]
@@ -125,6 +132,10 @@ def build_catalog_refresh_report(
             {
                 **source,
                 "status": "metadata_only",
+                "liveFetchPerformed": False,
+                "runId": stable_run_id,
+                "modelCount": None,
+                "error": "",
             }
             for source in PROVIDER_ECOSYSTEM_SOURCES
         ],

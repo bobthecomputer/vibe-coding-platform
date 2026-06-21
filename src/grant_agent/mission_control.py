@@ -164,6 +164,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "repo_supported",
         "routeRole": "primary_model_route",
         "authPath": "OpenAI API key or OpenAI Codex OAuth",
+        "sourceId": "opencode_models",
         "updateSource": "official_docs_and_runtime_status",
         "supports": ["chat", "coding", "image-route-check"],
     },
@@ -173,6 +174,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "repo_supported",
         "routeRole": "bounded_model_route",
         "authPath": "MiniMax API key or OpenClaw OAuth",
+        "sourceId": "openclaw_model_providers",
         "updateSource": "OpenClaw provider directory",
         "supports": ["chat", "coding", "hermes-route"],
     },
@@ -182,6 +184,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "credential_ready",
         "routeRole": "external_model_route",
         "authPath": "Anthropic API key",
+        "sourceId": "opencode_models",
         "updateSource": "AI SDK provider registry",
         "supports": ["chat", "coding", "verification"],
     },
@@ -191,6 +194,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "credential_ready",
         "routeRole": "gateway_model_route",
         "authPath": "OpenRouter API key",
+        "sourceId": "opencode_models",
         "updateSource": "OpenCode/OpenRouter integration",
         "supports": ["multi-provider", "fallback", "benchmarking"],
     },
@@ -200,6 +204,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "planned_adapter",
         "routeRole": "future_model_route",
         "authPath": "Google AI Studio or Vertex credentials",
+        "sourceId": "opencode_models",
         "updateSource": "AI SDK provider registry",
         "supports": ["chat", "vision", "long-context"],
     },
@@ -209,6 +214,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "planned_adapter",
         "routeRole": "local_model_route",
         "authPath": "Ollama, LM Studio, LiteLLM, vLLM, or OMLX endpoint",
+        "sourceId": "crush_local_models",
         "updateSource": "Crush local-provider discovery",
         "supports": ["private-chat", "cheap-probes", "offline-runs"],
     },
@@ -218,6 +224,7 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "planned_gateway",
         "routeRole": "provider_catalog_source",
         "authPath": "AI Gateway key",
+        "sourceId": "vercel_ai_gateway_models",
         "updateSource": "AI Gateway /v1/models endpoint",
         "supports": ["model-catalog", "pricing", "capability-metadata"],
     },
@@ -227,10 +234,91 @@ PROVIDER_ECOSYSTEM_ROWS = [
         "status": "planned_gateway",
         "routeRole": "adapter_gateway",
         "authPath": "LiteLLM proxy or provider-specific keys",
+        "sourceId": "litellm_providers",
         "updateSource": "LiteLLM provider docs",
         "supports": ["many-providers", "speech", "image", "fallback"],
     },
 ]
+
+
+def _provider_route_exposure(row: dict, *, can_route_now: bool) -> dict:
+    provider_id = str(row.get("providerId", "")).strip().lower()
+    status = str(row.get("status", "")).strip().lower()
+    if provider_id == "openai":
+        level = "first_class_route"
+        label = "First-class route"
+        summary = "Native Codex/OpenAI route metadata is tracked; live use still depends on account access and a smoke check."
+    elif provider_id == "minimax":
+        level = "bounded_openclaw_route"
+        label = "Bounded OpenClaw route"
+        summary = "MiniMax is routed through the OpenClaw/Hermes lane and must keep auth, runtime, and route proof visible."
+    elif status == "credential_ready":
+        level = "credential_ready_adapter"
+        label = "Credential-ready adapter"
+        summary = "Credentials can unlock this route, but it should not become default until a health check passes."
+    elif status == "planned_gateway":
+        level = "catalog_source_only"
+        label = "Catalog source only"
+        summary = "This is a provider catalog signal until a gateway adapter and route smoke proof exist."
+    elif status.startswith("planned"):
+        level = "planned_adapter"
+        label = "Planned adapter"
+        summary = "This provider is tracked for future adapter work and cannot route live work yet."
+    else:
+        level = "review_required"
+        label = "Review required"
+        summary = "Provider exposure could not be classified from the current repo metadata."
+    return {
+        "level": level,
+        "label": label,
+        "summary": summary,
+        "routeReady": can_route_now,
+    }
+
+
+def _provider_source_freshness(sources: list[dict], *, as_of: str = "2026-06-21") -> dict:
+    as_of_date = datetime.strptime(as_of, "%Y-%m-%d").date()
+    source_rows: list[dict] = []
+    fresh_count = 0
+    stale_count = 0
+    latest_verified_at = ""
+    for source in sources:
+        verified_at = str(source.get("verifiedAt", "")).strip()
+        age_days = None
+        status = "review"
+        if verified_at:
+            try:
+                verified_date = datetime.strptime(verified_at, "%Y-%m-%d").date()
+                age_days = max(0, (as_of_date - verified_date).days)
+                if not latest_verified_at or verified_at > latest_verified_at:
+                    latest_verified_at = verified_at
+                status = "current" if age_days <= 7 else "stale" if age_days <= 30 else "expired"
+            except ValueError:
+                status = "review"
+        if status == "current":
+            fresh_count += 1
+        else:
+            stale_count += 1
+        source_rows.append(
+            {
+                **source,
+                "freshnessStatus": status,
+                "ageDays": age_days,
+                "reviewOnly": True,
+                "refreshAction": "Refresh catalog metadata and review before default route changes.",
+            }
+        )
+    return {
+        "asOf": as_of,
+        "sourceCount": len(source_rows),
+        "freshSourceCount": fresh_count,
+        "reviewRequiredCount": stale_count,
+        "latestVerifiedAt": latest_verified_at,
+        "status": "current" if stale_count == 0 and source_rows else "review_required",
+        "reviewOnly": True,
+        "sources": source_rows,
+        "nextRefreshAction": "Run scripts/provider_catalog_refresh.py, review the artifact, then run provider health checks before default changes.",
+    }
 
 
 def _provider_compatibility_warnings(row: dict, *, auth_present: bool, can_route_now: bool) -> list[str]:
@@ -530,6 +618,12 @@ def _build_provider_ecosystem_snapshot(
     harness_lab: dict,
 ) -> dict:
     runtime_ids = {item.runtime_id for item in runtime_statuses if item.detected}
+    source_freshness = _provider_source_freshness(PROVIDER_ECOSYSTEM_SOURCES)
+    sources_by_id = {
+        str(item.get("sourceId", "")).strip(): item
+        for item in source_freshness["sources"]
+        if item.get("sourceId")
+    }
     fused_runtime = harness_lab.get("fusedRuntime", {})
     observed_routes = {
         str(item.get("provider", "")).strip().lower(): int(item.get("observedCount", 0) or 0)
@@ -553,12 +647,21 @@ def _build_provider_ecosystem_snapshot(
         )
         observed_route_count = observed_routes.get(provider_id, 0)
         model_capabilities = _provider_model_capabilities(row)
+        route_exposure = _provider_route_exposure(row, can_route_now=can_route_now)
+        row_source = sources_by_id.get(str(row.get("sourceId", "")).strip(), {})
         rows.append(
             {
                 **row,
                 "authPresent": auth_present,
                 "canRouteNow": can_route_now,
                 "observedRouteCount": observed_route_count,
+                "routeExposure": route_exposure,
+                "sourceFreshness": {
+                    "sourceId": row_source.get("sourceId") or row.get("sourceId"),
+                    "status": row_source.get("freshnessStatus", "review"),
+                    "verifiedAt": row_source.get("verifiedAt", ""),
+                    "reviewOnly": bool(row_source.get("reviewOnly", True)),
+                },
                 "setup": setup,
                 "compatibilityWarnings": compatibility_warnings,
                 "healthCheck": _provider_health_check(
@@ -670,9 +773,18 @@ def _build_provider_ecosystem_snapshot(
     readiness_review = [
         item for item in readiness_checklist if item["status"] != "ready"
     ]
+    exposure_counts: dict[str, int] = {}
+    for item in rows:
+        level = str(item.get("routeExposure", {}).get("level", "review_required"))
+        exposure_counts[level] = exposure_counts.get(level, 0) + 1
     return {
         "schemaVersion": "provider-ecosystem.v1",
         "lastVerifiedAt": "2026-06-21",
+        "sourceFreshness": {
+            key: value
+            for key, value in source_freshness.items()
+            if key != "sources"
+        },
         "summary": {
             "totalProvidersTracked": len(rows),
             "implementedOrCredentialReady": len(implemented),
@@ -680,14 +792,31 @@ def _build_provider_ecosystem_snapshot(
             "missingAuthCount": len(missing_auth),
             "updateReadinessReadyCount": len(readiness_ready),
             "updateReadinessReviewCount": len(readiness_review),
+            "catalogSourceCount": source_freshness["sourceCount"],
+            "freshCatalogSourceCount": source_freshness["freshSourceCount"],
+            "catalogReviewRequiredCount": source_freshness["reviewRequiredCount"],
+            "firstClassRouteCount": exposure_counts.get("first_class_route", 0),
+            "boundedRouteCount": exposure_counts.get("bounded_openclaw_route", 0),
+            "catalogOnlyCount": exposure_counts.get("catalog_source_only", 0),
+            "plannedAdapterCount": exposure_counts.get("planned_adapter", 0),
         },
         "providers": rows,
-        "sources": PROVIDER_ECOSYSTEM_SOURCES,
+        "sources": source_freshness["sources"],
         "updatePolicy": {
             "mode": "safe_refresh",
             "cadence": "manual_or_weekly",
             "requiresApprovalForDefaultChanges": True,
             "neverOverwriteUserModels": True,
+            "refreshProof": {
+                "schemaVersion": "provider-catalog-refresh/v1",
+                "command": "python scripts/provider_catalog_refresh.py",
+                "artifactRoot": "artifacts/provider-catalog",
+                "reviewOnly": True,
+                "writesDefaults": False,
+                "writesCredentials": False,
+                "writesProviderRegistry": False,
+                "requiresProviderHealthAfterRefresh": True,
+            },
             "compatibilityWarnings": [
                 "Review refreshed catalog metadata before changing default model IDs.",
                 "Keep user-defined models unchanged until a route smoke test passes.",

@@ -22,6 +22,8 @@ export function ProviderEcosystemPanel({
 }) {
   const providedReadinessChecklist = asList(updatePolicy.readinessChecklist);
   const readinessSummary = asRecord(updatePolicy.readinessSummary);
+  const sourceFreshness = asRecord(providerEcosystem.sourceFreshness);
+  const refreshProof = asRecord(updatePolicy.refreshProof);
   const readinessChecklist =
     providedReadinessChecklist.length > 0
       ? providedReadinessChecklist
@@ -82,6 +84,25 @@ export function ProviderEcosystemPanel({
           <strong>{summary.missingAuthCount || 0}</strong>
           <p>{providerEcosystem.lastVerifiedAt ? `Verified ${providerEcosystem.lastVerifiedAt}` : "Waiting for live snapshot."}</p>
         </article>
+        <article className="context-item">
+          <span>Source freshness</span>
+          <strong>{sourceFreshness.freshSourceCount || 0}/{sourceFreshness.sourceCount || sources.length || 0}</strong>
+          <p>{sourceFreshness.reviewOnly ? "Review-only catalog refresh; no default changes." : "Refresh proof pending."}</p>
+        </article>
+      </div>
+      <div className="provider-refresh-proof" aria-label="Provider catalog refresh proof">
+        <div>
+          <span>Catalog refresh proof</span>
+          <strong>{refreshProof.schemaVersion || "provider-catalog-refresh/v1"}</strong>
+          <p>{sourceFreshness.nextRefreshAction || "Run a review-only catalog refresh before changing provider defaults."}</p>
+        </div>
+        <code>{refreshProof.command || "python scripts/provider_catalog_refresh.py"}</code>
+        <small>
+          {refreshProof.reviewOnly ? "review-only" : "review pending"} ·{" "}
+          {refreshProof.writesDefaults ? "may write defaults" : "writesDefaults=false"} ·{" "}
+          {refreshProof.writesCredentials ? "may write credentials" : "writesCredentials=false"} ·{" "}
+          {refreshProof.writesProviderRegistry ? "may write registry" : "writesProviderRegistry=false"}
+        </small>
       </div>
       {readinessChecklist.length > 0 ? (
         <div className="provider-update-readiness" aria-label="Provider update readiness checklist">
@@ -131,7 +152,11 @@ export function ProviderEcosystemPanel({
                   <span className="mini-pill">{item.providerId}</span>
                   <span className="mini-pill muted">{item.updateSource || "manual"}</span>
                   <span className="mini-pill muted">{item.observedRouteCount || 0} observed</span>
+                  <span className="mini-pill muted">{item.routeExposure?.label || "Exposure review"}</span>
                 </div>
+                {item.routeExposure?.summary ? (
+                  <p className="provider-exposure-note">{item.routeExposure.summary}</p>
+                ) : null}
                 {healthCheck.status ? (
                   <div className="provider-health-note" aria-label={`${item.label || item.providerId} provider health check`}>
                     <strong>{titleizeToken(healthCheck.status)}</strong>
@@ -186,7 +211,7 @@ export function ProviderEcosystemPanel({
           <span>Catalog sources</span>
           <p>
             {sources.length > 0
-              ? sources.slice(0, 4).map(item => item.label || item.sourceId).join(", ")
+              ? sources.slice(0, 4).map(item => `${item.label || item.sourceId} (${titleizeToken(item.freshnessStatus || "review")})`).join(", ")
               : "OpenCode, OpenClaw, LiteLLM, AI Gateway, and local model catalogs appear after a live snapshot."}
           </p>
         </div>

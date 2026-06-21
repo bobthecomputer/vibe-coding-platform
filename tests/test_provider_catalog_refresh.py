@@ -29,6 +29,13 @@ class ProviderCatalogRefreshTests(unittest.TestCase):
         self.assertFalse(report["approvalPolicy"]["writesCredentials"])
         self.assertFalse(report["approvalPolicy"]["writesProviderRegistry"])
 
+        source_snapshot = report["sourceSnapshots"][0]
+        self.assertEqual(source_snapshot["status"], "metadata_only")
+        self.assertFalse(source_snapshot["liveFetchPerformed"])
+        self.assertEqual(source_snapshot["runId"], "test-provider-catalog-refresh")
+        self.assertIsNone(source_snapshot["modelCount"])
+        self.assertEqual(source_snapshot["error"], "")
+
         provider_ids = {item["providerId"] for item in report["trackedProviders"]}
         self.assertIn("openai", provider_ids)
         self.assertIn("minimax", provider_ids)
@@ -38,6 +45,9 @@ class ProviderCatalogRefreshTests(unittest.TestCase):
         dynamic = report["dynamicSourceSnapshots"][0]
         self.assertEqual(dynamic["sourceId"], "vercel_ai_gateway_models")
         self.assertEqual(dynamic["status"], "not_fetched")
+        self.assertFalse(dynamic["liveFetchPerformed"])
+        self.assertIsNone(dynamic["modelCount"])
+        self.assertEqual(dynamic["error"], "")
 
     def test_writes_report_without_mutating_defaults(self) -> None:
         report = refresh.build_catalog_refresh_report(

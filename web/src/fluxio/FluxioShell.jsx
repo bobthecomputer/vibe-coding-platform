@@ -8176,6 +8176,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     providerEcosystem.updatePolicy && typeof providerEcosystem.updatePolicy === "object"
       ? providerEcosystem.updatePolicy
       : EMPTY_OBJECT;
+  const providerCatalogFreshness = asRecord(providerEcosystem.sourceFreshness);
+  const providerRefreshProof = asRecord(providerEcosystemUpdatePolicy.refreshProof);
+  const providerExposureSummary = {
+    firstClass: Number(providerEcosystemSummary.firstClassRouteCount || 0),
+    bounded: Number(providerEcosystemSummary.boundedRouteCount || 0),
+    credentialReady: Number(providerEcosystemSummary.implementedOrCredentialReady || 0),
+    catalogOnly: Number(providerEcosystemSummary.catalogOnlyCount || 0),
+    planned: Number(providerEcosystemSummary.plannedAdapterCount || 0),
+  };
   const openAIProviderStatus =
     (providerSetupStatus && typeof providerSetupStatus === "object"
       ? providerSetupStatus.openai
@@ -13920,6 +13929,50 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           </p>
                         </article>
                       ))}
+                    </div>
+                    <div
+                      className={`provider-flight-check ${toneClass(Number(providerEcosystemSummary.catalogReviewRequiredCount || 0) > 0 ? "warn" : "good")}`}
+                      aria-label="Provider update flight check"
+                    >
+                      <div className="provider-flight-head">
+                        <span>Provider update flight check</span>
+                        <strong>
+                          {providerEcosystemSummary.routeReadyCount || 0}/{providerEcosystemSummary.totalProvidersTracked || providerEcosystemProviders.length || 0} route ready
+                        </strong>
+                      </div>
+                      <div className="provider-flight-grid">
+                        <div>
+                          <span>Route exposure</span>
+                          <b>
+                            {providerExposureSummary.firstClass} first-class · {providerExposureSummary.bounded} bounded · {providerExposureSummary.catalogOnly} catalog
+                          </b>
+                        </div>
+                        <div>
+                          <span>Source freshness</span>
+                          <b>
+                            {providerCatalogFreshness.freshSourceCount || 0}/{providerCatalogFreshness.sourceCount || providerEcosystemSources.length || 0} current
+                          </b>
+                        </div>
+                        <div>
+                          <span>Missing auth</span>
+                          <b>{providerEcosystemSummary.missingAuthCount || 0} provider(s)</b>
+                        </div>
+                        <div>
+                          <span>Refresh proof</span>
+                          <b>{providerRefreshProof.reviewOnly ? "Review-only artifact" : "Proof pending"}</b>
+                        </div>
+                      </div>
+                      <p>
+                        {providerCatalogFreshness.latestVerifiedAt
+                          ? `Sources verified ${providerCatalogFreshness.latestVerifiedAt}; default route changes still require provider health checks.`
+                          : "Provider source freshness is waiting for a live setup snapshot."}
+                      </p>
+                      <div className="provider-flight-actions">
+                        <span>{providerRefreshProof.command || "python scripts/provider_catalog_refresh.py"}</span>
+                        <ActionButton onClick={() => setActiveDrawer("runtime")} type="button">
+                          Open provider ecosystem
+                        </ActionButton>
+                      </div>
                     </div>
                     <div className="drawer-actions">
                       <ActionButton onClick={() => void applyPreferredHarness("fluxio_hybrid")} variant="primary">
