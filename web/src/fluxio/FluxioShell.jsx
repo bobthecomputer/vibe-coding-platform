@@ -6613,14 +6613,29 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const mediumAnnotations = liveReviewAnnotationBlocks.filter(
       block => String(block?.severity || "").toLowerCase() === "medium",
     );
+    const framePath = String(visualProofFrame?.path || visualProofFrame?.thumbnailPath || "").trim();
+    const hasRealFrame =
+      Boolean(framePath) &&
+      !["screenshots/latest.png", "screenshots/previous.png"].includes(framePath);
+    const frameStatus =
+      visualProofFrame?.frameStatus ||
+      selectedLiveReviewEvent?.frameStatus ||
+      firstLiveReviewFrameEvent?.frameStatus ||
+      (hasRealFrame ? "captured" : "missing");
     return {
       eventId: selectedLiveReviewEvent?.id || firstLiveReviewFrameEvent?.id || "",
       eventLabel:
         selectedLiveReviewEvent?.label ||
         firstLiveReviewFrameEvent?.label ||
         "Preview proof",
-      frameLabel: visualProofFrame?.label || "No frame selected",
-      framePath: visualProofFrame?.path || visualProofFrame?.thumbnailPath || "",
+      frameLabel: visualProofFrame?.label || (hasRealFrame ? "Captured frame" : "Frame evidence missing"),
+      framePath: hasRealFrame ? framePath : "",
+      frameStatus,
+      frameMissingReason:
+        selectedLiveReviewEvent?.frameMissingReason ||
+        firstLiveReviewFrameEvent?.frameMissingReason ||
+        (hasRealFrame ? "" : "No screenshot artifact is attached to this Live Review event."),
+      hasRealFrame,
       previewUrl: livePreviewUrl,
       annotationCount: liveReviewAnnotationBlocks.length,
       severeAnnotationCount: severeAnnotations.length,
@@ -6643,6 +6658,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     };
   }, [
     builderSelectedReviewTarget?.id,
+    firstLiveReviewFrameEvent?.frameMissingReason,
+    firstLiveReviewFrameEvent?.frameStatus,
     firstLiveReviewFrameEvent?.id,
     firstLiveReviewFrameEvent?.label,
     latestStructuredFeedbackReceipt?.eventId,
@@ -6653,11 +6670,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     mission?.mission_id,
     selectedLiveReviewEvent?.id,
     selectedLiveReviewEvent?.label,
+    selectedLiveReviewEvent?.frameMissingReason,
+    selectedLiveReviewEvent?.frameStatus,
     selectedLiveReviewEvent?.proofTarget,
     selectedLiveReviewEvent?.threadTarget,
     selectedReplayMarker?.deepLink?.proofTarget,
     selectedReplayMarker?.deepLink?.threadTarget,
     visualProofFrame?.label,
+    visualProofFrame?.frameStatus,
     visualProofFrame?.path,
     visualProofFrame?.thumbnailPath,
   ]);
@@ -12702,7 +12722,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               <article>
                                 <span>Frame</span>
                                 <strong>{visualProofPacket.frameLabel}</strong>
-                                <small>{visualProofPacket.framePath || "Path pending"}</small>
+                                <small>
+                                  {visualProofPacket.hasRealFrame
+                                    ? visualProofPacket.framePath
+                                    : visualProofPacket.frameMissingReason || "Frame evidence missing"}
+                                </small>
                               </article>
                               <article>
                                 <span>Annotations</span>
@@ -12718,20 +12742,22 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               </article>
                             </div>
                             <p className="builder-live-review-meta">
-                              Event: {visualProofPacket.eventLabel} · Handle: {visualProofPacket.receiptHandle || "none yet"}
+                              Event: {visualProofPacket.eventLabel} · Frame status: {titleizeToken(visualProofPacket.frameStatus)} · Handle: {visualProofPacket.receiptHandle || "none yet"}
                             </p>
                             <div className="builder-live-review-controls">
                               <ActionButton
-                                disabled={!visualProofPacket.framePath || previewMode !== "live"}
+                                disabled={!visualProofPacket.hasRealFrame || previewMode !== "live"}
                                 onClick={() => void handleStructuredLiveReviewFeedback({ proofOnly: true })}
+                                title={!visualProofPacket.hasRealFrame ? visualProofPacket.frameMissingReason : undefined}
                                 type="button"
                                 variant="primary"
                               >
                                 Capture proof
                               </ActionButton>
                               <ActionButton
-                                disabled={!visualProofPacket.framePath}
+                                disabled={!visualProofPacket.hasRealFrame}
                                 onClick={() => copyContextValue(visualProofPacket.framePath)}
+                                title={!visualProofPacket.hasRealFrame ? visualProofPacket.frameMissingReason : undefined}
                                 type="button"
                                 variant="ghost"
                               >

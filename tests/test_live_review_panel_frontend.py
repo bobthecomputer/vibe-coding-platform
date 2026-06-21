@@ -48,6 +48,8 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "operatorMessages",
             "page",
             "screenshotFrames",
+            "frameStatus",
+            "frameMissingReason",
             "snapshotPath",
             "thumbnailPath",
             "frameId",
@@ -69,9 +71,13 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "latestStructuredFeedbackReceipt",
             "live_review_structured_feedback",
             "plannerExecutorHandoffId",
+            "No screenshot artifact captured yet",
+            "No real screenshot artifact path is present",
         ]:
             self.assertIn(fragment, model)
-        self.assertNotIn('{ path: "screenshots/latest.png", label: "latest.png" }', model)
+        self.assertNotIn('|| "screenshots/latest.png"', model)
+        self.assertNotIn('|| "screenshots/previous.png"', model)
+        self.assertNotIn("snapshotPath: item?.artifactPath || item?.path || screenshotPath", model)
 
     def test_connected_device_bridge_evidence_is_exposed_to_live_review(self) -> None:
         bridge = (ROOT / "web" / "src" / "fluxio" / "fluxioBridge.ts").read_text(encoding="utf-8")
@@ -216,6 +222,10 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "Visual proof packet",
             "visualProofPacket",
             "Frame",
+            "Frame evidence missing",
+            "hasRealFrame",
+            "frameStatus",
+            "frameMissingReason",
             "Copy frame path",
             "Copy proof handle",
             "Open event",

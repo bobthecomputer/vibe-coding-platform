@@ -41,6 +41,30 @@ function listLabel(value) {
   return String(value);
 }
 
+function cleanArtifactPath(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "screenshots/latest.png" || text === "screenshots/previous.png") {
+    return "";
+  }
+  return text;
+}
+
+function liveReviewFrame(path, { id, label, timestamp } = {}) {
+  const cleanPath = cleanArtifactPath(path);
+  if (!cleanPath) {
+    return null;
+  }
+  return {
+    id,
+    label,
+    path: cleanPath,
+    thumbnailPath: cleanPath,
+    timestamp,
+    frameStatus: "captured",
+    proofSource: "mission_artifact",
+  };
+}
+
 function ratioPercent(part, total) {
   if (total <= 0) {
     return 0;
@@ -2105,17 +2129,30 @@ function deriveLiveReviewStudio({
     });
   }
 
+  const nowDate = new Date();
+  const nowTimestamp = nowDate.toISOString();
   const previewUrl = mission?.state?.last_preview_url || mission?.state?.preview_url || "No preview URL captured";
-  const screenshotPath =
-    mission?.proof?.latest_screenshot_path || mission?.state?.last_screenshot_path || "screenshots/latest.png";
+  const latestScreenshotPath = cleanArtifactPath(
+    mission?.proof?.latest_screenshot_path || mission?.state?.last_screenshot_path,
+  );
+  const previousScreenshotPath = cleanArtifactPath(mission?.state?.previous_screenshot_path);
+  const latestScreenshotFrame = liveReviewFrame(latestScreenshotPath, {
+    id: "frame-latest",
+    label: "Latest",
+    timestamp: mission?.state?.last_preview_refresh_at || nowTimestamp,
+  });
+  const previousScreenshotFrame = liveReviewFrame(previousScreenshotPath, {
+    id: "frame-previous",
+    label: "Previous",
+    timestamp: mission?.state?.previous_preview_refresh_at || mission?.updated_at || nowTimestamp,
+  });
+  const screenshotFrames = [latestScreenshotFrame, previousScreenshotFrame].filter(Boolean);
   const verificationStep =
     asList(mission?.state?.verification_failures).length > 0 ? "Verification blocked by failing checks" : "Verification checks in progress";
   const imageArtifacts = asList(mission?.proof?.artifacts)
     .map(item => item?.path || item?.artifact_path || "")
     .filter(Boolean)
     .slice(0, 2);
-  const nowDate = new Date();
-  const nowTimestamp = nowDate.toISOString();
   const progressWindow =
     mission?.state?.last_progress_update_at || mission?.state?.updated_at || mission?.updated_at || mission?.created_at || "";
   const progressWindowDate = progressWindow ? new Date(progressWindow) : null;
@@ -2307,25 +2344,16 @@ function deriveLiveReviewStudio({
       kind: "preview_refresh",
       label: "Preview refresh",
       title: "Screenshot and preview sync",
-      detail: `Latest screenshot artifact: ${screenshotPath}`,
-      tone: liveSyncSuspended ? "warn" : "good",
+      detail: latestScreenshotPath
+        ? `Latest screenshot artifact: ${latestScreenshotPath}`
+        : "No screenshot artifact captured yet; run browser proof capture before recording visual proof.",
+      tone: !latestScreenshotPath || liveSyncSuspended ? "warn" : "good",
       timestamp: mission?.state?.last_preview_refresh_at || nowTimestamp,
-      screenshotFrames: [
-        {
-          id: "frame-latest",
-          label: "Latest",
-          path: screenshotPath,
-          thumbnailPath: screenshotPath,
-          timestamp: mission?.state?.last_preview_refresh_at || nowTimestamp,
-        },
-        {
-          id: "frame-previous",
-          label: "Previous",
-          path: mission?.state?.previous_screenshot_path || "screenshots/previous.png",
-          thumbnailPath: mission?.state?.previous_screenshot_path || "screenshots/previous.png",
-          timestamp: mission?.state?.previous_preview_refresh_at || mission?.updated_at || nowTimestamp,
-        },
-      ],
+      frameStatus: latestScreenshotPath ? "captured" : "missing",
+      frameMissingReason: latestScreenshotPath
+        ? ""
+        : "No real screenshot artifact path is present in mission proof or mission state.",
+      screenshotFrames,
     },
     {
       id: "evt-verification",
@@ -2449,8 +2477,8 @@ function deriveLiveReviewStudio({
           id: item?.id || `marker-${index}`,
           label: item?.title || item?.label || "marker",
           timestamp: item?.updatedAt || item?.timestamp || nowTimestamp,
-          snapshotPath: item?.artifactPath || item?.path || screenshotPath,
-          frameId: index === 0 ? "frame-latest" : "frame-previous",
+          snapshotPath: cleanArtifactPath(item?.artifactPath || item?.path),
+          frameId: screenshotFrames[index === 0 ? 0 : 1]?.id || "",
           deepLink: {
             proofTarget: item?.proofId || mission?.id || "",
             threadTarget: item?.threadId || mission?.mission_id || mission?.id || "",
