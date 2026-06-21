@@ -331,29 +331,39 @@ def main() -> int:
         wait_for_control_shell(cdp)
         initial_layout = assert_no_horizontal_overflow(cdp)
 
-        steps = []
-        for label, expected in [
-            (
-                "Builder",
+        builder_expected = [
+            "CONVERSATION COMMAND BOARD",
+            "Launch mission",
+            "Visual proof packet",
+            "Proof readiness gate",
+            "Combined annotation map",
+        ]
+        if "verification_failure" in BASE_URL:
+            builder_expected.extend(
                 [
-                    "CONVERSATION COMMAND BOARD",
-                    "Launch mission",
                     "SKILL RECOVERY COCKPIT",
                     "Runtime lane:",
                     "Provider route:",
                     "Retry guard:",
-                ],
-            ),
-            (
-                "Skills",
+                ]
+            )
+        skills_expected = [
+            "Skills",
+            "RECOMMENDED SKILLS",
+            "RUNTIME LANE",
+        ]
+        if "verification_failure" in BASE_URL:
+            skills_expected.extend(
                 [
-                    "Skills",
                     "SKILL RECOVERY",
-                    "RECOMMENDED SKILLS",
-                    "RUNTIME LANE",
                     "Recovery actions and route separation",
-                ],
-            ),
+                ]
+            )
+
+        steps = []
+        for label, expected in [
+            ("Builder", builder_expected),
+            ("Skills", skills_expected),
             ("Runtime", ["Runtime", "OpenClaw", "Work engines"]),
             ("Settings", ["Settings", "Workspace"]),
             ("Agent", ["Agent", "Syntelos"]),
@@ -368,6 +378,8 @@ def main() -> int:
                 cdp.eval(
                     """
                     document.querySelector(".skill-recovery-cockpit")
+                      ?.scrollIntoView({ block: "center", inline: "nearest" });
+                    document.querySelector(".builder-visual-proof-readiness")
                       ?.scrollIntoView({ block: "center", inline: "nearest" });
                     """
                 )

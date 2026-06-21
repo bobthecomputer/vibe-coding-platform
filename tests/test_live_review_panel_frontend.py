@@ -29,6 +29,11 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             'kind: "continuation_supervisor"',
             'kind: "replay_marker"',
             "annotationReadiness",
+            "proofReadiness",
+            "live-review-proof-readiness.v1",
+            "proofGateChecks",
+            "annotationMap",
+            "passedGateCount",
             "recoveryAction",
             "queueTimeline",
             "providerEvents",
@@ -234,6 +239,18 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
             "plannerExecutorHandoffId",
             "Visual proof packet",
             "visualProofPacket",
+            "Visual proof readiness gate",
+            "Proof readiness gate",
+            "liveReviewProofReadiness",
+            "liveReviewProofGates",
+            "liveReviewAnnotationMap",
+            "Combined annotation map",
+            "builder-visual-proof-readiness",
+            "builder-visual-proof-gates",
+            "builder-visual-proof-gate",
+            "builder-visual-proof-map",
+            "builder-visual-proof-map-canvas",
+            "builder-visual-proof-map-mark",
             "Frame",
             "Frame evidence missing",
             "hasRealFrame",
@@ -261,6 +278,10 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn(".builder-visual-proof-packet", styles)
         self.assertIn(".builder-visual-proof-receipts", styles)
         self.assertIn(".builder-visual-proof-grid", styles)
+        self.assertIn(".builder-visual-proof-readiness", styles)
+        self.assertIn(".builder-visual-proof-gates", styles)
+        self.assertIn(".builder-visual-proof-map-canvas", styles)
+        self.assertIn("@keyframes visual-proof-mark-breathe", styles)
         self.assertIn(".preview-annotation-proof-strip", styles)
         self.assertIn(".preview-annotation-proof-grid", styles)
 

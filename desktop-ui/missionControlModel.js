@@ -2596,6 +2596,64 @@ function deriveLiveReviewStudio({
       },
     ],
   };
+  const proofGateChecks = [
+    {
+      id: "real-frame",
+      label: "Real screenshot frame",
+      passed: Boolean(latestScreenshotPath),
+      detail: latestScreenshotPath || "No screenshot artifact path is attached to this mission.",
+      recovery: "Run browser proof capture or attach a current frame before claiming the preview is verified.",
+    },
+    {
+      id: "annotation-map",
+      label: "Annotation map",
+      passed: annotationReadiness.blocks.length > 0,
+      detail: `${annotationReadiness.blocks.length} visible annotation mark(s) ready for review.`,
+      recovery: "Add at least one visible rectangle or pin that tells the executor what to repair.",
+    },
+    {
+      id: "target-link",
+      label: "Target link",
+      passed: reviewTargets.length > 0,
+      detail: reviewTargets[0]?.title || "No review target selected.",
+      recovery: "Select a review block so the proof can steer the next planner/executor handoff.",
+    },
+    {
+      id: "receipt-link",
+      label: "Receipt link",
+      passed: Boolean(latestStructuredFeedbackReceipt),
+      detail:
+        latestStructuredFeedbackReceipt?.eventId ||
+        latestStructuredFeedbackReceipt?.plannerExecutorHandoffId ||
+        "No structured feedback receipt yet.",
+      recovery: "Capture visual proof after frame and annotations are present.",
+    },
+  ];
+  const passedProofGateCount = proofGateChecks.filter(item => item.passed).length;
+  const proofReadiness = {
+    schemaVersion: "live-review-proof-readiness.v1",
+    status:
+      passedProofGateCount === proofGateChecks.length
+        ? "ready"
+        : latestScreenshotPath && annotationReadiness.blocks.length > 0
+          ? "needs_receipt"
+          : "needs_evidence",
+    score: Math.round((passedProofGateCount / proofGateChecks.length) * 100),
+    passedGateCount: passedProofGateCount,
+    totalGateCount: proofGateChecks.length,
+    nextAction:
+      proofGateChecks.find(item => !item.passed)?.recovery ||
+      "Use this receipt and annotation map as the next UI repair input.",
+    gates: proofGateChecks,
+    annotationMap: annotationReadiness.blocks.map((block, index) => ({
+      id: block.id || `annotation-${index + 1}`,
+      label: block.label || `Annotation ${index + 1}`,
+      severity: block.severity || "low",
+      page: block.page || "surface",
+      rectangle: block.rectangle || null,
+      pin: block.pin || null,
+    })),
+  };
 
   return {
     headline: "Live UI review",
@@ -2612,6 +2670,7 @@ function deriveLiveReviewStudio({
         : "Use fixture review now, then launch the UI review loop once a real mission is active.",
     events,
     annotationReadiness,
+    proofReadiness,
     plannerProof: {
       selectedSkills: plannerSelectedSkills,
       plannerRules,

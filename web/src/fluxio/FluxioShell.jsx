@@ -6823,6 +6823,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     previewAnnotationTopBlock?.note ||
     liveReviewStudio.compareHint ||
     "Open Live Review controls to inspect, annotate, and attach proof.";
+  const liveReviewProofReadiness = asRecord(liveReviewStudio.proofReadiness);
+  const liveReviewProofGates = asList(liveReviewProofReadiness.gates);
+  const liveReviewAnnotationMap = asList(liveReviewProofReadiness.annotationMap);
   const [liveReviewAutoplay, setLiveReviewAutoplay] = useState(false);
   const markerFrameMap = useMemo(() => {
     const map = new Map();
@@ -12604,6 +12607,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               <div className="preview-annotation-proof-head">
                                 <span>Preview + annotation proof</span>
                                 <strong>{titleizeToken(visualProofPacket.frameStatus)}</strong>
+                                <em>
+                                  Proof readiness gate{" "}
+                                  {Number.isFinite(liveReviewProofReadiness.score)
+                                    ? `${liveReviewProofReadiness.score}%`
+                                    : "0%"}
+                                </em>
                               </div>
                               <div className="preview-annotation-proof-grid">
                                 <div>
@@ -12623,6 +12632,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                                 <div>
                                   <span>Review target</span>
                                   <b>{previewAnnotationProofTarget}</b>
+                                </div>
+                                <div>
+                                  <span>Combined annotation map</span>
+                                  <b>{liveReviewAnnotationMap.length} mapped mark(s)</b>
                                 </div>
                               </div>
                               <div className="preview-annotation-proof-foot">
@@ -13176,6 +13189,60 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             <p className="builder-live-review-meta">
                               Event: {visualProofPacket.eventLabel} · Frame status: {titleizeToken(visualProofPacket.frameStatus)} · Handle: {visualProofPacket.receiptHandle || "none yet"}
                             </p>
+                            <section
+                              className={`builder-visual-proof-readiness tone-${liveReviewProofReadiness.status || "needs_evidence"}`.trim()}
+                              aria-label="Visual proof readiness gate"
+                            >
+                              <div className="builder-visual-proof-readiness-head">
+                                <span>Proof readiness gate</span>
+                                <strong>
+                                  {Number.isFinite(liveReviewProofReadiness.score)
+                                    ? `${liveReviewProofReadiness.score}%`
+                                    : "0%"}
+                                </strong>
+                                <em>
+                                  {liveReviewProofReadiness.passedGateCount || 0}/{liveReviewProofReadiness.totalGateCount || liveReviewProofGates.length || 0} passed
+                                </em>
+                              </div>
+                              <div className="builder-visual-proof-gates" role="list">
+                                {liveReviewProofGates.map(gate => (
+                                  <article className={`builder-visual-proof-gate ${gate.passed ? "passed" : "blocked"}`} key={gate.id || gate.label} role="listitem">
+                                    <span>{gate.passed ? "Ready" : "Needed"}</span>
+                                    <strong>{gate.label}</strong>
+                                    <small>{gate.detail}</small>
+                                  </article>
+                                ))}
+                              </div>
+                              <p>{liveReviewProofReadiness.nextAction || previewAnnotationProofNextAction}</p>
+                            </section>
+                            {liveReviewAnnotationMap.length > 0 ? (
+                              <section className="builder-visual-proof-map" aria-label="Combined annotation map">
+                                <div className="builder-live-review-panel-head compact">
+                                  <strong>Combined annotation map</strong>
+                                  <span className="mini-pill muted">{liveReviewAnnotationMap.length} marks</span>
+                                </div>
+                                <div className="builder-visual-proof-map-canvas">
+                                  {liveReviewAnnotationMap.map((mark, markIndex) => (
+                                    <span
+                                      aria-label={`${mark.label || "Annotation"} ${titleizeToken(mark.severity || "low")}`}
+                                      className={`builder-visual-proof-map-mark severity-${mark.severity || "low"} ${mark.rectangle ? "is-rect" : "is-pin"}`.trim()}
+                                      key={mark.id || `${mark.label}-${markIndex}`}
+                                      style={mark.rectangle ? {
+                                        left: `${mark.rectangle.x}%`,
+                                        top: `${mark.rectangle.y}%`,
+                                        width: `${mark.rectangle.width}%`,
+                                        height: `${mark.rectangle.height}%`,
+                                      } : {
+                                        left: `${mark.pin?.x || 50}%`,
+                                        top: `${mark.pin?.y || 50}%`,
+                                      }}
+                                      title={`${mark.label || "Annotation"} · ${mark.page || "surface"}`}
+                                    />
+                                  ))}
+                                  <div className="builder-visual-proof-map-grid" aria-hidden="true" />
+                                </div>
+                              </section>
+                            ) : null}
                             <div className="builder-live-review-controls">
                               <ActionButton
                                 disabled={!visualProofPacket.hasRealFrame || previewMode !== "live"}
