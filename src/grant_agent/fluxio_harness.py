@@ -1050,6 +1050,7 @@ class FluxioHarness:
                     execution_scope=execution_scope,
                     execution_policy=execution_policy,
                     route_configs=route_configs,
+                    selected_skills=selected_skills,
                 )
                 self.session_store.append_timeline(
                     session_path,

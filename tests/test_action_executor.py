@@ -304,6 +304,98 @@ class ActionExecutorTests(unittest.TestCase):
 
             self.assertNotEqual(proposal.kind, "runtime_delegate")
 
+    def test_runtime_skill_selection_drives_delegation_without_magic_words(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_skill_runtime_policy",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            step = PlannedStep(
+                step_id="step_safe_lab",
+                title="Run controlled JBHEAVEN probe set",
+                description="Use synthetic targets and record proof.",
+            )
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Assess refusal quality on fictional lab prompts and collect proof.",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+                route_configs=[
+                    {
+                        "role": "executor",
+                        "provider": "openai",
+                        "model": "gpt-5.4-mini",
+                        "effort": "medium",
+                    }
+                ],
+                selected_skills=[
+                    {
+                        "skillId": "jbheaven_godmode_lab",
+                        "label": "JBHEAVEN Godmode Lab",
+                        "actionKinds": [
+                            "security_red_team",
+                            "model_probe",
+                            "runtime_routing",
+                            "proof_collection",
+                        ],
+                        "executionCapable": True,
+                    }
+                ],
+            )
+
+            self.assertEqual(proposal.kind, "runtime_delegate")
+            policy_payload = proposal.delegation_metadata["skill_execution_policy"]
+            self.assertTrue(policy_payload["requiresRuntimeDelegation"])
+            self.assertEqual(
+                policy_payload["matchedSkills"][0]["skillId"],
+                "jbheaven_godmode_lab",
+            )
+            self.assertIn("runtime_routing", policy_payload["matchedSkills"][0]["actionKinds"])
+            self.assertIn("Selected execution-capable skill", proposal.reason)
+
+    def test_guidance_only_runtime_skill_does_not_force_delegation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            policy = build_execution_policy("builder")
+            scope = prepare_execution_scope(
+                root,
+                "mission_guidance_skill_policy",
+                requested_scope="direct",
+                profile_name="builder",
+            )
+            step = PlannedStep(step_id="step_read", title="Review referenced docs")
+
+            proposal = build_action_proposal(
+                step=step,
+                objective="Review docs and extract constraints.",
+                workspace_root=root,
+                verification_commands=[],
+                runtime_id="hermes",
+                execution_scope=scope,
+                execution_policy=policy,
+                selected_skills=[
+                    {
+                        "skillId": "runtime_loop_supervisor",
+                        "label": "Runtime Loop Supervisor",
+                        "actionKinds": ["runtime_routing", "loop_supervision"],
+                        "executionCapable": True,
+                        "guidanceOnly": True,
+                    }
+                ],
+            )
+
+            self.assertNotEqual(proposal.kind, "runtime_delegate")
+
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     @mock.patch("grant_agent.action_executor.runtime_adapter_map")
     def test_runtime_delegate_preserves_worktree_execution_truth(

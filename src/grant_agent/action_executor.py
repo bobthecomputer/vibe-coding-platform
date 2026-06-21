@@ -116,6 +116,7 @@ class ExecutionAdapter(ABC):
         execution_scope: ExecutionScope,
         execution_policy: ExecutionPolicy,
         route_configs: list[dict] | list[ModelRouteConfig] | None = None,
+        selected_skills: list[dict] | None = None,
     ) -> ActionProposal:
         raise NotImplementedError
 
@@ -258,6 +259,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
         execution_scope: ExecutionScope,
         execution_policy: ExecutionPolicy,
         route_configs: list[dict] | list[ModelRouteConfig] | None = None,
+        selected_skills: list[dict] | None = None,
     ) -> ActionProposal:
         step_text = f"{step.title} {step.description}".lower()
         lowered = f"{step_text} {objective}".lower()
@@ -265,6 +267,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
         event_id = f"evt_{uuid.uuid4().hex[:10]}"
         scope_root = Path(execution_scope.execution_root or workspace_root)
         target_path = _infer_target_path(objective, scope_root)
+        skill_runtime_policy = _skill_runtime_policy(selected_skills or [])
 
         if _matches(step_text, VERIFY_HINTS):
             command = verification_commands[0] if verification_commands else "git diff --stat"
@@ -281,7 +284,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 mutability_class="verify",
             )
 
-        if _should_delegate_step(lowered, execution_policy):
+        if _should_delegate_step(lowered, execution_policy) or skill_runtime_policy["requiresRuntimeDelegation"]:
             delegated_cycle_phase = _delegated_cycle_phase(step, objective, route_configs)
             delegated_role = _route_role_for_phase(delegated_cycle_phase)
             delegated_route = next(
@@ -301,7 +304,11 @@ class HybridExecutionAdapter(ExecutionAdapter):
                 kind="runtime_delegate",
                 title=f"Delegate {step.title} to {runtime_id}",
                 step=step,
-                reason="Fluxio can hand this step to the selected runtime lane and normalize the returned trace.",
+                reason=(
+                    skill_runtime_policy["reason"]
+                    if skill_runtime_policy["requiresRuntimeDelegation"]
+                    else "Fluxio can hand this step to the selected runtime lane and normalize the returned trace."
+                ),
                 execution_scope=execution_scope,
                 execution_policy=execution_policy,
                 mutability_class="delegate",
@@ -317,6 +324,7 @@ class HybridExecutionAdapter(ExecutionAdapter):
                         asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
                         for item in (route_configs or [])
                     ],
+                    "skill_execution_policy": skill_runtime_policy,
                 },
             )
 
@@ -743,6 +751,7 @@ def build_action_proposal(
     execution_scope: ExecutionScope | None = None,
     execution_policy: ExecutionPolicy | None = None,
     route_configs: list[dict] | list[ModelRouteConfig] | None = None,
+    selected_skills: list[dict] | None = None,
 ) -> ActionProposal:
     execution_scope = _with_execution_truth(
         execution_scope
@@ -762,6 +771,7 @@ def build_action_proposal(
         execution_scope=execution_scope,
         execution_policy=execution_policy,
         route_configs=route_configs,
+        selected_skills=selected_skills,
     )
 
 
@@ -932,6 +942,49 @@ def _risk_for_proposal(proposal: ActionProposal) -> str:
 def _fallback_query(objective: str) -> str:
     words = re.findall(r"[A-Za-z0-9_]+", objective)
     return "|".join(words[:4]) or "mission"
+
+
+RUNTIME_SKILL_ACTION_KINDS = {
+    "blocked_recovery",
+    "loop_supervision",
+    "model_probe",
+    "proof_collection",
+    "runtime_routing",
+    "security_red_team",
+}
+
+
+def _skill_runtime_policy(selected_skills: list[dict]) -> dict:
+    routing_skills: list[dict] = []
+    for skill in selected_skills:
+        action_kinds = {
+            str(item).strip().lower()
+            for item in skill.get("actionKinds", skill.get("action_kinds", []))
+            if str(item).strip()
+        }
+        if not action_kinds & RUNTIME_SKILL_ACTION_KINDS:
+            continue
+        if skill.get("guidanceOnly") or skill.get("guidance_only"):
+            continue
+        if not skill.get("executionCapable", skill.get("execution_capable", False)):
+            continue
+        routing_skills.append(
+            {
+                "skillId": skill.get("skillId") or skill.get("skill_id") or "",
+                "label": skill.get("label") or skill.get("name") or "Runtime skill",
+                "actionKinds": sorted(action_kinds & RUNTIME_SKILL_ACTION_KINDS),
+            }
+        )
+    return {
+        "schemaVersion": "skill-runtime-routing-policy.v1",
+        "requiresRuntimeDelegation": bool(routing_skills),
+        "matchedSkills": routing_skills,
+        "reason": (
+            "Selected execution-capable skill requires runtime routing or proof collection."
+            if routing_skills
+            else "No selected execution-capable runtime skill required delegation."
+        ),
+    }
 
 
 def _should_delegate_step(text: str, policy: ExecutionPolicy) -> bool:
