@@ -44,6 +44,10 @@ export function FusionWorkbenchPanel({ fusionWorkbench }) {
           <strong>{fusionWorkbench.summary.signalSnapshotCount || 0}</strong>
         </article>
         <article className="context-item">
+          <span>Evidence packets</span>
+          <strong>{fusionWorkbench.summary.fusionEvidencePacketCount || 0}</strong>
+        </article>
+        <article className="context-item">
           <span>Gates</span>
           <strong>
             {fusionWorkbench.summary.passedGateCount}/{fusionWorkbench.summary.gateCount}
@@ -137,6 +141,49 @@ export function FusionWorkbenchPanel({ fusionWorkbench }) {
         <p className="fusion-source-path">
           {adapterSummary.label || "mindtower-readonly-sqlite"} · {adapterSummary.sourcePath || "adapter path unavailable"}
         </p>
+      </section>
+      <section className="fusion-evidence-panel" aria-label="Fusion evidence packets">
+        <div className="builder-live-review-panel-head compact">
+          <div>
+            <h4>Fusion evidence packets</h4>
+            <p>Read-only correlations between Solantir signals and Mind Tower source evidence; review only, no trading execution.</p>
+          </div>
+          <span className="mini-pill muted">
+            {fusionWorkbench.summary.fusionEvidenceReviewReadyCount || 0} review-ready
+          </span>
+        </div>
+        <div className="fusion-evidence-packet-list">
+          {(fusionWorkbench.fusionEvidencePackets || []).map(packet => (
+            <article className="fusion-evidence-packet" key={packet.id}>
+              <span>{packet.collectionMode} · {packet.status}</span>
+              <strong>{packet.title}</strong>
+              <div className="pill-row">
+                <span className="mini-pill">confidence {Math.round(Number(packet.confidence || 0) * 100)}%</span>
+                <span className="mini-pill muted">{packet.riskLabel}</span>
+                <span className="mini-pill muted">{packet.signalDirection || "review"}</span>
+              </div>
+              <p>{packet.acceptanceRule}</p>
+              <div className="fusion-evidence-match-list">
+                {(packet.matchedEvidence || []).slice(0, 4).map(item => (
+                  <span key={`${packet.id}-${item.kind}-${item.id}`}>
+                    {item.kind}: {item.label} · {item.status}
+                  </span>
+                ))}
+              </div>
+              <div className="fusion-gate-list">
+                {(packet.safetyLabels || []).map(label => (
+                  <span className="mini-pill muted" key={`${packet.id}-${label}`}>{label}</span>
+                ))}
+              </div>
+              <p className="fusion-source-path">
+                Mind Tower: {packet.provenance?.mindTowerSourcePath || "unavailable"}
+              </p>
+              <p className="fusion-source-path">
+                Solantir: {packet.provenance?.solantirSourcePath || "unavailable"} · {packet.provenance?.solantirSourceHashPrefix || "no hash"}
+              </p>
+            </article>
+          ))}
+        </div>
       </section>
       {nextLane ? (
         <section className="fusion-next-lane" aria-label="Next fusion migration lane">

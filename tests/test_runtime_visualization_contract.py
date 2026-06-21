@@ -287,6 +287,13 @@ def test_fusion_migration_lanes_are_visible_in_builder_and_drawer() -> None:
     assert "Terminal and operator workbench shell" in fixtures
     assert "Synology monitoring and event records" in fixtures
     assert "Synthetic red-team proof lane" in fixtures
+    assert "Fusion evidence packets" in fusion_panel
+    assert "fusion-evidence-packet" in fusion_panel
+    assert "fusionEvidencePackets" in fusion_panel
+    assert ".fusion-evidence-packet" in styles
+    assert ".fusion-evidence-panel" in styles
+    assert "fusionEvidencePacketCount" in fixtures
+    assert "FUSION_EVIDENCE_PACKETS" in fixtures
     assert "mindtower-readonly-sqlite-adapter" in desktop_fixtures
     assert "credentialValuesExposed: false" in desktop_fixtures
     assert "writeActions: 0" in desktop_fixtures

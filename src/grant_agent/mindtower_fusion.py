@@ -315,6 +315,84 @@ def _runtime_state_preview(
     return preview
 
 
+def build_fusion_evidence_packets(
+    adapter: dict[str, Any],
+    signal_snapshots: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if (
+        not adapter.get("available")
+        or adapter.get("readOnly") is False
+        or int(adapter.get("writeActions") or 0) != 0
+        or adapter.get("credentialValuesExposed")
+        or not signal_snapshots
+    ):
+        return []
+
+    source_health = adapter.get("sourceHealth") if isinstance(adapter.get("sourceHealth"), list) else []
+    summary_jobs = adapter.get("summaryJobs") if isinstance(adapter.get("summaryJobs"), list) else []
+    recent_events = adapter.get("recentEvents") if isinstance(adapter.get("recentEvents"), list) else []
+    if not source_health and not summary_jobs and not recent_events:
+        return []
+
+    evidence_count = len(source_health) + len(summary_jobs) + len(recent_events)
+    packets: list[dict[str, Any]] = []
+    for index, signal in enumerate(signal_snapshots[:3]):
+        confidence = float(signal.get("confidence") or 0)
+        support_score = min(0.18, evidence_count * 0.025)
+        packet_confidence = round(min(0.95, confidence * 0.72 + support_score), 2)
+        source = source_health[index % len(source_health)] if source_health else {}
+        event = recent_events[index % len(recent_events)] if recent_events else {}
+        job = summary_jobs[index % len(summary_jobs)] if summary_jobs else {}
+        packets.append(
+            {
+                "id": f"fusion-evidence-{signal.get('id', index)}",
+                "status": "review-ready",
+                "title": f"{signal.get('entity', 'Solantir signal')} evidence packet",
+                "sourceProjects": ["Mind Tower", "Solantir"],
+                "collectionMode": "read-only-adapter",
+                "riskLabel": "no-trading-execution",
+                "confidence": packet_confidence,
+                "signalSnapshotId": signal.get("id", ""),
+                "signalEntity": signal.get("entity", ""),
+                "signalScore": signal.get("score", 0),
+                "signalDirection": signal.get("direction", ""),
+                "matchedEvidence": [
+                    {
+                        "kind": "mindtower-source-health",
+                        "id": source.get("id", "source-health-unavailable"),
+                        "label": source.get("label", "Source health unavailable"),
+                        "status": source.get("status", "unavailable"),
+                    },
+                    {
+                        "kind": "mindtower-event",
+                        "id": event.get("id", "event-unavailable"),
+                        "label": event.get("sourceType", "No recent event"),
+                        "status": str(event.get("priorityScore", "unavailable")),
+                    },
+                    {
+                        "kind": "mindtower-summary-job",
+                        "id": job.get("id", "summary-job-unavailable"),
+                        "label": job.get("label", "Summary job unavailable"),
+                        "status": job.get("status", "unavailable"),
+                    },
+                ],
+                "provenance": {
+                    "mindTowerSourcePath": adapter.get("sourcePath", ""),
+                    "solantirSourcePath": signal.get("sourcePath", ""),
+                    "solantirSourceHashPrefix": signal.get("sourceHashPrefix", ""),
+                },
+                "safetyLabels": [
+                    "read-only",
+                    "no-trading-execution",
+                    "no-credential-copy",
+                    "review-only",
+                ],
+                "acceptanceRule": "Review-only no-trading-execution correlation packet; it cannot place trades, copy credentials, or write back to either project.",
+            }
+        )
+    return packets
+
+
 def build_mindtower_fusion_snapshot(
     root: Path,
     db_path: Path | None = None,
@@ -342,7 +420,7 @@ def build_mindtower_fusion_snapshot(
     }
     if not database_path.exists():
         adapter["detail"] = "Mind Tower SQLite database was not found; fixture rows remain the fallback."
-        return {"adapter": adapter, "rows": [], "signalSnapshots": signal_snapshots}
+        return {"adapter": adapter, "rows": [], "signalSnapshots": signal_snapshots, "fusionEvidencePackets": []}
 
     try:
         uri = f"file:{database_path.as_posix()}?mode=ro"
@@ -361,7 +439,7 @@ def build_mindtower_fusion_snapshot(
     except sqlite3.Error as exc:
         adapter["status"] = "error"
         adapter["detail"] = f"Mind Tower SQLite read failed: {exc}"
-        return {"adapter": adapter, "rows": [], "signalSnapshots": signal_snapshots}
+        return {"adapter": adapter, "rows": [], "signalSnapshots": signal_snapshots, "fusionEvidencePackets": []}
 
     resource_count = sum(int(value or 0) for value in adapter["recordCounts"].values())
     adapter["status"] = "ready" if resource_count else "empty"
@@ -386,4 +464,9 @@ def build_mindtower_fusion_snapshot(
             "adapter": adapter,
         }
     ]
-    return {"adapter": adapter, "rows": rows, "signalSnapshots": signal_snapshots}
+    return {
+        "adapter": adapter,
+        "rows": rows,
+        "signalSnapshots": signal_snapshots,
+        "fusionEvidencePackets": build_fusion_evidence_packets(adapter, signal_snapshots),
+    }

@@ -314,6 +314,44 @@ export const SOLANTIR_SIGNAL_SNAPSHOTS = Object.freeze([
   },
 ]);
 
+export const FUSION_EVIDENCE_PACKETS = Object.freeze([
+  {
+    id: "fusion-evidence-seeded-solantir-mindtower",
+    status: "fixture-review",
+    title: "Solantir signal with Mind Tower source-health evidence",
+    sourceProjects: ["Solantir", "Mind Tower"],
+    collectionMode: "read-only-adapter",
+    riskLabel: "no-trading-execution",
+    confidence: 0.72,
+    signalSnapshotId: "solantir-signal-source-health",
+    signalEntity: "Solantir Source Health Composite",
+    signalScore: 55,
+    signalDirection: "neutral",
+    matchedEvidence: [
+      {
+        kind: "mindtower-source-health",
+        id: "mindtower-source-health",
+        label: "Synology source and review health",
+        status: "fixture-backed",
+      },
+      {
+        kind: "solantir-signal-provenance",
+        id: "solantir-signal-source-health",
+        label: "Solantir provenance contract",
+        status: "read-only",
+      },
+    ],
+    provenance: {
+      mindTowerSourcePath: "C:\\Users\\paul\\projects\\mind-tower\\data\\mindtower.sqlite",
+      solantirSourcePath: "C:\\Users\\paul\\projects\\Solantir\\packages\\contracts\\src\\solantir.ts",
+      solantirSourceHashPrefix: "fixture",
+    },
+    safetyLabels: ["read-only", "no-trading-execution", "no-credential-copy", "review-only"],
+    acceptanceRule:
+      "Review-only no-trading-execution correlation packet; it cannot place trades, copy credentials, or write back to either project.",
+  },
+]);
+
 function normalizeAdapter(adapter, rows) {
   if (adapter && typeof adapter === "object") {
     return adapter;
@@ -368,6 +406,13 @@ function summarizeAdapter(adapter) {
   };
 }
 
+function normalizeFusionEvidencePackets(snapshot) {
+  const packets = Array.isArray(snapshot?.fusionEvidencePackets)
+    ? snapshot.fusionEvidencePackets.filter(item => item && typeof item === "object")
+    : [];
+  return packets.length ? packets : FUSION_EVIDENCE_PACKETS;
+}
+
 export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
   const snapshot = fixtures && typeof fixtures === "object" && !Array.isArray(fixtures) ? fixtures : null;
   const providedRows = Array.isArray(fixtures)
@@ -417,6 +462,7 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
   const signalSnapshots = Array.isArray(snapshot?.signalSnapshots) && snapshot.signalSnapshots.length > 0
     ? snapshot.signalSnapshots
     : SOLANTIR_SIGNAL_SNAPSHOTS;
+  const fusionEvidencePackets = normalizeFusionEvidencePackets(snapshot);
   return {
     schemaVersion: FUSION_CONTRACT_VERSION,
     collectionModes: FUSION_COLLECTION_MODES,
@@ -431,6 +477,10 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
       migrationLaneCount: migrationLanes.length,
       nextMigrationLane: nextLane?.title || "",
       signalSnapshotCount: signalSnapshots.length,
+      fusionEvidencePacketCount: fusionEvidencePackets.length,
+      fusionEvidenceReviewReadyCount: fusionEvidencePackets.filter(item =>
+        ["review-ready", "fixture-review"].includes(item.status),
+      ).length,
       phaseCount: FUSION_MIGRATION_PHASES.length,
       activePhase: activePhase?.label || "",
       gateCount: gateRows.length,
@@ -449,12 +499,14 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
     adapter,
     adapterSummary,
     signalSnapshots,
+    fusionEvidencePackets,
     acceptanceRules: [
       "Every row must expose sourceProject, sourcePath, collectionMode, riskLabel, and lastVerifiedAt.",
       "Seeded or read-only rows must not imply live data, trading execution, credential access, or offensive red-team execution.",
       "Blocked rows must describe the missing policy or proof instead of inventing live status.",
       "Migration lanes must name duplicate areas, safe slices, target runtime, proof action, and owner role before code is copied.",
       "Solantir signal snapshots must show factors, drivers, confidence, timestamp, source path, and no-trading-execution labels.",
+      "Fusion evidence packets must show matched Mind Tower and Solantir provenance while remaining review-only.",
       "Promotion gates must show passed, needed, or blocked status before a lane can move beyond read-only fixture work.",
     ],
   };

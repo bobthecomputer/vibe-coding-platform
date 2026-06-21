@@ -43,6 +43,7 @@ class FusionFixtureContractTests(unittest.TestCase):
               lanes: FUSION_MIGRATION_LANES,
               phases: FUSION_MIGRATION_PHASES,
               gates: workbench.gateRows,
+              packets: workbench.fusionEvidencePackets,
               rules: workbench.acceptanceRules,
             }));
             """
@@ -54,6 +55,8 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["phaseCount"], len(payload["phases"]))
         self.assertGreaterEqual(payload["summary"]["gateCount"], 10)
         self.assertGreaterEqual(payload["summary"]["passedGateCount"], 6)
+        self.assertGreaterEqual(payload["summary"]["fusionEvidencePacketCount"], 1)
+        self.assertGreaterEqual(payload["summary"]["fusionEvidenceReviewReadyCount"], 1)
         self.assertIn("Read-only adapters", payload["summary"]["activePhase"])
         self.assertIn("Synology monitoring", payload["summary"]["nextMigrationLane"])
         self.assertIn("read-only-adapter", payload["modes"])
@@ -101,6 +104,18 @@ class FusionFixtureContractTests(unittest.TestCase):
         for gate in payload["gates"]:
             self.assertIn(gate["status"], {"passed", "needed", "blocked"})
             self.assertTrue(gate["evidence"])
+
+        for packet in payload["packets"]:
+            self.assertIn("Mind Tower", packet["sourceProjects"])
+            self.assertIn("Solantir", packet["sourceProjects"])
+            self.assertIn(packet["collectionMode"], payload["modes"])
+            self.assertEqual(packet["riskLabel"], "no-trading-execution")
+            self.assertGreaterEqual(packet["confidence"], 0)
+            self.assertLessEqual(packet["confidence"], 1)
+            self.assertGreaterEqual(len(packet["matchedEvidence"]), 2)
+            self.assertIn("read-only", packet["safetyLabels"])
+            self.assertIn("review-only", packet["safetyLabels"])
+            self.assertIn("no-trading-execution", packet["acceptanceRule"])
 
     def test_fusion_fixtures_do_not_claim_live_or_write_access(self) -> None:
         payload = run_node(
@@ -199,6 +214,7 @@ class FusionFixtureContractTests(unittest.TestCase):
               adapter: workbench.adapter,
               adapterSummary: workbench.adapterSummary,
               summary: workbench.summary,
+              packets: workbench.fusionEvidencePackets,
             }));
             """
         )
@@ -211,6 +227,8 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertEqual(payload["adapterSummary"]["summaryJobCount"], 1)
         self.assertEqual(payload["summary"]["adapterStatus"], "ready")
         self.assertEqual(payload["summary"]["adapterRecordTotal"], 4)
+        self.assertGreaterEqual(payload["summary"]["fusionEvidencePacketCount"], 1)
+        self.assertEqual(payload["packets"][0]["riskLabel"], "no-trading-execution")
 
     def test_backend_signal_snapshots_replace_seeded_solantir_signals(self) -> None:
         payload = run_node(
@@ -242,10 +260,37 @@ class FusionFixtureContractTests(unittest.TestCase):
                   safetyLabels: ['no broker', 'no order routing', 'not investment advice'],
                 },
               ],
+              fusionEvidencePackets: [
+                {
+                  id: 'fusion-evidence-backend-contract',
+                  status: 'review-ready',
+                  title: 'Backend Solantir Contract Provenance evidence packet',
+                  sourceProjects: ['Mind Tower', 'Solantir'],
+                  collectionMode: 'read-only-adapter',
+                  riskLabel: 'no-trading-execution',
+                  confidence: 0.84,
+                  signalSnapshotId: 'solantir-backend-signal-contract-provenance',
+                  signalEntity: 'Backend Solantir Contract Provenance',
+                  signalScore: 67,
+                  signalDirection: 'neutral',
+                  matchedEvidence: [
+                    { kind: 'mindtower-source-health', id: 'source-one', label: 'Example source', status: 'healthy' },
+                    { kind: 'mindtower-event', id: 'event-one', label: 'rss', status: '3' },
+                  ],
+                  provenance: {
+                    mindTowerSourcePath: 'C:/Users/paul/projects/mind-tower/data/mindtower.sqlite',
+                    solantirSourcePath: 'C:/Users/paul/projects/Solantir/packages/contracts/src/solantir.ts',
+                    solantirSourceHashPrefix: 'abc123def456',
+                  },
+                  safetyLabels: ['read-only', 'no-trading-execution', 'no-credential-copy', 'review-only'],
+                  acceptanceRule: 'Review-only no-trading-execution correlation packet; it cannot place trades, copy credentials, or write back to either project.',
+                },
+              ],
             });
             console.log(JSON.stringify({
               summary: workbench.summary,
               signals: workbench.signalSnapshots,
+              packets: workbench.fusionEvidencePackets,
             }));
             """
         )
@@ -256,6 +301,9 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertEqual(payload["signals"][0]["sourceProject"], "Solantir")
         self.assertEqual(payload["signals"][0]["sourceHashPrefix"], "abc123def456")
         self.assertEqual(payload["signals"][0]["riskLabel"], "no-trading-execution")
+        self.assertEqual(payload["summary"]["fusionEvidencePacketCount"], 1)
+        self.assertEqual(payload["packets"][0]["id"], "fusion-evidence-backend-contract")
+        self.assertEqual(payload["packets"][0]["provenance"]["solantirSourceHashPrefix"], "abc123def456")
 
     def test_solantir_signal_snapshots_are_explainable_and_non_executing(self) -> None:
         payload = run_node(

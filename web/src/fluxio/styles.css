@@ -4967,8 +4967,22 @@ button.builder-review-target:hover {
   padding: 10px;
 }
 
+.fusion-evidence-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(142, 203, 111, 0.18);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(142, 203, 111, 0.065), transparent 62%),
+    rgba(0, 0, 0, 0.14);
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
 .fusion-adapter-panel h4,
-.fusion-adapter-panel p {
+.fusion-adapter-panel p,
+.fusion-evidence-panel h4,
+.fusion-evidence-panel p {
   margin: 0;
 }
 
@@ -5018,6 +5032,49 @@ button.builder-review-target:hover {
 .fusion-signal-list {
   display: grid;
   gap: 8px;
+}
+
+.fusion-evidence-packet-list {
+  display: grid;
+  gap: 8px;
+}
+
+.fusion-evidence-packet {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(142, 203, 111, 0.16);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 10px;
+}
+
+.fusion-evidence-packet > span,
+.fusion-evidence-match-list {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fusion-evidence-packet > span {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fusion-evidence-packet strong {
+  overflow-wrap: anywhere;
+}
+
+.fusion-evidence-match-list {
+  display: grid;
+  gap: 5px;
+}
+
+.fusion-evidence-match-list span {
+  border: 1px solid rgba(238, 242, 236, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
 }
 
 .fusion-signal-card {

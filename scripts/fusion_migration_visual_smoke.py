@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -21,9 +22,12 @@ from control_route_interaction_smoke import (
 )
 
 
-OUT_DIR = ROOT / "artifacts" / "pr89-fusion-migration-gates"
+OUT_DIR = Path(os.environ.get("FLUXIO_PROOF_OUT_DIR", ROOT / "artifacts" / "pr107-fusion-evidence-packets"))
 CHECK_PATH = OUT_DIR / "fusion-migration-browser-proof.json"
-URL = "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime"
+URL = os.environ.get(
+    "FLUXIO_CONTROL_URL",
+    "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+)
 
 
 def capture(cdp: Cdp, path: Path) -> None:
@@ -77,8 +81,11 @@ def run_viewport(width: int, height: int, screenshot_name: str) -> dict:
             time.sleep(0.35)
         cdp.eval(
             """
-            document.querySelector(".fusion-adapter-panel")
-              ?.scrollIntoView({ block: "center", inline: "nearest" });
+            (() => {
+              const target = document.querySelector(".fusion-evidence-panel") ||
+                document.querySelector(".fusion-adapter-panel");
+              target?.scrollIntoView({ block: "center", inline: "nearest" });
+            })();
             """
         )
         time.sleep(0.45)
@@ -93,6 +100,7 @@ def run_viewport(width: int, height: int, screenshot_name: str) -> dict:
             "gateList": bool(cdp.eval('Boolean(document.querySelector(".fusion-gate-list"))')),
             "migrationCard": bool(cdp.eval('Boolean(document.querySelector(".fusion-migration-card"))')),
             "signalCard": bool(cdp.eval('Boolean(document.querySelector(".fusion-signal-card"))')),
+            "evidencePacket": bool(cdp.eval('Boolean(document.querySelector(".fusion-evidence-packet"))')),
         }
         screenshot_path = OUT_DIR / screenshot_name
         capture(cdp, screenshot_path)
@@ -100,6 +108,8 @@ def run_viewport(width: int, height: int, screenshot_name: str) -> dict:
         expected = [
             "fusion migration workbench",
             "mind tower adapter truth",
+            "fusion evidence packets",
+            "review-only",
             "next safe slice",
             "read-only adapters",
             "passed:",

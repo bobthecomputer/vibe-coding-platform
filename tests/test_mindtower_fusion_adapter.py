@@ -186,6 +186,7 @@ class MindTowerFusionAdapterTests(unittest.TestCase):
 
             self.assertEqual(len(snapshots), 2)
             self.assertEqual(fusion["signalSnapshots"], snapshots)
+            self.assertEqual(fusion["fusionEvidencePackets"], [])
             for signal in snapshots:
                 self.assertEqual(signal["sourceProject"], "Solantir")
                 self.assertEqual(signal["collectionMode"], "read-only-adapter")
@@ -195,6 +196,114 @@ class MindTowerFusionAdapterTests(unittest.TestCase):
                 self.assertGreaterEqual(len(signal["factors"]), 3)
                 self.assertIn("no order routing", signal["safetyLabels"])
                 self.assertIn("not investment advice", signal["safetyLabels"])
+
+    def test_fusion_evidence_packets_require_readonly_adapter_and_solantir_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir) / "platform"
+            root.mkdir()
+            db_path = root / "mindtower.sqlite"
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE records (
+                      resource TEXT NOT NULL,
+                      id TEXT NOT NULL,
+                      payload TEXT NOT NULL,
+                      created_at TEXT NOT NULL,
+                      updated_at TEXT NOT NULL,
+                      PRIMARY KEY (resource, id)
+                    );
+                    CREATE TABLE events (
+                      id TEXT PRIMARY KEY,
+                      source_type TEXT NOT NULL,
+                      source_id TEXT NOT NULL,
+                      author TEXT NOT NULL,
+                      published_at TEXT NOT NULL,
+                      content TEXT NOT NULL,
+                      url TEXT NOT NULL,
+                      tags_json TEXT NOT NULL,
+                      priority_score INTEGER NOT NULL,
+                      raw_payload_ref TEXT NOT NULL,
+                      created_at TEXT NOT NULL
+                    );
+                    CREATE TABLE runtime_state (
+                      namespace TEXT NOT NULL,
+                      key TEXT NOT NULL,
+                      value TEXT NOT NULL,
+                      updated_at TEXT NOT NULL,
+                      PRIMARY KEY (namespace, key)
+                    );
+                    """
+                )
+                now = "2026-06-21T00:00:00Z"
+                connection.execute(
+                    "INSERT INTO records VALUES (?, ?, ?, ?, ?)",
+                    (
+                        "sources",
+                        "source_one",
+                        json.dumps({"id": "source_one", "label": "Mind Tower source health", "status": "healthy"}),
+                        now,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO records VALUES (?, ?, ?, ?, ?)",
+                    (
+                        "summary-jobs",
+                        "summary_one",
+                        json.dumps({"id": "summary_one", "label": "Solantir review", "status": "ready"}),
+                        now,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "event_one",
+                        "rss",
+                        "source_one",
+                        "author",
+                        now,
+                        "source evidence",
+                        "https://example.invalid/item",
+                        "[]",
+                        3,
+                        "raw",
+                        now,
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            solantir_root = pathlib.Path(temp_dir) / "Solantir"
+            legacy_signals = solantir_root / "legacy" / "osint-platform" / "backend" / "solantir_api" / "signals.py"
+            contracts = solantir_root / "packages" / "contracts" / "src" / "solantir.ts"
+            legacy_signals.parent.mkdir(parents=True)
+            contracts.parent.mkdir(parents=True)
+            legacy_signals.write_text("signal confidence provenance source forecast observation read-only risk\n", encoding="utf-8")
+            contracts.write_text("export type SolantirProvenance = { source: string; confidence: number; signal: string }\n", encoding="utf-8")
+
+            fusion = build_mindtower_fusion_snapshot(root, db_path=db_path, solantir_root=solantir_root)
+
+            self.assertTrue(fusion["adapter"]["available"])
+            self.assertGreaterEqual(len(fusion["signalSnapshots"]), 2)
+            self.assertGreaterEqual(len(fusion["fusionEvidencePackets"]), 1)
+            packet = fusion["fusionEvidencePackets"][0]
+            self.assertEqual(packet["collectionMode"], "read-only-adapter")
+            self.assertEqual(packet["riskLabel"], "no-trading-execution")
+            self.assertIn("Mind Tower", packet["sourceProjects"])
+            self.assertIn("Solantir", packet["sourceProjects"])
+            self.assertEqual(packet["provenance"]["mindTowerSourcePath"], str(db_path))
+            self.assertTrue(pathlib.Path(packet["provenance"]["solantirSourcePath"]).exists())
+            self.assertIn("read-only", packet["safetyLabels"])
+            self.assertIn("no-credential-copy", packet["safetyLabels"])
+            self.assertIn("Review-only", packet["acceptanceRule"])
+            self.assertGreaterEqual(len(packet["matchedEvidence"]), 3)
+            joined = json.dumps(packet).lower()
+            self.assertNotIn("order routing enabled", joined)
+            self.assertNotIn("credential value", joined)
 
 
 if __name__ == "__main__":

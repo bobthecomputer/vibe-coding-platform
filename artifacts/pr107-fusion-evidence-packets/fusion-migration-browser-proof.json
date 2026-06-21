@@ -1,0 +1,64 @@
+{
+  "checkedAt": "2026-06-21T11:15:16.069681+00:00",
+  "url": "http://127.0.0.1:1426/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench&drawer=runtime",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "runs": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1180
+      },
+      "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr107-fusion-evidence-packets\\fusion-migration-desktop.png",
+      "selectors": {
+        "fusionWorkbench": true,
+        "phaseStrip": true,
+        "nextLane": true,
+        "gateList": true,
+        "migrationCard": true,
+        "signalCard": true,
+        "evidencePacket": true
+      },
+      "expectedFragments": [
+        "fusion migration workbench",
+        "mind tower adapter truth",
+        "fusion evidence packets",
+        "review-only",
+        "next safe slice",
+        "read-only adapters",
+        "passed:",
+        "no-trading-execution"
+      ],
+      "missingFragments": []
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 980
+      },
+      "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr107-fusion-evidence-packets\\fusion-migration-mobile.png",
+      "selectors": {
+        "fusionWorkbench": true,
+        "phaseStrip": true,
+        "nextLane": true,
+        "gateList": true,
+        "migrationCard": true,
+        "signalCard": true,
+        "evidencePacket": true
+      },
+      "expectedFragments": [
+        "fusion migration workbench",
+        "mind tower adapter truth",
+        "fusion evidence packets",
+        "review-only",
+        "next safe slice",
+        "read-only adapters",
+        "passed:",
+        "no-trading-execution"
+      ],
+      "missingFragments": []
+    }
+  ],
+  "selectorFailures": [],
+  "missingFragmentsByViewport": {},
+  "passed": true
+}
