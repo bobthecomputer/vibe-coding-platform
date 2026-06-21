@@ -109,6 +109,16 @@ def test_harness_lab_uses_fixture_benchmark_candidates_when_local_runs_are_missi
     assert rows[0]["provider"] != rows[0]["runtimeId"]
     assert rows[0]["outcomeScorecard"]["latestTestResult"] == "benchmark"
     assert "local proof run" in rows[0]["proofGaps"][0]
+    assert rows[0]["routeTier"].startswith("F")
+    assert rows[0]["workClass"] in {
+        "normal_repo_execution",
+        "controlled_red_team_lab",
+        "hard_or_frontier_mission",
+        "cheap_or_deterministic_work",
+        "unclassified_route",
+    }
+    assert rows[0]["localProofRequired"] is True
+    assert rows[0]["expectedWallTimeBand"] in {"sub_10m", "10_60m", "1_4h", "4h_plus", "unknown"}
 
 
 def test_harness_lab_loads_generated_runtime_lane_scorecard_artifacts() -> None:
@@ -138,3 +148,6 @@ def test_harness_lab_loads_generated_runtime_lane_scorecard_artifacts() -> None:
     assert artifact_rows[0]["benchmarkBoardId"] == "runtime-lane-proof-test-artifact"
     assert artifact_rows[0]["candidateId"] == "artifact-openclaw-candidate"
     assert artifact_rows[0]["sourceLabel"] == "Generated benchmark artifact"
+    assert artifact_rows[0]["useWhen"]
+    assert artifact_rows[0]["doNotUseWhen"]
+    assert "contextWindowTokens" in artifact_rows[0]

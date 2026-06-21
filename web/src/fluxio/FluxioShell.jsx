@@ -13715,7 +13715,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     <p className="eyebrow">Voice-first control</p>
                     <h1>Dictation and command review</h1>
                     <p>
-                      Review dictated text, command confidence, keyboard parity, and confirmation boundaries before the app runs an action.
+                      Review dictation before actions run.
                     </p>
                   </div>
                   <div className="builder-head-actions">
@@ -13737,18 +13737,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     <div className="builder-thread-list">
                       <article className="builder-thread-item tone-good">
                         <span>Keyboard parity</span>
-                        <strong>Every spoken action keeps a pointer and keyboard path.</strong>
-                        <p>Buttons expose labels that include command names and shortcuts where available.</p>
+                        <strong>Spoken actions keep pointer and keyboard paths.</strong>
+                        <p>Labels include command names and shortcuts.</p>
                       </article>
                       <article className="builder-thread-item tone-warn">
                         <span>Confirmation</span>
                         <strong>Risky actions pause for review.</strong>
-                        <p>Sending messages, clearing transcripts, approvals, and mission control require confirmation.</p>
+                        <p>Send, clear, approval, and mission-control actions require confirmation.</p>
                       </article>
                       <article className="builder-thread-item tone-neutral">
                         <span>Support truth</span>
                         <strong>No fake microphone state.</strong>
-                        <p>The panel only reports live support when browser speech APIs or a local bridge are actually present.</p>
+                        <p>Live support appears only when browser speech or a local bridge is present.</p>
                       </article>
                     </div>
                   </aside>
@@ -14148,7 +14148,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <p className="eyebrow">Voice-first control</p>
                   <h1>Dictation and command review</h1>
                   <p>
-                    Review dictated text, command confidence, keyboard parity, and confirmation boundaries before the app runs an action.
+                    Review dictation before actions run.
                   </p>
                 </div>
                 <div className="builder-head-actions">
@@ -14170,18 +14170,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                   <div className="builder-thread-list">
                     <article className="builder-thread-item tone-good">
                       <span>Keyboard parity</span>
-                      <strong>Every spoken action keeps a pointer and keyboard path.</strong>
-                      <p>Buttons expose labels that include command names and shortcuts where available.</p>
+                      <strong>Spoken actions keep pointer and keyboard paths.</strong>
+                      <p>Labels include command names and shortcuts.</p>
                     </article>
                     <article className="builder-thread-item tone-warn">
                       <span>Confirmation</span>
                       <strong>Risky actions pause for review.</strong>
-                      <p>Sending messages, clearing transcripts, approvals, and mission control require confirmation.</p>
+                      <p>Send, clear, approval, and mission-control actions require confirmation.</p>
                     </article>
                     <article className="builder-thread-item tone-neutral">
                       <span>Support truth</span>
                       <strong>No fake microphone state.</strong>
-                      <p>The panel only reports live support when browser speech APIs or a local bridge are actually present.</p>
+                      <p>Live support appears only when browser speech or a local bridge is present.</p>
                     </article>
                   </div>
                 </aside>
@@ -15628,6 +15628,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                             </div>
                             <strong>{runtimeLabel(item.runtimeId)} / {providerLabel(item.provider)} / {item.model}</strong>
                             <p>{item.recommendation}</p>
+                            <small className="route-decision-chip-row" aria-label="Route hardness">
+                              {[
+                                item.routeTier || "local",
+                                titleizeToken(item.workClass || "route"),
+                                item.expectedWallTimeBand ? titleizeToken(item.expectedWallTimeBand) : "",
+                                item.redTeamApplicable ? titleizeToken(item.redTeamScope || "synthetic_lab") : "",
+                                item.localProofRequired ? "Local proof" : "",
+                              ].filter(Boolean).join(" · ")}
+                            </small>
                             {item.fitReason ? <p className="route-decision-fit">{item.fitReason}</p> : null}
                             <small>
                               {item.observedRuns || 0} run{(item.observedRuns || 0) === 1 ? "" : "s"} · {item.completionRate || 0}% complete · {item.routeContractProofCount || 0} route proof

@@ -313,6 +313,9 @@ const baseSnapshot = {
         recommendation: 'Run this route once before treating it as a recommended choice.',
         fitLabel: 'Needs proof',
         fitReason: 'delegated_runtime_lane needs a completed local proof run before this route becomes a default.',
+        routeTier: 'F7',
+        workClass: 'red_team_lab',
+        localProofRequired: true,
         outcomeScorecard: {
           successRate: 0,
           humanInterventionCount: 0,

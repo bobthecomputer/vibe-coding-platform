@@ -6382,6 +6382,19 @@ def _route_decision_fit(row: dict) -> tuple[str, str]:
     )
 
 
+def _benchmark_work_class(route_tier: str, safe_redteam: dict) -> str:
+    tier = str(route_tier or "").strip().upper()
+    if safe_redteam.get("applicable"):
+        return "controlled_red_team_lab"
+    if tier in {"F6", "F7", "F8"}:
+        return "hard_or_frontier_mission"
+    if tier in {"F4", "F5"}:
+        return "normal_repo_execution"
+    if tier in {"F0", "F1", "F2", "F3"}:
+        return "cheap_or_deterministic_work"
+    return "unclassified_route"
+
+
 def _latest_runtime_lane_proof(root: Path) -> dict | None:
     artifact_root = root / "artifacts" / "runtime-lanes"
     if not artifact_root.exists():
@@ -6497,6 +6510,12 @@ def _benchmark_route_row_from_candidate(
         return None
     route_tier = str(decision.get("routeTier", "") or "F0")
     recommended = bool(decision.get("recommended"))
+    use_when = decision.get("useWhen", [])
+    do_not_use_when = decision.get("doNotUseWhen", [])
+    if not isinstance(use_when, list):
+        use_when = []
+    if not isinstance(do_not_use_when, list):
+        do_not_use_when = []
     proof_artifacts = verifier_proof.get("proofArtifacts", [])
     if not isinstance(proof_artifacts, list):
         proof_artifacts = []
@@ -6557,6 +6576,17 @@ def _benchmark_route_row_from_candidate(
         },
         "speedCostContext": speed_cost if isinstance(speed_cost, dict) else {},
         "safeRedTeam": safe_redteam if isinstance(safe_redteam, dict) else {},
+        "routeTier": route_tier,
+        "workClass": _benchmark_work_class(route_tier, safe_redteam if isinstance(safe_redteam, dict) else {}),
+        "useWhen": [str(item) for item in use_when[:3]],
+        "doNotUseWhen": [str(item) for item in do_not_use_when[:3]],
+        "redTeamApplicable": redteam_applicable,
+        "redTeamScope": str(safe_redteam.get("scope", "not_applicable") or "not_applicable"),
+        "escalationRequired": bool(safe_redteam.get("escalationRequired")),
+        "expectedWallTimeBand": str(speed_cost.get("expectedWallTimeBand", "unknown") or "unknown"),
+        "costBand": str(speed_cost.get("costBand", "unknown") or "unknown"),
+        "contextWindowTokens": int(speed_cost.get("contextWindowTokens", 0) or 0),
+        "localProofRequired": True,
         "proofGaps": ["Benchmark candidate needs a local proof run before default promotion."],
     }
 
@@ -6807,6 +6837,23 @@ def _build_route_decision_rows(root: Path, recent_runs: list[dict]) -> list[dict
             "proofArtifactCount": int(row.pop("proofArtifactCount", 0) or 0),
             "proofArtifactRequiredCount": int(row.pop("proofArtifactRequiredCount", 0) or 0),
         }
+        row["routeTier"] = "local"
+        row["workClass"] = (
+            "proven_local_route"
+            if row["decision"] == "use"
+            else "local_route_needs_evidence"
+        )
+        row["expectedWallTimeBand"] = (
+            "sub_10m"
+            if int(row["outcomeScorecard"]["wallTimeSeconds"] or 0) and int(row["outcomeScorecard"]["wallTimeSeconds"] or 0) < 600
+            else "10_60m"
+            if int(row["outcomeScorecard"]["wallTimeSeconds"] or 0) < 3600
+            else "unknown"
+        )
+        row["costBand"] = "observed"
+        row["localProofRequired"] = row["decision"] != "use"
+        row["redTeamApplicable"] = False
+        row["redTeamScope"] = "not_applicable"
         row["proofGaps"] = sorted(set(row["proofGaps"]))[:3]
         decision_rows.append(row)
 
