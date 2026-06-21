@@ -14,7 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from grant_agent.models import DelegatedRuntimeSession, Mission, WorkspaceProfile
 from grant_agent.runtime_supervisor import DelegatedRuntimeSupervisor, _coerce_platform_path
-from grant_agent.runtime_worker import _popen_command
+from grant_agent.runtime_worker import _popen_command, run as run_runtime_worker
 
 
 class RuntimeSupervisorTests(unittest.TestCase):
@@ -119,6 +119,71 @@ class RuntimeSupervisorTests(unittest.TestCase):
         self.assertEqual(args[:3], ["wsl", "bash", "-lc"])
         self.assertIn("--model gpt-5.5", args[3])
         self.assertIn("Mission objective", args[3])
+
+    def test_runtime_worker_runs_structured_setup_commands_before_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            session_path = root / "delegate_structured.json"
+            log_path = root / "delegate_structured.log"
+            events_path = root / "delegate_structured.events.jsonl"
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "delegated_id": "delegate_structured",
+                        "runtime_id": "openclaw",
+                        "launch_command": "fallback should not run",
+                        "run_command": [
+                            sys.executable,
+                            "-c",
+                            "import pathlib; pathlib.Path('runtime.txt').write_text('ran', encoding='utf-8'); print('runtime launched')",
+                        ],
+                        "setup_commands": [
+                            {
+                                "label": "optional existing-agent check",
+                                "argv": [sys.executable, "-c", "import sys; print('optional failed'); sys.exit(7)"],
+                                "allow_failure": True,
+                            },
+                            {
+                                "label": "required model setup",
+                                "argv": [
+                                    sys.executable,
+                                    "-c",
+                                    "import pathlib; pathlib.Path('setup.txt').write_text('ok', encoding='utf-8'); print('setup ok')",
+                                ],
+                                "allow_failure": False,
+                            },
+                        ],
+                        "status": "queued",
+                        "session_path": str(session_path),
+                        "workspace_root": str(root),
+                        "execution_root": str(root),
+                        "log_path": str(log_path),
+                        "events_path": str(events_path),
+                        "decision_path": str(root / "delegate_structured.approval.json"),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code = run_runtime_worker(session_path, root, "fallback should not run")
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual((root / "setup.txt").read_text(encoding="utf-8"), "ok")
+            self.assertEqual((root / "runtime.txt").read_text(encoding="utf-8"), "ran")
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("optional failed", log_text)
+            self.assertIn("setup ok", log_text)
+            self.assertIn("runtime launched", log_text)
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            kinds = [item["kind"] for item in events]
+            self.assertIn("runtime.setup_allowed_failure", kinds)
+            self.assertIn("runtime.setup_completed", kinds)
+            self.assertIn("session.completed", kinds)
 
     @mock.patch("grant_agent.runtime_supervisor.runtime_adapter_map")
     def test_supervisor_launches_and_completes_delegated_session(

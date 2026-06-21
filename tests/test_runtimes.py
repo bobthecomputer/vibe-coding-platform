@@ -135,9 +135,18 @@ class RuntimeAdapterTests(unittest.TestCase):
         launch = adapter.start_mission(mission, workspace)
 
         command = str(launch["launch_command"])
-        self.assertIn("openclaw agents add", command)
-        self.assertIn("--agent fluxio_mission_abcd1234_", command)
-        self.assertIn("--model openai-codex/gpt-5.4-mini", command)
+        setup_commands = launch["setup_commands"]
+        run_command = launch["run_command"]
+        self.assertEqual(len(setup_commands), 2)
+        self.assertEqual(setup_commands[0]["argv"][:3], ["openclaw", "agents", "add"])
+        self.assertTrue(setup_commands[0]["allow_failure"])
+        self.assertEqual(setup_commands[1]["argv"][:4], ["openclaw", "models", "--agent", setup_commands[0]["argv"][3]])
+        self.assertFalse(setup_commands[1]["allow_failure"])
+        self.assertNotIn("&&", command)
+        self.assertNotIn("||", command)
+        self.assertIn("--agent", run_command)
+        self.assertIn("--model", setup_commands[0]["argv"])
+        self.assertIn("openai-codex/gpt-5.4-mini", setup_commands[0]["argv"])
         self.assertIn("--session-id fluxio_mission_abcd1234", command)
         self.assertIn("--thinking medium", command)
         self.assertIn("--json", command)
@@ -167,6 +176,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             launch = adapter.start_mission(mission, workspace)
 
         self.assertIn("--local", str(launch["launch_command"]))
+        self.assertIn("--local", launch["run_command"])
 
     def test_hermes_launch_uses_wsl_bash_lc_when_hermes_only_in_wsl(self) -> None:
         adapter = HermesRuntimeAdapter()

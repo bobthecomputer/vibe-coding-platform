@@ -329,7 +329,10 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
     )
 
     with log_path.open("a", encoding="utf-8") as handle:
-        popen_command = _popen_command(command)
+        setup_return_code = _run_setup_commands(session_path, cwd, handle, payload)
+        if setup_return_code != 0:
+            return setup_return_code
+        popen_command = _structured_command_argv(payload.get("run_command"), command)
         child = subprocess.Popen(  # noqa: S603
             popen_command,
             shell=False,
@@ -488,6 +491,109 @@ def _popen_command(command: str) -> list[str]:
     if not args:
         raise ValueError("Delegated runtime command is empty or malformed.")
     return args
+
+
+def _structured_command_argv(value: object, fallback_command: str = "") -> list[str]:
+    if isinstance(value, list):
+        args = [str(item) for item in value if str(item).strip()]
+        if args:
+            return args
+    if isinstance(value, str) and value.strip():
+        return _popen_command(value)
+    return _popen_command(fallback_command)
+
+
+def _run_setup_commands(
+    session_path: Path,
+    cwd: Path,
+    log_handle,
+    payload: dict,
+) -> int:
+    setup_commands = payload.get("setup_commands")
+    if not isinstance(setup_commands, list):
+        return 0
+    env = _runtime_env(session_path, cwd)
+    for index, raw_step in enumerate(setup_commands, start=1):
+        if not isinstance(raw_step, dict):
+            continue
+        label = str(raw_step.get("label") or f"runtime setup step {index}")
+        allow_failure = bool(raw_step.get("allow_failure"))
+        try:
+            args = _structured_command_argv(raw_step.get("argv"), str(raw_step.get("command") or ""))
+        except ValueError as exc:
+            _append_event(
+                session_path,
+                kind="runtime.setup_failed",
+                message=f"{label} is malformed: {exc}",
+                status="failed",
+                data={"step": index, "allow_failure": allow_failure},
+            )
+            if allow_failure:
+                continue
+            _write_state(
+                session_path,
+                {
+                    "status": "failed",
+                    "exit_code": -1,
+                    "detail": f"{label} is malformed.",
+                    "heartbeat_status": "inactive",
+                },
+            )
+            return -1
+
+        _append_event(
+            session_path,
+            kind="runtime.setup_started",
+            message=label,
+            status="launching",
+            data={"step": index, "command": args[:3], "allow_failure": allow_failure},
+        )
+        completed = subprocess.run(  # noqa: S603
+            args,
+            shell=False,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=max(float(raw_step.get("timeout_seconds") or 30), 1.0),
+            creationflags=_creationflags(),
+            env=env,
+        )
+        output = "\n".join(
+            item for item in [completed.stdout.strip(), completed.stderr.strip()] if item
+        )
+        if output:
+            log_handle.write(output + "\n")
+            log_handle.flush()
+        if completed.returncode == 0:
+            _append_event(
+                session_path,
+                kind="runtime.setup_completed",
+                message=f"{label} completed.",
+                status="launching",
+                data={"step": index, "exit_code": completed.returncode},
+            )
+            continue
+        event_kind = "runtime.setup_allowed_failure" if allow_failure else "runtime.setup_failed"
+        _append_event(
+            session_path,
+            kind=event_kind,
+            message=f"{label} exited with code {completed.returncode}.",
+            status="launching" if allow_failure else "failed",
+            data={"step": index, "exit_code": completed.returncode, "allow_failure": allow_failure},
+        )
+        if allow_failure:
+            continue
+        _write_state(
+            session_path,
+            {
+                "status": "failed",
+                "exit_code": completed.returncode,
+                "detail": f"{label} failed before delegated runtime launch.",
+                "heartbeat_status": "inactive",
+            },
+        )
+        return int(completed.returncode or 1)
+    return 0
 
 
 def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:

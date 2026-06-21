@@ -163,13 +163,14 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
         route_contract = self._route_contract(mission)
+        launch = self._mission_launch(
+            mission.mission_id,
+            mission.objective,
+            workspace.root_path,
+            route_contract=route_contract,
+        )
         return {
-            "launch_command": self._mission_launch_command(
-                mission.mission_id,
-                mission.objective,
-                workspace.root_path,
-                route_contract=route_contract,
-            ),
+            **launch,
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
             "route_contract": route_contract,
@@ -196,13 +197,14 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         self, mission: Mission, workspace: WorkspaceProfile
     ) -> dict[str, object]:
         route_contract = self._route_contract(mission)
+        launch = self._mission_launch(
+            mission.mission_id,
+            f"Resume mission {mission.mission_id}: {mission.objective}",
+            workspace.root_path,
+            route_contract=route_contract,
+        )
         return {
-            "launch_command": self._mission_launch_command(
-                mission.mission_id,
-                f"Resume mission {mission.mission_id}: {mission.objective}",
-                workspace.root_path,
-                route_contract=route_contract,
-            ),
+            **launch,
             "workspace": workspace.root_path,
             "runtime_id": self.runtime_id,
             "route_contract": route_contract,
@@ -215,14 +217,14 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             "runtime_id": self.runtime_id,
         }
 
-    def _mission_launch_command(
+    def _mission_launch(
         self,
         mission_id: str,
         objective: str,
         workspace_root: str,
         *,
         route_contract: dict[str, str] | None = None,
-    ) -> str:
+    ) -> dict[str, object]:
         session_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"fluxio_{mission_id}") or "fluxio"
         route_contract = route_contract or {}
         thinking = self._thinking_level(route_contract.get("effort", ""))
@@ -241,7 +243,11 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
         if self._use_local_agent_mode():
             run_args.append("--local")
         if not model_id:
-            return shell_join(run_args)
+            return {
+                "launch_command": shell_join(run_args),
+                "run_command": run_args,
+                "setup_commands": [],
+            }
 
         agent_id = self._agent_id(mission_id, model_id)
         run_args[2:2] = ["--agent", agent_id]
@@ -265,12 +271,23 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
             "set",
             model_id,
         ]
-        add_cmd = shell_join(add_args)
-        set_cmd = shell_join(set_args)
         run_cmd = shell_join(run_args)
-        if os.name == "nt":
-            return f"({add_cmd} >nul 2>nul || {set_cmd} >nul 2>nul) && {run_cmd}"
-        return f"({add_cmd} >/dev/null 2>&1 || {set_cmd} >/dev/null 2>&1) && {run_cmd}"
+        return {
+            "launch_command": run_cmd,
+            "run_command": run_args,
+            "setup_commands": [
+                {
+                    "label": "Ensure OpenClaw agent exists",
+                    "argv": add_args,
+                    "allow_failure": True,
+                },
+                {
+                    "label": "Set OpenClaw agent model",
+                    "argv": set_args,
+                    "allow_failure": False,
+                },
+            ],
+        }
 
     def _route_contract(self, mission: Mission) -> dict[str, str]:
         route = mission_phase_route(mission)

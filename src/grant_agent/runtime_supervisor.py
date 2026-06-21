@@ -137,6 +137,12 @@ class DelegatedRuntimeSupervisor:
             delegated_id=delegated_id,
             runtime_id=runtime_id,
             launch_command=str(launch.get("launch_command", "")),
+            run_command=list(launch.get("run_command") or []),
+            setup_commands=[
+                dict(item)
+                for item in launch.get("setup_commands", [])
+                if isinstance(item, dict)
+            ],
             status="queued",
             detail=str(
                 launch.get("route_summary", "Delegated runtime worker queued.")

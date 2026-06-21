@@ -387,6 +387,8 @@ class DelegatedRuntimeSession:
     delegated_id: str
     runtime_id: str
     launch_command: str
+    run_command: list[str] = field(default_factory=list)
+    setup_commands: list[dict[str, Any]] = field(default_factory=list)
     status: str = "queued"
     detail: str = ""
     created_at: str = field(default_factory=utc_now_iso)
