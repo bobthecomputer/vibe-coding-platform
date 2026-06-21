@@ -3223,6 +3223,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     openClawMessages: [],
     providerSecretPresence: {},
   });
+  const [imageGenerationCapability, setImageGenerationCapability] = useState(null);
 
   const mountedRef = useRef(true);
   const currentMissionRef = useRef(null);
@@ -9800,6 +9801,36 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [markAction, pushToast],
   );
 
+  useEffect(() => {
+    if (surface !== "images" || previewMode !== "live") {
+      setImageGenerationCapability(null);
+      return;
+    }
+    let cancelled = false;
+    callBackend("image_generation_capability_command", {
+      providerId: "codex_subscription_gpt_image2",
+    })
+      .then(result => {
+        if (!cancelled && result && typeof result === "object") {
+          setImageGenerationCapability(result);
+        }
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setImageGenerationCapability({
+          schemaVersion: "image-generation-capability.v1",
+          providerStatus: "blocked",
+          runActionAvailable: false,
+          blockedReason: "backend_unavailable",
+          message: error?.message || "Image generation capability could not be checked.",
+          checks: [],
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewMode, surface]);
+
   const handleVoiceCommand = useCallback(
     async command => {
       const action = String(command?.action || "").trim();
@@ -11643,6 +11674,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 <Suspense fallback={<LazySurfaceFallback label="Image Playground" />}>
                   <ImageStudioPlayground
                     generatedArtifacts={generatedImageArtifacts}
+                    imageGenerationCapability={imageGenerationCapability}
                     onRequestDraft={handleImageStudioRequestDraft}
                   />
                 </Suspense>
@@ -12076,6 +12108,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               <Suspense fallback={<LazySurfaceFallback label="Image Playground" />}>
                 <ImageStudioPlayground
                   generatedArtifacts={generatedImageArtifacts}
+                  imageGenerationCapability={imageGenerationCapability}
                   onRequestDraft={handleImageStudioRequestDraft}
                 />
               </Suspense>

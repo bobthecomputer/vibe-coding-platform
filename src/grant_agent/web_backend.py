@@ -2537,6 +2537,128 @@ class FluxioWebBackend:
             "details": details or {},
         }
 
+    def _image_generation_capability(self, payload: dict[str, Any]) -> dict[str, Any]:
+        provider_id = self._image_provider_id(payload)
+        artifact_dir = self.root / ".agent_control" / "design_references" / "codex_image_artifacts"
+        checks: list[dict[str, Any]] = []
+
+        def add_check(check_id: str, label: str, passed: bool, detail: str) -> None:
+            checks.append(
+                {
+                    "checkId": check_id,
+                    "label": label,
+                    "passed": passed,
+                    "detail": detail,
+                }
+            )
+
+        provider_allowed = provider_id == IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID
+        add_check(
+            "provider_allowed",
+            "Codex subscription image route",
+            provider_allowed,
+            (
+                "Provider is the allowed Codex subscription GPT-Image-2 lane."
+                if provider_allowed
+                else f"Provider {provider_id or 'unknown'} is not enabled for real image runs."
+            ),
+        )
+
+        allow_paid_api_fallback = bool(
+            payload.get("allowPaidApiFallback") or payload.get("allow_paid_api_fallback")
+        )
+        codex_auth = _openai_codex_oauth_status(session_secrets=self.provider_secrets)
+        codex_source = str(codex_auth.get("source") or "").strip().lower()
+        codex_authenticated = bool(codex_auth.get("authenticated"))
+        add_check(
+            "codex_oauth",
+            "OpenAI Codex OAuth",
+            codex_authenticated,
+            (
+                f"Authenticated through {codex_source or 'configured Codex source'}."
+                if codex_authenticated
+                else "OpenAI Codex OAuth is not connected on this runtime."
+            ),
+        )
+        paid_api_allowed = codex_source != "openai-api-key" or allow_paid_api_fallback
+        add_check(
+            "paid_api_fallback_policy",
+            "Paid API fallback policy",
+            paid_api_allowed,
+            (
+                "Codex subscription routing is not using a paid API-key fallback."
+                if paid_api_allowed
+                else "Paid OpenAI API-key routing is blocked for this image lane."
+            ),
+        )
+
+        env = self._provider_env()
+        openclaw_command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
+        add_check(
+            "openclaw_cli",
+            "OpenClaw CLI",
+            bool(openclaw_command),
+            (
+                f"OpenClaw CLI found at {openclaw_command}."
+                if openclaw_command
+                else "OpenClaw CLI was not found on PATH."
+            ),
+        )
+
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_root_ready = artifact_dir.exists() and os.access(str(artifact_dir), os.W_OK)
+            artifact_root_detail = f"Artifact root is writable: {artifact_dir}."
+        except OSError as exc:
+            artifact_root_ready = False
+            artifact_root_detail = f"Artifact root is not writable: {artifact_dir}. {exc}"
+        add_check(
+            "artifact_root",
+            "Safe artifact root",
+            artifact_root_ready,
+            artifact_root_detail,
+        )
+
+        blocked_reason = ""
+        message = "Codex image generation capability is available."
+        if not provider_allowed:
+            blocked_reason = "provider_not_allowed"
+            message = "Only GPT-Image-2 via Codex subscription is enabled for this workbench."
+        elif not codex_authenticated:
+            blocked_reason = "codex_auth_missing"
+            message = "OpenAI Codex OAuth is not connected on this runtime."
+        elif not paid_api_allowed:
+            blocked_reason = "paid_api_fallback_blocked"
+            message = "Paid OpenAI API-key routing is blocked for this image lane."
+        elif not openclaw_command:
+            blocked_reason = "openclaw_missing"
+            message = "OpenClaw CLI was not found on PATH."
+        elif not artifact_root_ready:
+            blocked_reason = "artifact_root_unavailable"
+            message = "The safe generated image artifact root is not writable."
+
+        available = not blocked_reason
+        return {
+            "schemaVersion": "image-generation-capability.v1",
+            "status": "available" if available else "unavailable",
+            "providerStatus": "available" if available else "blocked",
+            "provider": IMAGE_PROVIDER_CODEX_EXPECTED_PROVIDER,
+            "providerId": IMAGE_PROVIDER_CODEX_SUBSCRIPTION_ID,
+            "model": IMAGE_PROVIDER_CODEX_EXPECTED_MODEL,
+            "route": "codex_subscription",
+            "authMode": "codex subscription",
+            "billingNote": "codex subscription",
+            "runActionAvailable": available,
+            "readyForRealRun": available,
+            "blockedReason": blocked_reason,
+            "message": message,
+            "checks": checks,
+            "artifactRoot": str(artifact_dir),
+            "openclawCommand": str(openclaw_command or ""),
+            "authStatus": codex_auth,
+            "doesNotWriteImageFiles": True,
+        }
+
     def _is_png_file(self, path: Path) -> bool:
         try:
             header = path.read_bytes()[:8]
@@ -3398,6 +3520,8 @@ class FluxioWebBackend:
             return bool(webbrowser.open(url))
         if command == "list_workspace_directory_command":
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
+        if command == "image_generation_capability_command":
+            return self._image_generation_capability(payload)
         if command == "image_playground_operation_command":
             return self._write_image_playground_artifact(payload)
         if command == "record_live_review_structured_feedback_command":

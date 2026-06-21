@@ -79,28 +79,43 @@ export function getProviderRoute(routeId) {
 export function getImageGenerationRouteStatus(route, options = {}) {
   const selected = route || getProviderRoute(options.routeId);
   const availability = selected.availability || {};
+  const capability =
+    selected.id === "openai-gpt-image-2" && options.capability && typeof options.capability === "object"
+      ? options.capability
+      : null;
   const hasAuth = Boolean(options.openAIReady || options.providerAuthReady);
-  const runActionAvailable = Boolean(availability.runActionAvailable && hasAuth);
+  const runActionAvailable = capability
+    ? Boolean(capability.runActionAvailable || capability.readyForRealRun)
+    : Boolean(availability.runActionAvailable && hasAuth);
   const needsConnector =
     selected.status === "needs_connector" ||
     availability.localStatus === "connector_required";
+  const localStatus = capability
+    ? capability.providerStatus === "available"
+      ? "provider_ready"
+      : capability.blockedReason || "provider_blocked"
+    : availability.localStatus || selected.status;
   return {
     routeId: selected.id,
     providerId: selected.providerId,
     model: selected.model,
-    localStatus: availability.localStatus || selected.status,
+    localStatus,
     runActionAvailable,
     readyForRealRun: runActionAvailable,
     handoffReady: selected.status !== "blocked",
-    needsConnector,
-    needsAuth: selected.authMode !== "none" && !hasAuth,
+    needsConnector: capability ? false : needsConnector,
+    needsAuth: capability ? capability.blockedReason === "codex_auth_missing" : selected.authMode !== "none" && !hasAuth,
     claim: availability.claim || "",
     officialSources: Array.isArray(availability.officialSources)
       ? availability.officialSources
       : [],
+    capability,
+    blockedReason: capability?.blockedReason || "",
+    message: capability?.message || "",
+    checks: Array.isArray(capability?.checks) ? capability.checks : [],
     proofLimit: runActionAvailable
       ? "A real provider run must still return a provider receipt, output manifest, and artifact hash."
-      : "This local surface can prepare and validate a request draft, but it has not completed a provider image run.",
+      : capability?.message || "This local surface can prepare and validate a request draft, but it has not completed a provider image run.",
   };
 }
 

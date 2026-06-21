@@ -499,7 +499,12 @@ function ArtifactBackendHealthNote({ health }) {
   );
 }
 
-export function ImageStudioPlayground({ generatedArtifacts = [], initialProject, onRequestDraft }) {
+export function ImageStudioPlayground({
+  generatedArtifacts = [],
+  imageGenerationCapability = null,
+  initialProject,
+  onRequestDraft,
+}) {
   const [project, setProject] = useState(() => normalizeProject(initialProject || loadImageProject()));
   const [session, setSession] = useState(loadStudioSession);
   const [draft, setDraft] = useState(null);
@@ -515,8 +520,13 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
   const route = useMemo(() => getProviderRoute(session.routeId), [session.routeId]);
   const draftValidation = useMemo(() => (draft ? validateImageStudioRequestDraft(draft) : null), [draft]);
   const proofReview = useMemo(
-    () => buildImageStudioProofReview(project, draft, { referenceAssets: session.referenceAssets, route }),
-    [draft, project, route, session.referenceAssets],
+    () =>
+      buildImageStudioProofReview(project, draft, {
+        capability: imageGenerationCapability,
+        referenceAssets: session.referenceAssets,
+        route,
+      }),
+    [draft, imageGenerationCapability, project, route, session.referenceAssets],
   );
   const routeAvailability = proofReview.imageGenerationRouteStatus;
   const chromaProof = proofReview.chromaKey;
@@ -876,6 +886,18 @@ export function ImageStudioPlayground({ generatedArtifacts = [], initialProject,
               <strong>{routeAvailability.readyForRealRun ? "Provider run available" : "Draft handoff only"}</strong>
               <p>{routeAvailability.claim}</p>
               <p>{routeAvailability.proofLimit}</p>
+              {routeAvailability.blockedReason ? (
+                <code>{routeAvailability.blockedReason}</code>
+              ) : null}
+              {routeAvailability.checks.length > 0 ? (
+                <div className="image-studio-capability-checks" aria-label="Image generation capability checks">
+                  {routeAvailability.checks.slice(0, 4).map(check => (
+                    <span data-status={check.passed ? "ready" : "blocked"} key={check.checkId || check.label}>
+                      {check.label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {routeAvailability.officialSources.length > 0 ? (
                 <small>{routeAvailability.officialSources.length} official source{routeAvailability.officialSources.length === 1 ? "" : "s"} recorded for review.</small>
               ) : null}

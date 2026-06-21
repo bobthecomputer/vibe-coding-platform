@@ -23,6 +23,65 @@ from grant_agent.web_backend import (
 
 
 class FluxioWebBackendTests(unittest.TestCase):
+    def test_image_generation_capability_reports_ready_without_writing_image_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch(
+                "grant_agent.web_backend._openai_codex_oauth_status",
+                return_value={"authenticated": True, "source": "openclaw-auth-profile"},
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="openclaw"):
+                    result = backend.dispatch(
+                        "image_generation_capability_command",
+                        {"providerId": "codex_subscription_gpt_image2"},
+                    )
+
+            artifact_root = pathlib.Path(result["artifactRoot"])
+            self.assertEqual(result["schemaVersion"], "image-generation-capability.v1")
+            self.assertEqual(result["providerStatus"], "available")
+            self.assertTrue(result["runActionAvailable"])
+            self.assertEqual(result["model"], "gpt-image-2")
+            self.assertTrue(result["doesNotWriteImageFiles"])
+            self.assertFalse(list(artifact_root.glob("*.png")) if artifact_root.exists() else [])
+            self.assertTrue(all(item["passed"] for item in result["checks"]))
+
+    def test_image_generation_capability_reports_missing_openclaw(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch(
+                "grant_agent.web_backend._openai_codex_oauth_status",
+                return_value={"authenticated": True, "source": "openclaw-auth-profile"},
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value=None):
+                    result = backend.dispatch(
+                        "image_generation_capability_command",
+                        {"providerId": "codex_subscription_gpt_image2"},
+                    )
+
+            self.assertEqual(result["providerStatus"], "blocked")
+            self.assertFalse(result["runActionAvailable"])
+            self.assertEqual(result["blockedReason"], "openclaw_missing")
+
+    def test_image_generation_capability_blocks_paid_api_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch(
+                "grant_agent.web_backend._openai_codex_oauth_status",
+                return_value={"authenticated": True, "source": "openai-api-key"},
+            ):
+                with mock.patch("grant_agent.web_backend.shutil.which", return_value="openclaw"):
+                    result = backend.dispatch(
+                        "image_generation_capability_command",
+                        {"providerId": "codex_subscription_gpt_image2"},
+                    )
+
+            self.assertEqual(result["providerStatus"], "blocked")
+            self.assertFalse(result["runActionAvailable"])
+            self.assertEqual(result["blockedReason"], "paid_api_fallback_blocked")
+
     def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
