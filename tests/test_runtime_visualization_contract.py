@@ -99,11 +99,27 @@ def test_builder_runtime_card_exposes_fused_runtime_without_promoting_provider_t
     assert "Runtime proof receipt" in source
     assert "Open proof receipt" in source
     assert "agent-runtime-proof-receipt" in source
+    assert "latestFusedRuntimeProof" in source
+    assert "runtimeSkillProofRoute" in source
+    assert "runtimeSkillProofProvider" in source
+    assert "runtimeSkillProofRuntime" in source
+    assert "runtimeSkillProofSelectedSkill" in source
+    assert "runtimeSkillProofRequirementLabel" in source
+    assert "runtimeSkillProofRetryBlocked" in source
+    assert "runtime-skill-proof-strip" in source
+    assert "Runtime + skill proof" in source
+    assert "Runtime and skill proof for current mission" in source
+    assert "Proof before retry:" in source
+    assert "Review recovery" in source
+    assert "Inspect runtime" in source
+    assert "Live execution" in source
     assert ".runtime-truth-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-lane-proof-receipt" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-contract" in STYLES.read_text(encoding="utf-8")
     assert ".runtime-readiness-gate-list" in STYLES.read_text(encoding="utf-8")
     assert ".agent-runtime-proof-receipt" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-skill-proof-strip" in STYLES.read_text(encoding="utf-8")
+    assert ".runtime-skill-proof-grid" in STYLES.read_text(encoding="utf-8")
     assert "supervisor_not_runtime_adapter" in fixtures
     assert "contract_ready_live_unverified" in fixtures
     assert "OpenClaw CLI available" in fixtures

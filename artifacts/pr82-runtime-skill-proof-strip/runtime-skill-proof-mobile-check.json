@@ -1,0 +1,26 @@
+{
+  "checkedAt": "2026-06-21T07:17:17.601195+00:00",
+  "url": "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench",
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserFamily": "chromium",
+  "domSupported": true,
+  "screenshotPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr82-runtime-skill-proof-strip\\runtime-skill-proof-mobile.png",
+  "domPath": "C:\\Users\\paul\\projects\\vibe-coding-platform\\artifacts\\pr82-runtime-skill-proof-strip\\runtime-skill-proof-mobile.html",
+  "expectedFragments": [
+    "Runtime + skill proof",
+    "Proof before retry",
+    "Live execution",
+    "Recovery skill"
+  ],
+  "missingFragments": [],
+  "skinErrors": [],
+  "image": {
+    "width": 390,
+    "height": 980,
+    "sampleCount": 9604,
+    "uniqueSampleColors": 620,
+    "averageLuma": 44.62,
+    "nonBlank": true
+  },
+  "passed": true
+}

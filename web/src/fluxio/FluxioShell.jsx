@@ -8363,6 +8363,49 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const latestRuntimeProofSummary = asRecord(latestRuntimeProofReceipt.summary);
   const latestRuntimeProofSignals = asRecord(latestRuntimeProofReceipt.proofSignals);
   const latestRuntimeProofArtifacts = asRecord(latestRuntimeProofReceipt.artifacts);
+  const latestFusedRuntimeProof = asRecord(snapshot.harnessLab?.fusedRuntime?.latestLaneProof);
+  const latestFusedRuntimeProofSafety = asRecord(latestFusedRuntimeProof.safetyContract);
+  const runtimeSkillProofRoute = asRecord(latestRuntimeProofReceipt.route);
+  const runtimeSkillProofProvider =
+    runtimeSkillProofRoute.provider ||
+    asRecord(latestFusedRuntimeProof.lanes?.[0]).provider ||
+    activeEffectiveRoute.provider ||
+    selectedAgentRoute.provider ||
+    "";
+  const runtimeSkillProofModel =
+    runtimeSkillProofRoute.model ||
+    asRecord(latestFusedRuntimeProof.lanes?.[0]).model ||
+    activeEffectiveRoute.model ||
+    selectedAgentRoute.model ||
+    "";
+  const runtimeSkillProofRuntime =
+    latestRuntimeProofReceipt.runtime ||
+    asRecord(latestFusedRuntimeProof.lanes?.[0]).runtimeId ||
+    missionSkillRecoveryPlan.runtimeLane ||
+    mission?.runtime_id ||
+    agentRuntimeSelectValue;
+  const runtimeSkillProofType =
+    latestFusedRuntimeProof.proofType ||
+    latestRuntimeProofReceipt.receiptKind ||
+    "runtime proof pending";
+  const runtimeSkillLiveExecution =
+    latestFusedRuntimeProofSafety.liveRuntimeExecution === true ||
+    latestRuntimeProofReceipt.safety?.liveModelCallRecorded === true;
+  const runtimeSkillProofSelectedSkill =
+    missionSkillRecoverySelectedSkill.label ||
+    missionSkillRecoverySelectedSkill.skillId ||
+    asRecord(latestFusedRuntimeProof.lanes?.[0]).skill ||
+    "No recovery skill selected";
+  const runtimeSkillProofRequirementLabel =
+    missionSkillRecoveryProofRequirement.label ||
+    missionSkillRecoveryProofArtifactPlan.artifactKind ||
+    "No retry proof required";
+  const runtimeSkillProofRetryBlocked =
+    Boolean(missionSkillRecoveryProofArtifactPlan.mustAttachBeforeRetry || missionSkillRecoveryNeedsAction);
+  const runtimeSkillProofNextAction =
+    missionSkillRecoveryPlan.nextAction ||
+    asList(asRecord(latestFusedRuntimeProof.readinessSummary).lanes)[0]?.nextRecoveryAction ||
+    "Continue plan-execute-verify with runtime proof visible.";
   const providerOAuthActionsAvailable =
     previewMode === "live" && hasCommandBackend();
   const providerOAuthUnavailableReason = !hasTauriBackend()
@@ -12233,6 +12276,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               </button>
                               <span className="mini-pill muted">Now: {viewModel.thread.activityPulse?.current || builderPrimaryConversation.current}</span>
                               <span className="mini-pill muted">Next: {viewModel.thread.activityPulse?.next || builderPrimaryConversation.next}</span>
+                            </div>
+                            <div className={`runtime-skill-proof-strip ${toneClass(runtimeSkillProofRetryBlocked ? "warn" : "good")}`} aria-label="Runtime and skill proof for current mission">
+                              <div className="runtime-skill-proof-head">
+                                <span>Runtime + skill proof</span>
+                                <strong>{runtimeLabel(runtimeSkillProofRuntime)}</strong>
+                              </div>
+                              <div className="runtime-skill-proof-grid">
+                                <div>
+                                  <span>Provider route</span>
+                                  <b>
+                                    {providerLabel(runtimeSkillProofProvider || "provider")} / {runtimeSkillProofModel || "model pending"}
+                                  </b>
+                                </div>
+                                <div>
+                                  <span>Proof type</span>
+                                  <b>{titleizeToken(runtimeSkillProofType)}</b>
+                                </div>
+                                <div>
+                                  <span>Live execution</span>
+                                  <b>{runtimeSkillLiveExecution ? "recorded" : "not proven"}</b>
+                                </div>
+                                <div>
+                                  <span>Recovery skill</span>
+                                  <b>{runtimeSkillProofSelectedSkill}</b>
+                                </div>
+                              </div>
+                              <div className="runtime-skill-proof-foot">
+                                <span>
+                                  Proof before retry: {runtimeSkillProofRetryBlocked ? runtimeSkillProofRequirementLabel : "not required"}
+                                </span>
+                                <button className="mini-pill muted" onClick={() => setActiveDrawer(runtimeSkillProofRetryBlocked ? "skills" : "runtime")} type="button">
+                                  {runtimeSkillProofRetryBlocked ? "Review recovery" : "Inspect runtime"}
+                                </button>
+                              </div>
+                              <p>{runtimeSkillProofNextAction}</p>
                             </div>
                             <div className="monitor-loop-strip" aria-label="External monitor loops">
                               <div>

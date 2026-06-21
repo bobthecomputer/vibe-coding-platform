@@ -909,6 +909,91 @@ button.builder-sidebar-nexus:hover {
   padding: 10px;
 }
 
+.runtime-skill-proof-strip {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.075), transparent 58%),
+    rgba(255, 255, 255, 0.025);
+  padding: 10px;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.runtime-skill-proof-strip:hover {
+  border-color: rgba(245, 158, 11, 0.3);
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.095), transparent 58%),
+    rgba(255, 255, 255, 0.035);
+  transform: translateY(-1px);
+}
+
+.runtime-skill-proof-strip:focus-within {
+  border-color: rgba(245, 158, 11, 0.42);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
+}
+
+.runtime-skill-proof-head,
+.runtime-skill-proof-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.runtime-skill-proof-head span,
+.runtime-skill-proof-grid span,
+.runtime-skill-proof-foot span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runtime-skill-proof-head strong {
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.runtime-skill-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.runtime-skill-proof-grid div {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 8px;
+}
+
+.runtime-skill-proof-grid b {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.runtime-skill-proof-foot {
+  flex-wrap: wrap;
+}
+
+.runtime-skill-proof-strip p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .supervisor-intervention-strip {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
@@ -4079,12 +4164,19 @@ button.builder-review-target:hover {
   .skill-recovery-list,
   .skill-recovery-plan-grid,
   .monitor-loop-strip,
+  .runtime-skill-proof-grid,
   .supervisor-intervention-strip,
   .monitor-loop-list,
   .subagent-command-strip,
   .subagent-board-stack,
   .subagent-scoreboard {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-skill-proof-head,
+  .runtime-skill-proof-foot {
+    display: grid;
+    justify-content: stretch;
   }
 
   .monitor-loop-strip-items {
