@@ -105,6 +105,7 @@ export function VoiceCommandPanel({
           ? "The transcript has passed the visible review checks."
           : "Start capture, use system dictation, or paste text through the normal composer.";
   const [manualCorrectionDraft, setManualCorrectionDraft] = useState(nextRepairSegment?.text || "");
+  const [manualDictationDraft, setManualDictationDraft] = useState("");
 
   useEffect(() => {
     setManualCorrectionDraft(nextRepairSegment?.text || "");
@@ -136,6 +137,44 @@ export function VoiceCommandPanel({
     Boolean(nextRepairSegment) &&
     manualCorrectionDraft.trim() &&
     manualCorrectionDraft.trim() !== nextRepairSegment.text;
+  const runBlockedByReview =
+    Boolean(voice.pendingCommand) ||
+    Boolean(voice.transcript.interimText) ||
+    Boolean(voice.transcript.reviewRequired) ||
+    voice.sendGuard?.status === "review_required" ||
+    voice.sendGuard?.status === "blocked";
+  const runDisabled = !voice.transcript.combinedText || runBlockedByReview;
+  const runDisabledReason = voice.pendingCommand
+    ? "Confirm or clear the pending voice command before running another one."
+    : voice.transcript.interimText
+      ? "Wait for final dictated text before running a command."
+      : voice.transcript.reviewRequired
+        ? "Review or correct the highlighted dictated text before running a command."
+        : voice.sendGuard?.status === "blocked"
+          ? voice.sendGuard.detail
+          : !voice.transcript.combinedText
+            ? "Dictate, paste, or type text before running a voice command."
+            : "";
+
+  const addManualDictation = () => {
+    const text = manualDictationDraft.trim();
+    if (!text) {
+      return;
+    }
+    voice.appendTranscript?.({
+      text,
+      confidence: 1,
+      isFinal: true,
+      source: "manual-dictation",
+    });
+    setManualDictationDraft("");
+  };
+  const runReviewedTranscriptCommand = () => {
+    if (runDisabled) {
+      return;
+    }
+    voice.runTranscriptCommand();
+  };
 
   return (
     <section className="fluxio-voice-panel" aria-label="Voice command controls" {...motion}>
@@ -196,6 +235,25 @@ export function VoiceCommandPanel({
           <span>Last event: {captureLifecycle.lastCaptureEvent || captureLifecycle.status || "idle"}</span>
           <span>Restart attempts: {captureLifecycle.restartCount || 0}</span>
           <span>Last error: {captureLifecycle.lastCaptureErrorCode || "none"}</span>
+        </div>
+      </div>
+
+      <div className="fluxio-voice-manual-intake" aria-label="Manual dictation intake">
+        <label htmlFor="fluxio-voice-manual-dictation">
+          Manual dictation intake
+          <textarea
+            id="fluxio-voice-manual-dictation"
+            onChange={event => setManualDictationDraft(event.target.value)}
+            placeholder="Paste OS dictation here when live capture is unavailable."
+            rows={3}
+            value={manualDictationDraft}
+          />
+        </label>
+        <div className="fluxio-voice-manual-intake-actions">
+          <p>Text added here enters the same review, correction, and accidental-send checks as live speech.</p>
+          <button disabled={!manualDictationDraft.trim()} onClick={addManualDictation} type="button">
+            Add to review
+          </button>
         </div>
       </div>
 
@@ -398,9 +456,10 @@ export function VoiceCommandPanel({
             shortcut: "Ctrl+Enter",
             voice: "send message",
           })}
-          disabled={!voice.transcript.combinedText}
-          onClick={() => voice.runTranscriptCommand()}
+          disabled={runDisabled}
+          onClick={runReviewedTranscriptCommand}
           type="button"
+          title={runDisabled ? runDisabledReason : undefined}
         >
           <CheckCircle aria-hidden="true" size={17} weight="duotone" />
           <span>Run</span>

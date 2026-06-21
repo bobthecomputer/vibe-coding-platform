@@ -121,6 +121,72 @@
   padding: 4px 8px;
 }
 
+.fluxio-voice-manual-intake {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(234, 228, 214, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.018)),
+    var(--panel-soft, #161918);
+  padding: 10px;
+}
+
+.fluxio-voice-manual-intake label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fluxio-voice-manual-intake textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  border: 1px solid rgba(234, 228, 214, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text, #f4f0e8);
+  font: inherit;
+  line-height: 1.45;
+  padding: 9px 10px;
+}
+
+.fluxio-voice-manual-intake textarea:focus {
+  border-color: rgba(142, 203, 111, 0.55);
+  outline: 2px solid rgba(142, 203, 111, 0.18);
+  outline-offset: 2px;
+}
+
+.fluxio-voice-manual-intake-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fluxio-voice-manual-intake-actions p {
+  color: var(--muted, #aaa395);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxio-voice-manual-intake-actions button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border: 1px solid rgba(142, 203, 111, 0.34);
+  border-radius: 8px;
+  background: rgba(142, 203, 111, 0.1);
+  color: var(--text, #f4f0e8);
+  padding: 0 10px;
+}
+
+.fluxio-voice-manual-intake-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .fluxio-voice-empty {
   color: var(--muted, #aaa395);
 }
@@ -498,5 +564,10 @@
 @media (max-width: 620px) {
   .fluxio-voice-quality-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fluxio-voice-manual-intake-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
