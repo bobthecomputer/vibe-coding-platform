@@ -16,6 +16,7 @@ FLUXIO_STYLES = ROOT / "web" / "src" / "fluxio" / "styles.css"
 HELPERS_JS = ROOT / "desktop-ui" / "fluxioHelpers.js"
 MISSION_MODEL = ROOT / "desktop-ui" / "missionControlModel.js"
 DESKTOP_FIXTURES = ROOT / "desktop-ui" / "fixtures.js"
+DESKTOP_FIXTURE_MANIFEST = ROOT / "desktop-ui" / "fixtureManifest.js"
 TAURI_CONF = ROOT / "src-tauri" / "tauri.conf.json"
 PACKAGE_JSON = ROOT / "package.json"
 CONTROL_SMOKE = ROOT / "scripts" / "control_route_smoke.mjs"
@@ -179,11 +180,18 @@ class DesktopUiContractTests(unittest.TestCase):
 
     def test_packaged_tauri_defaults_to_live_mode_without_fixture(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        fixture_manifest = DESKTOP_FIXTURE_MANIFEST.read_text(encoding="utf-8")
 
         self.assertIn("function resolveInitialPreviewMode", shell)
         self.assertIn('const explicitFixture = searchParams.get("fixture")', shell)
         self.assertIn("if (hasTauriBackend())", shell)
         self.assertIn('return "live";', shell)
+        self.assertIn("PREVIEW_FIXTURE_OPTIONS", shell)
+        self.assertIn('import("../../../desktop-ui/fixtures.js")', shell)
+        self.assertNotIn("listFixtureOptions", shell)
+        self.assertNotIn('from "../../../desktop-ui/fixtures.js"', shell)
+        self.assertIn("live_review", fixture_manifest)
+        self.assertIn("verification_failure", fixture_manifest)
         self.assertNotIn(
             'searchParams.get("fixture") || localStorage.getItem(STORAGE_KEYS.previewMode) || "live"',
             shell,

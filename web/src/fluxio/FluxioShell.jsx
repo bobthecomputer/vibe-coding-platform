@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { buildFixtureSnapshot, listFixtureOptions } from "../../../desktop-ui/fixtures.js";
+import { FIXTURE_OPTIONS as PREVIEW_FIXTURE_OPTIONS } from "../../../desktop-ui/fixtureManifest.js";
 import {
   activeProfileId,
   currentProfileParameters,
@@ -81,7 +81,7 @@ const STORAGE_KEYS = {
   activeChatSessionId: "fluxio.chat.active_session_id",
 };
 
-const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...listFixtureOptions()];
+const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...PREVIEW_FIXTURE_OPTIONS];
 const EMPTY_ARRAY = Object.freeze([]);
 const EMPTY_OBJECT = Object.freeze({});
 const LIVE_SYNC_OPTIONS = [
@@ -1399,6 +1399,11 @@ function canAttemptWebBackend() {
   }
   const host = String(globalThis.window?.location?.hostname || "").toLowerCase();
   return ["localhost", "127.0.0.1", "::1"].includes(host);
+}
+
+async function loadFixtureSnapshot(id) {
+  const { buildFixtureSnapshot } = await import("../../../desktop-ui/fixtures.js");
+  return buildFixtureSnapshot(id);
 }
 
 function hasCommandBackend() {
@@ -3580,7 +3585,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             setPreviewMode("live");
             return;
           }
-          const fixturePayload = buildFixtureSnapshot(previewMode);
+          const fixturePayload = await loadFixtureSnapshot(previewMode);
           if (!fixturePayload) {
             setPreviewMode("live");
             return;
