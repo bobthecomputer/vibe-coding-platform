@@ -6,7 +6,10 @@ import sqlite3
 import tempfile
 import unittest
 
-from src.grant_agent.mindtower_fusion import build_mindtower_fusion_snapshot
+from src.grant_agent.mindtower_fusion import (
+    build_mindtower_fusion_snapshot,
+    build_solantir_signal_snapshots,
+)
 
 
 class MindTowerFusionAdapterTests(unittest.TestCase):
@@ -154,6 +157,44 @@ class MindTowerFusionAdapterTests(unittest.TestCase):
             self.assertEqual(snapshot["rows"], [])
             self.assertEqual(snapshot["adapter"]["sourceHealth"], [])
             self.assertEqual(snapshot["adapter"]["recentEvents"], [])
+            self.assertEqual(snapshot["signalSnapshots"], [])
+
+    def test_solantir_signal_snapshots_use_readonly_source_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir) / "platform"
+            root.mkdir()
+            solantir_root = pathlib.Path(temp_dir) / "Solantir"
+            legacy_signals = solantir_root / "legacy" / "osint-platform" / "backend" / "solantir_api" / "signals.py"
+            contracts = solantir_root / "packages" / "contracts" / "src" / "solantir.ts"
+            legacy_signals.parent.mkdir(parents=True)
+            contracts.parent.mkdir(parents=True)
+            legacy_signals.write_text(
+                "signal confidence provenance source forecast observation read-only risk\n",
+                encoding="utf-8",
+            )
+            contracts.write_text(
+                "export type SolantirProvenance = { source: string; confidence: number; signal: string }\n",
+                encoding="utf-8",
+            )
+
+            snapshots = build_solantir_signal_snapshots(root, solantir_root=solantir_root)
+            fusion = build_mindtower_fusion_snapshot(
+                root,
+                db_path=root / "missing.sqlite",
+                solantir_root=solantir_root,
+            )
+
+            self.assertEqual(len(snapshots), 2)
+            self.assertEqual(fusion["signalSnapshots"], snapshots)
+            for signal in snapshots:
+                self.assertEqual(signal["sourceProject"], "Solantir")
+                self.assertEqual(signal["collectionMode"], "read-only-adapter")
+                self.assertEqual(signal["riskLabel"], "no-trading-execution")
+                self.assertTrue(signal["sourceHashPrefix"])
+                self.assertTrue(pathlib.Path(signal["sourcePath"]).exists())
+                self.assertGreaterEqual(len(signal["factors"]), 3)
+                self.assertIn("no order routing", signal["safetyLabels"])
+                self.assertIn("not investment advice", signal["safetyLabels"])
 
 
 if __name__ == "__main__":

@@ -212,6 +212,51 @@ class FusionFixtureContractTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["adapterStatus"], "ready")
         self.assertEqual(payload["summary"]["adapterRecordTotal"], 4)
 
+    def test_backend_signal_snapshots_replace_seeded_solantir_signals(self) -> None:
+        payload = run_node(
+            """
+            import { buildFusionWorkbench } from './web/src/fluxio/fusion/fusionFixtures.js';
+            const workbench = buildFusionWorkbench({
+              signalSnapshots: [
+                {
+                  id: 'solantir-backend-signal-contract-provenance',
+                  entity: 'Backend Solantir Contract Provenance',
+                  direction: 'neutral',
+                  score: 67,
+                  confidence: 0.82,
+                  timestamp: '2026-06-21T00:00:00Z',
+                  collectionMode: 'read-only-adapter',
+                  riskLabel: 'no-trading-execution',
+                  sourceProject: 'Solantir',
+                  sourcePath: 'C:/Users/paul/projects/Solantir/packages/contracts/src/solantir.ts',
+                  sourceHashPrefix: 'abc123def456',
+                  factors: [
+                    { name: 'provenance coverage', weight: 0.4, contribution: 16 },
+                    { name: 'driver explainability', weight: 0.32, contribution: 12 },
+                    { name: 'source file presence', weight: 0.28, contribution: 8 },
+                  ],
+                  topDrivers: [
+                    'Read-only backend adapter found solantir.ts and recorded hash abc123def456.',
+                    'No broker, order routing, credential, or live market execution path is exposed.',
+                  ],
+                  safetyLabels: ['no broker', 'no order routing', 'not investment advice'],
+                },
+              ],
+            });
+            console.log(JSON.stringify({
+              summary: workbench.summary,
+              signals: workbench.signalSnapshots,
+            }));
+            """
+        )
+
+        self.assertEqual(payload["summary"]["signalSnapshotCount"], 1)
+        self.assertEqual(payload["signals"][0]["id"], "solantir-backend-signal-contract-provenance")
+        self.assertEqual(payload["signals"][0]["collectionMode"], "read-only-adapter")
+        self.assertEqual(payload["signals"][0]["sourceProject"], "Solantir")
+        self.assertEqual(payload["signals"][0]["sourceHashPrefix"], "abc123def456")
+        self.assertEqual(payload["signals"][0]["riskLabel"], "no-trading-execution")
+
     def test_solantir_signal_snapshots_are_explainable_and_non_executing(self) -> None:
         payload = run_node(
             """

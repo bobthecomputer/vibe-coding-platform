@@ -414,7 +414,9 @@ export function buildFusionWorkbench(fixtures = FUSION_FIXTURES) {
   const promotionReadyLanes = migrationLanes.filter(lane =>
     (lane.promotionGates || []).every(gate => gate.status === "passed"),
   );
-  const signalSnapshots = SOLANTIR_SIGNAL_SNAPSHOTS;
+  const signalSnapshots = Array.isArray(snapshot?.signalSnapshots) && snapshot.signalSnapshots.length > 0
+    ? snapshot.signalSnapshots
+    : SOLANTIR_SIGNAL_SNAPSHOTS;
   return {
     schemaVersion: FUSION_CONTRACT_VERSION,
     collectionModes: FUSION_COLLECTION_MODES,

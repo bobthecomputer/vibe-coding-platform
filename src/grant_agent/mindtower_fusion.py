@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -33,6 +34,22 @@ SECRETISH_FIELDS = {
 }
 
 PREVIEW_LIMIT = 4
+SOLANTIR_SIGNAL_SOURCE_SPECS = [
+    {
+        "id": "solantir-backend-signal-legacy-drivers",
+        "relativePath": Path("legacy") / "osint-platform" / "backend" / "solantir_api" / "signals.py",
+        "entity": "Solantir Legacy Signal Drivers",
+        "direction": "upside-watch",
+        "baseScore": 64,
+    },
+    {
+        "id": "solantir-backend-signal-contract-provenance",
+        "relativePath": Path("packages") / "contracts" / "src" / "solantir.ts",
+        "entity": "Solantir Contract Provenance",
+        "direction": "neutral",
+        "baseScore": 58,
+    },
+]
 
 
 def _default_db_path(root: Path) -> Path:
@@ -40,6 +57,86 @@ def _default_db_path(root: Path) -> Path:
     if configured:
         return Path(configured)
     return root.parent / "mind-tower" / "data" / "mindtower.sqlite"
+
+
+def _default_solantir_root(root: Path) -> Path:
+    configured = os.environ.get("SOLANTIR_ROOT_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    return root.parent / "Solantir"
+
+
+def _hash_prefix(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:12]
+
+
+def _keyword_hits(text: str, keywords: list[str]) -> int:
+    lowered = text.lower()
+    return sum(1 for keyword in keywords if keyword in lowered)
+
+
+def build_solantir_signal_snapshots(
+    root: Path,
+    solantir_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    source_root = solantir_root or _default_solantir_root(root)
+    snapshots: list[dict[str, Any]] = []
+    for spec in SOLANTIR_SIGNAL_SOURCE_SPECS:
+        source_path = source_root / spec["relativePath"]
+        if not source_path.exists() or not source_path.is_file():
+            continue
+        try:
+            text = source_path.read_text(encoding="utf-8", errors="ignore")
+            source_hash = _hash_prefix(source_path)
+        except OSError:
+            continue
+        provenance_hits = _keyword_hits(text, ["provenance", "source", "confidence", "signal"])
+        safety_hits = _keyword_hits(text, ["readonly", "read-only", "risk", "forecast", "observation"])
+        size_bonus = min(12, max(0, source_path.stat().st_size // 800))
+        score = max(0, min(100, int(spec["baseScore"]) + provenance_hits * 3 + safety_hits * 2 + size_bonus))
+        confidence = min(0.92, 0.54 + provenance_hits * 0.045 + safety_hits * 0.035)
+        snapshots.append(
+            {
+                "id": spec["id"],
+                "entity": spec["entity"],
+                "direction": spec["direction"],
+                "score": score,
+                "confidence": round(confidence, 2),
+                "timestamp": "2026-06-21T00:00:00Z",
+                "collectionMode": "read-only-adapter",
+                "riskLabel": "no-trading-execution",
+                "sourceProject": "Solantir",
+                "sourcePath": str(source_path),
+                "sourceHashPrefix": source_hash,
+                "factors": [
+                    {
+                        "name": "provenance coverage",
+                        "weight": 0.4,
+                        "contribution": min(24, provenance_hits * 5),
+                    },
+                    {
+                        "name": "driver explainability",
+                        "weight": 0.32,
+                        "contribution": min(20, safety_hits * 4),
+                    },
+                    {
+                        "name": "source file presence",
+                        "weight": 0.28,
+                        "contribution": max(6, size_bonus),
+                    },
+                ],
+                "topDrivers": [
+                    f"Read-only backend adapter found {source_path.name} and recorded hash {source_hash}.",
+                    "No broker, order routing, credential, or live market execution path is exposed.",
+                ],
+                "safetyLabels": ["no broker", "no order routing", "not investment advice"],
+            }
+        )
+    return snapshots
 
 
 def _mask_value(value: Any) -> str:
@@ -218,8 +315,13 @@ def _runtime_state_preview(
     return preview
 
 
-def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> dict[str, Any]:
+def build_mindtower_fusion_snapshot(
+    root: Path,
+    db_path: Path | None = None,
+    solantir_root: Path | None = None,
+) -> dict[str, Any]:
     database_path = db_path or _default_db_path(root)
+    signal_snapshots = build_solantir_signal_snapshots(root, solantir_root=solantir_root)
     adapter: dict[str, Any] = {
         "adapterId": "mindtower-readonly-sqlite",
         "sourceProject": "Mind Tower",
@@ -240,7 +342,7 @@ def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> 
     }
     if not database_path.exists():
         adapter["detail"] = "Mind Tower SQLite database was not found; fixture rows remain the fallback."
-        return {"adapter": adapter, "rows": []}
+        return {"adapter": adapter, "rows": [], "signalSnapshots": signal_snapshots}
 
     try:
         uri = f"file:{database_path.as_posix()}?mode=ro"
@@ -259,7 +361,7 @@ def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> 
     except sqlite3.Error as exc:
         adapter["status"] = "error"
         adapter["detail"] = f"Mind Tower SQLite read failed: {exc}"
-        return {"adapter": adapter, "rows": []}
+        return {"adapter": adapter, "rows": [], "signalSnapshots": signal_snapshots}
 
     resource_count = sum(int(value or 0) for value in adapter["recordCounts"].values())
     adapter["status"] = "ready" if resource_count else "empty"
@@ -284,4 +386,4 @@ def build_mindtower_fusion_snapshot(root: Path, db_path: Path | None = None) -> 
             "adapter": adapter,
         }
     ]
-    return {"adapter": adapter, "rows": rows}
+    return {"adapter": adapter, "rows": rows, "signalSnapshots": signal_snapshots}
