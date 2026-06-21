@@ -717,6 +717,180 @@ def _build_provider_ecosystem_snapshot(
     }
 
 
+def reconcile_provider_secret_presence(
+    snapshot: dict,
+    provider_secret_presence: dict[str, bool],
+) -> dict:
+    """Keep masked provider credential truth consistent across setup and ecosystem rows."""
+    if not isinstance(snapshot, dict) or not isinstance(provider_secret_presence, dict):
+        return snapshot
+
+    def has_any(*provider_ids: str) -> bool:
+        return any(bool(provider_secret_presence.get(provider_id)) for provider_id in provider_ids)
+
+    provider_aliases = {
+        "openai": ("openai", "openai-codex"),
+        "minimax": ("minimax", "minimax-cn", "minimax-portal"),
+    }
+    setup_status = snapshot.setdefault("providerSetupStatus", {})
+    if not isinstance(setup_status, dict):
+        setup_status = {}
+        snapshot["providerSetupStatus"] = setup_status
+    for provider_id, aliases in provider_aliases.items():
+        if not has_any(*aliases):
+            continue
+        setup = setup_status.setdefault(provider_id, {})
+        if not isinstance(setup, dict):
+            setup = {}
+            setup_status[provider_id] = setup
+        setup["authPresent"] = True
+        setup["configured"] = True
+        if provider_id == "openai":
+            setup.setdefault(
+                "authPath",
+                "OpenAI Codex OAuth" if has_any("openai-codex") and not has_any("openai") else "API key",
+            )
+        if provider_id == "minimax":
+            setup.setdefault(
+                "authPath",
+                "MiniMax OpenClaw OAuth"
+                if has_any("minimax-portal") and not has_any("minimax", "minimax-cn")
+                else "API key",
+            )
+    alias_ids = {alias for aliases in provider_aliases.values() for alias in aliases}
+    setup_supported_ids = {"anthropic", "openrouter"}
+    for provider_id, present in provider_secret_presence.items():
+        if not present:
+            continue
+        provider_id = str(provider_id)
+        if provider_id in alias_ids or provider_id not in setup_supported_ids:
+            continue
+        setup = setup_status.setdefault(str(provider_id), {})
+        if not isinstance(setup, dict):
+            setup = {}
+            setup_status[str(provider_id)] = setup
+        setup["authPresent"] = True
+        setup["configured"] = True
+
+    ecosystem = snapshot.get("providerEcosystem")
+    if not isinstance(ecosystem, dict):
+        return snapshot
+    rows = ecosystem.get("providers")
+    if not isinstance(rows, list):
+        return snapshot
+
+    reconciled_rows = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        provider_id = str(item.get("providerId", "")).strip().lower()
+        aliases = provider_aliases.get(provider_id, (provider_id,))
+        auth_present = bool(item.get("authPresent") or has_any(*aliases))
+        status = str(item.get("status") or "").strip().lower()
+        existing_health = item.get("healthCheck") if isinstance(item.get("healthCheck"), dict) else {}
+        blocked_by_runtime = existing_health.get("status") == "runtime_missing"
+        can_route_now = bool(
+            status in {"repo_supported", "credential_ready"}
+            and auth_present
+            and not blocked_by_runtime
+        )
+        compatibility_warnings = _provider_compatibility_warnings(
+            item,
+            auth_present=auth_present,
+            can_route_now=can_route_now,
+        )
+        if blocked_by_runtime:
+            health_check = {
+                **existing_health,
+                "evidence": [
+                    "auth present" if auth_present else "auth missing",
+                    *[
+                        str(evidence)
+                        for evidence in existing_health.get("evidence", [])
+                        if str(evidence) not in {"auth present", "auth missing"}
+                    ],
+                ],
+                "warnings": compatibility_warnings,
+            }
+        else:
+            health_check = _provider_health_check(
+                item,
+                auth_present=auth_present,
+                can_route_now=can_route_now,
+                observed_route_count=int(item.get("observedRouteCount", 0) or 0),
+                runtime_ids=set(),
+                compatibility_warnings=compatibility_warnings,
+            )
+        reconciled_rows.append(
+            {
+                **item,
+                "authPresent": auth_present,
+                "canRouteNow": can_route_now,
+                "compatibilityWarnings": compatibility_warnings,
+                "healthCheck": health_check,
+            }
+        )
+    ecosystem["providers"] = reconciled_rows
+
+    implemented = [
+        item for item in reconciled_rows if item.get("status") in {"repo_supported", "credential_ready"}
+    ]
+    route_ready = [item for item in reconciled_rows if item.get("canRouteNow")]
+    missing_auth = [
+        str(item.get("providerId"))
+        for item in implemented
+        if not item.get("authPresent")
+    ]
+    summary = ecosystem.setdefault("summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+        ecosystem["summary"] = summary
+    summary["totalProvidersTracked"] = len(reconciled_rows)
+    summary["implementedOrCredentialReady"] = len(implemented)
+    summary["routeReadyCount"] = len(route_ready)
+    summary["missingAuthCount"] = len(missing_auth)
+
+    update_policy = ecosystem.get("updatePolicy")
+    if isinstance(update_policy, dict):
+        checklist = update_policy.get("readinessChecklist")
+        if isinstance(checklist, list):
+            for check in checklist:
+                if not isinstance(check, dict):
+                    continue
+                if check.get("checkId") == "credential_safety":
+                    check["status"] = "review" if missing_auth else "ready"
+                    check["summary"] = (
+                        "Provider credentials are present for route-ready accounts."
+                        if not missing_auth
+                        else "Some supported providers still need credentials before they can route live work."
+                    )
+                    check["safeAction"] = (
+                        "Keep stored credentials masked and connect missing providers: "
+                        + ", ".join(missing_auth)
+                        + "."
+                        if missing_auth
+                        else "Keep masked credential status visible; never write raw keys into catalog artifacts."
+                    )
+                if check.get("checkId") == "route_smoke":
+                    check["status"] = "ready" if route_ready else "review"
+                    check["safeAction"] = (
+                        "Use the existing provider health check before assigning live work."
+                        if route_ready
+                        else "Connect at least one supported provider, then run a provider health check."
+                    )
+            ready = [item for item in checklist if isinstance(item, dict) and item.get("status") == "ready"]
+            review = [item for item in checklist if isinstance(item, dict) and item.get("status") != "ready"]
+            summary["updateReadinessReadyCount"] = len(ready)
+            summary["updateReadinessReviewCount"] = len(review)
+            update_policy["readinessSummary"] = {
+                "readyCount": len(ready),
+                "reviewCount": len(review),
+                "totalCount": len(checklist),
+                "safeToRefresh": len(review) == 0,
+            }
+    return snapshot
+
+
 def _latest_autotune_event(activity: list[dict]) -> dict:
     for event in activity:
         if event.get("kind") == "mission.autotune.applied":

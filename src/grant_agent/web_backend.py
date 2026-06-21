@@ -27,6 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .mission_control import reconcile_provider_secret_presence
 from .port_safety import tcp_port_accepts_connection
 from .subprocess_utils import hidden_windows_subprocess_kwargs
 
@@ -3258,9 +3259,11 @@ class FluxioWebBackend:
         if command == "get_control_room_snapshot_command":
             root = Path(payload.get("root") or self.root).resolve()
             snapshot = self._run_cli(root, "control-room", [], timeout=180, fast_control_room=True)
-            snapshot["providerSecretPresence"] = _provider_presence(
+            provider_presence = _provider_presence(
                 session_secrets=self.provider_secrets,
             )
+            snapshot["providerSecretPresence"] = provider_presence
+            reconcile_provider_secret_presence(snapshot, provider_presence)
             snapshot["webBackend"] = {
                 "available": True,
                 "commandSurface": "http",

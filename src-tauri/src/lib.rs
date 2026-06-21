@@ -2755,6 +2755,291 @@ fn provider_secret_presence_snapshot(provider_ids: &[&str]) -> Result<Value, Str
     Ok(Value::Object(output))
 }
 
+fn provider_presence_any(provider_presence: &Value, provider_ids: &[&str]) -> bool {
+    provider_ids.iter().any(|provider_id| {
+        provider_presence
+            .get(*provider_id)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    })
+}
+
+fn provider_presence_aliases(provider_id: &str) -> &'static [&'static str] {
+    match provider_id {
+        "openai" => &["openai", "openai-codex"],
+        "minimax" => &["minimax", "minimax-cn", "minimax-portal"],
+        _ => &[],
+    }
+}
+
+fn provider_compatibility_warnings(status: &str, auth_present: bool, can_route_now: bool) -> Value {
+    let mut warnings = vec![
+        Value::String(
+            "Review refreshed catalog metadata before changing default model IDs.".to_string(),
+        ),
+        Value::String(
+            "Keep user-defined models unchanged until a route smoke test passes.".to_string(),
+        ),
+    ];
+    if matches!(status, "repo_supported" | "credential_ready") && !auth_present {
+        warnings.push(Value::String(
+            "Credentials are missing, so this provider cannot be selected for live routes yet."
+                .to_string(),
+        ));
+    }
+    if !can_route_now && status.starts_with("planned") {
+        warnings.push(Value::String(
+            "Adapter work is planned; use this row as a catalog signal only.".to_string(),
+        ));
+    }
+    Value::Array(warnings)
+}
+
+fn reconcile_provider_secret_presence(snapshot: &mut Value, provider_presence: &Value) {
+    let Some(root) = snapshot.as_object_mut() else {
+        return;
+    };
+
+    let setup_status = root
+        .entry("providerSetupStatus".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Value::Object(setup_status_map) = setup_status {
+        for (provider_id, aliases) in [
+            ("openai", &["openai", "openai-codex"][..]),
+            ("minimax", &["minimax", "minimax-cn", "minimax-portal"][..]),
+        ] {
+            if !provider_presence_any(provider_presence, aliases) {
+                continue;
+            }
+            let provider_entry = setup_status_map
+                .entry(provider_id.to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Value::Object(provider_payload) = provider_entry {
+                provider_payload.insert("authPresent".to_string(), Value::Bool(true));
+                provider_payload.insert("configured".to_string(), Value::Bool(true));
+                provider_payload
+                    .entry("authPath".to_string())
+                    .or_insert_with(|| {
+                        if provider_id == "minimax"
+                            && provider_presence_any(provider_presence, &["minimax-portal"])
+                            && !provider_presence_any(provider_presence, &["minimax", "minimax-cn"])
+                        {
+                            Value::String("MiniMax OpenClaw OAuth".to_string())
+                        } else if provider_id == "openai"
+                            && provider_presence_any(provider_presence, &["openai-codex"])
+                            && !provider_presence_any(provider_presence, &["openai"])
+                        {
+                            Value::String("OpenAI Codex OAuth".to_string())
+                        } else {
+                            Value::String("API key".to_string())
+                        }
+                    });
+            }
+        }
+    }
+
+    let Some(ecosystem) = root
+        .get_mut("providerEcosystem")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let mut implemented = 0usize;
+    let mut route_ready = 0usize;
+    let mut missing_auth: Vec<String> = Vec::new();
+    let total_providers = {
+        let Some(providers) = ecosystem.get_mut("providers").and_then(Value::as_array_mut) else {
+            return;
+        };
+        for provider in providers.iter_mut() {
+            let Some(provider_payload) = provider.as_object_mut() else {
+                continue;
+            };
+            let provider_id = provider_payload
+                .get("providerId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let status = provider_payload
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let aliases = provider_presence_aliases(&provider_id);
+            let auth_present = provider_payload
+                .get("authPresent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || (!aliases.is_empty() && provider_presence_any(provider_presence, aliases))
+                || provider_presence_any(provider_presence, &[provider_id.as_str()]);
+            let blocked_by_runtime = provider_payload
+                .get("healthCheck")
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                == Some("runtime_missing");
+            let route_supported = matches!(status.as_str(), "repo_supported" | "credential_ready");
+            let can_route_now = route_supported && auth_present && !blocked_by_runtime;
+            if route_supported {
+                implemented += 1;
+                if !auth_present {
+                    missing_auth.push(provider_id.clone());
+                }
+            }
+            if can_route_now {
+                route_ready += 1;
+            }
+            let warnings = provider_compatibility_warnings(&status, auth_present, can_route_now);
+            provider_payload.insert("authPresent".to_string(), Value::Bool(auth_present));
+            provider_payload.insert("canRouteNow".to_string(), Value::Bool(can_route_now));
+            provider_payload.insert("compatibilityWarnings".to_string(), warnings.clone());
+
+            if blocked_by_runtime {
+                if let Some(health) = provider_payload
+                    .get_mut("healthCheck")
+                    .and_then(Value::as_object_mut)
+                {
+                    health.insert("warnings".to_string(), warnings);
+                    health.insert(
+                        "evidence".to_string(),
+                        Value::Array(vec![Value::String(
+                            if auth_present {
+                                "auth present"
+                            } else {
+                                "auth missing"
+                            }
+                            .to_string(),
+                        )]),
+                    );
+                }
+            } else {
+                let health_status = if can_route_now {
+                    "ready"
+                } else if status.starts_with("planned") {
+                    "adapter_planned"
+                } else if !auth_present {
+                    "missing_auth"
+                } else {
+                    "unverified"
+                };
+                let summary = if can_route_now {
+                    "Credentials and route metadata are ready for controlled live work."
+                } else if status.starts_with("planned") {
+                    "This provider is tracked as a catalog or future adapter signal only."
+                } else if !auth_present {
+                    "A supported provider route exists, but credentials are not configured."
+                } else {
+                    "Provider metadata is tracked but no recent route proof is available."
+                };
+                let safe_next_step = if can_route_now {
+                    "Run a provider smoke test before assigning expensive or long-running work."
+                } else if status.starts_with("planned") {
+                    "Implement the adapter and prove a route smoke test before using it."
+                } else if !auth_present {
+                    "Connect credentials, then rerun provider health."
+                } else {
+                    "Run a route smoke test and keep the previous default until it passes."
+                };
+                provider_payload.insert(
+                    "healthCheck".to_string(),
+                    json!({
+                        "status": health_status,
+                        "summary": summary,
+                        "evidence": [if auth_present { "auth present" } else { "auth missing" }],
+                        "safeNextStep": safe_next_step,
+                        "warnings": warnings,
+                    }),
+                );
+            }
+        }
+        providers.len()
+    };
+
+    let summary = ecosystem
+        .entry("summary".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Value::Object(summary_map) = summary {
+        summary_map.insert(
+            "totalProvidersTracked".to_string(),
+            Value::from(total_providers),
+        );
+        summary_map.insert(
+            "implementedOrCredentialReady".to_string(),
+            Value::from(implemented),
+        );
+        summary_map.insert("routeReadyCount".to_string(), Value::from(route_ready));
+        summary_map.insert(
+            "missingAuthCount".to_string(),
+            Value::from(missing_auth.len()),
+        );
+    }
+
+    if let Some(update_policy) = ecosystem
+        .get_mut("updatePolicy")
+        .and_then(Value::as_object_mut)
+    {
+        let mut readiness_summary: Option<Value> = None;
+        if let Some(checklist) = update_policy
+            .get_mut("readinessChecklist")
+            .and_then(Value::as_array_mut)
+        {
+            for check in checklist.iter_mut() {
+                let Some(check_payload) = check.as_object_mut() else {
+                    continue;
+                };
+                let check_id = check_payload
+                    .get("checkId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if check_id == "credential_safety" {
+                    check_payload.insert(
+                        "status".to_string(),
+                        Value::String(
+                            if missing_auth.is_empty() {
+                                "ready"
+                            } else {
+                                "review"
+                            }
+                            .to_string(),
+                        ),
+                    );
+                    check_payload.insert(
+                        "safeAction".to_string(),
+                        Value::String(if missing_auth.is_empty() {
+                            "Keep masked credential status visible; never write raw keys into catalog artifacts.".to_string()
+                        } else {
+                            format!(
+                                "Keep stored credentials masked and connect missing providers: {}.",
+                                missing_auth.join(", ")
+                            )
+                        }),
+                    );
+                } else if check_id == "route_smoke" {
+                    check_payload.insert(
+                        "status".to_string(),
+                        Value::String(if route_ready > 0 { "ready" } else { "review" }.to_string()),
+                    );
+                }
+            }
+            let ready_count = checklist
+                .iter()
+                .filter(|item| item.get("status").and_then(Value::as_str).unwrap_or("") == "ready")
+                .count();
+            let review_count = checklist.len().saturating_sub(ready_count);
+            readiness_summary = Some(json!({
+                    "readyCount": ready_count,
+                    "reviewCount": review_count,
+                    "totalCount": checklist.len(),
+                    "safeToRefresh": review_count == 0,
+            }));
+        }
+        if let Some(summary) = readiness_summary {
+            update_policy.insert("readinessSummary".to_string(), summary);
+        }
+    }
+}
+
 fn inject_agent_cli_provider_env(command: &mut TokioCommand) -> Result<(), String> {
     for (env_name, provider_ids) in AGENT_PROVIDER_ENV_MAPPINGS {
         if let Some(secret) = provider_secret_for_ids(provider_ids)? {
@@ -5766,32 +6051,8 @@ async fn get_control_room_snapshot_command(
             "providerSecretPresence".to_string(),
             provider_presence.clone(),
         );
-        let setup_status_entry = root
-            .entry("providerSetupStatus".to_string())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if let Value::Object(setup_status) = setup_status_entry {
-            for provider_id in CONTROL_ROOM_PROVIDER_IDS {
-                let auth_present = provider_presence
-                    .get(provider_id)
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let provider_entry = setup_status
-                    .entry(provider_id.to_string())
-                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                if let Value::Object(provider_payload) = provider_entry {
-                    let effective_auth_present = auth_present;
-                    provider_payload.insert(
-                        "authPresent".to_string(),
-                        Value::Bool(effective_auth_present),
-                    );
-                    provider_payload.insert(
-                        "configured".to_string(),
-                        Value::Bool(effective_auth_present),
-                    );
-                }
-            }
-        }
     }
+    reconcile_provider_secret_presence(&mut snapshot, &provider_presence);
     merge_live_review_receipts(&app, &mut snapshot)?;
     Ok(snapshot)
 }
@@ -6043,9 +6304,7 @@ async fn exchange_openai_codex_oauth_code(
     })
 }
 
-async fn sync_openai_codex_oauth_to_wsl_hermes(
-    credential: &OpenAiCodexOAuthCredential,
-) -> Value {
+async fn sync_openai_codex_oauth_to_wsl_hermes(credential: &OpenAiCodexOAuthCredential) -> Value {
     if !cfg!(target_os = "windows") {
         return json!({ "synced": false, "reason": "wsl_unavailable" });
     }
@@ -6402,7 +6661,10 @@ fn merge_live_review_receipts(app: &AppHandle, snapshot: &mut Value) -> Result<(
         .unwrap_or_default();
     merged.extend(receipts);
     let keep_from = merged.len().saturating_sub(25);
-    bridge_object.insert("receipts".to_string(), Value::Array(merged.split_off(keep_from)));
+    bridge_object.insert(
+        "receipts".to_string(),
+        Value::Array(merged.split_off(keep_from)),
+    );
     bridge_object
         .entry("status".to_string())
         .or_insert_with(|| Value::String("local_receipts".to_string()));

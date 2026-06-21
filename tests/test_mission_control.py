@@ -30,6 +30,7 @@ from grant_agent.mission_control import (
     build_escalation_preview,
     mission_mode_to_engine_mode,
     mission_time_budget_window,
+    reconcile_provider_secret_presence,
 )
 from grant_agent.models import DelegatedRuntimeSession, MissionEvent, utc_now_iso
 from grant_agent.workspace_actions import execute_control_room_workspace_action
@@ -709,6 +710,51 @@ class MissionControlTests(unittest.TestCase):
             self.assertIn("opencode_models", source_ids)
             self.assertIn("crush_local_models", source_ids)
             self.assertIn("openclaw_model_providers", source_ids)
+
+    def test_provider_secret_reconciliation_keeps_aliases_and_runtime_blocks_honest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "",
+                    "ANTHROPIC_API_KEY": "",
+                    "OPENROUTER_API_KEY": "",
+                    "MINIMAX_API_KEY": "",
+                    "FLUXIO_OPENAI_CODEX_OAUTH_PRESENT": "",
+                    "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT": "",
+                },
+                clear=False,
+            ):
+                snapshot = ControlRoomStore(root).build_snapshot()
+
+            reconcile_provider_secret_presence(
+                snapshot,
+                {"openai-codex": True, "minimax-portal": True},
+            )
+
+            providers = {
+                item["providerId"]: item
+                for item in snapshot["providerEcosystem"]["providers"]
+            }
+            self.assertTrue(snapshot["providerSetupStatus"]["openai"]["authPresent"])
+            self.assertTrue(providers["openai"]["authPresent"])
+            self.assertTrue(providers["openai"]["canRouteNow"])
+            self.assertEqual(providers["openai"]["healthCheck"]["status"], "ready")
+            self.assertTrue(snapshot["providerSetupStatus"]["minimax"]["authPresent"])
+            self.assertTrue(providers["minimax"]["authPresent"])
+            if providers["minimax"]["healthCheck"]["status"] == "runtime_missing":
+                self.assertFalse(providers["minimax"]["canRouteNow"])
+                self.assertIn("auth present", providers["minimax"]["healthCheck"]["evidence"])
+            self.assertGreaterEqual(
+                snapshot["providerEcosystem"]["summary"]["routeReadyCount"],
+                1,
+            )
+            self.assertEqual(
+                snapshot["providerEcosystem"]["summary"]["missingAuthCount"],
+                2,
+            )
 
     def test_create_mission_persists_and_builds_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

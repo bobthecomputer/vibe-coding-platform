@@ -459,6 +459,103 @@ class FluxioWebBackendTests(unittest.TestCase):
                 self.assertFalse(cleared["openai"])
                 self.assertFalse(cleared["openai-codex"])
 
+    def test_control_room_snapshot_reconciles_session_provider_secret_with_ecosystem(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            stale_snapshot = {
+                "providerSetupStatus": {
+                    "openai": {
+                        "authPresent": False,
+                        "configured": False,
+                        "authPath": "not configured",
+                    }
+                },
+                "providerEcosystem": {
+                    "summary": {
+                        "totalProvidersTracked": 1,
+                        "implementedOrCredentialReady": 1,
+                        "routeReadyCount": 0,
+                        "missingAuthCount": 1,
+                    },
+                    "providers": [
+                        {
+                            "providerId": "openai",
+                            "label": "OpenAI / Codex",
+                            "status": "repo_supported",
+                            "authPresent": False,
+                            "canRouteNow": False,
+                            "observedRouteCount": 0,
+                            "healthCheck": {
+                                "status": "missing_auth",
+                                "summary": "A supported provider route exists, but credentials are not configured.",
+                                "evidence": ["auth missing"],
+                                "safeNextStep": "Connect credentials, then rerun provider health.",
+                            },
+                        }
+                    ],
+                    "updatePolicy": {
+                        "readinessChecklist": [
+                            {
+                                "checkId": "credential_safety",
+                                "status": "review",
+                                "summary": "Some supported providers still need credentials before they can route live work.",
+                                "safeAction": "Connect OpenAI.",
+                            },
+                            {
+                                "checkId": "route_smoke",
+                                "status": "review",
+                                "summary": "A route should pass a cheap health check before becoming the default path.",
+                                "safeAction": "Connect at least one supported provider, then run a provider health check.",
+                            },
+                        ],
+                        "readinessSummary": {
+                            "readyCount": 0,
+                            "reviewCount": 2,
+                            "totalCount": 2,
+                            "safeToRefresh": False,
+                        },
+                    },
+                },
+            }
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "",
+                    "ANTHROPIC_API_KEY": "",
+                    "OPENROUTER_API_KEY": "",
+                    "MINIMAX_API_KEY": "",
+                },
+            ):
+                self.assertTrue(
+                    backend.dispatch(
+                        "save_provider_secret_command",
+                        {"providerId": "openai", "secret": "test-key"},
+                    )
+                )
+                with mock.patch.object(
+                    backend,
+                    "_run_cli",
+                    return_value=json.loads(json.dumps(stale_snapshot)),
+                ):
+                    snapshot = backend.dispatch("get_control_room_snapshot_command", {})
+
+            provider = snapshot["providerEcosystem"]["providers"][0]
+            self.assertTrue(snapshot["providerSecretPresence"]["openai"])
+            self.assertTrue(snapshot["providerSetupStatus"]["openai"]["authPresent"])
+            self.assertTrue(provider["authPresent"])
+            self.assertTrue(provider["canRouteNow"])
+            self.assertEqual(provider["healthCheck"]["status"], "ready")
+            self.assertEqual(snapshot["providerEcosystem"]["summary"]["routeReadyCount"], 1)
+            self.assertEqual(snapshot["providerEcosystem"]["summary"]["missingAuthCount"], 0)
+            checklist = {
+                item["checkId"]: item
+                for item in snapshot["providerEcosystem"]["updatePolicy"]["readinessChecklist"]
+            }
+            self.assertEqual(checklist["credential_safety"]["status"], "ready")
+            self.assertEqual(checklist["route_smoke"]["status"], "ready")
+
     def test_web_backend_prepends_packaged_runtime_bin_to_cli_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
