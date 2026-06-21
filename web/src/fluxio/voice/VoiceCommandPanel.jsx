@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   Info,
@@ -14,9 +14,16 @@ import { getVoiceCommandExamples } from "./voiceCommandGrammar.js";
 import { useVoiceInteractionController } from "./useVoiceInteractionController.js";
 import "./voice.css";
 
-export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = false, speechAdapter = null }) {
+export function VoiceCommandPanel({
+  autoStartToken = 0,
+  controller,
+  onVoiceCommand,
+  reducedMotion = false,
+  speechAdapter = null,
+}) {
   const ownedController = useVoiceInteractionController({ onVoiceCommand, speechAdapter });
   const voice = controller || ownedController;
+  const lastAutoStartTokenRef = useRef(autoStartToken);
   const motion = getVoiceMotionAffordance(reducedMotion);
   const examples = getVoiceCommandExamples();
   const MicIcon = voice.listening ? MicrophoneSlash : Microphone;
@@ -102,6 +109,17 @@ export function VoiceCommandPanel({ controller, onVoiceCommand, reducedMotion = 
   useEffect(() => {
     setManualCorrectionDraft(nextRepairSegment?.text || "");
   }, [nextRepairSegment?.id, nextRepairSegment?.text]);
+
+  useEffect(() => {
+    if (!autoStartToken || autoStartToken === lastAutoStartTokenRef.current) {
+      return;
+    }
+    lastAutoStartTokenRef.current = autoStartToken;
+    if (!capture.canStartLiveCapture || voice.listening) {
+      return;
+    }
+    void voice.startListening?.();
+  }, [autoStartToken, capture.canStartLiveCapture, voice.listening, voice.startListening]);
 
   const applyManualCorrection = () => {
     const correctedText = manualCorrectionDraft.trim();

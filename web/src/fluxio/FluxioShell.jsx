@@ -3156,6 +3156,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [activeDrawer, setActiveDrawer] = useState(requestedDrawer || storedUiState.activeDrawer || null);
   const [operatorDraft, setOperatorDraft] = useState("");
   const [operatorNotes, setOperatorNotes] = useState(storedUiState.operatorNotes || []);
+  const [voiceAutoStartToken, setVoiceAutoStartToken] = useState(0);
   const [liveControlEvents, setLiveControlEvents] = useState(storedUiState.liveControlEvents || []);
   const [operatorAttachments, setOperatorAttachments] = useState([]);
   const [activeCommentTarget, setActiveCommentTarget] = useState(null);
@@ -9849,7 +9850,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (action === "voice.start") {
-        await handleReferenceDictation();
+        setUiMode("builder");
+        setSurface("voice");
+        setActiveDrawer(null);
+        setVoiceAutoStartToken(current => current + 1);
+        pushToast("Voice panel opened; live capture will start when a browser or local adapter is ready.", "info");
         return;
       }
 
@@ -9911,7 +9916,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [
       handleAgentFollowUp,
       handleAgentIdlePrimaryAction,
-      handleReferenceDictation,
       markAction,
       mission,
       pushToast,
@@ -11664,7 +11668,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 </header>
                 <div className="voice-studio-grid">
                   <Suspense fallback={<LazySurfaceFallback label="Voice command panel" />}>
-                    <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                    <VoiceCommandPanel autoStartToken={voiceAutoStartToken} onVoiceCommand={handleVoiceCommand} />
                   </Suspense>
                   <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
                     <p className="eyebrow">Accessible operation</p>
@@ -12097,7 +12101,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </header>
               <div className="voice-studio-grid">
                 <Suspense fallback={<LazySurfaceFallback label="Voice command panel" />}>
-                  <VoiceCommandPanel onVoiceCommand={handleVoiceCommand} />
+                  <VoiceCommandPanel autoStartToken={voiceAutoStartToken} onVoiceCommand={handleVoiceCommand} />
                 </Suspense>
                 <aside className="builder-panel voice-studio-guidance" aria-label="Voice accessibility safeguards">
                   <p className="eyebrow">Accessible operation</p>
