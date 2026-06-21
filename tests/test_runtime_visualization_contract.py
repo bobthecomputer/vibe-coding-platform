@@ -137,11 +137,16 @@ def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:
     assert "Controlled red-team proof" in component
     assert "redteam-proof-card" in component
     assert "redteam-coverage-matrix" in component
+    assert "redteam-probe-transcripts" in component
+    assert "safe probe transcripts" in component
     assert "safe coverage checks passed" in component
     assert ".redteam-proof-card" in styles
     assert ".redteam-coverage-row" in styles
+    assert ".redteam-probe-row" in styles
     assert "RED_TEAM_PROOF_PACKETS" in fixtures
     assert "coverageMatrix" in fixtures
+    assert "probeTranscripts" in fixtures
+    assert "probe-prompt-injection-scope" in fixtures
     assert "fictional-targets-only" in fixtures
     assert "liveModelCalls: false" in fixtures
     assert "networkActivity: false" in fixtures

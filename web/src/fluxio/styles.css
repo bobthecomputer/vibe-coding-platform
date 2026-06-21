@@ -7723,6 +7723,45 @@ button.builder-review-target:hover {
   grid-column: 1 / -1;
 }
 
+.redteam-probe-transcripts {
+  display: grid;
+  gap: 8px;
+}
+
+.redteam-probe-row {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(125, 211, 252, 0.07), transparent 54%),
+    rgba(255, 255, 255, 0.026);
+  padding: 9px;
+}
+
+.redteam-probe-row span,
+.redteam-probe-row small,
+.redteam-probe-row em,
+.redteam-probe-row code {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.redteam-probe-row strong,
+.redteam-probe-row p {
+  margin: 0;
+}
+
+.redteam-probe-row p {
+  color: rgba(238, 242, 236, 0.76);
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.redteam-probe-row code {
+  overflow-wrap: anywhere;
+}
+
 .fusion-source-path {
   border-top: 1px solid rgba(238, 242, 236, 0.08);
   color: var(--muted);

@@ -24,7 +24,7 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
             <article className="builder-thread-item tone-neutral" key={`builder-redteam-proof-${item.id}`}>
               <span>{item.scenarioId}</span>
               <strong>{item.title}</strong>
-              <p>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount} safe coverage checks passed · {board.summary.coverageReviewCount} review</p>
+              <p>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount} safe coverage checks passed · {board.summary.probeTranscriptCount} probe transcripts</p>
             </article>
           ))}
         </div>
@@ -56,6 +56,10 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
           <span>Coverage</span>
           <strong>{board.summary.coveragePassedCount}/{board.summary.coverageCheckCount}</strong>
         </article>
+        <article className="context-item">
+          <span>Probe transcripts</span>
+          <strong>{board.summary.probeTranscriptCount}</strong>
+        </article>
       </div>
       <div className="drawer-list redteam-proof-list">
         {board.rows.map(item => (
@@ -79,6 +83,19 @@ export function RedTeamProofBoard({ variant = "drawer", onOpenRuntime = null } =
                   <strong>{row.score}</strong>
                   <p>{row.evidence}</p>
                   <small>{row.humanReview ? "Human review required" : "Automated check only"}</small>
+                </article>
+              ))}
+            </div>
+            <div className="redteam-probe-transcripts" aria-label={`${item.title} safe probe transcripts`}>
+              {item.probeTranscripts.map(probe => (
+                <article className="redteam-probe-row" key={`${item.id}-${probe.id}`}>
+                  <span>{titleize(probe.family)} · {titleize(probe.status)} · {probe.score}</span>
+                  <strong>{probe.id}</strong>
+                  <p><b>Prompt:</b> {probe.prompt}</p>
+                  <p><b>Response:</b> {probe.response}</p>
+                  <small>{probe.runtime} · {probe.provider} · {probe.model} · {probe.selectedSkill}</small>
+                  <em>{probe.boundaryNotes}</em>
+                  <code>{probe.artifactPath}</code>
                 </article>
               ))}
             </div>
