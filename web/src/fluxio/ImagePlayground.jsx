@@ -265,6 +265,10 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const [project, setProject] = useState(() => loadImageProject());
   const [busy, setBusy] = useState(false);
   const [providerMessage, setProviderMessage] = useState("Ready for layered generation.");
+  const [selfRepairBusy, setSelfRepairBusy] = useState(false);
+  const [selfRepairProof, setSelfRepairProof] = useState(null);
+  const [selectedLibraryId, setSelectedLibraryId] = useState("");
+  const [exportTarget, setExportTarget] = useState("agent");
   const [providerBlockedState, setProviderBlockedState] = useState(null);
   const [compareHistoryId, setCompareHistoryId] = useState(project.history[0]?.id || "");
   const [dragState, setDragState] = useState(null);
@@ -522,6 +526,21 @@ export function ImagePlaygroundSurface({ callBackend }) {
       return true;
     }).slice(0, 12);
   }, [project.designReferences, project.history]);
+  const selectedLibraryItem = useMemo(
+    () => libraryItems.find(item => item.id === selectedLibraryId) || libraryItems[0] || null,
+    [libraryItems, selectedLibraryId],
+  );
+  const selectedLibraryManifestUrl = selectedLibraryItem?.manifestUrl || "";
+  const selfRepairArtifacts = selfRepairProof?.artifacts && typeof selfRepairProof.artifacts === "object"
+    ? Object.entries(selfRepairProof.artifacts)
+    : [];
+
+  useEffect(() => {
+    if (!libraryItems.length) return;
+    if (!selectedLibraryId || !libraryItems.some(item => item.id === selectedLibraryId)) {
+      setSelectedLibraryId(libraryItems[0].id);
+    }
+  }, [libraryItems, selectedLibraryId]);
 
   function resolveManifestReceiptLink(item) {
     const requestId = String(item?.requestId || "").trim();
@@ -1838,6 +1857,111 @@ export function ImagePlaygroundSurface({ callBackend }) {
     }
   }
 
+  async function runSelfRepairLoop() {
+    if (typeof callBackend !== "function") {
+      const blocked = {
+        routeStatus: "blocked",
+        message: "Live backend bridge is unavailable, so the app cannot run its internal vision self-repair loop.",
+        artifacts: {},
+        skillsUsed: [],
+      };
+      setSelfRepairProof(blocked);
+      pushOperationEvent("Self-repair blocked", blocked.message, "warn");
+      return;
+    }
+    setSelfRepairBusy(true);
+    pushOperationEvent(
+      "Vision self-repair started",
+      `${project.visionRoute.modelId} will inspect the Images surface through the app runtime and skill wrappers.`,
+      "info",
+    );
+    try {
+      const result = await callBackend("image_self_repair_loop_command", {
+        requestId: `image-self-repair-${Date.now().toString(36)}`,
+        screenshotPath: selectedLibraryItem?.src || "",
+        galleryCount: libraryItems.length,
+        layerCount: project.layers.length,
+        annotationCount:
+          (project.annotationReadiness?.pins || []).length +
+          (project.annotationReadiness?.rectangles || []).length +
+          (project.annotationReadiness?.comments || []).length,
+        domFacts: {
+          surface: "images",
+          selectedArtifact: selectedLibraryItem?.title || "",
+          provider: project.provider.id,
+          visionRoute: project.visionRoute,
+          promptHash: tinyPromptHash(project.prompt.text),
+        },
+        timeoutSeconds: 45,
+      });
+      setSelfRepairProof(result);
+      updateProject(current => ({
+        ...current,
+        skillsEvidence: [
+          {
+            id: makeId("skill-evidence"),
+            selectedSkills: (result?.skillsUsed || []).map(item => item.id || item).filter(Boolean),
+            why: result?.message || "Image self-repair loop produced route and skill artifacts.",
+            artifacts: Object.values(result?.artifacts || {}).filter(Boolean),
+            requestId: result?.requestId || "",
+            createdAt: nowIso(),
+          },
+          ...(current.skillsEvidence || []),
+        ].slice(0, 20),
+        annotationReadiness: {
+          ...(current.annotationReadiness || {}),
+          comments: [
+            {
+              id: makeId("comment"),
+              type: "comment",
+              text: `Self-repair loop: ${result?.message || "route proof captured"}`,
+              createdAt: nowIso(),
+            },
+            ...((current.annotationReadiness || {}).comments || []),
+          ].slice(0, 20),
+        },
+      }));
+      pushOperationEvent(
+        "Vision self-repair proof captured",
+        result?.message || "Route, skill, plan, and verifier artifacts were written.",
+        result?.routeStatus === "ok" ? "good" : "warn",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || "Self-repair loop failed.");
+      setSelfRepairProof({ routeStatus: "failed", message, artifacts: {}, skillsUsed: [] });
+      pushOperationEvent("Self-repair failed", message, "bad");
+    } finally {
+      setSelfRepairBusy(false);
+    }
+  }
+
+  function exportSelectedImage(target = exportTarget) {
+    if (!selectedLibraryItem) {
+      pushOperationEvent("Export blocked", "No image artifact is selected in the gallery.", "warn");
+      return;
+    }
+    const label = target === "builder" ? "Builder" : target === "preview" ? "Preview" : target === "download" ? "Download" : "Agent";
+    updateProject(current => ({
+      ...current,
+      annotationReadiness: {
+        ...(current.annotationReadiness || {}),
+        comments: [
+          {
+            id: makeId("comment"),
+            type: "export",
+            text: `Exported ${selectedLibraryItem.title} to ${label}.`,
+            target,
+            artifactUrl: selectedLibraryItem.src,
+            manifestUrl: selectedLibraryItem.manifestUrl || "",
+            createdAt: nowIso(),
+          },
+          ...((current.annotationReadiness || {}).comments || []),
+        ].slice(0, 20),
+      },
+    }));
+    pushOperationEvent("Image exported", `${selectedLibraryItem.title} sent to ${label}.`, "good");
+  }
+
   function resetImageHorizontalScroll() {
     if (typeof document === "undefined") return;
     requestAnimationFrame(() => {
@@ -1931,12 +2055,12 @@ export function ImagePlaygroundSurface({ callBackend }) {
   return (
     <section className="image-playground-shell">
       <input accept="image/*" className="image-hidden-input" onChange={handleImportFile} ref={fileInputRef} type="file" />
-      <header className="image-playground-hero">
+      <header className="image-playground-hero image-playground-hero-compact" data-image-playground-surface="true">
         <div>
-          <p className="reference-kicker">Creative workspace</p>
-          <h1>Image Generator</h1>
+          <p className="reference-kicker">Mission 1 · Vision workflow</p>
+          <h1>Image Playground</h1>
           <p>
-            Type a prompt, generate a visible image artifact, then inspect the queue only when you need receipts.
+            Generate, inspect, annotate, compare, and export image artifacts through the app runtime.
           </p>
         </div>
         <div className="image-hero-actions">
@@ -1952,49 +2076,139 @@ export function ImagePlaygroundSurface({ callBackend }) {
         </div>
       </header>
 
-      <section className="image-simple-generator image-glass-panel" aria-label="Simple image generator">
-        <div>
-          <p className="reference-kicker">Image generation plugin</p>
-          <h2>Generate one real artifact first.</h2>
-          <p>
-            This button bypasses the canvas-snapshot flow and writes a served PNG artifact directly into the workbench.
-          </p>
-        </div>
-        <label className="image-field image-simple-prompt">
+      <section className="image-command-deck image-glass-panel" aria-label="Image command bar" data-image-command-bar="true">
+        <label className="image-field image-command-prompt">
           <span>Prompt</span>
           <textarea
             onChange={event => updateProject(current => ({ ...current, prompt: { ...current.prompt, text: event.target.value } }))}
             value={project.prompt.text}
           />
         </label>
-        <div className="image-simple-actions">
+        <div className="image-command-controls">
+          <label className="image-field compact">
+            <span>Image provider</span>
+            <select
+              onChange={event => updateProject(current => ({
+                ...current,
+                provider: { ...current.provider, id: event.target.value },
+              }))}
+              value={project.provider.id}
+            >
+              {IMAGE_PROVIDER_ADAPTERS.map(item => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="image-field compact">
+            <span>Export to</span>
+            <select onChange={event => setExportTarget(event.target.value)} value={exportTarget}>
+              <option value="agent">Agent</option>
+              <option value="builder">Builder</option>
+              <option value="preview">Preview</option>
+              <option value="download">Download</option>
+            </select>
+          </label>
+          <div className="image-route-pill" data-image-route-provider={project.visionRoute.provider}>
+            <span>Vision route</span>
+            <strong>{project.visionRoute.runtime} → {project.visionRoute.fallbackRuntime}</strong>
+            <code>{project.visionRoute.modelId}</code>
+          </div>
+        </div>
+        <div className="image-command-actions">
           <button className="image-primary-button" disabled={busy || !project.prompt.text.trim()} onClick={() => runOperation("generate", { imagePluginMode: true })} type="button">
-            <WandSparkles size={18} /> {busy ? "Generating image..." : "Generate image now"}
+            <WandSparkles size={18} /> {busy ? "Generating..." : "Generate"}
           </button>
-          <span>{providerMessage}</span>
+          <button className="image-glass-button" disabled={!selectedLibraryItem} onClick={() => exportSelectedImage()} type="button">
+            <Download size={16} /> Export selected
+          </button>
+          <button className="image-glass-button" disabled={selfRepairBusy} onClick={() => void runSelfRepairLoop()} type="button">
+            <Sparkles size={16} /> {selfRepairBusy ? "Inspecting..." : "Run self-repair"}
+          </button>
         </div>
       </section>
 
-      <section className="image-library-view image-glass-panel" aria-label="Generated image library">
-        <div className="image-library-head">
-          <div>
-            <p className="reference-kicker">Library</p>
-            <h2>Generated images</h2>
+      <section className="image-mission-workbench" aria-label="Image mission workbench" data-image-mission-workbench="true">
+        <aside className="image-gallery-rail image-glass-panel" aria-label="All images">
+          <div className="image-library-head">
+            <div>
+              <p className="reference-kicker">Gallery</p>
+              <h2>All images</h2>
+            </div>
+            <span>{libraryItems.length}</span>
           </div>
-          <span>{libraryItems.length} artifacts</span>
-        </div>
-        <div className="image-library-grid">
-          {libraryItems.map(item => (
-            <article className="image-library-card" key={item.id || item.src}>
-              <img alt={item.title} src={item.src} />
-              <div>
-                <strong>{item.title}</strong>
-                <span>{item.provider}</span>
-                {item.manifestUrl ? <a href={item.manifestUrl} rel="noreferrer" target="_blank">Manifest</a> : null}
+          <div className="image-gallery-list" role="listbox" aria-label="Image artifacts">
+            {libraryItems.map(item => (
+              <button
+                aria-selected={selectedLibraryItem?.id === item.id}
+                className={cx("image-gallery-item", selectedLibraryItem?.id === item.id && "active")}
+                key={item.id || item.src}
+                onClick={() => setSelectedLibraryId(item.id)}
+                type="button"
+              >
+                <img alt="" src={item.src} />
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <main className="image-selected-stage image-glass-panel" aria-label="Selected image stage">
+          {selectedLibraryItem ? (
+            <>
+              <div className="image-selected-frame">
+                <img alt={selectedLibraryItem.title} src={selectedLibraryItem.src} />
+                <div className="image-selected-overlay">{renderOverlayShapes(focusedOverlaySnapshot, "preview")}</div>
               </div>
-            </article>
-          ))}
-        </div>
+              <div className="image-selected-caption">
+                <div>
+                  <p className="reference-kicker">Selected artifact</p>
+                  <h2>{selectedLibraryItem.title}</h2>
+                </div>
+                <span>{selectedLibraryItem.provider}</span>
+              </div>
+            </>
+          ) : (
+            <div className="image-selected-empty">
+              <ImagePlus size={28} />
+              <strong>No image loaded</strong>
+              <span>Import or generate an artifact to start the workflow.</span>
+            </div>
+          )}
+        </main>
+
+        <aside className="image-workbench-inspector image-glass-panel" aria-label="Image workflow inspector">
+          <div className="image-panel-head">
+            <strong>Inspector</strong>
+            <span>{project.layers.length} layers</span>
+          </div>
+          <div className="image-inspector-facts">
+            <span>Provider <b>{provider.name}</b></span>
+            <span>Annotations <b>{(project.annotationReadiness?.pins || []).length + (project.annotationReadiness?.rectangles || []).length}</b></span>
+            <span>Queue <b>{queueSummary.running} running</b></span>
+          </div>
+          {selectedLibraryManifestUrl ? (
+            <a className="image-manifest-receipt-link" href={selectedLibraryManifestUrl} rel="noreferrer" target="_blank">
+              Open manifest
+            </a>
+          ) : null}
+          <div className="image-inspector-actions">
+            <button onClick={addFocusedPin} type="button">Add pin</button>
+            <button onClick={addFocusedRectangle} type="button">Add region</button>
+            <button onClick={() => exportSelectedImage("agent")} type="button">Send to Agent</button>
+          </div>
+          <div className="image-self-repair-proof" data-image-self-repair-proof="true">
+            <strong>Self-repair loop</strong>
+            <p>{selfRepairProof?.message || "Run the loop to create route, skill, plan, and verifier artifacts."}</p>
+            {selfRepairProof?.routeStatus ? <code>{selfRepairProof.routeStatus}</code> : null}
+            {selfRepairArtifacts.length ? (
+              <ul>
+                {selfRepairArtifacts.map(([key, value]) => (
+                  <li key={key}><span>{key}</span><code>{value}</code></li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        </aside>
       </section>
 
       <div className="image-playground-grid">

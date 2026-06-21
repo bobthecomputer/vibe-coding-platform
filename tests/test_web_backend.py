@@ -209,6 +209,69 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(result["blockedReason"], "openclaw_missing")
             self.assertEqual(result["billingNote"], "codex subscription")
 
+    def test_chat_route_preserves_openrouter_glm_nested_model_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            route = backend._chat_route({"route": {"provider": "openrouter", "model": "z-ai/glm-5.2"}})
+
+            self.assertEqual(route["provider"], "openrouter")
+            self.assertEqual(route["model"], "z-ai/glm-5.2")
+            self.assertEqual(route["model_id"], "openrouter/z-ai/glm-5.2")
+
+    def test_image_self_repair_loop_writes_skill_artifacts_and_prefers_hermes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command, path=None):
+                if command in {"opencode", "hermes", "openclaw"}:
+                    return command
+                return None
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):
+                executable = pathlib.Path(str(args[0])).name.lower()
+                if executable == "opencode":
+                    return {}, "openrouter/z-ai/glm-5.2\nopenrouter/z-ai/glm-4.6\n", "", 80
+                if executable == "hermes":
+                    raise RuntimeError("Hermes route timed out during proof capture.")
+                if executable == "openclaw":
+                    payload = {"reply": "{\"findings\":[\"legacy Images surface\"]}"}
+                    return payload, json.dumps(payload), "", 120
+                raise AssertionError(f"Unexpected command: {args}")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                    result = backend.dispatch(
+                        "image_self_repair_loop_command",
+                        {
+                            "requestId": "mission1-proof",
+                            "galleryCount": 2,
+                            "layerCount": 3,
+                            "annotationCount": 1,
+                            "timeoutSeconds": 5,
+                            "probeExternalRoutes": True,
+                        },
+                    )
+
+            self.assertEqual(result["route"]["runtime"], "hermes")
+            self.assertEqual(result["route"]["fallbackRuntime"], "openclaw")
+            self.assertEqual(result["route"]["modelId"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(result["routeStatus"], "ok")
+            skill_ids = [item["id"] for item in result["skillsUsed"]]
+            self.assertIn("image_vision_breakdown", skill_ids)
+            self.assertIn("ui_self_repair_planner", skill_ids)
+            self.assertIn("self_repair_verifier", skill_ids)
+
+            route_proof = json.loads(pathlib.Path(result["artifacts"]["routeProofPath"]).read_text(encoding="utf-8"))
+            self.assertTrue(route_proof["opencode"]["modelsContainGlm52"])
+            self.assertEqual(route_proof["hermes"]["call"]["status"], "failed")
+            self.assertEqual(route_proof["openclaw"]["call"]["status"], "ok")
+            self.assertEqual(route_proof["selectedRuntime"], "openclaw")
+            for artifact_path in result["artifacts"].values():
+                self.assertTrue(pathlib.Path(artifact_path).exists(), artifact_path)
+
     def test_artifact_resolver_maps_nas_absolute_path_to_local_volume_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

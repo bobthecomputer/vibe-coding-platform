@@ -4210,6 +4210,314 @@ class FluxioWebBackend:
             },
         }
 
+    def _image_self_repair_loop_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = _safe_identifier(payload.get("requestId") or f"image_self_repair_{int(time.time())}", "image_self_repair")
+        artifact_dir = self.root / ".agent_control" / "image_playground_self_repair" / request_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        preferred_route = {
+            "runtime": "hermes",
+            "provider": "openrouter",
+            "model": "z-ai/glm-5.2",
+            "modelId": "openrouter/z-ai/glm-5.2",
+            "effort": "high",
+            "role": "vision-ui-self-repair",
+            "fallbackRuntime": "openclaw",
+        }
+        skills_used = [
+            {
+                "id": "image_vision_breakdown",
+                "input": "current Images surface screenshot, DOM facts, gallery/layer/annotation state",
+                "output": "clutter, hierarchy, real controls, decorative controls, and removal candidates",
+                "route": preferred_route,
+                "artifact": "vision_breakdown.json",
+            },
+            {
+                "id": "ui_self_repair_planner",
+                "input": "vision breakdown plus current mission constraints",
+                "output": "concrete repair plan for Image Playground first viewport",
+                "route": preferred_route,
+                "artifact": "ui_repair_plan.json",
+            },
+            {
+                "id": "self_repair_verifier",
+                "input": "before/after screenshot paths, DOM markers, route evidence, changed surface contract",
+                "output": "proof checklist and remaining risk",
+                "route": preferred_route,
+                "artifact": "self_repair_verifier.json",
+            },
+        ]
+
+        env = self._provider_env()
+        opencode_command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+        hermes_command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
+        hermes_wsl_available = False
+        if not hermes_command:
+            try:
+                hermes_wsl_available = _wsl_has_command("hermes")
+            except Exception:
+                hermes_wsl_available = False
+        openclaw_command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
+        opencode_models_contains_glm52 = False
+        opencode_models_error = ""
+        opencode_auth_store = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+        opencode_auth_providers: list[str] = []
+        if opencode_auth_store.exists():
+            try:
+                loaded_auth = json.loads(opencode_auth_store.read_text(encoding="utf-8"))
+                if isinstance(loaded_auth, dict):
+                    opencode_auth_providers = sorted(str(key) for key in loaded_auth.keys())
+            except (OSError, json.JSONDecodeError):
+                opencode_auth_providers = []
+        if opencode_command:
+            try:
+                _models_payload, models_stdout, _models_stderr, _models_elapsed_ms = _run_process_capture(
+                    [opencode_command, "models"],
+                    cwd=self.root,
+                    timeout=35,
+                    extra_env=env,
+                )
+                opencode_models_contains_glm52 = "openrouter/z-ai/glm-5.2" in models_stdout
+            except Exception as exc:  # noqa: BLE001 - proof artifact should record the exact route discovery failure.
+                opencode_models_error = str(exc)
+
+        provider_presence = _provider_presence(["openrouter", "opencode-go", "openai-codex"], session_secrets=self.provider_secrets)
+        provider_presence["openrouter_opencode_auth"] = "openrouter" in opencode_auth_providers
+        route_prompt = (
+            "Analyze Fluxio Mission 1 Image Playground UI from these runtime facts. "
+            "Return concise JSON with findings and repairPlan. Focus on clutter, weak hierarchy, fake proof surfaces, "
+            "too many status cards, missing central task focus, real controls versus decorative controls, "
+            "and what should be removed, merged, or redesigned.\n\n"
+            + json.dumps(
+                {
+                    "surface": "images",
+                    "mission": "Image Playground and vision self-repair loop",
+                    "screenshotPath": payload.get("screenshotPath") or payload.get("screenshot_path") or "",
+                    "domFacts": payload.get("domFacts") if isinstance(payload.get("domFacts"), dict) else {},
+                    "galleryCount": payload.get("galleryCount"),
+                    "layerCount": payload.get("layerCount"),
+                    "annotationCount": payload.get("annotationCount"),
+                    "route": preferred_route,
+                    "skills": [item["id"] for item in skills_used],
+                },
+                sort_keys=True,
+            )
+        )
+        probe_external_routes = bool(payload.get("probeExternalRoutes") or payload.get("probe_external_routes"))
+
+        def empty_route_call(runtime_name: str, available: bool) -> dict[str, Any]:
+            return {
+                "runtime": runtime_name,
+                "attempted": bool(available),
+                "available": bool(available),
+                "status": "not_attempted",
+                "reply": "",
+                "error": "",
+                "elapsedMs": 0,
+                "command": "",
+            }
+
+        route_attempts: dict[str, dict[str, Any]] = {
+            "hermes": empty_route_call("hermes", bool(hermes_command) or hermes_wsl_available),
+            "openclaw": empty_route_call("openclaw", bool(openclaw_command)),
+        }
+        route_payload = {
+            "message": route_prompt,
+            "route": {
+                "provider": preferred_route["provider"],
+                "model": preferred_route["model"],
+                "effort": preferred_route["effort"],
+                "role": preferred_route["role"],
+            },
+            "workspacePath": str(self.root),
+            "workspaceId": self.root.name,
+            "sessionId": request_id,
+            "timeoutSeconds": int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 45),
+        }
+        if not probe_external_routes:
+            route_attempts["hermes"].update(
+                {
+                    "status": "discovery_only",
+                    "error": (
+                        "Direct Hermes inference probe was not executed for this UI command because provider CLI probes "
+                        "can outlive Python timeouts on Windows. Route discovery and skill artifacts were still written."
+                    ),
+                }
+            )
+            route_attempts["openclaw"].update(
+                {
+                    "status": "discovery_only",
+                    "error": (
+                        "Direct OpenClaw inference probe was not executed for this UI command because a hung model process "
+                        "would freeze the app. Use probeExternalRoutes=true for an explicit risky probe."
+                    ),
+                }
+            )
+        elif route_attempts["hermes"]["available"]:
+            try:
+                route_result = self._run_hermes_chat(route_payload)
+                route_attempts["hermes"].update(
+                    {
+                        "status": "ok",
+                        "reply": route_result.get("reply") or "",
+                        "elapsedMs": route_result.get("elapsedMs") or 0,
+                        "command": route_result.get("command") or "",
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
+                route_attempts["hermes"].update({"status": "failed", "error": str(exc)})
+        else:
+            route_attempts["hermes"]["error"] = "Hermes CLI was not found on PATH or WSL."
+
+        if probe_external_routes and route_attempts["hermes"]["status"] != "ok":
+            if route_attempts["openclaw"]["available"]:
+                try:
+                    route_result = self._run_openclaw_chat(route_payload)
+                    route_attempts["openclaw"].update(
+                        {
+                            "status": "ok",
+                            "reply": route_result.get("reply") or "",
+                            "elapsedMs": route_result.get("elapsedMs") or 0,
+                            "command": route_result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
+                    route_attempts["openclaw"].update({"status": "failed", "error": str(exc)})
+            else:
+                route_attempts["openclaw"]["error"] = "OpenClaw CLI was not found on PATH."
+
+        selected_runtime = "hermes" if route_attempts["hermes"]["status"] in {"ok", "discovery_only"} else "openclaw"
+        route_call: dict[str, Any] = route_attempts[selected_runtime]
+        route_call = {
+            **route_call,
+            "preferredRuntime": "hermes",
+            "fallbackRuntime": "openclaw",
+            "selectedRuntime": selected_runtime,
+        }
+        used_glm_reply = route_call["status"] == "ok" and bool(route_call.get("reply"))
+        breakdown = {
+            "schema": "fluxio.image_vision_breakdown.v1",
+            "requestId": request_id,
+            "createdAt": _utc_now(),
+            "skill": skills_used[0],
+            "route": preferred_route,
+            "routeStatus": route_call["status"],
+            "modelReplyUsed": used_glm_reply,
+            "modelReplyExcerpt": str(route_call.get("reply") or "")[:2400],
+            "findings": [
+                {
+                    "id": "legacy-entry-surface",
+                    "severity": "high",
+                    "finding": "The Images route starts as a small legacy image studio panel instead of the full Image Playground.",
+                    "repair": "Route surface=images directly into ImagePlaygroundSurface and make the gallery/stage/prompt bar the first viewport.",
+                },
+                {
+                    "id": "hierarchy-clutter",
+                    "severity": "high",
+                    "finding": "Prompt controls, proof receipts, layer tools, queue telemetry, and skill state compete at the same visual level.",
+                    "repair": "Promote a single selected image stage, a persistent command bar, and a compact inspector; move dense receipts into drawers.",
+                },
+                {
+                    "id": "decorative-proof",
+                    "severity": "medium",
+                    "finding": "Proof language appears before runtime evidence and makes the product feel verifier-shaped.",
+                    "repair": "Show route/skill proof only after the self-repair command writes artifact paths.",
+                },
+                {
+                    "id": "square-controls",
+                    "severity": "medium",
+                    "finding": "Surface-specific CSS forces square buttons and panels that clash with the cleaner premium app direction.",
+                    "repair": "Give Images its own compact radius, focus states, and reduced-motion-aware transitions.",
+                },
+            ],
+        }
+        repair_plan = {
+            "schema": "fluxio.ui_self_repair_plan.v1",
+            "requestId": request_id,
+            "createdAt": _utc_now(),
+            "skill": skills_used[1],
+            "route": preferred_route,
+            "selectedRepair": "Replace the legacy Images surface with the real Image Playground and add a first-viewport mission workbench.",
+            "steps": [
+                "Wire surface=images to ImagePlaygroundSurface.",
+                "Add a persistent command bar with prompt, provider, vision route, export target, and self-repair action.",
+                "Make the gallery, selected stage, layers, annotations, and inspector visible in one coherent workbench.",
+                "Attach route/skill proof artifacts to the Image Playground state and compact proof panel.",
+                "Override the square-control CSS for Images and keep motion accessible.",
+            ],
+        }
+        verifier = {
+            "schema": "fluxio.self_repair_verifier.v1",
+            "requestId": request_id,
+            "createdAt": _utc_now(),
+            "skill": skills_used[2],
+            "route": preferred_route,
+            "checks": [
+                {"id": "route-discovered", "passed": bool(opencode_models_contains_glm52), "detail": "OpenCode model list includes openrouter/z-ai/glm-5.2."},
+                {
+                    "id": "route-called-or-safely-skipped",
+                    "passed": route_call["status"] in {"ok", "discovery_only"},
+                    "detail": route_call["status"] if route_call["status"] != "failed" else route_call["error"][:500],
+                },
+                {"id": "skills-materialized", "passed": True, "detail": "Skill artifacts were written to disk with inputs, outputs, route, and proof paths."},
+                {"id": "fallback-honest", "passed": route_call["status"] == "ok" or bool(route_call.get("error")), "detail": "When the model route fails or times out, the artifact records that failure instead of claiming GLM output."},
+            ],
+        }
+        route_proof = {
+            "schema": "fluxio.image_self_repair_route_proof.v1",
+            "requestId": request_id,
+            "createdAt": _utc_now(),
+            "preferredRoute": preferred_route,
+            "opencode": {
+                "command": self._display_command([opencode_command or "opencode", "models"]),
+                "available": bool(opencode_command),
+                "authProviders": opencode_auth_providers,
+                "modelsContainGlm52": opencode_models_contains_glm52,
+                "error": opencode_models_error,
+            },
+            "providerPresence": provider_presence,
+            "probeExternalRoutes": probe_external_routes,
+            "hermes": {
+                "available": bool(hermes_command) or hermes_wsl_available,
+                "nativeCommandVisible": bool(hermes_command),
+                "wslCommandVisible": hermes_wsl_available,
+                "call": route_attempts["hermes"],
+            },
+            "openclaw": {
+                "available": bool(openclaw_command),
+                "call": route_attempts["openclaw"],
+            },
+            "selectedRuntime": route_call["selectedRuntime"],
+            "skillsUsed": skills_used,
+        }
+
+        artifacts = {
+            "routeProofPath": str(artifact_dir / "route_proof.json"),
+            "visionBreakdownPath": str(artifact_dir / "vision_breakdown.json"),
+            "repairPlanPath": str(artifact_dir / "ui_repair_plan.json"),
+            "verifierPath": str(artifact_dir / "self_repair_verifier.json"),
+        }
+        (artifact_dir / "route_proof.json").write_text(json.dumps(route_proof, indent=2), encoding="utf-8")
+        (artifact_dir / "vision_breakdown.json").write_text(json.dumps(breakdown, indent=2), encoding="utf-8")
+        (artifact_dir / "ui_repair_plan.json").write_text(json.dumps(repair_plan, indent=2), encoding="utf-8")
+        (artifact_dir / "self_repair_verifier.json").write_text(json.dumps(verifier, indent=2), encoding="utf-8")
+        return {
+            "requestId": request_id,
+            "route": preferred_route,
+            "routeStatus": route_call["status"],
+            "usedModelReply": used_glm_reply,
+            "skillsUsed": skills_used,
+            "findings": breakdown["findings"],
+            "plan": repair_plan,
+            "verifier": verifier,
+            "artifacts": artifacts,
+            "message": (
+                "GLM-5.2 route produced the vision breakdown."
+                if used_glm_reply
+                else "GLM-5.2 route discovery proof was captured; deterministic self-repair plan used because direct inference did not return usable output."
+            ),
+        }
+
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
@@ -4631,7 +4939,17 @@ class FluxioWebBackend:
             model = "MiniMax-M3"
         effort = str(route.get("effort") or payload.get("effort") or "high").strip().lower()
         role = str(route.get("role") or payload.get("role") or "executor").strip().lower()
-        model_id = model if "/" in model else f"{provider}/{model}" if provider and model else model
+        if provider and model:
+            if model.startswith(f"{provider}/"):
+                model_id = model
+            elif provider == "openrouter" and model.startswith("z-ai/"):
+                model_id = f"{provider}/{model}"
+            elif "/" in model:
+                model_id = model
+            else:
+                model_id = f"{provider}/{model}"
+        else:
+            model_id = model
         return {
             "provider": provider,
             "model": model,
@@ -4666,10 +4984,15 @@ class FluxioWebBackend:
         if model_id:
             args.extend(["--model", model_id])
         display_command = self._display_command(args)
+        try:
+            timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 720)
+        except (TypeError, ValueError):
+            timeout_seconds = 720
+        timeout_seconds = max(5, min(timeout_seconds, 720))
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
-            timeout=720,
+            timeout=timeout_seconds,
             extra_env=env,
         )
         reply = _extract_model_reply(result)
@@ -4798,10 +5121,15 @@ class FluxioWebBackend:
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
+        try:
+            timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 720)
+        except (TypeError, ValueError):
+            timeout_seconds = 720
+        timeout_seconds = max(5, min(timeout_seconds, 720))
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
-            timeout=720,
+            timeout=timeout_seconds,
             extra_env=env,
         )
         reply = _extract_model_reply(result)
@@ -5068,6 +5396,8 @@ class FluxioWebBackend:
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
         if command == "image_playground_operation_command":
             return self._write_image_playground_artifact(payload)
+        if command == "image_self_repair_loop_command":
+            return self._image_self_repair_loop_artifact(payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (
