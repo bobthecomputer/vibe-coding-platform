@@ -22,6 +22,8 @@ BASE_URL = os.environ.get(
     "FLUXIO_CONTROL_URL",
     "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder",
 )
+VIEWPORT_WIDTH = int(os.environ.get("FLUXIO_VIEWPORT_WIDTH", "1440"))
+VIEWPORT_HEIGHT = int(os.environ.get("FLUXIO_VIEWPORT_HEIGHT", "1200"))
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 
 
@@ -195,16 +197,68 @@ def assert_current_control_shell(cdp: Cdp) -> None:
         """
 (() => ({
   hasFluxioShell: Boolean(document.querySelector('.fluxio-shell')),
+  hasErrorScreen: Boolean(document.querySelector('.fluxio-error-screen')),
+  errorText: document.querySelector('.fluxio-error-screen')?.innerText?.slice(0, 500) || '',
   hasFluxosShell: Boolean(document.querySelector('.fluxos-shell')),
   hasPublicPage: Boolean(document.querySelector('.grand-public-page')),
   url: location.href,
 }))()
 """
     )
+    if isinstance(result, dict) and result.get("hasErrorScreen"):
+        raise RuntimeError(f"Fluxio render error screen appeared during control proof: {result}")
     if not isinstance(result, dict) or not result.get("hasFluxioShell"):
         raise RuntimeError(f"Current .fluxio-shell did not render: {result}")
     if result.get("hasFluxosShell") or result.get("hasPublicPage"):
         raise RuntimeError(f"Wrong skin rendered for control proof: {result}")
+
+
+def wait_for_control_shell(cdp: Cdp, timeout: float = 12.0) -> None:
+    deadline = time.time() + timeout
+    last_result: object = None
+    while time.time() < deadline:
+        try:
+            assert_current_control_shell(cdp)
+            return
+        except RuntimeError as error:
+            last_result = str(error)
+            if "render error screen" in str(error):
+                raise
+        time.sleep(0.25)
+    raise RuntimeError(f"Timed out waiting for current .fluxio-shell: {last_result}")
+
+
+def assert_no_horizontal_overflow(cdp: Cdp) -> dict[str, object]:
+    result = cdp.eval(
+        """
+(() => {
+  const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  const documentScrollWidth = document.documentElement.scrollWidth || 0;
+  const bodyScrollWidth = document.body ? document.body.scrollWidth || 0 : 0;
+  const overflowPx = Math.max(documentScrollWidth, bodyScrollWidth) - viewportWidth;
+  const offenders = Array.from(document.querySelectorAll("body *"))
+    .map(element => {
+      const rect = element.getBoundingClientRect();
+      return {
+        tag: element.tagName,
+        className: typeof element.className === "string" ? element.className : "",
+        text: (element.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 120),
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width),
+      };
+    })
+    .filter(item => item.right > viewportWidth + 4)
+    .slice(0, 12);
+  return { viewportWidth, documentScrollWidth, bodyScrollWidth, overflowPx, offenders };
+})()
+"""
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Could not inspect layout overflow: {result}")
+    if int(result.get("overflowPx") or 0) > 4 or result.get("offenders"):
+        raise RuntimeError(f"Horizontal overflow detected: {result}")
+    return result
 
 
 def click_button(cdp: Cdp, label: str) -> None:
@@ -248,7 +302,7 @@ def main() -> int:
             "--no-sandbox",
             f"--remote-debugging-port={port}",
             f"--user-data-dir={profile.name}",
-            "--window-size=1440,1200",
+            f"--window-size={VIEWPORT_WIDTH},{VIEWPORT_HEIGHT}",
             "about:blank",
         ],
         cwd=ROOT,
@@ -266,7 +320,8 @@ def main() -> int:
         cdp.send("Page.navigate", {"url": BASE_URL})
         time.sleep(1.5)
         wait_for_ready(cdp)
-        assert_current_control_shell(cdp)
+        wait_for_control_shell(cdp)
+        initial_layout = assert_no_horizontal_overflow(cdp)
 
         steps = []
         for label, expected in [
@@ -278,6 +333,7 @@ def main() -> int:
         ]:
             click_button(cdp, label)
             assert_current_control_shell(cdp)
+            layout = assert_no_horizontal_overflow(cdp)
             for fragment in expected:
                 wait_for_text(cdp, fragment)
             visible = str(cdp.eval("document.body.innerText")).replace("\r\n", "\n")
@@ -287,6 +343,7 @@ def main() -> int:
                     "click": label,
                     "expected": expected,
                     "visibleTextMatched": all(fragment in visible for fragment in expected),
+                    "layout": layout,
                     "screenshotPath": screenshot,
                     "excerpt": visible[:900],
                     "passed": True,
@@ -297,6 +354,8 @@ def main() -> int:
             "checkedAt": datetime.now(timezone.utc).isoformat(),
             "browser": str(CHROME),
             "type": "live CDP click interaction",
+            "viewport": {"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+            "initialLayout": initial_layout,
             "passed": all(step["passed"] for step in steps),
             "steps": steps,
         }

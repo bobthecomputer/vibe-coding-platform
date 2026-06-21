@@ -35,6 +35,7 @@ export default function FluxioDrawerPanel(props) {
     activeDrawer,
     activeRoadmapItemId,
     agentCyclePhase,
+    allowFixturePreviewModes,
     asList,
     bridgeSessions,
     clearAllMemory,
@@ -172,6 +173,7 @@ export default function FluxioDrawerPanel(props) {
     verifyMiniMaxOpenClawAuth,
     viewModel,
     visualProofPacket,
+    WindowedList,
     workspace,
     workspaceProfileForm,
   } = props;

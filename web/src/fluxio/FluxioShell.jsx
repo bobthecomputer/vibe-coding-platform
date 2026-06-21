@@ -10960,6 +10960,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     activeDrawer,
     activeRoadmapItemId,
     agentCyclePhase,
+    allowFixturePreviewModes,
     asList,
     bridgeSessions,
     clearAllMemory,
@@ -11097,6 +11098,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     verifyMiniMaxOpenClawAuth,
     viewModel,
     visualProofPacket,
+    WindowedList,
     workspace,
     workspaceProfileForm,
   };
