@@ -6925,6 +6925,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       })),
     [snapshot?.runtimes],
   );
+  const autonomyGuardrails = useMemo(
+    () => [
+      {
+        id: "inspect-before-stop",
+        label: "Inspect before stopping",
+        status: "required",
+        proof: "Read code, logs, tests, and current branch before declaring blocked.",
+      },
+      {
+        id: "preserve-user-work",
+        label: "Preserve user work",
+        status: "required",
+        proof: "Branch, stash, or isolate safely; never revert unrelated user edits.",
+      },
+      {
+        id: "continue-independent-work",
+        label: "Continue independent work",
+        status: "active",
+        proof: "When one slice is blocked, switch to another safe mission area.",
+      },
+      {
+        id: "split-reviewable-prs",
+        label: "Split reviewable PRs",
+        status: "active",
+        proof: "Keep branches ordered, scoped, pushed, and proof-linked.",
+      },
+      {
+        id: "attach-real-proof",
+        label: "Attach real proof",
+        status: "required",
+        proof: "Use tests, builds, screenshots, artifacts, transcripts, and logs without faking runtime output.",
+      },
+    ],
+    [],
+  );
   const runtimeStatusById = useMemo(
     () => new Map(asList(snapshot?.runtimes).map(item => [item.runtime_id, item])),
     [snapshot?.runtimes],
@@ -15659,6 +15694,21 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                           </article>
                         );
                       })}
+                    </div>
+                  </article>
+
+                  <article className="builder-panel builder-panel-focus autonomy-guardrail-board">
+                    <p className="eyebrow">Autonomy guardrails</p>
+                    <h3>Continue until a real boundary</h3>
+                    <p>Normal blockers trigger inspection, safe branching, parallel work, and proof capture before the agent stops.</p>
+                    <div className="builder-thread-list">
+                      {autonomyGuardrails.map(item => (
+                        <article className="builder-thread-item tone-neutral" key={`autonomy-guardrail-${item.id}`}>
+                          <span>{titleizeToken(item.status)}</span>
+                          <strong>{item.label}</strong>
+                          <p>{item.proof}</p>
+                        </article>
+                      ))}
                     </div>
                   </article>
 

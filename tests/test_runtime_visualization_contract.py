@@ -132,3 +132,19 @@ def test_redteam_proof_board_is_visible_and_synthetic_only() -> None:
     assert "liveModelCalls: false" in fixtures
     assert "networkActivity: false" in fixtures
     assert "sample_transcript.json" in fixtures
+
+
+def test_autonomy_guardrails_are_visible_in_builder() -> None:
+    source = SHELL.read_text(encoding="utf-8")
+    styles = STYLES.read_text(encoding="utf-8")
+
+    assert "autonomyGuardrails" in source
+    assert "Autonomy guardrails" in source
+    assert "Continue until a real boundary" in source
+    assert "Inspect before stopping" in source
+    assert "Preserve user work" in source
+    assert "Continue independent work" in source
+    assert "Split reviewable PRs" in source
+    assert "Attach real proof" in source
+    assert "autonomy-guardrail-board" in source
+    assert ".autonomy-guardrail-board" in styles

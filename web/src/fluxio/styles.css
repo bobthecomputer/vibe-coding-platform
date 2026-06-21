@@ -1047,6 +1047,10 @@ button.builder-sidebar-nexus:hover {
   display: block;
 }
 
+.autonomy-guardrail-board {
+  gap: 10px;
+}
+
 .route-decision-card em {
   font-style: normal;
 }
