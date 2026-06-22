@@ -1,0 +1,41 @@
+name: GitHub Action Runtime Guard
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/verify_github_action_runtimes.py"
+      - "tests/test_github_action_runtimes.py"
+      - "package.json"
+  push:
+    branches: ["master", "main"]
+    paths:
+      - ".github/workflows/**"
+      - "scripts/verify_github_action_runtimes.py"
+      - "tests/test_github_action_runtimes.py"
+      - "package.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-runtime-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  action-runtime-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m unittest tests.test_github_action_runtimes
+      - run: python scripts/verify_github_action_runtimes.py --output artifacts/github-action-runtime-guard/github-action-runtime-guard.json
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: github-action-runtime-guard
+          path: artifacts/github-action-runtime-guard/github-action-runtime-guard.json
+          if-no-files-found: ignore
