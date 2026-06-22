@@ -269,6 +269,9 @@ class FluxioWebBackendTests(unittest.TestCase):
                             "annotationCount": 1,
                             "timeoutSeconds": 5,
                             "probeExternalRoutes": True,
+                            "probeProviderModels": True,
+                            "allowProviderCliProbe": True,
+                            "allowOpenClawInferProbe": True,
                         },
                     )
 
@@ -286,8 +289,104 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(route_proof["hermes"]["call"]["status"], "failed")
             self.assertEqual(route_proof["openclaw"]["call"]["status"], "ok")
             self.assertEqual(route_proof["selectedRuntime"], "openclaw")
+            self.assertEqual(route_proof["missionGate"]["schema"], "fluxio.mission_completion_gate.v1")
+            self.assertEqual(result["missionGate"]["status"], "incomplete")
+            self.assertEqual(result["missionGate"]["nextMissing"]["id"], "preview-state-attached")
+            mission_gate = json.loads(pathlib.Path(result["artifacts"]["missionGatePath"]).read_text(encoding="utf-8"))
+            self.assertEqual(mission_gate["mission"], "mission1-image-playground")
+            self.assertIn("Mission 1 still has open acceptance items", result["message"])
             for artifact_path in result["artifacts"].values():
                 self.assertTrue(pathlib.Path(artifact_path).exists(), artifact_path)
+
+    def test_image_playground_handoff_receipt_updates_mission_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            handoff = backend.dispatch(
+                "image_playground_handoff_command",
+                {
+                    "requestId": "handoff-proof",
+                    "target": "agent",
+                    "artifactTitle": "ImageGen cyberpunk gallery artifact",
+                    "artifactUrl": "/api/artifact/image.png",
+                    "manifestUrl": "/api/artifact/image.manifest.json",
+                },
+            )
+            self.assertEqual(handoff["status"], "recorded")
+            self.assertTrue(pathlib.Path(handoff["receiptPath"]).exists())
+            self.assertEqual(handoff["receipt"]["schema"], "fluxio.image_playground_handoff_receipt.v1")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", return_value=None):
+                result = backend.dispatch(
+                    "image_self_repair_loop_command",
+                    {
+                        "requestId": "mission1-gate-handoff-proof",
+                        "screenshotPath": "artifacts/images-desktop.png",
+                        "domFacts": {"surface": "images"},
+                    },
+                )
+
+            gate_items = {item["id"]: item for item in result["missionGate"]["items"]}
+            self.assertEqual(gate_items["handoff-proof"]["status"], "done")
+            self.assertEqual(gate_items["handoff-proof"]["proof"], handoff["receiptPath"])
+            self.assertEqual(result["missionGate"]["status"], "incomplete")
+
+    def test_image_self_repair_loop_uses_opencode_glm_when_openclaw_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            backend.dispatch(
+                "image_playground_handoff_command",
+                {
+                    "requestId": "handoff-proof",
+                    "target": "agent",
+                    "artifactTitle": "ImageGen cyberpunk gallery artifact",
+                    "artifactUrl": "/api/artifact/image.png",
+                },
+            )
+
+            def fake_which(command, path=None):
+                if command in {"opencode", "openclaw"}:
+                    return command
+                return None
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):
+                executable = pathlib.Path(str(args[0])).name.lower()
+                if executable == "opencode" and "models" in args:
+                    return {}, "openrouter/z-ai/glm-5.2\n", "", 80
+                if executable == "openclaw":
+                    raise RuntimeError("OpenClaw route timed out during proof capture.")
+                if executable == "opencode" and "run" in args:
+                    payload = {"type": "text", "part": {"text": "{\"ok\":true,\"route\":\"opencode-glm\"}"}}
+                    return payload, json.dumps(payload), "", 140
+                raise AssertionError(f"Unexpected command: {args}")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                    result = backend.dispatch(
+                        "image_self_repair_loop_command",
+                        {
+                            "requestId": "mission1-opencode-proof",
+                            "screenshotPath": "artifacts/images-desktop.png",
+                            "domFacts": {"surface": "images"},
+                            "probeExternalRoutes": True,
+                            "probeProviderModels": True,
+                            "allowProviderCliProbe": True,
+                            "timeoutSeconds": 5,
+                        },
+                    )
+
+            self.assertEqual(result["routeStatus"], "ok")
+            self.assertEqual(result["missionGate"]["status"], "complete")
+            self.assertTrue(result["usedModelReply"])
+            route_proof = json.loads(pathlib.Path(result["artifacts"]["routeProofPath"]).read_text(encoding="utf-8"))
+            self.assertEqual(route_proof["selectedRuntime"], "opencode")
+            self.assertEqual(route_proof["opencode"]["call"]["status"], "ok")
+            self.assertEqual(route_proof["openclaw"]["call"]["status"], "not_attempted")
+            self.assertIn("OpenClaw inference probe was skipped", route_proof["openclaw"]["call"]["error"])
+            self.assertIn("opencode run", route_proof["opencode"]["call"]["command"])
 
     def test_ui_self_repair_loop_writes_builder_skill_artifacts_and_prefers_hermes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -796,6 +796,17 @@ def _parse_json_objects_from_text(raw: str) -> list[dict[str, Any]]:
     return objects
 
 
+def _extract_opencode_text_reply(stdout: str) -> str:
+    for event in reversed(_parse_json_objects_from_text(stdout)):
+        if str(event.get("type") or "").lower() != "text":
+            continue
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        text = str(part.get("text") or event.get("text") or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _push_tool_timeline_event(
     events: list[dict[str, str]],
     *,
@@ -5226,17 +5237,20 @@ class FluxioWebBackend:
                     opencode_auth_providers = sorted(str(key) for key in loaded_auth.keys())
             except (OSError, json.JSONDecodeError):
                 opencode_auth_providers = []
-        if opencode_command:
+        probe_provider_models = bool(payload.get("probeProviderModels") or payload.get("probe_provider_models"))
+        if opencode_command and probe_provider_models:
             try:
                 _models_payload, models_stdout, _models_stderr, _models_elapsed_ms = _run_process_capture(
                     [opencode_command, "models"],
                     cwd=self.root,
-                    timeout=35,
+                    timeout=max(5, min(int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 12), 20)),
                     extra_env=env,
                 )
                 opencode_models_contains_glm52 = "openrouter/z-ai/glm-5.2" in models_stdout
             except Exception as exc:  # noqa: BLE001 - proof artifact should record the exact route discovery failure.
                 opencode_models_error = str(exc)
+        elif opencode_command:
+            opencode_models_error = "OpenCode model-list probe was not requested; skipping provider CLI call to keep the app responsive."
 
         provider_presence = _provider_presence(["openrouter", "opencode-go", "openai-codex"], session_secrets=self.provider_secrets)
         provider_presence["openrouter_opencode_auth"] = "openrouter" in opencode_auth_providers
@@ -5277,6 +5291,7 @@ class FluxioWebBackend:
         route_attempts: dict[str, dict[str, Any]] = {
             "hermes": empty_route_call("hermes", bool(hermes_command) or hermes_wsl_available),
             "openclaw": empty_route_call("openclaw", bool(openclaw_command)),
+            "opencode": empty_route_call("opencode", bool(opencode_command)),
         }
         route_payload = {
             "message": route_prompt,
@@ -5291,7 +5306,25 @@ class FluxioWebBackend:
             "sessionId": request_id,
             "timeoutSeconds": int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 45),
         }
-        if not probe_external_routes:
+        provider_cli_probe_allowed = bool(payload.get("allowProviderCliProbe") or payload.get("allow_provider_cli_probe"))
+        openclaw_infer_probe_allowed = bool(payload.get("allowOpenClawInferProbe") or payload.get("allow_openclaw_infer_probe"))
+        prefer_opencode_glm_route = bool(opencode_command and opencode_models_contains_glm52 and not openclaw_infer_probe_allowed)
+        if probe_external_routes and not provider_cli_probe_allowed:
+            route_attempts["hermes"].update(
+                {
+                    "status": "blocked",
+                    "attempted": False,
+                    "error": "External provider CLI probe was requested but blocked by the app safety guard; set allowProviderCliProbe=true for an explicit slow probe.",
+                }
+            )
+            route_attempts["openclaw"].update(
+                {
+                    "status": "blocked",
+                    "attempted": False,
+                    "error": "External provider CLI probe was requested but blocked by the app safety guard; set allowProviderCliProbe=true for an explicit slow probe.",
+                }
+            )
+        elif not probe_external_routes:
             route_attempts["hermes"].update(
                 {
                     "status": "discovery_only",
@@ -5326,8 +5359,40 @@ class FluxioWebBackend:
         else:
             route_attempts["hermes"]["error"] = "Hermes CLI was not found on PATH or WSL."
 
-        if probe_external_routes and route_attempts["hermes"]["status"] != "ok":
-            if route_attempts["openclaw"]["available"]:
+        if (
+            probe_external_routes
+            and provider_cli_probe_allowed
+            and route_attempts["hermes"]["status"] != "ok"
+            and prefer_opencode_glm_route
+        ):
+            if route_attempts["opencode"]["available"]:
+                try:
+                    route_result = self._run_opencode_chat(route_payload)
+                    route_attempts["opencode"].update(
+                        {
+                            "status": "ok",
+                            "reply": route_result.get("reply") or "",
+                            "elapsedMs": route_result.get("elapsedMs") or 0,
+                            "command": route_result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
+                    route_attempts["opencode"].update({"status": "failed", "error": str(exc)})
+            else:
+                route_attempts["opencode"]["error"] = "OpenCode CLI was not found on PATH."
+            if route_attempts["opencode"]["status"] == "ok" and route_attempts["openclaw"]["available"]:
+                route_attempts["openclaw"]["error"] = (
+                    "OpenClaw inference probe was skipped because the GLM-5.2 OpenCode route returned usable output first; "
+                    "set allowOpenClawInferProbe=true to run OpenClaw explicitly."
+                )
+
+        if (
+            probe_external_routes
+            and provider_cli_probe_allowed
+            and route_attempts["hermes"]["status"] != "ok"
+            and route_attempts["opencode"]["status"] != "ok"
+        ):
+            if route_attempts["openclaw"]["available"] and (openclaw_infer_probe_allowed or not prefer_opencode_glm_route):
                 try:
                     route_result = self._run_openclaw_chat(route_payload)
                     route_attempts["openclaw"].update(
@@ -5340,10 +5405,46 @@ class FluxioWebBackend:
                     )
                 except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
                     route_attempts["openclaw"].update({"status": "failed", "error": str(exc)})
+            elif route_attempts["openclaw"]["available"]:
+                route_attempts["openclaw"]["error"] = (
+                    "OpenClaw inference probe was skipped because the GLM-5.2 OpenCode route is available and "
+                    "OpenClaw can outlive Windows timeouts; set allowOpenClawInferProbe=true to run it explicitly."
+                )
             else:
                 route_attempts["openclaw"]["error"] = "OpenClaw CLI was not found on PATH."
 
-        selected_runtime = "hermes" if route_attempts["hermes"]["status"] in {"ok", "discovery_only"} else "openclaw"
+        if (
+            probe_external_routes
+            and route_attempts["hermes"]["status"] != "ok"
+            and route_attempts["openclaw"]["status"] != "ok"
+            and route_attempts["opencode"]["status"] != "ok"
+        ):
+            if route_attempts["opencode"]["available"]:
+                try:
+                    route_result = self._run_opencode_chat(route_payload)
+                    route_attempts["opencode"].update(
+                        {
+                            "status": "ok",
+                            "reply": route_result.get("reply") or "",
+                            "elapsedMs": route_result.get("elapsedMs") or 0,
+                            "command": route_result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
+                    route_attempts["opencode"].update({"status": "failed", "error": str(exc)})
+            else:
+                route_attempts["opencode"]["error"] = "OpenCode CLI was not found on PATH."
+
+        if route_attempts["hermes"]["status"] == "ok":
+            selected_runtime = "hermes"
+        elif route_attempts["openclaw"]["status"] == "ok":
+            selected_runtime = "openclaw"
+        elif route_attempts["opencode"]["status"] == "ok":
+            selected_runtime = "opencode"
+        elif route_attempts["hermes"]["status"] == "discovery_only":
+            selected_runtime = "hermes"
+        else:
+            selected_runtime = "openclaw"
         route_call: dict[str, Any] = route_attempts[selected_runtime]
         route_call = {
             **route_call,
@@ -5420,6 +5521,68 @@ class FluxioWebBackend:
                 {"id": "fallback-honest", "passed": route_call["status"] == "ok" or bool(route_call.get("error")), "detail": "When the model route fails or times out, the artifact records that failure instead of claiming GLM output."},
             ],
         }
+        handoff_dir = self.root / ".agent_control" / "image_playground_handoffs"
+        handoff_receipts = sorted(handoff_dir.glob("*.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True) if handoff_dir.exists() else []
+        latest_handoff_path = str(handoff_receipts[0]) if handoff_receipts else ""
+        mission_gate_items = [
+            {
+                "id": "glm52-route-discovered",
+                "label": "GLM-5.2 route discovered",
+                "status": "done" if opencode_models_contains_glm52 else "missing",
+                "proof": "OpenCode model list contains openrouter/z-ai/glm-5.2." if opencode_models_contains_glm52 else opencode_models_error or "OpenCode model list did not include openrouter/z-ai/glm-5.2.",
+            },
+            {
+                "id": "runtime-route-probed",
+                "label": "Runtime route probed",
+                "status": "done" if route_call["status"] == "ok" else ("missing" if not probe_external_routes else "blocked"),
+                "proof": (
+                    f"{route_call['selectedRuntime']} returned model output."
+                    if route_call["status"] == "ok"
+                    else "Route probe was not requested by the app."
+                    if not probe_external_routes
+                    else route_call.get("error") or "Route probe did not return usable output."
+                ),
+            },
+            {
+                "id": "skills-materialized",
+                "label": "Vision/UI skills materialized",
+                "status": "done",
+                "proof": "image_vision_breakdown, ui_self_repair_planner, and self_repair_verifier artifacts were written.",
+            },
+            {
+                "id": "preview-state-attached",
+                "label": "Preview/screenshot state attached",
+                "status": "done" if payload.get("screenshotPath") or payload.get("screenshot_path") or isinstance(payload.get("domFacts"), dict) else "missing",
+                "proof": "The command received screenshot or DOM facts from Image Playground." if payload.get("screenshotPath") or payload.get("screenshot_path") or isinstance(payload.get("domFacts"), dict) else "No screenshot path or DOM facts were provided.",
+            },
+            {
+                "id": "handoff-proof",
+                "label": "Cross-surface handoff proof",
+                "status": "done" if latest_handoff_path else "missing",
+                "proof": latest_handoff_path or "Run an Image Playground export and verify the receipt in Agent/Builder/Preview backend state.",
+            },
+        ]
+        mission_gate_status = "complete" if all(item["status"] == "done" for item in mission_gate_items) else (
+            "blocked" if any(item["status"] == "blocked" for item in mission_gate_items) else "incomplete"
+        )
+        mission_gate = {
+            "schema": "fluxio.mission_completion_gate.v1",
+            "mission": "mission1-image-playground",
+            "status": mission_gate_status,
+            "items": mission_gate_items,
+            "nextMissing": next((item for item in mission_gate_items if item["status"] != "done"), None),
+        }
+        verifier["checks"].append(
+            {
+                "id": "mission-completion-gate",
+                "passed": mission_gate_status == "complete",
+                "detail": (
+                    "Mission 1 acceptance checklist is complete."
+                    if mission_gate_status == "complete"
+                    else f"Mission 1 is {mission_gate_status}; next item: {mission_gate['nextMissing']['label'] if mission_gate['nextMissing'] else 'unknown'}."
+                ),
+            }
+        )
         route_proof = {
             "schema": "fluxio.image_self_repair_route_proof.v1",
             "requestId": request_id,
@@ -5431,9 +5594,13 @@ class FluxioWebBackend:
                 "authProviders": opencode_auth_providers,
                 "modelsContainGlm52": opencode_models_contains_glm52,
                 "error": opencode_models_error,
+                "modelListProbeRequested": probe_provider_models,
+                "call": route_attempts["opencode"],
             },
             "providerPresence": provider_presence,
             "probeExternalRoutes": probe_external_routes,
+            "allowProviderCliProbe": provider_cli_probe_allowed,
+            "allowOpenClawInferProbe": openclaw_infer_probe_allowed,
             "hermes": {
                 "available": bool(hermes_command) or hermes_wsl_available,
                 "nativeCommandVisible": bool(hermes_command),
@@ -5446,6 +5613,7 @@ class FluxioWebBackend:
             },
             "selectedRuntime": route_call["selectedRuntime"],
             "skillsUsed": skills_used,
+            "missionGate": mission_gate,
         }
 
         artifacts = {
@@ -5453,11 +5621,13 @@ class FluxioWebBackend:
             "visionBreakdownPath": str(artifact_dir / "vision_breakdown.json"),
             "repairPlanPath": str(artifact_dir / "ui_repair_plan.json"),
             "verifierPath": str(artifact_dir / "self_repair_verifier.json"),
+            "missionGatePath": str(artifact_dir / "mission_completion_gate.json"),
         }
         (artifact_dir / "route_proof.json").write_text(json.dumps(route_proof, indent=2), encoding="utf-8")
         (artifact_dir / "vision_breakdown.json").write_text(json.dumps(breakdown, indent=2), encoding="utf-8")
         (artifact_dir / "ui_repair_plan.json").write_text(json.dumps(repair_plan, indent=2), encoding="utf-8")
         (artifact_dir / "self_repair_verifier.json").write_text(json.dumps(verifier, indent=2), encoding="utf-8")
+        (artifact_dir / "mission_completion_gate.json").write_text(json.dumps(mission_gate, indent=2), encoding="utf-8")
         return {
             "requestId": request_id,
             "status": "recorded",
@@ -5468,12 +5638,50 @@ class FluxioWebBackend:
             "findings": breakdown["findings"],
             "plan": repair_plan,
             "verifier": verifier,
+            "missionGate": mission_gate,
             "artifacts": artifacts,
             "message": (
-                "GLM-5.2 route produced the vision breakdown."
+                "Mission 1 completion gate passed; GLM-5.2 route produced the vision breakdown."
+                if mission_gate_status == "complete" and used_glm_reply
+                else "GLM-5.2 route produced the vision breakdown, but Mission 1 still has open acceptance items."
                 if used_glm_reply
-                else "GLM-5.2 route discovery proof was captured; deterministic self-repair plan used because direct inference did not return usable output."
+                else "GLM-5.2 route discovery proof was captured; Mission 1 remains gated until live route and handoff proof pass."
             ),
+        }
+
+    def _image_playground_handoff_receipt(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = _safe_identifier(payload.get("requestId") or f"image_handoff_{int(time.time())}", "image_handoff")
+        target = str(payload.get("target") or "agent").strip().lower()
+        if target not in {"agent", "builder", "preview", "download"}:
+            target = "agent"
+        artifact_title = str(payload.get("artifactTitle") or payload.get("title") or "Selected artifact").strip()
+        artifact_url = str(payload.get("artifactUrl") or payload.get("artifact_url") or "").strip()
+        manifest_url = str(payload.get("manifestUrl") or payload.get("manifest_url") or "").strip()
+        receipt_dir = self.root / ".agent_control" / "image_playground_handoffs"
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        receipt = {
+            "schema": "fluxio.image_playground_handoff_receipt.v1",
+            "requestId": request_id,
+            "createdAt": _utc_now(),
+            "target": target,
+            "artifactTitle": artifact_title,
+            "artifactUrl": artifact_url,
+            "manifestUrl": manifest_url,
+            "source": "image_playground",
+            "status": "recorded",
+            "proof": {
+                "hasArtifactUrl": bool(artifact_url),
+                "hasManifestUrl": bool(manifest_url),
+                "mission": "mission1-image-playground",
+            },
+        }
+        path = receipt_dir / f"{request_id}.json"
+        path.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+        return {
+            "status": "recorded",
+            "receipt": receipt,
+            "receiptPath": str(path),
+            "message": f"Image handoff receipt recorded for {target}.",
         }
 
     def _ui_self_repair_loop_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -7194,6 +7402,78 @@ class FluxioWebBackend:
             "filesChanged": files_changed,
         }
 
+    def _run_opencode_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = str(payload.get("message") or "").strip()
+        if not prompt:
+            prompt = _chat_prompt(payload)
+        prompt = (
+            "You are running inside the Fluxio app runtime. Do not ask clarifying questions. "
+            "Use the provided screenshot path and DOM facts when available, and return the requested result directly.\n\n"
+            + prompt
+        )
+        prompt = re.sub(r"\s+", " ", prompt).strip()
+        env = self._provider_env()
+        command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+        if not command:
+            raise RuntimeError("OpenCode CLI was not found on PATH.")
+        route = self._chat_route(payload)
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+        workspace_id = _safe_identifier(payload.get("workspaceId") or workspace_path.name, "workspace")
+        session_id = _safe_identifier(payload.get("sessionId") or f"opencode_chat_{workspace_id}", "opencode_chat")
+        model_id = route["model_id"]
+        args = [
+            command,
+            "run",
+            "--pure",
+            "--format",
+            "json",
+        ]
+        if model_id:
+            args.extend(["--model", model_id])
+        args.append(prompt)
+        display_command = self._display_command(args[:-1] + ["<prompt>"])
+        try:
+            timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 120)
+        except (TypeError, ValueError):
+            timeout_seconds = 120
+        timeout_seconds = max(5, min(timeout_seconds, 240))
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=timeout_seconds,
+            extra_env=env,
+        )
+        reply = _extract_opencode_text_reply(stdout) or _extract_model_reply(result)
+        if not reply:
+            for event in reversed(_parse_json_objects_from_text(stdout)):
+                part = event.get("part") if isinstance(event.get("part"), dict) else {}
+                text = str(part.get("text") or event.get("text") or "").strip()
+                if text:
+                    reply = text
+                    break
+        if not reply:
+            raise RuntimeError("OpenCode finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
+        return {
+            "reply": reply,
+            "runtime": "opencode",
+            "sessionId": session_id,
+            "route": route,
+            "raw": result,
+            "elapsedMs": elapsed_ms,
+            "command": display_command,
+            "toolTimeline": tool_timeline,
+            "filesChanged": files_changed,
+        }
+
     def _run_codex_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         prompt = _chat_prompt(payload)
         env = self._provider_env()
@@ -7601,6 +7881,8 @@ class FluxioWebBackend:
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
         if command == "image_playground_operation_command":
             return self._write_image_playground_artifact(payload)
+        if command == "image_playground_handoff_command":
+            return self._image_playground_handoff_receipt(payload)
         if command == "image_self_repair_loop_command":
             return self._image_self_repair_loop_artifact(payload)
         if command == "ui_self_repair_loop_command":

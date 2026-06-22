@@ -149,6 +149,50 @@ function manifestUrlForRecord(record) {
   return resolveArtifactUrl(record?.manifestUrl || record?.manifestPath || "");
 }
 
+function artifactUnavailableDetail(src) {
+  const source = String(src || "").trim();
+  if (!source) return "No artifact URL is recorded for this image.";
+  if (source.includes("/api/artifact")) {
+    return "Start the live backend or NAS artifact bridge to serve this image.";
+  }
+  return "The recorded image source did not load in this browser session.";
+}
+
+function ArtifactImage({ alt = "", className = "", detail = "", provider = "", src = "", title = "", variant = "thumb" }) {
+  const [failedSource, setFailedSource] = useState("");
+  const source = String(src || "").trim();
+  const unavailable = !source || failedSource === source;
+
+  useEffect(() => {
+    setFailedSource("");
+  }, [source]);
+
+  if (unavailable) {
+    return (
+      <div
+        aria-label={`${title || alt || "Image artifact"} unavailable`}
+        className={cx("image-artifact-visual", `variant-${variant}`, "is-unavailable", className)}
+        data-image-artifact-state="unavailable"
+        role="img"
+      >
+        <span>Artifact unavailable</span>
+        <strong>{title || "Image artifact"}</strong>
+        {provider ? <em>{provider}</em> : null}
+        <small>{detail || artifactUnavailableDetail(source)}</small>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={cx("image-artifact-visual", `variant-${variant}`, className)}
+      onError={() => setFailedSource(source)}
+      src={source}
+    />
+  );
+}
+
 function providerRouteFromReceipt(receipt) {
   const route = String(receipt?.route || receipt?.fallback || "").trim();
   return route || "Unknown";
@@ -260,6 +304,86 @@ const DRAFT_STATE_LABELS = {
 
 const KEYBOARD_JUMP_TRAIL_LIMIT = 3;
 const KEYBOARD_JUMP_TRAIL_IDLE_MS = 30000;
+const MISSION1_LOOP_SCHEME = [
+  {
+    id: "baseline",
+    label: "1. Single-agent baseline",
+    detail: "Hermes plans from the current screenshot, prompt, layers, and selected artifact before any council is spawned.",
+  },
+  {
+    id: "observe",
+    label: "2. Tool observation",
+    detail: "Preview screenshot, DOM facts, queue receipts, and annotation counts become the feedback channel.",
+  },
+  {
+    id: "repair",
+    label: "3. Critique and repair",
+    detail: "The vision/UI skill proposes one concrete repair and implementation writes only proof-backed changes.",
+  },
+  {
+    id: "verify",
+    label: "4. Verify or escalate",
+    detail: "Stop on screenshot/build/verifier proof; escalate to OpenClaw or human review only when Hermes cannot prove it.",
+  },
+];
+
+function missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedState, queueSummary }) {
+  const missionGate = selfRepairProof?.missionGate;
+  const nextMissing = missionGate?.nextMissing;
+  if (selfRepairBusy) {
+    return {
+      phase: "Inspecting",
+      status: "running",
+      proof: "Runtime loop is collecting screenshot and route evidence.",
+      nextAction: "Wait for verifier proof",
+    };
+  }
+  if (missionGate?.status === "complete") {
+    return {
+      phase: "Mission complete",
+      status: "proven",
+      proof: "Every Mission 1 acceptance item has proof.",
+      nextAction: "Review proof or export context",
+    };
+  }
+  if (missionGate?.status) {
+    return {
+      phase: missionGate.status === "blocked" ? "Blocked" : "Incomplete",
+      status: missionGate.status === "blocked" ? "blocked" : "attention",
+      proof: nextMissing?.proof || selfRepairProof?.message || "Mission gate still has missing acceptance items.",
+      nextAction: nextMissing?.id === "runtime-route-probed" ? "Enable route probe" : "Continue mission",
+    };
+  }
+  if (selfRepairProof?.routeStatus || providerBlockedState) {
+    return {
+      phase: "Blocked",
+      status: "blocked",
+      proof: selfRepairProof?.message || providerBlockedState?.message || "The loop needs live backend or provider evidence.",
+      nextAction: "Attach backend/NAS artifact bridge",
+    };
+  }
+  if (queueSummary.failed > 0) {
+    return {
+      phase: "Repair needed",
+      status: "attention",
+      proof: "Queue contains a failed or blocked generation receipt.",
+      nextAction: "Run self-repair",
+    };
+  }
+  return {
+    phase: "Ready",
+    status: "ready",
+    proof: "Uses screenshot, route, queue, and skill evidence before claiming success.",
+    nextAction: "Run self-repair",
+  };
+}
+
+function handoffTargetLabel(target) {
+  if (target === "builder") return "Builder";
+  if (target === "preview") return "Preview";
+  if (target === "download") return "Download";
+  return "Agent";
+}
 
 export function ImagePlaygroundSurface({ callBackend }) {
   const [project, setProject] = useState(() => loadImageProject());
@@ -267,6 +391,8 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const [providerMessage, setProviderMessage] = useState("Ready for layered generation.");
   const [selfRepairBusy, setSelfRepairBusy] = useState(false);
   const [selfRepairProof, setSelfRepairProof] = useState(null);
+  const [routeProbeEnabled, setRouteProbeEnabled] = useState(false);
+  const [allowProviderCliProbe, setAllowProviderCliProbe] = useState(false);
   const [selectedLibraryId, setSelectedLibraryId] = useState("");
   const [exportTarget, setExportTarget] = useState("agent");
   const [providerBlockedState, setProviderBlockedState] = useState(null);
@@ -534,6 +660,31 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const selfRepairArtifacts = selfRepairProof?.artifacts && typeof selfRepairProof.artifacts === "object"
     ? Object.entries(selfRepairProof.artifacts)
     : [];
+  const missionGateItems = Array.isArray(selfRepairProof?.missionGate?.items)
+    ? selfRepairProof.missionGate.items
+    : [];
+  const missionGateMissing = missionGateItems.filter(item => item?.status !== "done");
+  const latestHandoffReceipt = useMemo(() => {
+    const comments = Array.isArray(project.annotationReadiness?.comments)
+      ? project.annotationReadiness.comments
+      : [];
+    const receipt = comments.find(item => item?.type === "export");
+    if (!receipt) return null;
+    const target = receipt.target || "agent";
+    return {
+      target,
+      label: receipt.targetLabel || handoffTargetLabel(target),
+      artifactTitle: receipt.artifactTitle || selectedLibraryItem?.title || "Selected artifact",
+      artifactUrl: receipt.artifactUrl || "",
+      manifestUrl: receipt.manifestUrl || "",
+      backendReceiptPath: receipt.backendReceiptPath || "",
+      createdAt: receipt.createdAt || "",
+    };
+  }, [project.annotationReadiness?.comments, selectedLibraryItem?.title]);
+  const loopStatus = useMemo(
+    () => missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedState, queueSummary }),
+    [providerBlockedState, queueSummary, selfRepairBusy, selfRepairProof],
+  );
 
   useEffect(() => {
     if (!libraryItems.length) return;
@@ -1891,8 +2042,12 @@ export function ImagePlaygroundSurface({ callBackend }) {
           provider: project.provider.id,
           visionRoute: project.visionRoute,
           promptHash: tinyPromptHash(project.prompt.text),
+          routeProbeEnabled,
         },
         timeoutSeconds: 45,
+        probeExternalRoutes: routeProbeEnabled,
+        probeProviderModels: routeProbeEnabled,
+        allowProviderCliProbe: routeProbeEnabled && allowProviderCliProbe,
       });
       setSelfRepairProof(result);
       updateProject(current => ({
@@ -1935,24 +2090,30 @@ export function ImagePlaygroundSurface({ callBackend }) {
     }
   }
 
-  function exportSelectedImage(target = exportTarget) {
+  async function exportSelectedImage(target = exportTarget) {
     if (!selectedLibraryItem) {
       pushOperationEvent("Export blocked", "No image artifact is selected in the gallery.", "warn");
       return;
     }
-    const label = target === "builder" ? "Builder" : target === "preview" ? "Preview" : target === "download" ? "Download" : "Agent";
+    const label = handoffTargetLabel(target);
+    const commentId = makeId("comment");
+    const requestId = makeId("image-handoff");
     updateProject(current => ({
       ...current,
       annotationReadiness: {
         ...(current.annotationReadiness || {}),
         comments: [
           {
-            id: makeId("comment"),
+            id: commentId,
             type: "export",
             text: `Exported ${selectedLibraryItem.title} to ${label}.`,
             target,
+            targetLabel: label,
+            artifactTitle: selectedLibraryItem.title,
             artifactUrl: selectedLibraryItem.src,
             manifestUrl: selectedLibraryItem.manifestUrl || "",
+            backendReceiptPath: "",
+            requestId,
             createdAt: nowIso(),
           },
           ...((current.annotationReadiness || {}).comments || []),
@@ -1960,6 +2121,39 @@ export function ImagePlaygroundSurface({ callBackend }) {
       },
     }));
     pushOperationEvent("Image exported", `${selectedLibraryItem.title} sent to ${label}.`, "good");
+    if (typeof callBackend !== "function") {
+      pushOperationEvent("Handoff proof pending", "Live backend bridge is unavailable, so only the local export comment was recorded.", "warn");
+      return;
+    }
+    try {
+      const result = await callBackend("image_playground_handoff_command", {
+        requestId,
+        target,
+        targetLabel: label,
+        artifactTitle: selectedLibraryItem.title,
+        artifactUrl: selectedLibraryItem.src,
+        manifestUrl: selectedLibraryItem.manifestUrl || "",
+      });
+      updateProject(current => ({
+        ...current,
+        annotationReadiness: {
+          ...(current.annotationReadiness || {}),
+          comments: ((current.annotationReadiness || {}).comments || []).map(item => (
+            item.id === commentId
+              ? {
+                ...item,
+                backendReceiptPath: result?.receiptPath || "",
+                text: result?.message || item.text,
+              }
+              : item
+          )),
+        },
+      }));
+      pushOperationEvent("Handoff proof recorded", result?.receiptPath || "Backend receipt recorded for export.", "good");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || "Backend handoff receipt failed.");
+      pushOperationEvent("Handoff proof failed", message, "warn");
+    }
   }
 
   function resetImageHorizontalScroll() {
@@ -2118,12 +2312,32 @@ export function ImagePlaygroundSurface({ callBackend }) {
           <button className="image-primary-button" disabled={busy || !project.prompt.text.trim()} onClick={() => runOperation("generate", { imagePluginMode: true })} type="button">
             <WandSparkles size={18} /> {busy ? "Generating..." : "Generate"}
           </button>
-          <button className="image-glass-button" disabled={!selectedLibraryItem} onClick={() => exportSelectedImage()} type="button">
+          <button className="image-glass-button" disabled={!selectedLibraryItem} onClick={() => void exportSelectedImage()} type="button">
             <Download size={16} /> Export selected
           </button>
           <button className="image-glass-button" disabled={selfRepairBusy} onClick={() => void runSelfRepairLoop()} type="button">
             <Sparkles size={16} /> {selfRepairBusy ? "Inspecting..." : "Run self-repair"}
           </button>
+          <label className="image-route-probe-toggle">
+            <input
+              checked={routeProbeEnabled}
+              onChange={event => {
+                setRouteProbeEnabled(event.target.checked);
+                if (!event.target.checked) setAllowProviderCliProbe(false);
+              }}
+              type="checkbox"
+            />
+            <span>Probe Hermes/OpenClaw route</span>
+          </label>
+          <label className={cx("image-route-probe-toggle", !routeProbeEnabled && "muted")}>
+            <input
+              checked={allowProviderCliProbe}
+              disabled={!routeProbeEnabled}
+              onChange={event => setAllowProviderCliProbe(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Allow slow model call</span>
+          </label>
         </div>
       </section>
 
@@ -2145,7 +2359,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                 onClick={() => setSelectedLibraryId(item.id)}
                 type="button"
               >
-                <img alt="" src={item.src} />
+                <ArtifactImage
+                  alt=""
+                  provider={item.provider}
+                  src={item.src}
+                  title={item.title}
+                  variant="gallery"
+                />
                 <span>{item.title}</span>
               </button>
             ))}
@@ -2156,7 +2376,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
           {selectedLibraryItem ? (
             <>
               <div className="image-selected-frame">
-                <img alt={selectedLibraryItem.title} src={selectedLibraryItem.src} />
+                <ArtifactImage
+                  alt={selectedLibraryItem.title}
+                  provider={selectedLibraryItem.provider}
+                  src={selectedLibraryItem.src}
+                  title={selectedLibraryItem.title}
+                  variant="selected"
+                />
                 <div className="image-selected-overlay">{renderOverlayShapes(focusedOverlaySnapshot, "preview")}</div>
               </div>
               <div className="image-selected-caption">
@@ -2194,7 +2420,34 @@ export function ImagePlaygroundSurface({ callBackend }) {
           <div className="image-inspector-actions">
             <button onClick={addFocusedPin} type="button">Add pin</button>
             <button onClick={addFocusedRectangle} type="button">Add region</button>
-            <button onClick={() => exportSelectedImage("agent")} type="button">Send to Agent</button>
+            <button onClick={() => void exportSelectedImage("agent")} type="button">Send to Agent</button>
+          </div>
+          <div className={cx("image-handoff-receipt", latestHandoffReceipt && "has-receipt")} data-image-handoff-receipt="true" role="status" aria-live="polite">
+            <div className="image-handoff-receipt-head">
+              <strong>Latest handoff</strong>
+              <span>{latestHandoffReceipt ? formatTime(latestHandoffReceipt.createdAt) : "No export yet"}</span>
+            </div>
+            {latestHandoffReceipt ? (
+              <>
+                <p>
+                  <b>{latestHandoffReceipt.artifactTitle}</b>
+                  <span>sent to {latestHandoffReceipt.label}</span>
+                </p>
+                <div className="image-handoff-receipt-actions">
+                  <span>{latestHandoffReceipt.backendReceiptPath ? "Backend receipt recorded" : "Proof comment attached"}</span>
+                  {latestHandoffReceipt.backendReceiptPath ? <code>{latestHandoffReceipt.backendReceiptPath}</code> : null}
+                  {latestHandoffReceipt.manifestUrl ? (
+                    <a href={latestHandoffReceipt.manifestUrl} rel="noreferrer" target="_blank">Manifest</a>
+                  ) : null}
+                  <button onClick={() => void exportSelectedImage(latestHandoffReceipt.target)} type="button">Send again</button>
+                </div>
+              </>
+            ) : (
+              <p>
+                <b>{selectedLibraryItem?.title || "Select an artifact"}</b>
+                <span>Export to Agent, Builder, Preview, or Download to create a receipt.</span>
+              </p>
+            )}
           </div>
           <div className="image-self-repair-proof" data-image-self-repair-proof="true">
             <strong>Self-repair loop</strong>
@@ -2207,6 +2460,48 @@ export function ImagePlaygroundSurface({ callBackend }) {
                 ))}
               </ul>
             ) : null}
+          </div>
+          <div className="image-loop-scheme" data-image-loop-scheme="mission1">
+            <div className="image-loop-scheme-head">
+              <div>
+                <strong>Mission loop scheme</strong>
+                <p>Budget-aware plan → observe → repair → verify.</p>
+              </div>
+              <span data-loop-status={loopStatus.status}>{loopStatus.phase}</span>
+            </div>
+            <div className="image-loop-route-grid" aria-label="Loop route contract">
+              <span>
+                Route
+                <b>{project.visionRoute.runtime} · {project.visionRoute.model}</b>
+              </span>
+              <span>
+                Fallback
+                <b>{project.visionRoute.fallbackRuntime}</b>
+              </span>
+              <span>
+                Stop rule
+                <b>proof or cap</b>
+              </span>
+            </div>
+            <ol>
+              {MISSION1_LOOP_SCHEME.map(item => (
+                <li key={item.id}>
+                  <b>{item.label}</b>
+                  <span>{item.detail}</span>
+                </li>
+              ))}
+            </ol>
+            <p className="image-loop-proof">{loopStatus.proof}</p>
+            {missionGateItems.length ? (
+              <div className="image-mission-gate" data-image-mission-gate={selfRepairProof?.missionGate?.status || "unknown"}>
+                <span>Mission gate</span>
+                <strong>{selfRepairProof?.missionGate?.status || "unknown"}</strong>
+                {missionGateMissing.length ? <em>{missionGateMissing[0]?.label || "Next acceptance item"} remains</em> : <em>Ready for Mission 2</em>}
+              </div>
+            ) : null}
+            <button className="image-loop-action" disabled={selfRepairBusy} onClick={() => void runSelfRepairLoop()} type="button">
+              {loopStatus.nextAction}
+            </button>
           </div>
         </aside>
       </section>
@@ -2306,7 +2601,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                   <article className={cx("image-reference-row", referenceImage && "has-image")} key={ref.id}>
                     {referenceImage ? (
                       <div className="image-reference-thumb">
-                        <img alt={ref.title || "Generated design reference"} src={referenceImage} />
+                        <ArtifactImage
+                          alt={ref.title || "Generated design reference"}
+                          provider={ref.provider || ref.source}
+                          src={referenceImage}
+                          title={ref.title || "Generated design reference"}
+                          variant="reference"
+                        />
                       </div>
                     ) : null}
                     <div>
@@ -2326,7 +2627,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                 <article className="image-reference-row">
                   {selectedGeneratedDesignReferenceUrl ? (
                     <div className="image-reference-thumb large">
-                      <img alt="Selected generated artifact" src={selectedGeneratedDesignReferenceUrl} />
+                      <ArtifactImage
+                        alt="Selected generated artifact"
+                        provider={selectedGeneratedDesignReference.source}
+                        src={selectedGeneratedDesignReferenceUrl}
+                        title={selectedGeneratedDesignReference.artifactId || selectedGeneratedDesignReference.requestId || "Selected generated artifact"}
+                        variant="reference"
+                      />
                     </div>
                   ) : null}
                   <b>{selectedGeneratedDesignReference.artifactId || selectedGeneratedDesignReference.requestId || "generated-reference"}</b>
@@ -2518,7 +2825,15 @@ export function ImagePlaygroundSurface({ callBackend }) {
                     onPointerDown={event => startLayerDrag(event, layer)}
                     style={canvasLayerStyle(layer, layer.id === project.selectedLayerId)}
                   >
-                    {layer.type === "image" && layer.src ? <img alt="" draggable="false" src={layer.src} /> : null}
+                    {layer.type === "image" && layer.src ? (
+                      <ArtifactImage
+                        alt=""
+                        className="image-layer-artifact"
+                        src={layer.src}
+                        title={layer.name}
+                        variant="layer"
+                      />
+                    ) : null}
                     {layer.id === project.selectedLayerId && !layer.locked ? (
                       <button className="image-resize-handle" onPointerDown={event => startResize(event, layer)} type="button" />
                     ) : null}
@@ -2611,7 +2926,14 @@ export function ImagePlaygroundSurface({ callBackend }) {
                     {layer.visible === false ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                   <div className="image-layer-thumb" style={{ background: layer.type === "shape" ? layer.fill : "rgba(255,255,255,.08)" }}>
-                    {layer.type === "image" && layer.src ? <img alt="" src={layer.src} /> : null}
+                    {layer.type === "image" && layer.src ? (
+                      <ArtifactImage
+                        alt=""
+                        src={layer.src}
+                        title={layer.name}
+                        variant="layer-thumb"
+                      />
+                    ) : null}
                   </div>
                   <div>
                     <strong>{layer.name}</strong>
@@ -2747,7 +3069,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                     <strong>{item.title || "History item"}</strong>
                     {historyPreview ? (
                       <div className="image-history-preview">
-                        <img alt={item.title || "History image preview"} src={historyPreview} />
+                        <ArtifactImage
+                          alt={item.title || "History image preview"}
+                          provider={item.provider || item.providerId}
+                          src={historyPreview}
+                          title={item.title || "History image preview"}
+                          variant="history"
+                        />
                       </div>
                     ) : null}
                     {keyboardReady ? <small className="image-kbd-ready-badge">kbd ready</small> : null}
@@ -3107,7 +3435,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                   <small>{queueFlow.stageMeta[item.state]?.label || "Pending"} · {queueFlow.stageMeta[item.state]?.detail || "Awaiting update"}</small>
                   {item.generatedPreview ? (
                     <div className="image-queue-preview">
-                      <img alt="Generated preview" src={item.generatedPreview} />
+                      <ArtifactImage
+                        alt="Generated preview"
+                        provider={item.providerName || item.providerId}
+                        src={item.generatedPreview}
+                        title={item.title || "Generated preview"}
+                        variant="queue"
+                      />
                       {(item.annotationSnapshot?.pins?.length || item.annotationSnapshot?.rectangles?.length) ? (
                         <div className="image-queue-preview-overlays" aria-label="Queue annotation overlays">
                           {renderOverlayShapes(item.annotationSnapshot, "queue")}

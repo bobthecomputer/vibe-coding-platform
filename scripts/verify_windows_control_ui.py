@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -63,9 +64,10 @@ SURFACES = [
     {
         "name": "images-desktop",
         "surface": "images",
+        "mode": "agent",
         "width": 1440,
         "height": 960,
-        "expect": ["Image studio"],
+        "expect": ["Image Playground", "Prompt", "Generate image"],
     },
     {
         "name": "settings-models-desktop",
@@ -160,6 +162,10 @@ def npm_command() -> str:
     return "npm.cmd" if sys.platform.startswith("win") else "npm"
 
 
+def npx_command() -> str:
+    return "npx.cmd" if sys.platform.startswith("win") else "npx"
+
+
 def process_group_flags() -> int:
     return subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform.startswith("win") else 0
 
@@ -186,9 +192,41 @@ def stop_process_tree(process: subprocess.Popen[bytes | str] | None, timeout: fl
         process.kill()
 
 
-def start_vite(port: int, *, env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
-    return subprocess.Popen(
-        [
+def verifier_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["VITE_FLUXIO_ALLOW_PREVIEW_FIXTURES"] = "1"
+    return env
+
+
+def run_frontend_build(*, env: dict[str, str]) -> None:
+    completed = subprocess.run(
+        [npm_command(), "run", "frontend:build"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
+        raise RuntimeError(f"Frontend build failed before Windows UI verification:\n{output[-4000:]}")
+
+
+def start_vite(port: int, *, server_mode: str, env: dict[str, str]) -> subprocess.Popen[bytes]:
+    if server_mode == "preview":
+        command = [
+            npx_command(),
+            "vite",
+            "preview",
+            "--config",
+            "vite.config.mjs",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--strictPort",
+        ]
+    else:
+        command = [
             npm_command(),
             "run",
             "frontend:dev",
@@ -198,7 +236,9 @@ def start_vite(port: int, *, env: dict[str, str] | None = None) -> subprocess.Po
             "--port",
             str(port),
             "--strictPort",
-        ],
+        ]
+    return subprocess.Popen(
+        command,
         cwd=ROOT,
         env=env,
         creationflags=process_group_flags(),
@@ -223,7 +263,8 @@ def run_surface_check(
     browser: str,
     browser_path: str,
     surface: dict[str, object],
-    timeout: int,
+    render_timeout: int,
+    process_timeout: int,
 ) -> dict[str, object]:
     command = [
         sys.executable,
@@ -244,15 +285,42 @@ def run_surface_check(
         str(surface.get("min_width", 1000)),
         "--min-height",
         str(surface.get("min_height", 700)),
+        "--render-timeout",
+        str(render_timeout),
     ]
     if browser_path:
         command.extend(["--browser-path", browser_path])
     for fragment in surface["expect"]:
         command.extend(["--expect", str(fragment)])
     started = time.perf_counter()
-    completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=timeout)
-    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     report_path = out_dir / f"{surface['name']}-check.json"
+    try:
+        completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=process_timeout)
+    except subprocess.TimeoutExpired as exc:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        report = {
+            "passed": False,
+            "error": (
+                f"visual smoke process timed out after {process_timeout}s "
+                f"while page render timeout was {render_timeout}s"
+            ),
+            "command": command,
+            "stdout": (exc.stdout or "")[-1600:] if isinstance(exc.stdout, str) else "",
+            "stderr": (exc.stderr or "")[-1600:] if isinstance(exc.stderr, str) else "",
+        }
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return {
+            "name": surface["name"],
+            "surface": surface["surface"],
+            "exitCode": None,
+            "elapsedMs": elapsed_ms,
+            "passed": False,
+            "reportPath": str(report_path),
+            "screenshotPath": "",
+            "missingFragments": [],
+            "error": str(report["error"]),
+        }
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     if report_path.exists():
         report = json.loads(report_path.read_text(encoding="utf-8"))
     else:
@@ -280,7 +348,20 @@ def main() -> int:
     parser.add_argument("--browser", choices=["auto", "chrome", "chromium", "edge", "zen"], default="auto")
     parser.add_argument("--browser-path", default="")
     parser.add_argument("--keep-server", action="store_true")
+    parser.add_argument(
+        "--server-mode",
+        choices=["preview", "dev"],
+        default="preview",
+        help="Use production preview by default for release-like screenshots; use dev only when debugging HMR.",
+    )
+    parser.add_argument("--skip-build", action="store_true", help="Skip frontend build before preview mode.")
     parser.add_argument("--surface-timeout", type=int, default=120)
+    parser.add_argument(
+        "--process-timeout",
+        type=int,
+        default=0,
+        help="Outer timeout for each visual-smoke subprocess. Defaults to max(surface timeout + 90s, 2x surface timeout).",
+    )
     parser.add_argument("--retries", type=int, default=1)
     parser.add_argument("--only", action="append", default=[], help="Surface check name to run; can be passed more than once.")
     args = parser.parse_args()
@@ -290,7 +371,10 @@ def main() -> int:
     run_dir = Path(args.out_dir) / datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    server = start_vite(port)
+    env = verifier_env()
+    if args.server_mode == "preview" and not args.skip_build:
+        run_frontend_build(env=env)
+    server = start_vite(port, server_mode=args.server_mode, env=env)
     try:
         wait_for_http(f"{base_url}/control?preview-control=1", timeout=45)
         selected_names = {str(name).strip() for name in args.only if str(name).strip()}
@@ -305,7 +389,8 @@ def main() -> int:
                     browser=args.browser,
                     browser_path=args.browser_path,
                     surface=surface,
-                    timeout=args.surface_timeout,
+                    render_timeout=args.surface_timeout,
+                    process_timeout=args.process_timeout or max(args.surface_timeout + 90, args.surface_timeout * 2),
                 )
                 latest["attempt"] = attempt + 1
                 if latest["passed"]:
@@ -317,6 +402,8 @@ def main() -> int:
             "schema": "fluxio.windows_control_ui_verification.v1",
             "baseUrl": base_url,
             "outDir": str(run_dir),
+            "serverMode": args.server_mode,
+            "fixtureEnv": env.get("VITE_FLUXIO_ALLOW_PREVIEW_FIXTURES"),
             "passed": passed,
             "surfaces": results,
         }
