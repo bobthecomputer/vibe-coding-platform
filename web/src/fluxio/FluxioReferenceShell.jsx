@@ -11291,6 +11291,15 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const harnessBenchmarkBlockers = asList(harnessBenchmarkBoard.blockers);
   const harnessBenchmarkProofPath = String(harnessBenchmarkBoard?.proof?.artifactPath || "").trim();
   const harnessBenchmarkStatus = String(harnessBenchmarkBoard.status || "pending_live_capture");
+  const updateManagementReadiness =
+    settingsState?.updateManagementReadiness && typeof settingsState.updateManagementReadiness === "object"
+      ? settingsState.updateManagementReadiness
+      : {};
+  const updateComponents = asList(updateManagementReadiness.components);
+  const updateWorkflow = asList(updateManagementReadiness.safeUpgradeWorkflow);
+  const updateBlockers = asList(updateManagementReadiness.blockers);
+  const updateProofPath = String(updateManagementReadiness?.proof?.artifactPath || "").trim();
+  const updateStatus = String(updateManagementReadiness.status || "pending_live_capture");
   const fusionReadiness =
     settingsState?.fusionReadiness && typeof settingsState.fusionReadiness === "object"
       ? settingsState.fusionReadiness
@@ -11340,6 +11349,12 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
       label: "Workspace",
       status: settingsState?.workspaceName || "Local workspace",
       detail: "Local folder, Codex import, NAS bridge, and file routing.",
+    },
+    {
+      id: "updates",
+      label: "Updates",
+      status: titleizeToken(updateStatus),
+      detail: "Dependency, provider/model, runtime adapter, and app-shell update readiness.",
     },
     {
       id: "appearance",
@@ -11520,6 +11535,72 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
           );
         })}
       </div>
+    </div>
+  );
+  const renderUpdateSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-updates-panel="true">
+      <section
+        className={cx("fluxos-update-readiness", updateProofPath && "ready")}
+        data-update-management-readiness="true"
+        data-update-management-primary-lane={updateManagementReadiness.primaryRuntimeLane || "hermes"}
+        data-update-management-schema={updateManagementReadiness.schema || "fluxio.update_management_readiness.v1"}
+      >
+        <div className="fluxos-update-readiness-head">
+          <div>
+            <span>Update management</span>
+            <strong>{titleizeToken(updateStatus)}</strong>
+            <p>
+              Safe updates are treated as release work: one family at a time, Hermes-first runtime proof,
+              reviewable rollback, and no automatic upgrade claims without live evidence.
+            </p>
+          </div>
+          <button
+            className="fluxos-update-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "updates:capture-readiness")}
+            type="button"
+          >
+            Capture update proof
+          </button>
+        </div>
+        <div className="fluxos-update-component-grid" aria-label="Update readiness components">
+          {updateComponents.slice(0, 5).map(component => (
+            <article
+              className={cx(
+                component.status === "ready" && "ready",
+                component.status === "blocked" && "blocked",
+              )}
+              key={component.id || component.label}
+            >
+              <span>{titleizeToken(component.status || "pending")}</span>
+              <strong>{component.label || titleizeToken(component.id || "component")}</strong>
+              <p>{component.detail || component.safeAction || "No update readiness detail captured yet."}</p>
+              <small>{component.currentVersion || "current version pending"} to {component.latestVersion || "latest version pending"}</small>
+              {component.safeAction ? <em>{component.safeAction}</em> : null}
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-update-proof-grid">
+          <article>
+            <span>Primary lane</span>
+            <strong>{titleizeToken(updateManagementReadiness.primaryRuntimeLane || "hermes")}</strong>
+            <p>
+              {asList(updateManagementReadiness.fallbackRuntimeLanes).length
+                ? `Fallback: ${asList(updateManagementReadiness.fallbackRuntimeLanes).join(" / ")}`
+                : "Fallback lanes pending live capture."}
+            </p>
+          </article>
+          <article>
+            <span>Proof</span>
+            <strong>{updateProofPath ? "Captured" : "Not captured"}</strong>
+            <p>{updateProofPath || updateBlockers[0] || updateManagementReadiness.nextAction || "Capture live readiness before updating."}</p>
+          </article>
+          <article>
+            <span>Workflow</span>
+            <strong>{updateWorkflow.map(item => titleizeToken(item.step)).slice(0, 4).join(" / ") || "Snapshot / Isolate / Verify / Rollback"}</strong>
+            <p>{updateWorkflow[0]?.detail || "Capture current state before changing dependencies, models, runtimes, or app shell."}</p>
+          </article>
+        </div>
+      </section>
     </div>
   );
   const renderWorkspaceSettings = () => (
@@ -11763,6 +11844,7 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   );
   const renderActivePanel = () => {
     if (activeTab === "providers") return renderProviderSettings();
+    if (activeTab === "updates") return renderUpdateSettings();
     if (activeTab === "workspace") return renderWorkspaceSettings();
     if (activeTab === "appearance") return renderAppearanceSettings();
     if (activeTab === "rules") return renderRulesSettings();
