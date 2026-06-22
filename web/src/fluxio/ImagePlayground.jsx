@@ -368,6 +368,13 @@ function missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedSta
   };
 }
 
+function handoffTargetLabel(target) {
+  if (target === "builder") return "Builder";
+  if (target === "preview") return "Preview";
+  if (target === "download") return "Download";
+  return "Agent";
+}
+
 export function ImagePlaygroundSurface({ callBackend }) {
   const [project, setProject] = useState(() => loadImageProject());
   const [busy, setBusy] = useState(false);
@@ -641,6 +648,22 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const selfRepairArtifacts = selfRepairProof?.artifacts && typeof selfRepairProof.artifacts === "object"
     ? Object.entries(selfRepairProof.artifacts)
     : [];
+  const latestHandoffReceipt = useMemo(() => {
+    const comments = Array.isArray(project.annotationReadiness?.comments)
+      ? project.annotationReadiness.comments
+      : [];
+    const receipt = comments.find(item => item?.type === "export");
+    if (!receipt) return null;
+    const target = receipt.target || "agent";
+    return {
+      target,
+      label: receipt.targetLabel || handoffTargetLabel(target),
+      artifactTitle: receipt.artifactTitle || selectedLibraryItem?.title || "Selected artifact",
+      artifactUrl: receipt.artifactUrl || "",
+      manifestUrl: receipt.manifestUrl || "",
+      createdAt: receipt.createdAt || "",
+    };
+  }, [project.annotationReadiness?.comments, selectedLibraryItem?.title]);
   const loopStatus = useMemo(
     () => missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedState, queueSummary }),
     [providerBlockedState, queueSummary, selfRepairBusy, selfRepairProof],
@@ -2051,7 +2074,7 @@ export function ImagePlaygroundSurface({ callBackend }) {
       pushOperationEvent("Export blocked", "No image artifact is selected in the gallery.", "warn");
       return;
     }
-    const label = target === "builder" ? "Builder" : target === "preview" ? "Preview" : target === "download" ? "Download" : "Agent";
+    const label = handoffTargetLabel(target);
     updateProject(current => ({
       ...current,
       annotationReadiness: {
@@ -2062,6 +2085,8 @@ export function ImagePlaygroundSurface({ callBackend }) {
             type: "export",
             text: `Exported ${selectedLibraryItem.title} to ${label}.`,
             target,
+            targetLabel: label,
+            artifactTitle: selectedLibraryItem.title,
             artifactUrl: selectedLibraryItem.src,
             manifestUrl: selectedLibraryItem.manifestUrl || "",
             createdAt: nowIso(),
@@ -2318,6 +2343,32 @@ export function ImagePlaygroundSurface({ callBackend }) {
             <button onClick={addFocusedPin} type="button">Add pin</button>
             <button onClick={addFocusedRectangle} type="button">Add region</button>
             <button onClick={() => exportSelectedImage("agent")} type="button">Send to Agent</button>
+          </div>
+          <div className={cx("image-handoff-receipt", latestHandoffReceipt && "has-receipt")} data-image-handoff-receipt="true" role="status" aria-live="polite">
+            <div className="image-handoff-receipt-head">
+              <strong>Latest handoff</strong>
+              <span>{latestHandoffReceipt ? formatTime(latestHandoffReceipt.createdAt) : "No export yet"}</span>
+            </div>
+            {latestHandoffReceipt ? (
+              <>
+                <p>
+                  <b>{latestHandoffReceipt.artifactTitle}</b>
+                  <span>sent to {latestHandoffReceipt.label}</span>
+                </p>
+                <div className="image-handoff-receipt-actions">
+                  <span>Proof comment attached</span>
+                  {latestHandoffReceipt.manifestUrl ? (
+                    <a href={latestHandoffReceipt.manifestUrl} rel="noreferrer" target="_blank">Manifest</a>
+                  ) : null}
+                  <button onClick={() => exportSelectedImage(latestHandoffReceipt.target)} type="button">Send again</button>
+                </div>
+              </>
+            ) : (
+              <p>
+                <b>{selectedLibraryItem?.title || "Select an artifact"}</b>
+                <span>Export to Agent, Builder, Preview, or Download to create a receipt.</span>
+              </p>
+            )}
           </div>
           <div className="image-self-repair-proof" data-image-self-repair-proof="true">
             <strong>Self-repair loop</strong>

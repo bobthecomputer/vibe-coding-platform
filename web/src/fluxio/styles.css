@@ -25704,6 +25704,94 @@ body::-webkit-scrollbar-thumb {
   gap: 8px;
 }
 
+.reference-shell.surface-images .image-handoff-receipt,
+.fluxos-shell.surface-images .image-handoff-receipt {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.reference-shell.surface-images .image-handoff-receipt.has-receipt,
+.fluxos-shell.surface-images .image-handoff-receipt.has-receipt {
+  border-color: rgba(163, 216, 185, 0.26);
+  background: rgba(163, 216, 185, 0.055);
+}
+
+.reference-shell.surface-images .image-handoff-receipt-head,
+.fluxos-shell.surface-images .image-handoff-receipt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.reference-shell.surface-images .image-handoff-receipt-head strong,
+.fluxos-shell.surface-images .image-handoff-receipt-head strong {
+  color: #fff;
+  font-size: 13px;
+}
+
+.reference-shell.surface-images .image-handoff-receipt-head span,
+.fluxos-shell.surface-images .image-handoff-receipt-head span,
+.reference-shell.surface-images .image-handoff-receipt p span,
+.fluxos-shell.surface-images .image-handoff-receipt p span,
+.reference-shell.surface-images .image-handoff-receipt-actions span,
+.fluxos-shell.surface-images .image-handoff-receipt-actions span {
+  color: rgba(239, 244, 242, 0.62);
+  font-size: 11px;
+}
+
+.reference-shell.surface-images .image-handoff-receipt p,
+.fluxos-shell.surface-images .image-handoff-receipt p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.reference-shell.surface-images .image-handoff-receipt p b,
+.fluxos-shell.surface-images .image-handoff-receipt p b {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-shell.surface-images .image-handoff-receipt-actions,
+.fluxos-shell.surface-images .image-handoff-receipt-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reference-shell.surface-images .image-handoff-receipt-actions a,
+.fluxos-shell.surface-images .image-handoff-receipt-actions a,
+.reference-shell.surface-images .image-handoff-receipt-actions button,
+.fluxos-shell.surface-images .image-handoff-receipt-actions button {
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.reference-shell.surface-images .image-handoff-receipt-actions button:not(:disabled):hover,
+.fluxos-shell.surface-images .image-handoff-receipt-actions button:not(:disabled):hover,
+.reference-shell.surface-images .image-handoff-receipt-actions a:hover,
+.fluxos-shell.surface-images .image-handoff-receipt-actions a:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.09);
+}
+
 .reference-shell.surface-images .image-self-repair-proof,
 .fluxos-shell.surface-images .image-self-repair-proof {
   display: grid;

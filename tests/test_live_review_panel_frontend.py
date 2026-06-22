@@ -250,6 +250,10 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn("missionLoopStatus", app)
         self.assertIn("Budget-aware plan", app)
         self.assertIn("proof or cap", app)
+        self.assertIn("latestHandoffReceipt", app)
+        self.assertIn('data-image-handoff-receipt="true"', app)
+        self.assertIn("Latest handoff", app)
+        self.assertIn("Proof comment attached", app)
         self.assertIn("Vision route", app)
         self.assertIn("Image Playground", app)
         self.assertIn("imagePluginMode", app)
@@ -271,6 +275,7 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn(".image-mission-workbench", styles)
         self.assertIn(".image-self-repair-proof", styles)
         self.assertIn(".image-loop-scheme", styles)
+        self.assertIn(".image-handoff-receipt", styles)
 
     def test_builder_has_mission2_current_mission_canvas_and_self_repair_path(self) -> None:
         shell = REFERENCE_SHELL.read_text(encoding="utf-8")
