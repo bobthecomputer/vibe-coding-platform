@@ -1325,6 +1325,116 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "hermes_first_harness_benchmark_board")
 
+    def test_harness_quality_gate_blocks_claimed_feature_without_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            contract = backend.dispatch(
+                "get_harness_quality_gate_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission3-blocked-test",
+                    "completionRequested": True,
+                    "features": [
+                        {
+                            "id": "pre_completion_gate",
+                            "title": "Pre-completion gate",
+                            "status": "passed",
+                            "passes": True,
+                            "proofArtifacts": ["missing-proof.json"],
+                        }
+                    ],
+                    "verificationResults": [
+                        {
+                            "command": "python -m pytest tests/test_web_backend.py::gate",
+                            "status": "passed",
+                            "returnCode": 0,
+                        }
+                    ],
+                    "events": [
+                        {"kind": "harness.plan", "message": "Plan the gate."},
+                        {"kind": "harness.verify", "message": "Verify proof."},
+                    ],
+                    "progress": {
+                        "currentFeatureId": "pre_completion_gate",
+                        "nextAction": "Attach proof before claiming completion.",
+                    },
+                },
+            )
+
+            self.assertEqual(contract["schema"], "fluxio.harness_quality_gate.v1")
+            self.assertEqual(contract["status"], "blocked")
+            self.assertEqual(contract["missionGate"]["status"], "blocked")
+            self.assertEqual(contract["missionGate"]["nextMissing"]["id"], "pre-completion-verification")
+            feature = contract["featureLedger"]["features"][0]
+            self.assertFalse(feature["passes"])
+            self.assertEqual(feature["status"], "blocked")
+            self.assertIn("missing-proof.json", feature["missingProofArtifacts"][0])
+            artifacts = contract["artifacts"]
+            self.assertTrue(pathlib.Path(artifacts["featureLedgerPath"]).is_file())
+            self.assertTrue(pathlib.Path(artifacts["progressPath"]).is_file())
+            self.assertTrue(pathlib.Path(artifacts["eventTracePath"]).is_file())
+            self.assertTrue(pathlib.Path(artifacts["missionGatePath"]).is_file())
+            self.assertTrue(pathlib.Path(artifacts["contractPath"]).is_file())
+
+    def test_harness_quality_gate_completes_with_feature_proof_and_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_dir = root / "artifacts" / "mission3"
+            proof_dir.mkdir(parents=True)
+            proof_file = proof_dir / "proof.json"
+            proof_file.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            contract = backend.dispatch(
+                "get_harness_quality_gate_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission3-complete-test",
+                    "completionRequested": True,
+                    "features": [
+                        {
+                            "id": "pre_completion_gate",
+                            "title": "Pre-completion gate",
+                            "status": "passed",
+                            "passes": True,
+                            "proofArtifacts": [str(proof_file)],
+                            "verificationCommands": ["python -m pytest tests/test_web_backend.py::gate"],
+                        }
+                    ],
+                    "verificationResults": [
+                        {
+                            "command": "python -m pytest tests/test_web_backend.py::gate",
+                            "status": "passed",
+                            "returnCode": 0,
+                            "durationMs": 123,
+                        }
+                    ],
+                    "events": [
+                        {"kind": "harness.plan", "message": "Plan the gate."},
+                        {"kind": "harness.verify", "message": "Verify proof."},
+                    ],
+                    "progress": {
+                        "currentFeatureId": "pre_completion_gate",
+                        "nextAction": "Open the focused Mission 3 PR.",
+                    },
+                },
+            )
+
+            self.assertEqual(contract["status"], "complete")
+            self.assertEqual(contract["missionGate"]["status"], "complete")
+            self.assertIsNone(contract["missionGate"]["nextMissing"])
+            self.assertEqual(contract["featureLedger"]["rules"]["passesRequiresProof"], True)
+            self.assertTrue(contract["featureLedger"]["features"][0]["passes"])
+            self.assertEqual(contract["progress"]["completedFeatureCount"], 1)
+            self.assertEqual({item["kind"] for item in contract["eventTrace"]}, {"harness.plan", "harness.verify"})
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "mission3_harness_quality_pre_completion_gate")
+            self.assertEqual(proof["missionGate"]["status"], "complete")
+
     def test_update_management_readiness_command_writes_safe_update_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

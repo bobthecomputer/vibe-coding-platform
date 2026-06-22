@@ -6757,6 +6757,258 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _harness_quality_gate_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"harness-quality-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "harness_quality_gate" / request_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        completion_requested = bool(
+            payload.get("completionRequested")
+            or payload.get("completion_requested")
+            or payload.get("claimComplete")
+            or payload.get("claim_complete")
+        )
+        raw_features = payload.get("features")
+        if not isinstance(raw_features, list) or not raw_features:
+            raw_features = [
+                {
+                    "id": "mission3-harness-quality-gate",
+                    "title": "Install pre-completion harness gate",
+                    "status": "in_progress",
+                    "passes": False,
+                    "proofArtifacts": [],
+                }
+            ]
+        raw_verification = payload.get("verificationResults") or payload.get("verification_results") or []
+        verification_results = [item for item in raw_verification if isinstance(item, dict)] if isinstance(raw_verification, list) else []
+        raw_events = payload.get("events") if isinstance(payload.get("events"), list) else []
+        progress_payload = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
+        now = utc_now_iso()
+
+        def resolved_existing_path(raw_path: object) -> str:
+            value = str(raw_path or "").strip()
+            if not value:
+                return ""
+            path = Path(value)
+            if not path.is_absolute():
+                path = root / path
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            return str(resolved) if resolved.exists() else ""
+
+        def verification_passed(item: dict[str, Any]) -> bool:
+            status = str(item.get("status") or "").strip().lower()
+            return_code = item.get("returnCode", item.get("return_code", item.get("returncode", 0)))
+            try:
+                numeric_return_code = int(return_code)
+            except (TypeError, ValueError):
+                numeric_return_code = 1
+            return status in {"passed", "pass", "ok", "executed", "success"} and numeric_return_code == 0
+
+        passed_verification = [item for item in verification_results if verification_passed(item)]
+        failed_verification = [item for item in verification_results if not verification_passed(item)]
+        features: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_features):
+            raw = item if isinstance(item, dict) else {}
+            feature_id = _sanitize_artifact_id(str(raw.get("id") or raw.get("featureId") or f"feature-{index + 1}"))
+            title = str(raw.get("title") or raw.get("label") or feature_id).strip()
+            status = str(raw.get("status") or ("passed" if raw.get("passes") else "pending")).strip().lower()
+            explicit_pass = bool(raw.get("passes")) or status in {"passed", "done", "complete", "completed", "verified"}
+            proof_paths = raw.get("proofArtifacts") or raw.get("proof_artifacts") or raw.get("proof") or []
+            if isinstance(proof_paths, (str, Path)):
+                proof_paths = [str(proof_paths)]
+            if not isinstance(proof_paths, list):
+                proof_paths = []
+            existing_proofs = [path for path in (resolved_existing_path(path) for path in proof_paths) if path]
+            verification_refs = [
+                str(value)
+                for value in (raw.get("verificationCommands") or raw.get("verification_commands") or [])
+                if str(value).strip()
+            ]
+            command_hits = [
+                item
+                for item in passed_verification
+                if not verification_refs
+                or str(item.get("command") or "").strip() in verification_refs
+            ]
+            declared_proof_paths = [path for path in proof_paths if str(path).strip()]
+            proof_ready = bool(existing_proofs) if declared_proof_paths else bool(command_hits)
+            passes = explicit_pass and proof_ready
+            features.append(
+                {
+                    "id": feature_id,
+                    "title": title,
+                    "status": "passed" if passes else ("blocked" if explicit_pass and not proof_ready else status or "pending"),
+                    "passes": passes,
+                    "claimedPassing": explicit_pass,
+                    "proofReady": proof_ready,
+                    "proofArtifacts": existing_proofs,
+                    "missingProofArtifacts": [
+                        str(path)
+                        for path in proof_paths
+                        if str(path).strip() and not resolved_existing_path(path)
+                    ],
+                    "verificationCommands": verification_refs,
+                    "blockedReason": "" if passes else (
+                        "Feature claimed passing but has no existing proof artifact or passing verification evidence."
+                        if explicit_pass
+                        else "Feature is not marked passing yet."
+                    ),
+                }
+            )
+
+        active_features = [
+            item
+            for item in features
+            if str(item.get("status") or "").lower() in {"active", "in_progress", "in-progress", "running"}
+        ]
+        event_trace = []
+        for index, item in enumerate(raw_events):
+            raw = item if isinstance(item, dict) else {}
+            event_trace.append(
+                {
+                    "sequence": index + 1,
+                    "timestamp": str(raw.get("timestamp") or now),
+                    "kind": str(raw.get("kind") or raw.get("type") or "harness.event"),
+                    "message": str(raw.get("message") or raw.get("summary") or ""),
+                    "metadata": raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {},
+                }
+            )
+        if not event_trace:
+            event_trace = [
+                {
+                    "sequence": 1,
+                    "timestamp": now,
+                    "kind": "harness.context_loaded",
+                    "message": "Harness quality gate created from current mission payload.",
+                    "metadata": {"command": command, "requestId": request_id},
+                }
+            ]
+        event_kinds = {str(item.get("kind") or "") for item in event_trace}
+        required_event_kinds = {"harness.plan", "harness.verify"}
+        progress = {
+            "schema": "fluxio.harness_progress.v1",
+            "mission": "mission3-harness-quality",
+            "requestId": request_id,
+            "updatedAt": now,
+            "currentFeatureId": str(progress_payload.get("currentFeatureId") or progress_payload.get("current_feature_id") or (features[0]["id"] if features else "")),
+            "nextAction": str(progress_payload.get("nextAction") or progress_payload.get("next_action") or "Run the next missing verification item."),
+            "completedFeatureCount": sum(1 for item in features if item["passes"]),
+            "totalFeatureCount": len(features),
+            "openFeatureIds": [item["id"] for item in features if not item["passes"]],
+        }
+        gate_items = [
+            {
+                "id": "feature-ledger",
+                "label": "Feature ledger is present and proof-gated",
+                "status": "done" if features else "blocked",
+                "proof": f"{len(features)} feature(s) normalized.",
+            },
+            {
+                "id": "one-feature-at-a-time",
+                "label": "Only one feature is active at a time",
+                "status": "done" if len(active_features) <= 1 else "blocked",
+                "proof": f"{len(active_features)} active feature(s).",
+            },
+            {
+                "id": "pre-completion-verification",
+                "label": "Pre-completion verifier has passing evidence for every done feature",
+                "status": "done" if features and all(item["passes"] for item in features) and passed_verification and not failed_verification else "blocked",
+                "proof": (
+                    f"{len(passed_verification)} passing verification result(s), {len(failed_verification)} failing result(s)."
+                    if verification_results
+                    else "No verification results supplied."
+                ),
+            },
+            {
+                "id": "event-trace",
+                "label": "Harness event trace includes plan and verify phases",
+                "status": "done" if required_event_kinds.issubset(event_kinds) else "blocked",
+                "proof": ", ".join(sorted(event_kinds)) or "No events.",
+            },
+            {
+                "id": "progress-handoff",
+                "label": "Compact progress handoff is available",
+                "status": "done" if progress["currentFeatureId"] and progress["nextAction"] else "blocked",
+                "proof": progress["nextAction"],
+            },
+            {
+                "id": "repo-system-of-record",
+                "label": "Gate artifacts are written in the repo control directory",
+                "status": "done",
+                "proof": str(artifact_dir),
+            },
+        ]
+        missing = [item for item in gate_items if item["status"] != "done"]
+        gate_status = "complete" if not missing else ("blocked" if completion_requested else "incomplete")
+        mission_gate = {
+            "schema": "fluxio.mission_completion_gate.v1",
+            "mission": "mission3-harness-quality",
+            "status": gate_status,
+            "completionRequested": completion_requested,
+            "items": gate_items,
+            "nextMissing": missing[0] if missing else None,
+        }
+        feature_ledger = {
+            "schema": "fluxio.harness_feature_ledger.v1",
+            "mission": "mission3-harness-quality",
+            "requestId": request_id,
+            "features": features,
+            "rules": {
+                "passesRequiresProof": True,
+                "oneFeatureAtATime": True,
+                "completionRequiresVerification": True,
+            },
+        }
+        contract = {
+            "schema": "fluxio.harness_quality_gate.v1",
+            "generatedAt": now,
+            "requestId": request_id,
+            "status": gate_status,
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["opencode", "openclaw"],
+            "missionScope": "feature ledger, progress file, event trace, and pre-completion verification gate",
+            "outOfScope": ["broad UI cleanup", "provider ecosystem expansion", "fusion", "benchmark board", "red-team simulation"],
+            "featureLedger": feature_ledger,
+            "progress": progress,
+            "eventTrace": event_trace,
+            "verification": {
+                "passed": passed_verification,
+                "failed": failed_verification,
+            },
+            "missionGate": mission_gate,
+            "artifacts": {
+                "featureLedgerPath": str(artifact_dir / "feature_ledger.json"),
+                "progressPath": str(artifact_dir / "progress.json"),
+                "eventTracePath": str(artifact_dir / "event_trace.jsonl"),
+                "missionGatePath": str(artifact_dir / "mission_completion_gate.json"),
+                "contractPath": str(artifact_dir / "contract.json"),
+            },
+            "proof": {
+                "command": command,
+                "artifactPath": str(artifact_dir / "contract.json"),
+                "purpose": "mission3_harness_quality_pre_completion_gate",
+            },
+            "nextAction": (
+                "Mission 3 gate is complete; proceed to harness runtime integration or Mission 4 only after review."
+                if gate_status == "complete"
+                else f"Resolve gate item: {missing[0]['label'] if missing else 'unknown'}."
+            ),
+        }
+        (artifact_dir / "feature_ledger.json").write_text(json.dumps(feature_ledger, indent=2), encoding="utf-8")
+        (artifact_dir / "progress.json").write_text(json.dumps(progress, indent=2), encoding="utf-8")
+        (artifact_dir / "event_trace.jsonl").write_text(
+            "\n".join(json.dumps(item, sort_keys=True) for item in event_trace) + "\n",
+            encoding="utf-8",
+        )
+        (artifact_dir / "mission_completion_gate.json").write_text(json.dumps(mission_gate, indent=2), encoding="utf-8")
+        (artifact_dir / "contract.json").write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        return contract
+
     def _update_management_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         root = Path(payload.get("root") or self.root).resolve()
         request_id = _sanitize_artifact_id(
@@ -8215,6 +8467,8 @@ class FluxioWebBackend:
             return self._preview_annotation_readiness_artifact(command, payload)
         if command in {"harness_benchmark_board_command", "get_harness_benchmark_board_command"}:
             return self._harness_benchmark_board_artifact(command, payload)
+        if command in {"harness_quality_gate_command", "get_harness_quality_gate_command"}:
+            return self._harness_quality_gate_artifact(command, payload)
         if command in {"update_management_readiness_command", "get_update_management_readiness_command"}:
             return self._update_management_readiness_artifact(command, payload)
         if command in {"pr_stack_landing_readiness_command", "get_pr_stack_landing_readiness_command"}:
