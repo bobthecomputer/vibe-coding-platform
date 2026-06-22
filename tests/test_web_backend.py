@@ -1350,6 +1350,16 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("capture screenshot artifact", contract["captureCapabilities"])
             self.assertEqual(contract["selectedFinding"]["id"], "annotation-preview")
             self.assertIn("Fold raw proof", contract["nextAction"])
+            self.assertEqual(contract["executionProof"]["schema"], "fluxio.preview_execution_proof.v1")
+            self.assertTrue(contract["executionProof"]["screenshotCaptured"])
+            self.assertTrue(contract["executionProof"]["domCaptured"])
+            self.assertTrue(contract["executionProof"]["annotationFeedsRuntime"])
+            self.assertEqual(contract["runtimeHandoff"]["schema"], "fluxio.preview_annotation_handoff.v1")
+            self.assertIn("Fold raw proof", contract["runtimeHandoff"]["nextImplementationStep"])
+            self.assertEqual(contract["annotationMap"]["schema"], "fluxio.preview_annotation_map.v1")
+            self.assertEqual(contract["missionGate"]["schema"], "fluxio.preview_browser_annotation_gate.v1")
+            self.assertEqual(contract["missionGate"]["missionId"], "mission7-preview-browser-annotation")
+            self.assertEqual(contract["missionGate"]["status"], "complete")
             self.assertIn("preview_screenshot_breakdown", {item["id"] for item in contract["skillsUsed"]})
             self.assertEqual({item["step"] for item in contract["annotationLoop"]}, {"capture", "breakdown", "annotate", "repair"})
             self.assertTrue(all(item["status"] != "blocked" for item in contract["readinessChecks"]))
@@ -1358,6 +1368,45 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "preview_browser_annotation_readiness")
             self.assertEqual(proof["proofArtifacts"]["screenshotPath"], str(screenshot.resolve()))
+            annotation_map_path = pathlib.Path(contract["proofArtifacts"]["annotationMapPath"])
+            runtime_handoff_path = pathlib.Path(contract["proofArtifacts"]["runtimeHandoffPath"])
+            self.assertTrue(annotation_map_path.is_file())
+            self.assertTrue(runtime_handoff_path.is_file())
+            annotation_map = json.loads(annotation_map_path.read_text(encoding="utf-8"))
+            runtime_handoff = json.loads(runtime_handoff_path.read_text(encoding="utf-8"))
+            self.assertEqual(annotation_map["annotation"]["id"], "annotation-preview")
+            self.assertEqual(runtime_handoff["source"], "preview_browser_annotation")
+
+    def test_preview_annotation_readiness_blocks_without_capture_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            (scripts / "control_route_visual_smoke.py").write_text("# visual smoke fixture\n", encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            contract = backend.dispatch(
+                "get_preview_annotation_readiness_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission7-preview-missing-capture",
+                    "targetUrl": "http://127.0.0.1:5185/control?surface=builder",
+                    "visualFinding": {
+                        "id": "missing-capture",
+                        "finding": "The preview cannot prove the browser saw the target yet.",
+                        "nextImplementationStep": "Capture screenshot and DOM artifacts before implementation.",
+                    },
+                },
+            )
+
+            self.assertEqual(contract["status"], "blocked_missing_preview_capture")
+            self.assertEqual(contract["missionGate"]["status"], "needs_capture")
+            self.assertFalse(contract["executionProof"]["screenshotCaptured"])
+            self.assertFalse(contract["executionProof"]["domCaptured"])
+            self.assertIn("No screenshot path supplied yet.", contract["blockers"])
+            self.assertIn("No DOM path supplied yet.", contract["blockers"])
+            self.assertTrue(pathlib.Path(contract["proofArtifacts"]["annotationMapPath"]).is_file())
+            self.assertTrue(pathlib.Path(contract["proofArtifacts"]["runtimeHandoffPath"]).is_file())
 
     def test_harness_benchmark_board_command_writes_hermes_first_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
