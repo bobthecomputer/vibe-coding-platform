@@ -6406,6 +6406,168 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _automation_overlap_status_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"automation-overlap-{int(time.time())}")
+        )
+        control_dir = root / ".agent_control"
+        artifact_dir = control_dir / "automation_overlap_status"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+
+        automation_id = str(payload.get("automationId") or payload.get("automation_id") or "").strip()
+        memory_path_raw = str(
+            payload.get("automationMemoryPath")
+            or payload.get("automation_memory_path")
+            or os.environ.get("FLUXIO_AUTOMATION_MEMORY_PATH")
+            or ""
+        ).strip()
+        if not memory_path_raw:
+            codex_home = str(os.environ.get("CODEX_HOME") or "").strip()
+            if codex_home and automation_id:
+                memory_path_raw = str(Path(codex_home) / "automations" / automation_id / "memory.md")
+        memory_path = Path(memory_path_raw).expanduser() if memory_path_raw else None
+        memory_text = ""
+        memory_exists = False
+        if memory_path:
+            try:
+                memory_path = memory_path.resolve()
+                memory_exists = memory_path.exists()
+                if memory_exists:
+                    memory_text = memory_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                memory_exists = False
+                memory_text = ""
+
+        completed_numbers = sorted({int(match) for match in re.findall(r"\bMission\s+(\d+)\b", memory_text)})
+        highest_completed = max(completed_numbers) if completed_numbers else 0
+        pr_links = re.findall(r"https://github\.com/[^\s`)]+/pull/\d+", memory_text)
+
+        watchdog_report = _safe_json_object(control_dir / "mission_watchdog.json")
+        watchdog_summary = watchdog_report.get("summary") if isinstance(watchdog_report.get("summary"), dict) else {}
+        supervisor = _safe_json_object(control_dir / "mission_watchdog_supervisor.json")
+        bootstrap_cache = _safe_json_object(control_dir / "control_room_bootstrap_summary_cache.json")
+        bootstrap_summary = bootstrap_cache.get("summary") if isinstance(bootstrap_cache.get("summary"), dict) else {}
+        counts = bootstrap_summary.get("counts") if isinstance(bootstrap_summary.get("counts"), dict) else {}
+
+        thread_goal_status = str(
+            payload.get("threadGoalStatus")
+            or payload.get("thread_goal_status")
+            or payload.get("goalStatus")
+            or payload.get("goal_status")
+            or "unknown"
+        ).strip().lower()
+        current_mission = int(payload.get("currentMissionNumber") or payload.get("current_mission_number") or 0)
+        active_missions = int(counts.get("activeMissions") or watchdog_summary.get("activeMissionCount") or 0)
+        queued_missions = int(counts.get("queuedMissions") or watchdog_summary.get("queuedMissionCount") or 0)
+        blocked_missions = int(counts.get("blockedMissions") or watchdog_summary.get("blockedMissionCount") or 0)
+        supervisor_active = bool(supervisor.get("supervisorActive") or supervisor.get("loopActive"))
+        unfinished_goal = thread_goal_status in {
+            "active",
+            "budget_limited",
+            "budget-limited",
+            "unfinished",
+            "running",
+            "in_progress",
+            "in-progress",
+        }
+        if unfinished_goal:
+            status = "defer_new_goal"
+            tone = "warn"
+            decision = "Do not create or override a slash goal."
+            next_action = "Continue the active mission and notify only if user action is required."
+        elif current_mission and highest_completed >= current_mission:
+            status = "skip_completed_mission"
+            tone = "good"
+            decision = f"Skip Mission {current_mission}; memory records Mission {highest_completed} complete."
+            next_action = f"Move to Mission {highest_completed + 1} or the next useful improvement."
+        elif active_missions or queued_missions:
+            status = "defer_for_live_mission"
+            tone = "warn"
+            decision = "Live mission state is not idle."
+            next_action = "Do not launch overlapping automation work until the active or queued mission clears."
+        elif not memory_exists:
+            status = "needs_memory_evidence"
+            tone = "warn"
+            decision = "Automation memory is not attached."
+            next_action = "Pass the automation memory path or set FLUXIO_AUTOMATION_MEMORY_PATH before claiming completed missions are skipped."
+        else:
+            status = "continue_next_mission"
+            tone = "good"
+            decision = "No unfinished goal or active mission evidence found."
+            next_action = f"Continue with Mission {highest_completed + 1} or the next useful real-project improvement."
+
+        checks = [
+            {
+                "id": "thread-goal",
+                "label": "Thread goal",
+                "status": "defer" if unfinished_goal else ("unknown" if thread_goal_status == "unknown" else "clear"),
+                "detail": f"Goal status: {thread_goal_status}.",
+            },
+            {
+                "id": "completed-memory",
+                "label": "Completed missions",
+                "status": "ready" if memory_exists else "missing",
+                "detail": f"Highest completed mission: {highest_completed}." if memory_exists else "Automation memory path was not readable.",
+            },
+            {
+                "id": "live-mission-state",
+                "label": "Live mission state",
+                "status": "defer" if active_missions or queued_missions else "clear",
+                "detail": f"{active_missions} active, {queued_missions} queued, {blocked_missions} blocked.",
+            },
+            {
+                "id": "watchdog-loop",
+                "label": "Watchdog loop",
+                "status": "ready" if supervisor_active else "not_running",
+                "detail": str(supervisor.get("loopStatus") or watchdog_report.get("loopStatus") or "loop status not reported"),
+            },
+        ]
+        generated_at = utc_now_iso()
+        contract = {
+            "schema": "fluxio.automation_overlap_status.v1",
+            "generatedAt": generated_at,
+            "status": status,
+            "tone": tone,
+            "automationId": automation_id,
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode"],
+            "decision": decision,
+            "nextAction": next_action,
+            "currentMissionNumber": current_mission,
+            "highestCompletedMission": highest_completed,
+            "completedMissionNumbers": completed_numbers[-12:],
+            "proofLinks": pr_links[-8:],
+            "threadGoal": {
+                "status": thread_goal_status,
+                "objective": str(payload.get("threadGoalObjective") or payload.get("thread_goal_objective") or "")[:420],
+                "source": "runtime_payload" if thread_goal_status != "unknown" else "not_supplied",
+            },
+            "liveMissionState": {
+                "active": active_missions,
+                "queued": queued_missions,
+                "blocked": blocked_missions,
+                "watchdogReportPresent": watchdog_report.get("schema") == "fluxio.mission_watchdog.v1",
+                "supervisorActive": supervisor_active,
+            },
+            "memory": {
+                "path": str(memory_path) if memory_path else "",
+                "present": memory_exists,
+            },
+            "checks": checks,
+            "proof": {
+                "command": command,
+                "artifactPath": str(artifact_path),
+                "writtenAt": generated_at,
+                "purpose": "automation_overlap_goal_guard",
+            },
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
@@ -7332,6 +7494,8 @@ class FluxioWebBackend:
             return self._harness_benchmark_board_artifact(command, payload)
         if command in {"update_management_readiness_command", "get_update_management_readiness_command"}:
             return self._update_management_readiness_artifact(command, payload)
+        if command in {"automation_overlap_status_command", "get_automation_overlap_status_command"}:
+            return self._automation_overlap_status_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

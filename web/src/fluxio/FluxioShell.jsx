@@ -5189,6 +5189,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
   const [harnessBenchmarkBoardContract, setHarnessBenchmarkBoardContract] = useState(null);
   const [updateManagementReadinessContract, setUpdateManagementReadinessContract] = useState(null);
+  const [automationOverlapStatusContract, setAutomationOverlapStatusContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
   const [appUpdateState, setAppUpdateState] = useState({
     status: "",
@@ -15559,6 +15560,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "automation:capture-overlap-status") {
+        setSurface("settings");
+        setReferenceSettingsTab("rules");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture automation overlap status.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_automation_overlap_status_command",
+            {
+              payload: {
+                root: null,
+                requestId: `automation-overlap-${Date.now()}`,
+                automationId: "fluxio-night-school-real-agent-transcript-proof",
+                currentMissionNumber: 13,
+                threadGoalStatus: "unknown",
+              },
+            },
+            { throwOnError: true },
+          );
+          setAutomationOverlapStatusContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Automation overlap proof captured: ${pathLeaf(artifactPath)}.`
+              : "Automation overlap proof captured.",
+            "info",
+          );
+          await refreshAll("automation-overlap-status");
+        } catch (error) {
+          pushToast(`Automation overlap proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "settings:run-action") {
         const action = payload?.action;
         if (!action?.actionId) {
@@ -19621,6 +19660,53 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ],
       blockers: ["Live capture has not run in this browser session."],
       nextAction: "Capture update readiness proof before changing dependencies, provider definitions, or runtime adapters.",
+      proof: null,
+    },
+    automationOverlapStatus: automationOverlapStatusContract || snapshot?.automationOverlapStatus || {
+      schema: "fluxio.automation_overlap_status.v1",
+      status: "pending_live_capture",
+      tone: "warn",
+      automationId: "fluxio-night-school-real-agent-transcript-proof",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      decision: "Capture overlap status before the heartbeat creates another goal.",
+      nextAction: "Read thread-goal status first; if active, continue it. If memory already completed the mission, skip forward.",
+      currentMissionNumber: 13,
+      highestCompletedMission: 12,
+      completedMissionNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      proofLinks: [],
+      threadGoal: {
+        status: "unknown",
+        objective: "",
+        source: "not_supplied",
+      },
+      liveMissionState: {
+        active: 0,
+        queued: 0,
+        blocked: 0,
+        watchdogReportPresent: false,
+        supervisorActive: false,
+      },
+      checks: [
+        {
+          id: "thread-goal",
+          label: "Thread goal",
+          status: "unknown",
+          detail: "Thread goal status must be supplied by the automation runner.",
+        },
+        {
+          id: "completed-memory",
+          label: "Completed missions",
+          status: "pending",
+          detail: "Automation memory has not been captured in this browser session.",
+        },
+        {
+          id: "live-mission-state",
+          label: "Live mission state",
+          status: "pending",
+          detail: "Capture live proof to detect active or queued missions.",
+        },
+      ],
       proof: null,
     },
     chatgptConnection: {

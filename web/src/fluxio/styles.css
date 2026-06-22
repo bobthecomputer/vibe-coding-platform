@@ -6677,6 +6677,7 @@ button.fluxos-context-root:hover {
 .fluxos-shell.surface-settings .fluxos-provider-orchestration .fluxos-provider-proof-button,
 .fluxos-shell.surface-settings .fluxos-harness-benchmark-board .fluxos-harness-benchmark-proof-button,
 .fluxos-shell.surface-settings .fluxos-update-readiness .fluxos-update-proof-button,
+.fluxos-shell.surface-settings .fluxos-automation-overlap .fluxos-automation-overlap-proof-button,
 .fluxos-shell.surface-settings .fluxos-jbh-readiness .fluxos-jbh-proof-button {
   display: inline-flex !important;
   min-height: 36px !important;
@@ -6687,6 +6688,131 @@ button.fluxos-context-root:hover {
   background: rgba(245, 245, 245, 0.94) !important;
   color: #050505 !important;
   padding: 0 16px !important;
+}
+
+.fluxos-automation-overlap {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 16px 0;
+}
+
+.fluxos-automation-overlap.ready {
+  border-color: rgba(180, 255, 214, 0.3);
+}
+
+.fluxos-automation-overlap.attention {
+  border-top-color: rgba(245, 245, 240, 0.24);
+}
+
+.fluxos-automation-overlap-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-automation-overlap-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-automation-overlap-head span,
+.fluxos-automation-overlap-grid span,
+.fluxos-automation-overlap-checks strong {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-automation-overlap-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+}
+
+.fluxos-automation-overlap-head p,
+.fluxos-automation-overlap-grid p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-automation-overlap-proof-button {
+  display: inline-flex !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0 16px !important;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-automation-overlap-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-automation-overlap-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+
+.fluxos-automation-overlap-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-automation-overlap-grid article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-automation-overlap-grid strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.fluxos-automation-overlap-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fluxos-automation-overlap-checks span {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--fluxos-muted);
+  font-size: 11px;
+}
+
+.fluxos-automation-overlap-checks em {
+  color: var(--fluxos-text);
+  font-style: normal;
+  font-weight: 760;
 }
 
 .fluxos-jbh-readiness {
@@ -7404,6 +7530,7 @@ button.fluxos-context-root:hover {
   .fluxos-harness-benchmark-proof,
   .fluxos-fusion-project-grid,
   .fluxos-fusion-next-step,
+  .fluxos-automation-overlap-grid,
   .fluxos-jbh-readiness-grid {
     grid-template-columns: 1fr;
   }
@@ -7416,6 +7543,7 @@ button.fluxos-context-root:hover {
   .fluxos-harness-benchmark-proof article + article,
   .fluxos-fusion-project-grid article + article,
   .fluxos-fusion-next-step article + article,
+  .fluxos-automation-overlap-grid article + article,
   .fluxos-jbh-readiness-grid article + article {
     border-left: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.08);

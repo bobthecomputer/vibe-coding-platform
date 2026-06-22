@@ -200,7 +200,7 @@ def capture_chromium_with_cdp(
     timeout: int = 45,
 ) -> dict[str, object]:
     port = free_port()
-    profile = tempfile.TemporaryDirectory(prefix="fluxio-cdp-")
+    profile = tempfile.TemporaryDirectory(prefix="fluxio-cdp-", ignore_cleanup_errors=True)
     process = subprocess.Popen(
         [
             browser,
