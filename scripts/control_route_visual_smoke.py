@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import html
 import json
 import re
 import shutil
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from control_route_interaction_smoke import Cdp, DevToolsSocket, free_port, wait_for_devtools
+from control_route_interaction_smoke import Cdp, DevToolsSocket, free_port, json_get
 
 try:
     from PIL import Image
@@ -159,8 +160,59 @@ def run_browser(browser: str, args: list[str], timeout: int = 90) -> subprocess.
     )
 
 
+def collapse_html_text(value: str) -> str:
+    without_scripts = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", value, flags=re.IGNORECASE | re.DOTALL)
+    without_tags = re.sub(r"<[^>]+>", " ", without_scripts)
+    return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
+
+
 def decode_output(value: bytes | None) -> str:
     return (value or b"").decode("utf-8", errors="replace")
+
+
+def launch_output_excerpt(process: subprocess.Popen[bytes]) -> str:
+    if process.poll() is None:
+        return ""
+    try:
+        stdout, stderr = process.communicate(timeout=1)
+    except subprocess.TimeoutExpired:
+        return ""
+    text = "\n".join(part for part in [decode_output(stdout), decode_output(stderr)] if part)
+    return text[-1200:]
+
+
+def wait_for_chromium_devtools(
+    port: int,
+    process: subprocess.Popen[bytes],
+    *,
+    timeout: float = 30.0,
+) -> list[dict[str, object]]:
+    deadline = time.time() + timeout
+    last_error = ""
+    while time.time() < deadline:
+        if process.poll() is not None:
+            excerpt = launch_output_excerpt(process)
+            raise RuntimeError(
+                "Chrome DevTools endpoint did not start because the browser exited. "
+                f"Exit={process.returncode}; output={excerpt!r}"
+            )
+        try:
+            tabs = json_get(f"http://127.0.0.1:{port}/json/list")
+            if isinstance(tabs, list) and tabs:
+                page_tabs = [
+                    tab
+                    for tab in tabs
+                    if tab.get("type") == "page" and not str(tab.get("url", "")).startswith("chrome-extension:")
+                ]
+                if page_tabs:
+                    return page_tabs
+        except Exception as exc:
+            last_error = repr(exc)
+        time.sleep(0.25)
+    raise RuntimeError(
+        "Chrome DevTools endpoint did not start within "
+        f"{timeout:.0f}s on port {port}. Last error={last_error}"
+    )
 
 
 def cdp_eval(cdp: Cdp, expression: str) -> object:
@@ -200,14 +252,19 @@ def capture_chromium_with_cdp(
     timeout: int = 45,
 ) -> dict[str, object]:
     port = free_port()
-    profile = tempfile.TemporaryDirectory(prefix="fluxio-cdp-")
+    profile = tempfile.TemporaryDirectory(prefix="fluxio-cdp-", ignore_cleanup_errors=True)
     process = subprocess.Popen(
         [
             browser,
             "--headless=new",
             "--disable-dev-shm-usage",
             "--disable-gpu",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--no-default-browser-check",
+            "--no-first-run",
             "--no-sandbox",
+            "--remote-debugging-address=127.0.0.1",
             f"--remote-debugging-port={port}",
             f"--user-data-dir={profile.name}",
             f"--window-size={width},{height}",
@@ -220,7 +277,7 @@ def capture_chromium_with_cdp(
     )
     ws: DevToolsSocket | None = None
     try:
-        tabs = wait_for_devtools(port)
+        tabs = wait_for_chromium_devtools(port, process, timeout=max(timeout, 30))
         ws = DevToolsSocket(str(tabs[0]["webSocketDebuggerUrl"]))
         ws.socket.settimeout(max(timeout, 30))
         cdp = Cdp(ws)
@@ -254,6 +311,166 @@ def capture_chromium_with_cdp(
             ws.close()
         stop_process_tree(process)
         profile.cleanup()
+
+
+def capture_chromium_with_cli(
+    *,
+    browser: str,
+    url: str,
+    screenshot_path: Path,
+    dom_path: Path,
+    width: int,
+    height: int,
+    expected: list[str],
+    timeout: int = 90,
+) -> dict[str, object]:
+    common_args = [
+        "--disable-dev-shm-usage",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--no-default-browser-check",
+        "--no-first-run",
+        f"--window-size={width},{height}",
+        "--virtual-time-budget=8000",
+    ]
+    screenshot = run_browser(
+        browser,
+        [
+            *common_args,
+            f"--screenshot={screenshot_path}",
+            url,
+        ],
+        timeout=timeout,
+    )
+    if screenshot.returncode not in (0, None) and not screenshot_path.exists():
+        raise RuntimeError(
+            decode_output(screenshot.stderr).strip()
+            or decode_output(screenshot.stdout).strip()
+            or "Chromium CLI screenshot failed."
+        )
+    if not screenshot_path.exists():
+        raise RuntimeError("Chromium CLI did not create a screenshot.")
+
+    dom = run_browser(browser, [*common_args, "--dump-dom", url], timeout=timeout)
+    dom_text = decode_output(dom.stdout)
+    if dom.returncode not in (0, None) and not dom_text:
+        raise RuntimeError(
+            decode_output(dom.stderr).strip()
+            or "Chromium CLI DOM capture failed."
+        )
+    dom_path.write_text(dom_text, encoding="utf-8")
+    visible_text = collapse_html_text(dom_text)
+    normalized_text = visible_text.casefold()
+    missing = [fragment for fragment in expected if fragment.casefold() not in normalized_text]
+    if missing:
+        raise RuntimeError(
+            "Chromium CLI fallback rendered without expected text. "
+            f"Missing={missing!r}; visible excerpt={visible_text[:900]!r}"
+        )
+    return {
+        "method": "chromium-cli-fallback",
+        "visibleText": visible_text,
+        "visibleTextExcerpt": visible_text[:900],
+    }
+
+
+async def _capture_chromium_with_playwright_async(
+    *,
+    browser_path: str = "",
+    url: str,
+    screenshot_path: Path,
+    dom_path: Path,
+    width: int,
+    height: int,
+    expected: list[str],
+    timeout: int = 45,
+) -> dict[str, object]:
+    if async_playwright is None:
+        raise RuntimeError(f"Playwright is required for controlled Chromium capture: {PLAYWRIGHT_IMPORT_ERROR}")
+    launch_args = ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
+    async with async_playwright() as playwright:
+        launch_options: dict[str, object] = {
+            "headless": True,
+            "args": launch_args,
+        }
+        if browser_path:
+            launch_options["executable_path"] = browser_path
+        browser = await playwright.chromium.launch(**launch_options)
+        page = await browser.new_page(viewport={"width": width, "height": height})
+        page.set_default_timeout(2000)
+        page.set_default_navigation_timeout(timeout * 1000)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            deadline = time.time() + timeout
+            visible_text = ""
+            last_render_error = ""
+            while time.time() < deadline:
+                try:
+                    visible_text = str(
+                        await asyncio.wait_for(
+                            page.evaluate("document.body ? document.body.innerText : ''"),
+                            timeout=2,
+                        )
+                        or ""
+                    )
+                    has_shell = bool(
+                        await asyncio.wait_for(
+                            page.evaluate(
+                                "Boolean(document.querySelector('.fluxos-shell, .reference-shell, .fluxio-shell'))"
+                            ),
+                            timeout=2,
+                        )
+                    )
+                except Exception as exc:
+                    last_render_error = str(exc)[:500]
+                    await page.wait_for_timeout(250)
+                    continue
+                normalized_text = visible_text.casefold()
+                has_expected = all(fragment.casefold() in normalized_text for fragment in expected)
+                loading = "Loading live control shell" in visible_text
+                if has_shell and has_expected and not loading:
+                    break
+                await page.wait_for_timeout(250)
+            else:
+                raise RuntimeError(
+                    "Timed out waiting for Playwright-rendered control surface. "
+                    f"Expected={expected!r}; visible excerpt={visible_text[:900]!r}; last error={last_render_error!r}"
+                )
+            dom = await page.content()
+            dom_path.write_text(dom, encoding="utf-8")
+            await page.screenshot(path=str(screenshot_path), full_page=False)
+            return {
+                "method": "playwright-chromium",
+                "visibleText": visible_text,
+                "visibleTextExcerpt": visible_text.replace("\r\n", "\n")[:900],
+            }
+        finally:
+            await browser.close()
+
+
+def capture_chromium_with_playwright(
+    *,
+    browser: str,
+    url: str,
+    screenshot_path: Path,
+    dom_path: Path,
+    width: int,
+    height: int,
+    expected: list[str],
+    timeout: int = 45,
+) -> dict[str, object]:
+    return asyncio.run(
+        _capture_chromium_with_playwright_async(
+            browser_path="",
+            url=url,
+            screenshot_path=screenshot_path,
+            dom_path=dom_path,
+            width=width,
+            height=height,
+            expected=expected,
+            timeout=timeout,
+        )
+    )
 
 
 def url_with_params(url: str, **updates: str) -> str:
@@ -624,15 +841,47 @@ def main() -> int:
     expected = args.expect or ["Runtime operations", "Automatic verify", "Hermes"]
     capture_report: dict[str, object] = {"method": "browser-screenshot-cli"}
     if family == "chromium":
-        capture_report = capture_chromium_with_cdp(
-            browser=browser,
-            url=args.url,
-            screenshot_path=screenshot_path,
-            dom_path=dom_path,
-            width=args.width,
-            height=args.height,
-            expected=expected,
-        )
+        fallback_errors: list[str] = []
+        try:
+            capture_report = capture_chromium_with_playwright(
+                browser=browser,
+                url=args.url,
+                screenshot_path=screenshot_path,
+                dom_path=dom_path,
+                width=args.width,
+                height=args.height,
+                expected=expected,
+            )
+        except Exception as exc:
+            fallback_errors.append(f"playwright-chromium: {str(exc)[:700]}")
+            if async_playwright is not None:
+                raise RuntimeError(f"Playwright Chromium capture failed: {fallback_errors[-1]}") from exc
+            try:
+                capture_report = capture_chromium_with_cdp(
+                    browser=browser,
+                    url=args.url,
+                    screenshot_path=screenshot_path,
+                    dom_path=dom_path,
+                    width=args.width,
+                    height=args.height,
+                    expected=expected,
+                )
+                capture_report["fallbackFrom"] = "playwright-chromium"
+                capture_report["fallbackReason"] = fallback_errors[-1]
+            except Exception as cdp_exc:
+                fallback_errors.append(f"chromium-devtools: {str(cdp_exc)[:700]}")
+                capture_report = capture_chromium_with_cli(
+                    browser=browser,
+                    url=args.url,
+                    screenshot_path=screenshot_path,
+                    dom_path=dom_path,
+                    width=args.width,
+                    height=args.height,
+                    expected=expected,
+                    timeout=30,
+                )
+                capture_report["fallbackFrom"] = "playwright-chromium, chromium-devtools"
+                capture_report["fallbackReason"] = " | ".join(fallback_errors)[:1200]
         dom_text = dom_path.read_text(encoding="utf-8")
         dom_supported = True
     elif family in {"zen", "firefox"}:

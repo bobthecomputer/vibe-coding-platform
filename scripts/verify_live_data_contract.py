@@ -28,6 +28,7 @@ def _snippet_check(check_id: str, text: str, snippets: tuple[str, ...], details:
 def verify_live_data_contract(root: Path, *, require_built_dist: bool = False) -> dict:
     root = root.resolve()
     shell_text = _read_text(root / "web" / "src" / "fluxio" / "FluxioShell.jsx")
+    app_text = _read_text(root / "web" / "src" / "fluxio" / "FluxioApp.tsx")
     reference_text = _read_text(root / "web" / "src" / "fluxio" / "FluxioReferenceShell.jsx")
     model_text = _read_text(root / "desktop-ui" / "missionControlModel.js")
     package_text = _read_text(root / "package.json")
@@ -51,15 +52,19 @@ def verify_live_data_contract(root: Path, *, require_built_dist: bool = False) -
         ),
         _snippet_check(
             "fixtures_are_dev_preview_only",
-            shell_text,
+            shell_text + "\n" + app_text,
             (
                 "function fixturesAllowedForSearch(searchParams)",
-                "import.meta.env?.DEV && searchParams.get(\"preview-control\") === \"1\"",
+                "env?.DEV ||",
+                "VITE_FLUXIO_ALLOW_PREVIEW_FIXTURES === \"1\"",
+                "searchParams.get(\"preview-control\") === \"1\"",
                 "allowFixtureMode && explicitFixture",
                 "if (hasTauriBackend() || !allowFixtureMode)",
                 "const allowFixturePreviewModes = fixturesAllowedForSearch(searchParams)",
+                "function isDevControlPreview(): boolean",
+                "new URLSearchParams(window.location.search).get(\"preview-control\") === \"1\"",
             ),
-            "Fixture mode must be restricted to explicit development preview-control mode.",
+            "Fixture mode must be restricted to explicit dev or release-proof preview-control mode.",
         ),
         _snippet_check(
             "summary_missions_feed_builder_rows",
