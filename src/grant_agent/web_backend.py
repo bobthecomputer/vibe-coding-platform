@@ -5693,6 +5693,34 @@ class FluxioWebBackend:
             return build_integration_readiness_snapshot(self.root)
         if command == "inspect_codex_import_command":
             return _codex_import_snapshot()
+        if command in {"get_dictation_config", "get_dictation_config_command"}:
+            return {
+                "schema": "fluxio.dictation_config.v1",
+                "strategy": "system_dictation_bridge",
+                "primaryRuntimeLane": "hermes",
+                "fallbackRuntimeLane": "openclaw",
+                "reviewBeforeSend": True,
+                "ambiguityGuard": True,
+                "correctionBuffer": True,
+                "localSttConfigured": False,
+                "osFallbackHint": (
+                    "Use your OS dictation shortcut, then review the correction buffer before sending."
+                ),
+                "os_fallback_hint": (
+                    "Use your OS dictation shortcut, then review the correction buffer before sending."
+                ),
+                "accessibility": {
+                    "ariaLiveStatus": True,
+                    "keyboardRepairPath": True,
+                    "reducedMotionSafe": True,
+                    "accidentalSendProtection": True,
+                },
+                "proof": {
+                    "command": command,
+                    "surface": "web_backend",
+                    "purpose": "dictation_voice_accessibility_control_points",
+                },
+            }
         if command == "get_provider_secret_presence_command":
             ids = payload.get("providerIds") or payload.get("provider_ids")
             return _provider_presence(

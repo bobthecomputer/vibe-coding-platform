@@ -4554,6 +4554,28 @@ function MetricTile({ label, value, detail, tone = "neutral" }) {
   );
 }
 
+const DICTATION_AMBIGUITY_CHECKS = [
+  ["correction phrase", /\b(scratch that|delete that|correction|i mean|no wait|wait no|start over)\b/i],
+  ["repeated negation", /\b(no|nope)\b[\s,.;:-]+\b(no|nope)\b/i],
+  ["uncertainty marker", /\b(maybe|not sure|unclear|i think)\b/i],
+  ["question burst", /\?{2,}/],
+];
+
+function dictationAmbiguityFinding(value) {
+  const text = String(value || "");
+  const match = DICTATION_AMBIGUITY_CHECKS.find(([, pattern]) => pattern.test(text));
+  return match ? match[0] : "";
+}
+
+function cleanDictationDraft(value) {
+  return String(value || "")
+    .replace(/\b(scratch that|delete that|correction|i mean|no wait|wait no|start over)\b[:,.;\s-]*/gi, "")
+    .replace(/\b(no|nope)\b[\s,.;:-]+\b(no|nope)\b[:,.;\s-]*/gi, "")
+    .replace(/\?{2,}/g, "?")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function FluxioComposer({
   activeCommentTarget,
   draft,
@@ -4567,7 +4589,12 @@ function FluxioComposer({
 }) {
   const currentDraft = String(draft || "");
   const [plusOpen, setPlusOpen] = useState(false);
-  const submit = () => {
+  const [dictationReviewOpen, setDictationReviewOpen] = useState(false);
+  const [dictationGuardEnabled, setDictationGuardEnabled] = useState(true);
+  const [dictationStatus, setDictationStatus] = useState("System dictation route ready");
+  const dictationFinding = useMemo(() => dictationAmbiguityFinding(currentDraft), [currentDraft]);
+  const dictationNeedsReview = Boolean(dictationGuardEnabled && dictationFinding);
+  const performSubmit = () => {
     if (typeof onSubmit === "function") {
       onSubmit();
       return;
@@ -4577,6 +4604,39 @@ function FluxioComposer({
       return;
     }
     fluxioAction(onRequestAction, "composer:send");
+  };
+  const submit = ({ force = false } = {}) => {
+    if (!force && dictationNeedsReview) {
+      setDictationReviewOpen(true);
+      setDictationStatus(`Review needed: ${dictationFinding}`);
+      fluxioAction(onRequestAction, "dictation:review-required", { finding: dictationFinding });
+      return;
+    }
+    setDictationReviewOpen(false);
+    performSubmit();
+  };
+  const armDictation = () => {
+    setDictationReviewOpen(true);
+    setDictationStatus("Dictate into the composer, then review before sending");
+    if (typeof onDictation === "function") {
+      onDictation({
+        source: "fluxio_composer",
+        reviewBeforeSend: true,
+        ambiguityGuard: dictationGuardEnabled,
+        correctionBuffer: true,
+      });
+      return;
+    }
+    fluxioAction(onRequestAction, "dictation:repair-armed", {
+      reviewBeforeSend: true,
+      ambiguityGuard: dictationGuardEnabled,
+      correctionBuffer: true,
+    });
+  };
+  const applyDictationCleanup = () => {
+    const cleaned = cleanDictationDraft(currentDraft);
+    onChangeDraft?.(cleaned);
+    setDictationStatus(cleaned === currentDraft.trim() ? "No dictation markers found" : "Correction markers cleaned");
   };
   const runPlusAction = (actionId, payload) => {
     setPlusOpen(false);
@@ -4601,7 +4661,13 @@ function FluxioComposer({
   ];
 
   return (
-    <section className="fluxos-composer" aria-label="Fluxio command composer">
+    <section
+      className="fluxos-composer"
+      aria-label="Fluxio command composer"
+      data-accessibility-control-points="true"
+      data-dictation-ambiguity-guard={dictationGuardEnabled ? "true" : "false"}
+      data-dictation-control="true"
+    >
       {activeCommentTarget?.id ? (
         <div className="reference-comment-target" data-executable-comment-target="true">
           <span>{activeCommentTarget.kind || "Comment target"}</span>
@@ -4621,11 +4687,84 @@ function FluxioComposer({
       ) : null}
       <textarea
         aria-label="Command Fluxio"
+        aria-describedby="fluxos-dictation-status"
         data-agent-composer-draft="true"
         onChange={event => onChangeDraft?.(event.target.value)}
         placeholder={placeholder}
         value={currentDraft}
       />
+      <div
+        className="fluxos-dictation-strip"
+        data-dictation-repair-strip="true"
+        data-dictation-review-open={dictationReviewOpen ? "true" : "false"}
+      >
+        <div className="fluxos-dictation-copy">
+          <span>Voice guard</span>
+          <strong>{dictationNeedsReview ? `Review ${dictationFinding}` : "Review before send"}</strong>
+        </div>
+        <div className="fluxos-dictation-checks" aria-label="Dictation safeguards">
+          <span>Review before send</span>
+          <span>Ambiguity check</span>
+          <span>Correction buffer</span>
+        </div>
+        <div className="fluxos-dictation-controls">
+          <button
+            aria-pressed={dictationGuardEnabled ? "true" : "false"}
+            data-dictation-guard-toggle="true"
+            onClick={() => {
+              setDictationGuardEnabled(current => !current);
+              setDictationStatus(dictationGuardEnabled ? "Ambiguity guard off for next send" : "Ambiguity guard on");
+            }}
+            type="button"
+          >
+            Guard {dictationGuardEnabled ? "on" : "off"}
+          </button>
+          <button
+            aria-expanded={dictationReviewOpen ? "true" : "false"}
+            data-dictation-review-toggle="true"
+            onClick={() => setDictationReviewOpen(current => !current)}
+            type="button"
+          >
+            Review text
+          </button>
+        </div>
+      </div>
+      <p
+        className="fluxos-dictation-live"
+        id="fluxos-dictation-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {dictationStatus}
+      </p>
+      {dictationReviewOpen ? (
+        <div
+          className="fluxos-dictation-review"
+          data-dictation-correction-buffer="true"
+          role="region"
+          aria-label="Dictation review and correction buffer"
+        >
+          <div className="fluxos-dictation-review-copy">
+            <span>Correction buffer</span>
+            <strong>{dictationFinding ? `Check ${dictationFinding} before launch` : "Text is ready to verify"}</strong>
+            <p>
+              Speak or paste into the composer, clean obvious dictation markers, then send only when the command reads correctly.
+            </p>
+          </div>
+          <div className="fluxos-dictation-review-actions">
+            <button onClick={applyDictationCleanup} type="button">
+              Clean markers
+            </button>
+            <button onClick={() => setDictationReviewOpen(false)} type="button">
+              Keep editing
+            </button>
+            <button className="primary" onClick={() => submit({ force: true })} type="button">
+              Send checked
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="fluxos-composer-bar">
         <div className="fluxos-composer-actions">
           <div className="fluxos-composer-left-actions">
@@ -4658,10 +4797,16 @@ function FluxioComposer({
             ) : null}
           </div>
           <div className="fluxos-composer-right-actions">
-            <button aria-label="Start dictation" onClick={onDictation} title="Start dictation" type="button">
+            <button
+              aria-label="Start dictation repair"
+              data-dictation-control-button="true"
+              onClick={armDictation}
+              title="Start dictation repair"
+              type="button"
+            >
               <Mic size={16} strokeWidth={1.9} />
             </button>
-            <button className="primary" onClick={submit} type="button">
+            <button className="primary" onClick={() => submit()} type="button">
               <ArrowUp size={17} strokeWidth={2.1} />
               <span>Run</span>
             </button>

@@ -1239,6 +1239,107 @@
   color: var(--fluxos-text);
 }
 
+.fluxos-dictation-strip {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.72fr) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 7px;
+}
+
+.fluxos-dictation-copy,
+.fluxos-dictation-review-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fluxos-dictation-copy span,
+.fluxos-dictation-review-copy span {
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fluxos-dictation-copy strong,
+.fluxos-dictation-review-copy strong {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-dictation-checks,
+.fluxos-dictation-controls,
+.fluxos-dictation-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fluxos-dictation-checks span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 0 8px;
+  color: rgba(245, 245, 245, 0.66);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.fluxos-dictation-controls {
+  justify-content: flex-end;
+}
+
+.fluxos-dictation-controls button,
+.fluxos-dictation-review-actions button {
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 5px 9px;
+}
+
+.fluxos-dictation-live {
+  margin: -2px 2px 0;
+  color: rgba(245, 245, 245, 0.58);
+  font-size: 11px;
+}
+
+.fluxos-dictation-review {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.24);
+  padding: 10px;
+}
+
+.fluxos-dictation-review-copy p {
+  margin: 0;
+  color: rgba(245, 245, 245, 0.62);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fluxos-dictation-review-actions {
+  justify-content: flex-end;
+}
+
+.fluxos-dictation-review-actions button.primary {
+  background: #f4f4f5;
+  color: #09090b;
+}
+
 .fluxos-home-lobby .fluxos-composer textarea {
   min-height: 54px;
   padding: 8px 4px;
@@ -6656,8 +6757,20 @@ button.fluxos-context-root:hover {
   .fluxos-phone-actions,
   .fluxos-phone-metrics,
   .fluxos-workbench-proof-metrics,
-  .fluxos-workbench-proof-actions {
+  .fluxos-workbench-proof-actions,
+  .fluxos-dictation-strip,
+  .fluxos-dictation-review {
     grid-template-columns: 1fr;
+  }
+
+  .fluxos-dictation-controls,
+  .fluxos-dictation-review-actions {
+    justify-content: stretch;
+  }
+
+  .fluxos-dictation-controls button,
+  .fluxos-dictation-review-actions button {
+    flex: 1 1 120px;
   }
 
   .fluxos-agent-thread-first-copy {
