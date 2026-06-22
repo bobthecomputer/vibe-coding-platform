@@ -11300,6 +11300,26 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const updateBlockers = asList(updateManagementReadiness.blockers);
   const updateProofPath = String(updateManagementReadiness?.proof?.artifactPath || "").trim();
   const updateStatus = String(updateManagementReadiness.status || "pending_live_capture");
+  const prStackLandingReadiness =
+    settingsState?.prStackLandingReadiness && typeof settingsState.prStackLandingReadiness === "object"
+      ? settingsState.prStackLandingReadiness
+      : {};
+  const prStackLandingSummary =
+    prStackLandingReadiness.summary && typeof prStackLandingReadiness.summary === "object"
+      ? prStackLandingReadiness.summary
+      : {};
+  const prStackLandingStack =
+    prStackLandingReadiness.stack && typeof prStackLandingReadiness.stack === "object"
+      ? prStackLandingReadiness.stack
+      : {};
+  const prStackLandingFrontier =
+    prStackLandingReadiness.landingFrontier && typeof prStackLandingReadiness.landingFrontier === "object"
+      ? prStackLandingReadiness.landingFrontier
+      : {};
+  const prStackLandingRows = asList(prStackLandingReadiness.landingSequence);
+  const prStackLandingBlockers = asList(prStackLandingReadiness.blockers);
+  const prStackLandingProofPath = String(prStackLandingReadiness?.proof?.artifactPath || "").trim();
+  const prStackLandingStatus = String(prStackLandingReadiness.status || "pending_live_capture");
   const automationOverlapStatus =
     settingsState?.automationOverlapStatus && typeof settingsState.automationOverlapStatus === "object"
       ? settingsState.automationOverlapStatus
@@ -11608,6 +11628,67 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <p>{updateWorkflow[0]?.detail || "Capture current state before changing dependencies, models, runtimes, or app shell."}</p>
           </article>
         </div>
+      </section>
+      <section
+        className={cx("fluxos-pr-stack-landing", prStackLandingProofPath && "ready", !prStackLandingReadiness.ok && "attention")}
+        data-pr-stack-landing-readiness="true"
+        data-pr-stack-landing-primary-lane={prStackLandingReadiness.primaryRuntimeLane || "hermes"}
+        data-pr-stack-landing-schema={prStackLandingReadiness.schema || "fluxio.pr_stack_landing_readiness.v1"}
+      >
+        <div className="fluxos-pr-stack-landing-head">
+          <div>
+            <span>PR landing readiness</span>
+            <strong>{titleizeToken(prStackLandingStatus)}</strong>
+            <p>
+              Ordered merge proof for the mission stack. Hermes is the primary lane; OpenClaw and OpenCode remain fallback metadata for route verification.
+            </p>
+          </div>
+          <button
+            className="fluxos-pr-stack-landing-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "pr-stack:capture-landing-readiness")}
+            type="button"
+          >
+            Capture PR proof
+          </button>
+        </div>
+        <div className="fluxos-pr-stack-landing-grid" aria-label="PR landing readiness summary">
+          <article>
+            <span>Landing frontier</span>
+            <strong>{prStackLandingFrontier.number ? `PR${prStackLandingFrontier.number}` : "Not captured"}</strong>
+            <p>{asList(prStackLandingFrontier.blockers).join(" / ") || prStackLandingBlockers[0] || "No frontier blocker captured yet."}</p>
+          </article>
+          <article>
+            <span>Stack</span>
+            <strong>{`${prStackLandingStack.longestChainLength || 0} PR chain`}</strong>
+            <p>{prStackLandingRows.slice(0, 6).map(row => `#${row.number}`).join(" -> ") || "Landing order pending."}</p>
+          </article>
+          <article>
+            <span>Checks</span>
+            <strong>{`${prStackLandingSummary.releaseProofPassedCount || 0} green / ${prStackLandingSummary.blockedCount || 0} blocked`}</strong>
+            <p>{`${prStackLandingSummary.cleanCount || 0} clean, ${prStackLandingSummary.draftCount || 0} draft.`}</p>
+          </article>
+          <article>
+            <span>Route</span>
+            <strong>{titleizeToken(prStackLandingReadiness.primaryRuntimeLane || "hermes")}</strong>
+            <p>{asList(prStackLandingReadiness.fallbackRuntimeLanes).join(" / ") || "openclaw / opencode"}</p>
+          </article>
+        </div>
+        {prStackLandingRows.length ? (
+          <div className="fluxos-pr-stack-landing-sequence" aria-label="PR landing order">
+            {prStackLandingRows.slice(0, 5).map(row => (
+              <article className={cx(row.ready && "ready", asList(row.blockers).length && "blocked")} key={row.number || row.headRefName}>
+                <span>{row.number ? `PR${row.number}` : "PR"}</span>
+                <strong>{row.title || row.headRefName || "Untitled pull request"}</strong>
+                <p>{asList(row.blockers).join(" / ") || `${titleizeToken(row.releaseProofStatus || "unknown")} release proof`}</p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        <p className="fluxos-pr-stack-landing-foot">
+          {prStackLandingProofPath
+            ? `Proof artifact: ${prStackLandingProofPath}`
+            : prStackLandingReadiness.nextAction || "Capture PR landing readiness before merging the stacked mission PRs."}
+        </p>
       </section>
     </div>
   );

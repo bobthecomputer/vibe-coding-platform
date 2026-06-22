@@ -5193,6 +5193,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [harnessBenchmarkBoardContract, setHarnessBenchmarkBoardContract] = useState(null);
   const [updateManagementReadinessContract, setUpdateManagementReadinessContract] = useState(null);
   const [automationOverlapStatusContract, setAutomationOverlapStatusContract] = useState(null);
+  const [prStackLandingReadinessContract, setPrStackLandingReadinessContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
   const [appUpdateState, setAppUpdateState] = useState({
     status: "",
@@ -15493,6 +15494,43 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "pr-stack:capture-landing-readiness") {
+        setSurface("settings");
+        setReferenceSettingsTab("updates");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture PR landing readiness.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_pr_stack_landing_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `pr-stack-landing-${Date.now()}`,
+                maxChain: 20,
+              },
+            },
+            { throwOnError: true },
+          );
+          setPrStackLandingReadinessContract(response && typeof response === "object" ? response : null);
+          const frontier = response?.landingFrontier?.number ? `PR${response.landingFrontier.number}` : "the stack";
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `PR landing proof captured for ${frontier}: ${pathLeaf(artifactPath)}.`
+              : `PR landing proof captured for ${frontier}.`,
+            response?.ok ? "info" : "warn",
+          );
+          await refreshAll("pr-stack-landing-readiness");
+        } catch (error) {
+          pushToast(`PR landing readiness proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "fusion:capture-readiness") {
         setSurface("settings");
         setReferenceSettingsTab("runtimes");
@@ -19663,6 +19701,35 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ],
       blockers: ["Live capture has not run in this browser session."],
       nextAction: "Capture update readiness proof before changing dependencies, provider definitions, or runtime adapters.",
+      proof: null,
+    },
+    prStackLandingReadiness: prStackLandingReadinessContract || snapshot?.prStackLandingReadiness || {
+      schema: "fluxio.pr_stack_landing_readiness.v1",
+      status: "pending_live_capture",
+      ok: false,
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      source: "pending_live_capture",
+      stack: {
+        openPrCount: 0,
+        chainCount: 0,
+        longestChainLength: 0,
+        longestChainPrs: [],
+        longestChainHeads: [],
+        maxAllowedChain: 20,
+        staleStackDetected: false,
+      },
+      summary: {
+        readyToLandCount: 0,
+        blockedCount: 0,
+        draftCount: 0,
+        cleanCount: 0,
+        releaseProofPassedCount: 0,
+      },
+      landingFrontier: null,
+      landingSequence: [],
+      blockers: ["Live GitHub PR stack evidence has not been captured in this browser session."],
+      nextAction: "Capture PR landing readiness before merging or closing the stacked mission PRs.",
       proof: null,
     },
     automationOverlapStatus: automationOverlapStatusContract || snapshot?.automationOverlapStatus || {

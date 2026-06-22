@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from scripts.pr_stack_health import build_pr_stack_health
+from scripts.pr_stack_health import build_pr_stack_health, build_pr_stack_landing_readiness
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +19,35 @@ def pr(number: int, head: str, base: str) -> dict[str, object]:
         "isDraft": number % 2 == 0,
         "url": f"https://example.test/pull/{number}",
     }
+
+
+def pr_with_checks(
+    number: int,
+    head: str,
+    base: str,
+    *,
+    draft: bool = False,
+    merge_state: str = "CLEAN",
+    release_conclusion: str = "SUCCESS",
+) -> dict[str, object]:
+    row = pr(number, head, base)
+    row.update(
+        {
+            "isDraft": draft,
+            "mergeStateStatus": merge_state,
+            "reviewDecision": "",
+            "statusCheckRollup": [
+                {
+                    "__typename": "CheckRun",
+                    "name": "release-proof",
+                    "workflowName": "Fluxio Release Proof",
+                    "status": "COMPLETED",
+                    "conclusion": release_conclusion,
+                }
+            ],
+        }
+    )
+    return row
 
 
 class PrStackHealthTests(unittest.TestCase):
@@ -55,6 +84,47 @@ class PrStackHealthTests(unittest.TestCase):
         self.assertEqual(report["openPrCount"], 3)
         self.assertEqual(report["longestChainLength"], 1)
         self.assertEqual(report["chainCount"], 3)
+
+    def test_landing_readiness_blocks_at_oldest_failed_pr(self) -> None:
+        rows = [
+            pr_with_checks(131, "codex/131-automation-overlap-status", "codex/130-in-app-update-cue"),
+            pr_with_checks(130, "codex/130-in-app-update-cue", "codex/119-image-playground-mission1"),
+            pr_with_checks(
+                119,
+                "codex/119-image-playground-mission1",
+                "master",
+                merge_state="UNSTABLE",
+                release_conclusion="FAILURE",
+            ),
+        ]
+
+        report = build_pr_stack_landing_readiness(rows, max_chain=10)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["schema"], "fluxio.pr_stack_landing_readiness.v1")
+        self.assertEqual(report["status"], "blocked_at_landing_frontier")
+        self.assertEqual(report["landingFrontier"]["number"], 119)
+        self.assertEqual(report["landingSequence"][0]["number"], 119)
+        self.assertIn("merge_state:unstable", report["landingFrontier"]["blockers"])
+        self.assertIn("release_proof:failed", report["landingFrontier"]["blockers"])
+        self.assertIn("Fix PR119", report["nextAction"])
+        self.assertEqual(report["primaryRuntimeLane"], "hermes")
+        self.assertIn("openclaw", report["fallbackRuntimeLanes"])
+
+    def test_landing_readiness_counts_drafts_and_green_checks(self) -> None:
+        rows = [
+            pr_with_checks(3, "codex/feature-3", "codex/feature-2"),
+            pr_with_checks(2, "codex/feature-2", "codex/feature-1", draft=True),
+            pr_with_checks(1, "codex/feature-1", "master"),
+        ]
+
+        report = build_pr_stack_landing_readiness(rows, max_chain=5)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["landingFrontier"]["number"], 2)
+        self.assertIn("draft", report["landingFrontier"]["blockers"])
+        self.assertEqual(report["summary"]["draftCount"], 1)
+        self.assertEqual(report["summary"]["releaseProofPassedCount"], 3)
 
     def test_operator_doc_matches_scripts_and_workflow(self) -> None:
         doc = (ROOT / "docs" / "PR_STACK_HEALTH.md").read_text(encoding="utf-8")
