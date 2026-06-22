@@ -52,7 +52,7 @@ from .mission_control import (
     hermes_auth_store_candidates,
 )
 from .models import MissionEvent, utc_now_iso
-from .mission_watchdog import ensure_watchdog_supervisor_loop
+from .mission_watchdog import ensure_watchdog_supervisor_loop, load_watchdog_supervisor_state
 from .port_safety import tcp_port_accepts_connection
 from .skill_library import SkillLibrary
 from .skills import SkillRegistry
@@ -4626,8 +4626,14 @@ class FluxioWebBackend:
         report_path = control_dir / "mission_watchdog.json"
         supervisor_path = control_dir / "mission_watchdog_supervisor.json"
         watchdog_report = _safe_json_object(report_path) if report_path.exists() else {}
-        supervisor = _safe_json_object(supervisor_path) if supervisor_path.exists() else {}
+        supervisor = load_watchdog_supervisor_state(root)
         summary = watchdog_report.get("summary") if isinstance(watchdog_report.get("summary"), dict) else {}
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"anti-drift-{int(time.time())}")
+        )
+        generated_at = utc_now_iso()
+        current = datetime.now(timezone.utc)
+        stale_minutes = max(1, int(payload.get("staleMinutes") or payload.get("stale_minutes") or 45))
 
         raw_issues: list[dict[str, Any]] = []
         for source in (
@@ -4641,6 +4647,129 @@ class FluxioWebBackend:
             for issue in source:
                 if isinstance(issue, dict):
                     raw_issues.append(issue)
+
+        def parse_timestamp(value: object) -> datetime | None:
+            text = str(value or "").strip()
+            if not text:
+                return None
+            if text.endswith("Z"):
+                text = f"{text[:-1]}+00:00"
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+
+        def load_json_any(path: Path) -> object:
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+
+        def latest_json(pattern_root: Path, filename: str) -> dict[str, Any]:
+            if not pattern_root.exists():
+                return {}
+            candidates = [path for path in pattern_root.rglob(filename) if path.is_file()]
+            candidates.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+            return _safe_json_object(candidates[0]) if candidates else {}
+
+        missions_payload = load_json_any(control_dir / "missions.json")
+        if isinstance(missions_payload, dict):
+            raw_missions = missions_payload.get("missions") if isinstance(missions_payload.get("missions"), list) else []
+        elif isinstance(missions_payload, list):
+            raw_missions = missions_payload
+        else:
+            raw_missions = []
+        mission_rows: list[dict[str, Any]] = []
+        stale_mission_rows: list[dict[str, Any]] = []
+        active_statuses = {"running", "in_progress", "in-progress", "active", "queued", "launching"}
+        for index, item in enumerate(raw_missions):
+            if not isinstance(item, dict):
+                continue
+            state = item.get("state") if isinstance(item.get("state"), dict) else {}
+            status = str(state.get("status") or item.get("status") or "").strip().lower()
+            updated_at = str(item.get("updated_at") or item.get("updatedAt") or state.get("updated_at") or state.get("updatedAt") or "")
+            parsed = parse_timestamp(updated_at)
+            age_minutes = int((current - parsed).total_seconds() // 60) if parsed else None
+            mission_id = str(item.get("mission_id") or item.get("missionId") or f"mission-{index + 1}")
+            row = {
+                "missionId": mission_id,
+                "status": status or "unknown",
+                "updatedAt": updated_at,
+                "ageMinutes": age_minutes,
+                "runtimeId": str(item.get("runtime_id") or item.get("runtimeId") or ""),
+                "objective": str(item.get("objective") or item.get("title") or "")[:240],
+            }
+            mission_rows.append(row)
+            if status in active_statuses and (age_minutes is None or age_minutes >= stale_minutes):
+                stale_mission_rows.append(row)
+                raw_issues.append(
+                    {
+                        "kind": "stale_running_mission",
+                        "severity": "warn",
+                        "missionId": mission_id,
+                        "title": "Active mission has stale progress",
+                        "detail": f"Mission {mission_id} is {status} and last updated {age_minutes if age_minutes is not None else 'unknown'} minutes ago.",
+                        "firstStep": "Open the mission detail, inspect the latest runtime event, and either resume the route or mark the lane blocked.",
+                    }
+                )
+
+        if supervisor.get("stale") or supervisor.get("status") in {"missing", "unreadable", "stale"}:
+            raw_issues.append(
+                {
+                    "kind": "stale_runtime_heartbeat",
+                    "severity": "warn",
+                    "title": "Watchdog supervisor is stale",
+                    "detail": str(supervisor.get("nextAction") or "The monitoring supervisor is missing or overdue."),
+                    "firstStep": str(supervisor.get("nextAction") or "Restart the mission watchdog loop."),
+                }
+            )
+
+        latest_harness_gate = latest_json(control_dir / "harness_quality_gate", "mission_completion_gate.json")
+        if latest_harness_gate and str(latest_harness_gate.get("status") or "").lower() != "complete":
+            next_missing = latest_harness_gate.get("nextMissing") if isinstance(latest_harness_gate.get("nextMissing"), dict) else {}
+            raw_issues.append(
+                {
+                    "kind": "planned_scope_artifacts_not_ready",
+                    "severity": "warn",
+                    "title": "Harness completion gate is not complete",
+                    "detail": str(next_missing.get("label") or "A harness gate is incomplete or blocked."),
+                    "firstStep": str(next_missing.get("proof") or "Repair the harness gate before claiming completion."),
+                }
+            )
+
+        latest_route_contract = latest_json(control_dir / "runtime_route_unification", "contract.json")
+        latest_route_health = (
+            latest_route_contract.get("health") if isinstance(latest_route_contract.get("health"), dict) else {}
+        )
+        route_calls = latest_route_health.get("calls") if isinstance(latest_route_health.get("calls"), dict) else {}
+        primary_route_status = (
+            route_calls.get("hermes", {}).get("status")
+            if isinstance(route_calls.get("hermes"), dict)
+            else ""
+        )
+        if latest_route_contract and str(latest_route_contract.get("status") or "").lower() != "complete":
+            raw_issues.append(
+                {
+                    "kind": "route_contract_incomplete",
+                    "severity": "warn",
+                    "title": "Runtime route contract is not complete",
+                    "detail": f"Runtime route status is {latest_route_contract.get('status') or 'unknown'}.",
+                    "firstStep": "Rerun runtime route unification and attach the latest route-health proof.",
+                }
+            )
+        elif latest_route_contract and primary_route_status and primary_route_status != "ok":
+            raw_issues.append(
+                {
+                    "kind": "runtime_cycle_state_mismatch",
+                    "severity": "warn",
+                    "title": "Primary Hermes route is not currently healthy",
+                    "detail": f"Hermes route status is {primary_route_status}; selected runtime is {latest_route_contract.get('selectedRuntime') or 'unknown'}.",
+                    "firstStep": "Use the recorded fallback lane and repair Hermes provider/auth setup before switching primary back.",
+                }
+            )
 
         seen_issue_keys: set[str] = set()
         issues: list[dict[str, Any]] = []
@@ -4667,13 +4796,22 @@ class FluxioWebBackend:
             for key in ("artifactMissing", "artifactPartial")
         )
         proof_gap_count = explicit_proof_count + artifact_gap_count
-        bad_count = int(summary.get("bad") or sum(1 for issue in issues if _issue_severity(issue) == "bad"))
-        warn_count = int(summary.get("warn") or sum(1 for issue in issues if _issue_severity(issue) == "warn"))
-        issue_count = int(summary.get("issueCount") or len(issues))
+        bad_count = max(int(summary.get("bad") or 0), sum(1 for issue in issues if _issue_severity(issue) == "bad"))
+        warn_count = max(int(summary.get("warn") or 0), sum(1 for issue in issues if _issue_severity(issue) == "warn"))
+        issue_count = max(int(summary.get("issueCount") or 0), len(issues))
         queue_pressure = int(summary.get("queuePressure") or 0)
         live_evidence = bool(watchdog_report.get("schema") == "fluxio.mission_watchdog.v1")
+        supervisor_evidence = supervisor_path.exists()
+        local_state_evidence = bool(mission_rows or latest_harness_gate or latest_route_contract or supervisor_evidence)
+        first_issue = issues[0] if issues else {}
+        first_issue_step = str(
+            first_issue.get("firstRepairStep")
+            or first_issue.get("firstStep")
+            or first_issue.get("detail")
+            or ""
+        )
 
-        if not live_evidence:
+        if not live_evidence and not local_state_evidence:
             status = "waiting_for_watchdog_evidence"
             tone = "warn"
             headline = "Waiting for live watchdog evidence"
@@ -4682,19 +4820,18 @@ class FluxioWebBackend:
             status = "intervention_required"
             tone = "bad"
             headline = "Intervention required before continuing"
-            next_action = str(watchdog_report.get("nextAction") or "Open the first watchdog problem and repair it.")
+            next_action = str(watchdog_report.get("nextAction") or first_issue_step or "Open the first watchdog problem and repair it.")
         elif drift_count or route_count or proof_gap_count or warn_count:
             status = "attention"
             tone = "warn"
             headline = "Guard sees drift risk"
-            next_action = str(watchdog_report.get("nextAction") or "Refresh the mission proof, route contract, and active runtime lane.")
+            next_action = str(watchdog_report.get("nextAction") or first_issue_step or "Refresh the mission proof, route contract, and active runtime lane.")
         else:
             status = "clear"
             tone = "good"
             headline = "Mission can continue"
             next_action = str(watchdog_report.get("nextAction") or "No watchdog issues found. Keep Hermes running.")
 
-        first_issue = issues[0] if issues else {}
         signals = [
             {
                 "id": "blocked_loop",
@@ -4736,7 +4873,7 @@ class FluxioWebBackend:
 
         guard = {
             "schema": "fluxio.mission_anti_drift_guard.v1",
-            "ok": live_evidence,
+            "ok": live_evidence or local_state_evidence,
             "status": status,
             "tone": tone,
             "headline": headline,
@@ -4746,12 +4883,16 @@ class FluxioWebBackend:
             "fallbackRuntimeLane": "openclaw",
             "routeProof": {
                 "command": command,
-                "source": "mission_watchdog_report",
+                "source": "mission_watchdog_report_and_live_control_state",
                 "sourceReportPath": str(report_path),
                 "sourceReportPresent": live_evidence,
                 "supervisorPath": str(supervisor_path),
                 "supervisorActive": bool(supervisor.get("supervisorActive") or supervisor.get("loopActive")),
                 "loopStatus": str(supervisor.get("loopStatus") or watchdog_report.get("loopStatus") or "unknown"),
+                "runtimeRouteContractPath": str(control_dir / "runtime_route_unification"),
+                "runtimeRouteStatus": str(latest_route_contract.get("status") or ""),
+                "selectedRuntime": str(latest_route_contract.get("selectedRuntime") or ""),
+                "primaryRouteStatus": str(primary_route_status or ""),
             },
             "summary": {
                 "issueCount": issue_count,
@@ -4763,7 +4904,70 @@ class FluxioWebBackend:
                 "routeMismatchCount": route_count,
                 "proofGapCount": proof_gap_count,
             },
+            "monitoringLoop": {
+                "schema": "fluxio.monitoring_loop_state.v1",
+                "supervisor": supervisor,
+                "localStateEvidence": local_state_evidence,
+                "staleMinutes": stale_minutes,
+                "liveMissionCount": len(mission_rows),
+                "staleActiveMissionCount": len(stale_mission_rows),
+            },
+            "liveMissionState": {
+                "schema": "fluxio.live_mission_state_scan.v1",
+                "sourcePath": str(control_dir / "missions.json"),
+                "missionCount": len(mission_rows),
+                "staleActiveMissions": stale_mission_rows[:8],
+                "sample": mission_rows[:8],
+            },
+            "gateState": {
+                "schema": "fluxio.monitoring_gate_state.v1",
+                "latestHarnessGateStatus": str(latest_harness_gate.get("status") or ""),
+                "latestHarnessGateNextMissing": latest_harness_gate.get("nextMissing") if isinstance(latest_harness_gate.get("nextMissing"), dict) else None,
+                "latestRouteStatus": str(latest_route_contract.get("status") or ""),
+                "selectedRuntime": str(latest_route_contract.get("selectedRuntime") or ""),
+            },
             "signals": signals,
+            "intervention": {
+                "schema": "fluxio.anti_drift_intervention.v1",
+                "required": status in {"intervention_required", "attention"},
+                "severity": tone,
+                "pauseNewMissions": status == "intervention_required",
+                "shouldSwitchRoute": bool(route_count and latest_route_contract.get("selectedRuntime")),
+                "recommendedRuntime": str(latest_route_contract.get("selectedRuntime") or "hermes"),
+                "firstRepairStep": next_action,
+                "reason": headline,
+            },
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "mission4-monitoring-anti-drift",
+                "status": "complete" if local_state_evidence and status != "waiting_for_watchdog_evidence" else "incomplete",
+                "items": [
+                    {
+                        "id": "live-state-inspection",
+                        "label": "Live mission/control state inspected",
+                        "status": "done" if local_state_evidence else "blocked",
+                        "proof": "mission/watchdog/supervisor/gate/route state was scanned." if local_state_evidence else "No local monitoring state was available.",
+                    },
+                    {
+                        "id": "anti-drift-signals",
+                        "label": "Blocked, drift, route, and proof signals normalized",
+                        "status": "done",
+                        "proof": f"{len(signals)} signals emitted.",
+                    },
+                    {
+                        "id": "corrective-intervention",
+                        "label": "Corrective intervention is available",
+                        "status": "done" if next_action else "blocked",
+                        "proof": next_action,
+                    },
+                    {
+                        "id": "proof-artifact",
+                        "label": "Monitoring proof artifact written",
+                        "status": "done",
+                        "proof": str(artifact_path),
+                    },
+                ],
+            },
             "firstFinding": {
                 "kind": _issue_kind(first_issue),
                 "severity": _issue_severity(first_issue),

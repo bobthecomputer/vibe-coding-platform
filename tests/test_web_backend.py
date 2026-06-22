@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -3194,6 +3195,109 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof_path = pathlib.Path(result["proof"]["artifactPath"])
             self.assertTrue(proof_path.exists())
             self.assertIn("mission_anti_drift_guard", proof_path.read_text(encoding="utf-8"))
+
+    def test_mission_anti_drift_guard_waits_when_no_monitoring_state_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "get_mission_anti_drift_guard_command",
+                {"root": str(root), "requestId": "mission4-no-state"},
+            )
+
+            self.assertEqual(result["schema"], "fluxio.mission_anti_drift_guard.v1")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "waiting_for_watchdog_evidence")
+            self.assertEqual(result["missionGate"]["status"], "incomplete")
+            self.assertEqual(result["missionGate"]["items"][0]["id"], "live-state-inspection")
+            self.assertEqual(result["missionGate"]["items"][0]["status"], "blocked")
+
+    def test_mission_anti_drift_guard_detects_local_state_intervention_without_watchdog_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            stale_updated_at = (datetime.now(timezone.utc) - timedelta(minutes=90)).isoformat()
+            (control_dir / "missions.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "mission_id": "mission_stale",
+                            "runtime_id": "hermes",
+                            "objective": "Finish the current mission without drifting.",
+                            "updated_at": stale_updated_at,
+                            "state": {"status": "running"},
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            gate_dir = control_dir / "harness_quality_gate" / "latest"
+            gate_dir.mkdir(parents=True)
+            (gate_dir / "mission_completion_gate.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.mission_completion_gate.v1",
+                        "mission": "mission3-harness-quality",
+                        "status": "blocked",
+                        "nextMissing": {
+                            "id": "pre-completion-verification",
+                            "label": "Pre-completion verifier has passing evidence",
+                            "proof": "Attach a real proof artifact.",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_dir = control_dir / "runtime_route_unification" / "latest"
+            route_dir.mkdir(parents=True)
+            (route_dir / "contract.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.runtime_route_unification.v1",
+                        "status": "complete",
+                        "selectedRuntime": "opencode",
+                        "health": {
+                            "calls": {
+                                "hermes": {"status": "failed"},
+                                "opencode": {"status": "ok"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "get_mission_anti_drift_guard_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission4-local-state",
+                    "staleMinutes": 30,
+                },
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "intervention_required")
+            self.assertEqual(result["monitoringLoop"]["liveMissionCount"], 1)
+            self.assertEqual(result["monitoringLoop"]["staleActiveMissionCount"], 1)
+            self.assertEqual(result["summary"]["driftRiskCount"], 2)
+            self.assertEqual(result["summary"]["routeMismatchCount"], 1)
+            self.assertGreaterEqual(result["summary"]["proofGapCount"], 1)
+            self.assertEqual(result["gateState"]["latestHarnessGateStatus"], "blocked")
+            self.assertEqual(result["routeProof"]["selectedRuntime"], "opencode")
+            self.assertTrue(result["intervention"]["required"])
+            self.assertTrue(result["intervention"]["pauseNewMissions"])
+            self.assertTrue(result["intervention"]["shouldSwitchRoute"])
+            self.assertEqual(result["intervention"]["recommendedRuntime"], "opencode")
+            self.assertEqual(result["missionGate"]["status"], "complete")
+            proof_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(proof_path.exists())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "monitoring_anti_drift_runtime_guard")
+            self.assertEqual(proof["missionGate"]["status"], "complete")
 
     def test_skill_runtime_contract_command_writes_runtime_proof_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
