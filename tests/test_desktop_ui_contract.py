@@ -1550,6 +1550,10 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("fluxos-provider-proof-button", reference_shell)
         self.assertIn("providers:capture-orchestration-contract", reference_shell)
         self.assertIn("fluxos-provider-route-health", reference_shell)
+        self.assertIn("providerRouteScorecard", reference_shell)
+        self.assertIn("fluxos-provider-route-policy", reference_shell)
+        self.assertIn("Provider route policy", reference_shell)
+        self.assertIn("providerRoutePolicy.healthGate", reference_shell)
         self.assertIn("OpenCodeGo provider docs", reference_shell)
         self.assertIn("Save key", reference_shell)
         self.assertIn("Clear key", reference_shell)
@@ -1566,6 +1570,7 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".fluxos-provider-orchestration", styles)
         self.assertIn(".fluxos-provider-proof-button", styles)
         self.assertIn(".fluxos-provider-route-health", styles)
+        self.assertIn(".fluxos-provider-route-policy", styles)
 
     def test_settings_runtimes_rooms_has_fusion_readiness_panel(self) -> None:
         reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")

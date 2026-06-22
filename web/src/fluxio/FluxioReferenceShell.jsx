@@ -11362,6 +11362,14 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
     providerOrchestration?.selectedRoute && typeof providerOrchestration.selectedRoute === "object"
       ? providerOrchestration.selectedRoute
       : {};
+  const providerRouteScorecard =
+    providerRoute?.scorecard && typeof providerRoute.scorecard === "object"
+      ? providerRoute.scorecard
+      : {};
+  const providerRoutePolicy =
+    providerOrchestration?.routePolicy && typeof providerOrchestration.routePolicy === "object"
+      ? providerOrchestration.routePolicy
+      : {};
   const orchestrationProviders = asList(providerOrchestration?.providers).slice(0, 4);
   const orchestrationProofPath = String(providerOrchestration?.proof?.artifactPath || "").trim();
   const orchestrationStatus = String(providerRoute.health || providerOrchestration.status || "pending_live_capture");
@@ -11493,17 +11501,38 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <span>Fallback lanes</span>
             <strong>{asList(providerRoute.fallbackRuntimeLanes || providerOrchestration.fallbackRuntimeLanes).join(" / ") || "openclaw / opencode"}</strong>
           </article>
+          <article>
+            <span>Route score</span>
+            <strong>{providerRoute.score ?? providerRouteScorecard.score ?? "pending"}</strong>
+          </article>
+          <article>
+            <span>Cost / speed / context</span>
+            <strong>
+              {[providerRouteScorecard.costScore, providerRouteScorecard.speedScore, providerRouteScorecard.contextScore]
+                .filter(value => value !== undefined && value !== null)
+                .join(" / ") || "pending"}
+            </strong>
+          </article>
+        </div>
+        <div className="fluxos-provider-route-policy" aria-label="Provider route policy">
+          <span>{providerRoutePolicy.healthGate || "Ready routes execute; auth-required routes stay recommendations."}</span>
+          <small>{providerRoutePolicy.switchRule || "Switch when the active provider/model is weaker than the selected route."}</small>
         </div>
         {orchestrationProviders.length ? (
           <div className="fluxos-provider-route-list">
             {orchestrationProviders.map(item => {
               const providerId = item.provider || item.id || item.label || "provider";
+              const itemScorecard = item.scorecard && typeof item.scorecard === "object" ? item.scorecard : {};
               return (
                 <article className={cx("fluxos-provider-route-card", item.authPresent && "ready")} key={providerId}>
                   <span>{titleizeToken(item.health || (item.authPresent ? "ready" : "auth_required"))}</span>
-                  <strong>{item.label || titleizeToken(providerId)}</strong>
+                  <strong>{item.label || titleizeToken(providerId)} · {item.score ?? itemScorecard.score ?? "?"}</strong>
                   <p>{asList(item.models).slice(0, 2).join(" / ") || "Model list not reported"}</p>
-                  <small>{asList(item.capabilities).slice(0, 4).join(" / ") || item.useWhen || "Capabilities not reported"}</small>
+                  <small>
+                    {asList(item.matchedCapabilities).length
+                      ? `Matched ${asList(item.matchedCapabilities).join(" / ")}`
+                      : asList(item.capabilities).slice(0, 4).join(" / ") || item.useWhen || "Capabilities not reported"}
+                  </small>
                 </article>
               );
             })}
