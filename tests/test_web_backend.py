@@ -413,8 +413,9 @@ class FluxioWebBackendTests(unittest.TestCase):
                     result = backend.dispatch(
                         "ui_self_repair_loop_command",
                         {
-                            "requestId": "mission2-builder-proof",
-                            "surface": "builder",
+                            "requestId": "mission8-broader-ui-proof",
+                            "surface": "core-surfaces",
+                            "surfaces": ["builder", "agent", "runtime", "skills", "images", "preview"],
                             "clarityMode": "focus",
                             "missionCount": 3,
                             "timeoutSeconds": 5,
@@ -425,8 +426,15 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(result["route"]["runtime"], "hermes")
             self.assertEqual(result["route"]["fallbackRuntime"], "openclaw")
             self.assertEqual(result["route"]["modelId"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(result["status"], "complete")
             self.assertEqual(result["routeStatus"], "ok")
+            self.assertEqual(result["missionGate"]["schema"], "fluxio.broader_ui_self_repair_gate.v1")
+            self.assertEqual(result["missionGate"]["missionId"], "mission8-broader-ui-self-repair")
+            self.assertEqual(result["missionGate"]["status"], "complete")
+            self.assertEqual(result["surfaceAudit"]["schema"], "fluxio.broader_ui_surface_audit.v1")
+            self.assertEqual(result["surfaceAudit"]["targetSurfaces"], ["builder", "agent", "runtime", "skills", "images", "preview"])
             skill_ids = [item["id"] for item in result["skillsUsed"]]
+            self.assertIn("broader_ui_surface_audit", skill_ids)
             self.assertIn("operator_ui_breakdown", skill_ids)
             self.assertIn("operator_ui_repair_planner", skill_ids)
             self.assertIn("implementation_surface_contract", skill_ids)
@@ -438,6 +446,8 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(route_proof["selectedRuntime"], "hermes")
             contract = json.loads(pathlib.Path(result["artifacts"]["implementationContractPath"]).read_text(encoding="utf-8"))
             self.assertIn('data-builder-current-mission="true"', contract["surfaceMarkers"])
+            self.assertIn('data-ui-self-repair-canvas="mission8"', contract["surfaceMarkers"])
+            self.assertIn('data-broader-ui-self-repair-receipt="true"', contract["surfaceMarkers"])
             for artifact_path in result["artifacts"].values():
                 self.assertTrue(pathlib.Path(artifact_path).exists(), artifact_path)
 

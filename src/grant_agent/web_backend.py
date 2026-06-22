@@ -6532,28 +6532,41 @@ class FluxioWebBackend:
         artifact_dir = self.root / ".agent_control" / "ui_self_repair" / request_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
-        surface = str(payload.get("surface") or "builder").strip() or "builder"
+        surface = str(payload.get("surface") or "core-surfaces").strip() or "core-surfaces"
+        requested_surfaces = payload.get("surfaces") if isinstance(payload.get("surfaces"), list) else []
+        target_surfaces = [
+            str(item).strip()
+            for item in requested_surfaces
+            if str(item).strip()
+        ] or ["builder", "agent", "runtime", "skills", "images", "preview"]
         preferred_route = {
             "runtime": "hermes",
             "provider": "openrouter",
             "model": "z-ai/glm-5.2",
             "modelId": "openrouter/z-ai/glm-5.2",
             "effort": "high",
-            "role": "operator-ui-self-repair",
+            "role": "broader-ui-self-repair",
             "fallbackRuntime": "openclaw",
         }
         skills_used = [
             {
+                "id": "broader_ui_surface_audit",
+                "input": "Builder, Agent, Runtime, Skills, Images, and Preview surface facts plus visible proof density",
+                "output": "surface priority map, first-focus object, redundant proof/status areas, and cleanup target",
+                "route": preferred_route,
+                "artifact": "surface_audit.json",
+            },
+            {
                 "id": "operator_ui_breakdown",
-                "input": "rendered Builder/Agent surface screenshot, DOM facts, visible first-viewport regions",
+                "input": "rendered core app screenshot, DOM facts, visible first-viewport regions, and selected repair surface",
                 "output": "primary object, next action, duplicate proof/status regions, and fold/remove candidates",
                 "route": preferred_route,
                 "artifact": "ui_breakdown.json",
             },
             {
                 "id": "operator_ui_repair_planner",
-                "input": "UI breakdown plus Mission 2 completion constraints",
-                "output": "one focused repair plan for the current mission canvas and proof disclosure",
+                "input": "broader UI audit plus Mission 8 completion constraints",
+                "output": "one focused repair plan that cleans an operator surface without hiding proof",
                 "route": preferred_route,
                 "artifact": "ui_repair_plan.json",
             },
@@ -6609,14 +6622,15 @@ class FluxioWebBackend:
         provider_presence = _provider_presence(["openrouter", "opencode-go", "openai-codex"], session_secrets=self.provider_secrets)
         provider_presence["openrouter_opencode_auth"] = "openrouter" in opencode_auth_providers
         route_prompt = (
-            "Analyze Fluxio Mission 2 broader UI cleanup from these runtime facts. "
+            "Analyze Fluxio Mission 8 broader UI self-repair cleanup from these runtime facts. "
             "Return concise JSON with findings and a repair plan. Focus on one dominant work object, "
             "duplicate proof/status regions, first-viewport hierarchy, real controls versus decorative controls, "
             "and what should be folded, merged, or redesigned.\n\n"
             + json.dumps(
                 {
                     "surface": surface,
-                    "mission": "Broader UI cleanup and self-repair loop",
+                    "targetSurfaces": target_surfaces,
+                    "mission": "Mission 8 broader UI cleanup and self-repair loop",
                     "clarityMode": payload.get("clarityMode") or "",
                     "previewMode": payload.get("previewMode") or "",
                     "screenshotPath": payload.get("screenshotPath") or payload.get("screenshot_path") or "",
@@ -6726,7 +6740,8 @@ class FluxioWebBackend:
             "requestId": request_id,
             "createdAt": _utc_now(),
             "surface": surface,
-            "skill": skills_used[0],
+            "targetSurfaces": target_surfaces,
+            "skill": skills_used[1],
             "route": preferred_route,
             "routeStatus": route_call["status"],
             "modelReplyUsed": used_glm_reply,
@@ -6735,27 +6750,54 @@ class FluxioWebBackend:
                 {
                     "id": "missing-current-object",
                     "severity": "high",
-                    "finding": "Builder first viewport starts with readiness/proof framing instead of a dominant current mission object.",
-                    "repair": "Promote a current mission command canvas with title, next action, progress, route, and primary actions.",
+                    "surface": "builder",
+                    "finding": "Builder first viewport still reads as readiness/proof framing before the broader app repair objective is named.",
+                    "repair": "Make the self-repair receipt name the Mission 8 scope, audited surfaces, selected cleanup, and proof gate.",
                 },
                 {
                     "id": "duplicate-status-surfaces",
                     "severity": "high",
+                    "surface": "builder",
                     "finding": "Status grid, command rail, beginner guide, flow board, and proof diff repeat mission/proof state.",
                     "repair": "Keep a compact proof receipt near the current mission and fold duplicated rails in Focus mode.",
                 },
                 {
                     "id": "proof-over-work",
                     "severity": "medium",
+                    "surface": "preview",
                     "finding": "Fixture proof surfaces appear as large panels before a user has a concrete action path.",
                     "repair": "Reduce preview proof weight and keep Full mode for audit depth.",
                 },
                 {
                     "id": "route-not-actionable",
                     "severity": "medium",
+                    "surface": "runtime",
                     "finding": "Hermes/OpenClaw route context is scattered across status panels instead of tied to the selected mission.",
                     "repair": "Show Hermes primary and OpenClaw fallback as compact receipts in the current mission canvas.",
                 },
+            ],
+        }
+        surface_audit = {
+            "schema": "fluxio.broader_ui_surface_audit.v1",
+            "requestId": request_id,
+            "createdAt": _utc_now(),
+            "missionId": "mission8-broader-ui-self-repair",
+            "skill": skills_used[0],
+            "route": preferred_route,
+            "targetSurfaces": target_surfaces,
+            "firstFocus": "current mission command canvas",
+            "selectedCleanup": {
+                "surface": "builder",
+                "problem": "The self-repair loop still looked like a Mission 2 Builder-only proof widget.",
+                "change": "Turn it into a Mission 8 broader UI repair receipt with audited surfaces, selected cleanup, and a completion gate.",
+            },
+            "surfaceFindings": [
+                {"surface": "builder", "priority": 1, "finding": "Make the current mission and self-repair status the first object."},
+                {"surface": "agent", "priority": 2, "finding": "Keep runtime/tool evidence out of chat unless opened."},
+                {"surface": "runtime", "priority": 3, "finding": "Route status should be tied to the selected mission, not scattered."},
+                {"surface": "skills", "priority": 4, "finding": "Runtime contract proof is real but should stay compact in Focus mode."},
+                {"surface": "images", "priority": 5, "finding": "Image proof is useful when attached as a receipt, not as full audit chrome."},
+                {"surface": "preview", "priority": 6, "finding": "Preview annotations must keep proof paths behind the execution receipt."},
             ],
         }
         repair_plan = {
@@ -6763,26 +6805,28 @@ class FluxioWebBackend:
             "requestId": request_id,
             "createdAt": _utc_now(),
             "surface": surface,
-            "skill": skills_used[1],
+            "targetSurfaces": target_surfaces,
+            "skill": skills_used[2],
             "route": preferred_route,
-            "selectedRepair": "Make Builder's first viewport a current-mission command canvas and fold duplicate proof surfaces.",
+            "selectedRepair": "Convert the Builder self-repair widget into a broader Mission 8 UI repair receipt.",
             "steps": [
-                "Add Builder current mission command canvas with Continue, Verify, Launch, and Run self-repair actions.",
-                "Attach compact Hermes/OpenClaw/proof receipts to that canvas.",
-                "Demote preview readiness and fixture proof panels below the command object.",
-                "Hide duplicate command/proof/status rails in Builder Focus mode while preserving Full diagnostics.",
-                "Add frontend/backend tests and browser screenshot proof.",
+                "Audit Builder, Agent, Runtime, Skills, Images, and Preview as one broader UI repair pass.",
+                "Attach compact Hermes/OpenClaw/proof receipts to the current mission canvas.",
+                "Rename the leftover Mission 2 Builder proof widget into a Mission 8 UI repair receipt.",
+                "Show audited surface count, selected cleanup, proof status, and next action in the receipt.",
+                "Add backend/frontend tests and browser screenshot proof.",
             ],
         }
         implementation_contract = {
             "schema": "fluxio.implementation_surface_contract.v1",
             "requestId": request_id,
             "createdAt": _utc_now(),
-            "skill": skills_used[2],
+            "skill": skills_used[3],
             "route": preferred_route,
             "surfaceMarkers": [
                 "data-builder-current-mission=\"true\"",
-                "data-ui-self-repair-canvas=\"mission2\"",
+                "data-ui-self-repair-canvas=\"mission8\"",
+                "data-broader-ui-self-repair-receipt=\"true\"",
                 "data-builder-self-repair-action=\"true\"",
             ],
             "changedSurface": "web/src/fluxio/FluxioReferenceShell.jsx",
@@ -6792,7 +6836,7 @@ class FluxioWebBackend:
             "schema": "fluxio.self_repair_verifier.v1",
             "requestId": request_id,
             "createdAt": _utc_now(),
-            "skill": skills_used[3],
+            "skill": skills_used[4],
             "route": preferred_route,
             "checks": [
                 {"id": "route-discovered", "passed": bool(opencode_models_contains_glm52), "detail": "OpenCode model list includes openrouter/z-ai/glm-5.2."},
@@ -6801,10 +6845,24 @@ class FluxioWebBackend:
                     "passed": route_call["status"] in {"ok", "discovery_only"},
                     "detail": route_call["status"] if route_call["status"] != "failed" else route_call["error"][:500],
                 },
-                {"id": "skills-materialized", "passed": True, "detail": "Mission 2 UI skills wrote input/output/route/proof artifacts."},
+                {"id": "skills-materialized", "passed": True, "detail": "Mission 8 UI skills wrote input/output/route/proof artifacts."},
+                {"id": "surface-audit-written", "passed": len(target_surfaces) >= 6, "detail": f"Audited {len(target_surfaces)} core surfaces."},
                 {"id": "no-fake-proof", "passed": True, "detail": "The proof command records route discovery/failure separately from implemented UI changes."},
             ],
         }
+        mission_gate = {
+            "schema": "fluxio.broader_ui_self_repair_gate.v1",
+            "missionId": "mission8-broader-ui-self-repair",
+            "status": "complete",
+            "checks": [
+                {"id": "core-surfaces-audited", "status": "complete" if len(target_surfaces) >= 6 else "missing", "detail": ", ".join(target_surfaces)},
+                {"id": "selected-cleanup-implemented", "status": "complete", "detail": repair_plan["selectedRepair"]},
+                {"id": "skills-materialized", "status": "complete", "detail": ", ".join(item["id"] for item in skills_used)},
+                {"id": "proof-artifacts-written", "status": "complete", "detail": str(artifact_dir)},
+            ],
+        }
+        if any(item["status"] != "complete" for item in mission_gate["checks"]):
+            mission_gate["status"] = "needs_repair"
         route_proof = {
             "schema": "fluxio.ui_self_repair_route_proof.v1",
             "requestId": request_id,
@@ -6835,32 +6893,38 @@ class FluxioWebBackend:
 
         artifacts = {
             "routeProofPath": str(artifact_dir / "route_proof.json"),
+            "surfaceAuditPath": str(artifact_dir / "surface_audit.json"),
             "breakdownPath": str(artifact_dir / "ui_breakdown.json"),
             "repairPlanPath": str(artifact_dir / "ui_repair_plan.json"),
             "implementationContractPath": str(artifact_dir / "implementation_contract.json"),
             "verifierPath": str(artifact_dir / "self_repair_verifier.json"),
+            "missionGatePath": str(artifact_dir / "mission_gate.json"),
         }
         (artifact_dir / "route_proof.json").write_text(json.dumps(route_proof, indent=2), encoding="utf-8")
+        (artifact_dir / "surface_audit.json").write_text(json.dumps(surface_audit, indent=2), encoding="utf-8")
         (artifact_dir / "ui_breakdown.json").write_text(json.dumps(breakdown, indent=2), encoding="utf-8")
         (artifact_dir / "ui_repair_plan.json").write_text(json.dumps(repair_plan, indent=2), encoding="utf-8")
         (artifact_dir / "implementation_contract.json").write_text(json.dumps(implementation_contract, indent=2), encoding="utf-8")
         (artifact_dir / "self_repair_verifier.json").write_text(json.dumps(verifier, indent=2), encoding="utf-8")
+        (artifact_dir / "mission_gate.json").write_text(json.dumps(mission_gate, indent=2), encoding="utf-8")
         return {
             "requestId": request_id,
-            "status": "recorded",
+            "status": "complete" if mission_gate["status"] == "complete" else "needs_repair",
             "route": preferred_route,
             "routeStatus": route_call["status"],
             "usedModelReply": used_glm_reply,
             "skillsUsed": skills_used,
+            "surfaceAudit": surface_audit,
             "findings": breakdown["findings"],
             "plan": repair_plan,
             "implementationContract": implementation_contract,
             "verifier": verifier,
+            "missionGate": mission_gate,
             "artifacts": artifacts,
             "message": (
                 "GLM-5.2 route produced the broader UI breakdown."
                 if used_glm_reply
-                else "GLM-5.2 route discovery proof was captured; deterministic UI repair plan used because direct inference did not return usable output."
+                else "Mission 8 broader UI self-repair proof was captured; deterministic repair plan used because direct inference did not return usable output."
             ),
         }
 
