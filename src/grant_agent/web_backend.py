@@ -6239,6 +6239,173 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _update_management_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"update-readiness-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "update_management_readiness"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        package_json = _safe_json_object(root / "package.json")
+        package_scripts = package_json.get("scripts") if isinstance(package_json.get("scripts"), dict) else {}
+        package_version = str(package_json.get("version") or "unknown")
+        lockfiles = [
+            path.name
+            for path in [
+                root / "package-lock.json",
+                root / "pnpm-lock.yaml",
+                root / "yarn.lock",
+                root / "uv.lock",
+                root / "src-tauri" / "Cargo.lock",
+            ]
+            if path.exists()
+        ]
+        release_workflow = root / ".github" / "workflows" / "release-proof.yml"
+        release_workflow_text = release_workflow.read_text(encoding="utf-8") if release_workflow.exists() else ""
+        service_worker = root / "web" / "public" / "service-worker.js"
+        service_worker_text = service_worker.read_text(encoding="utf-8") if service_worker.exists() else ""
+        cache_version_match = re.search(r'CACHE_VERSION\s*=\s*"([^"]+)"', service_worker_text)
+        manifest = _safe_json_object(root / "web" / "public" / "manifest.webmanifest")
+        provider_presence = _provider_presence(
+            ["openai", "openai-codex", "openrouter", "opencode-go", "minimax", "minimax-portal", "fal"],
+            session_secrets=self.provider_secrets,
+        )
+        env = self._provider_env()
+        command_rows: list[dict[str, Any]] = []
+        for command_name in ["node", "npm", "python", "hermes", "openclaw", "opencode", "wsl"]:
+            command_path = shutil.which(command_name, path=env.get("PATH") or os.environ.get("PATH"))
+            command_rows.append(
+                {
+                    "id": command_name,
+                    "status": "ready" if command_path else "missing",
+                    "path": command_path or "",
+                }
+            )
+        hermes_ready = any(item["id"] == "hermes" and item["status"] == "ready" for item in command_rows)
+        if not hermes_ready:
+            try:
+                hermes_ready = _wsl_has_command("hermes")
+            except Exception:
+                hermes_ready = False
+        openclaw_ready = any(item["id"] == "openclaw" and item["status"] == "ready" for item in command_rows)
+        opencode_ready = any(item["id"] == "opencode" and item["status"] == "ready" for item in command_rows)
+        package_ready = bool(package_json) and "package-lock.json" in lockfiles and "frontend:build" in package_scripts
+        release_proof_ready = release_workflow.exists() and "npm run frontend:build" in release_workflow_text and "verify:long-history" in release_workflow_text
+        pwa_ready = bool(cache_version_match) and bool(manifest.get("start_url"))
+        provider_ready_count = sum(1 for ready in provider_presence.values() if ready)
+        prior_contracts = [
+            root / ".agent_control" / "provider_orchestration" / "mission6-local-proof.json",
+            root / ".agent_control" / "skill_runtime_contracts" / "mission5-local-proof.json",
+            root / ".agent_control" / "harness_benchmark_board" / "mission10-local-proof.json",
+            root / ".agent_control" / "preview_annotation_readiness" / "mission9-preview-actual.json",
+        ]
+        prior_contract_count = sum(1 for path in prior_contracts if path.exists())
+        components = [
+            {
+                "id": "package-dependencies",
+                "label": "App dependencies",
+                "status": "ready" if package_ready else "blocked",
+                "currentVersion": package_version,
+                "latestVersion": "manual check required",
+                "detail": "package.json, package-lock.json, and frontend build script are present." if package_ready else "package.json, lockfile, or frontend build script is missing.",
+                "safeAction": "Use npm ci, build, release-proof, then review generated dist before merging.",
+            },
+            {
+                "id": "provider-model-definitions",
+                "label": "Provider and model definitions",
+                "status": "review_required" if provider_ready_count == 0 else "ready",
+                "currentVersion": f"{provider_ready_count} authenticated provider marker(s)",
+                "latestVersion": "refresh provider docs and route list before changing defaults",
+                "detail": "Provider routes stay adapter-backed; no model list is promoted without route proof.",
+                "safeAction": "Capture provider orchestration proof after any provider/model list change.",
+            },
+            {
+                "id": "runtime-adapters",
+                "label": "Hermes / OpenClaw / OpenCode adapters",
+                "status": "ready" if hermes_ready and (openclaw_ready or opencode_ready) else "review_required",
+                "currentVersion": f"Hermes {'ready' if hermes_ready else 'missing'} / OpenClaw {'ready' if openclaw_ready else 'missing'} / OpenCode {'ready' if opencode_ready else 'missing'}",
+                "latestVersion": "update one runtime lane at a time",
+                "detail": "Hermes remains the primary lane; OpenClaw/OpenCode are fallback and specialist routes.",
+                "safeAction": "Run skill, harness, provider, and preview proof contracts after runtime adapter updates.",
+            },
+            {
+                "id": "web-pwa-shell",
+                "label": "Web and app shell",
+                "status": "ready" if pwa_ready else "blocked",
+                "currentVersion": cache_version_match.group(1) if cache_version_match else "cache version missing",
+                "latestVersion": "bump only with verified dist",
+                "detail": "Service worker cache version and manifest start URL are tracked for installed clients.",
+                "safeAction": "Build dist, run live-data/web-distribution checks, then archive release proof.",
+            },
+            {
+                "id": "release-proof",
+                "label": "Release proof workflow",
+                "status": "ready" if release_proof_ready else "blocked",
+                "currentVersion": str(release_workflow.relative_to(root)) if release_workflow.exists() else "missing",
+                "latestVersion": "keep CI proof aligned with update surface",
+                "detail": "CI covers install, build, live-data, web distribution, self-improvement, long-history, and release artifacts.",
+                "safeAction": "Do not promote update claims until release-proof is green.",
+            },
+        ]
+        blockers = [
+            item["detail"]
+            for item in components
+            if item["status"] == "blocked"
+        ]
+        status = "ready_for_safe_update_window" if not blockers else "blocked_missing_update_prerequisites"
+        if status == "ready_for_safe_update_window" and any(item["status"] == "review_required" for item in components):
+            status = "ready_with_manual_review"
+        contract = {
+            "schema": "fluxio.update_management_readiness.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode"],
+            "status": status,
+            "appVersion": package_version,
+            "lockfiles": lockfiles,
+            "packageManager": "npm" if "package-lock.json" in lockfiles else "unknown",
+            "components": components,
+            "runtimeCommands": command_rows,
+            "providerPresence": provider_presence,
+            "priorProofContracts": [
+                {
+                    "path": str(path),
+                    "status": "ready" if path.exists() else "missing",
+                }
+                for path in prior_contracts
+            ],
+            "priorProofContractCount": prior_contract_count,
+            "safeUpgradeWorkflow": [
+                {"step": "snapshot", "detail": "Capture update readiness and current route/runtime proof before touching dependencies."},
+                {"step": "isolate", "detail": "Update one component family per PR: dependencies, providers, runtime adapter, or app shell."},
+                {"step": "verify", "detail": "Run frontend build, focused tests, visual smoke, and release-proof before promotion."},
+                {"step": "rollback", "detail": "Keep lockfile and previous cache version reviewable so failed updates can be reverted cleanly."},
+            ],
+            "blockers": blockers,
+            "nextAction": "Review component rows, update one family at a time, and capture proof again before merging.",
+            "sourceFiles": [
+                "package.json",
+                "package-lock.json",
+                "web/public/service-worker.js",
+                "web/public/manifest.webmanifest",
+                ".github/workflows/release-proof.yml",
+                "src/grant_agent/web_backend.py",
+                "web/src/fluxio/FluxioReferenceShell.jsx",
+                "web/src/fluxio/FluxioShell.jsx",
+                "web/src/fluxio/styles.css",
+            ],
+        }
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "safe_dependency_runtime_provider_update_readiness",
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
@@ -7163,6 +7330,8 @@ class FluxioWebBackend:
             return self._preview_annotation_readiness_artifact(command, payload)
         if command in {"harness_benchmark_board_command", "get_harness_benchmark_board_command"}:
             return self._harness_benchmark_board_artifact(command, payload)
+        if command in {"update_management_readiness_command", "get_update_management_readiness_command"}:
+            return self._update_management_readiness_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

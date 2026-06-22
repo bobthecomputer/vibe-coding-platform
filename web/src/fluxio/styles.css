@@ -6297,6 +6297,128 @@ button.fluxos-context-root:hover {
   overflow-wrap: anywhere;
 }
 
+.fluxos-update-readiness {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 16px 0;
+}
+
+.fluxos-update-readiness.ready {
+  border-color: rgba(180, 255, 214, 0.3);
+}
+
+.fluxos-update-readiness-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-update-readiness-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-update-readiness-head span,
+.fluxos-update-component-grid span,
+.fluxos-update-proof-grid span {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-update-readiness-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+}
+
+.fluxos-update-readiness-head p,
+.fluxos-update-component-grid p,
+.fluxos-update-component-grid small,
+.fluxos-update-component-grid em,
+.fluxos-update-proof-grid p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-update-proof-button {
+  display: inline-flex !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0 16px !important;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-update-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-update-component-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+}
+
+.fluxos-update-component-grid article,
+.fluxos-update-proof-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-update-component-grid article + article,
+.fluxos-update-proof-grid article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-update-component-grid article.ready span {
+  color: rgba(180, 255, 214, 0.86);
+}
+
+.fluxos-update-component-grid article.blocked span {
+  color: rgba(255, 188, 170, 0.9);
+}
+
+.fluxos-update-component-grid strong,
+.fluxos-update-proof-grid strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-update-component-grid em {
+  font-style: normal;
+}
+
+.fluxos-update-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+}
+
 .fluxos-harness-benchmark-board {
   display: grid;
   gap: 14px;
@@ -6494,6 +6616,7 @@ button.fluxos-context-root:hover {
 .fluxos-shell.surface-settings .fluxos-fusion-readiness .fluxos-fusion-proof-button,
 .fluxos-shell.surface-settings .fluxos-provider-orchestration .fluxos-provider-proof-button,
 .fluxos-shell.surface-settings .fluxos-harness-benchmark-board .fluxos-harness-benchmark-proof-button,
+.fluxos-shell.surface-settings .fluxos-update-readiness .fluxos-update-proof-button,
 .fluxos-shell.surface-settings .fluxos-jbh-readiness .fluxos-jbh-proof-button {
   display: inline-flex !important;
   min-height: 36px !important;
@@ -7215,6 +7338,8 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary,
   .fluxos-settings-fact-grid,
+  .fluxos-update-component-grid,
+  .fluxos-update-proof-grid,
   .fluxos-harness-benchmark-matrix,
   .fluxos-harness-benchmark-proof,
   .fluxos-fusion-project-grid,
@@ -7225,6 +7350,8 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary article + article,
   .fluxos-settings-fact-grid article + article,
+  .fluxos-update-component-grid article + article,
+  .fluxos-update-proof-grid article + article,
   .fluxos-harness-benchmark-matrix article + article,
   .fluxos-harness-benchmark-proof article + article,
   .fluxos-fusion-project-grid article + article,

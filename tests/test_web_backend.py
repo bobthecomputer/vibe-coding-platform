@@ -1126,6 +1126,86 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "hermes_first_harness_benchmark_board")
 
+    def test_update_management_readiness_command_writes_safe_update_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "web" / "public").mkdir(parents=True)
+            (root / "src-tauri").mkdir(parents=True)
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "version": "9.8.7",
+                        "scripts": {
+                            "frontend:build": "vite build --config vite.config.mjs",
+                            "verify:long-history": "python scripts/control_route_responsive_smoke.py",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "package-lock.json").write_text("{}", encoding="utf-8")
+            (root / "uv.lock").write_text("", encoding="utf-8")
+            (root / "src-tauri" / "Cargo.lock").write_text("", encoding="utf-8")
+            (root / ".github" / "workflows" / "release-proof.yml").write_text(
+                "steps:\n  - run: npm run frontend:build\n  - run: npm run verify:long-history\n",
+                encoding="utf-8",
+            )
+            (root / "web" / "public" / "service-worker.js").write_text(
+                'const CACHE_VERSION = "fluxio-test-cache";\n',
+                encoding="utf-8",
+            )
+            (root / "web" / "public" / "manifest.webmanifest").write_text(
+                json.dumps({"start_url": "/control"}),
+                encoding="utf-8",
+            )
+            for relative in (
+                "provider_orchestration/mission6-local-proof.json",
+                "skill_runtime_contracts/mission5-local-proof.json",
+                "harness_benchmark_board/mission10-local-proof.json",
+                "preview_annotation_readiness/mission9-preview-actual.json",
+            ):
+                artifact = root / ".agent_control" / relative
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command: str, **_kwargs: object) -> str | None:
+                if command in {"node", "npm", "python", "hermes", "openclaw", "opencode"}:
+                    return f"C:/tools/{command}.exe"
+                return None
+
+            with mock.patch("shutil.which", side_effect=fake_which):
+                contract = backend.dispatch(
+                    "get_update_management_readiness_command",
+                    {
+                        "root": str(root),
+                        "requestId": "mission11-update-test",
+                    },
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.update_management_readiness.v1")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertIn("opencode", contract["fallbackRuntimeLanes"])
+            self.assertIn(contract["status"], {"ready_for_safe_update_window", "ready_with_manual_review"})
+            self.assertEqual(contract["appVersion"], "9.8.7")
+            self.assertEqual(contract["packageManager"], "npm")
+            self.assertIn("package-lock.json", contract["lockfiles"])
+            labels = {item["label"] for item in contract["components"]}
+            self.assertIn("App dependencies", labels)
+            self.assertIn("Provider and model definitions", labels)
+            self.assertIn("Hermes / OpenClaw / OpenCode adapters", labels)
+            self.assertIn("Web and app shell", labels)
+            self.assertIn("Release proof workflow", labels)
+            self.assertEqual({item["step"] for item in contract["safeUpgradeWorkflow"]}, {"snapshot", "isolate", "verify", "rollback"})
+            self.assertEqual(contract["priorProofContractCount"], 4)
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "safe_dependency_runtime_provider_update_readiness")
+            self.assertEqual(proof["components"][0]["status"], "ready")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

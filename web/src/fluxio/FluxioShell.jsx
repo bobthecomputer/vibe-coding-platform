@@ -5191,6 +5191,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
   const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
   const [harnessBenchmarkBoardContract, setHarnessBenchmarkBoardContract] = useState(null);
+  const [updateManagementReadinessContract, setUpdateManagementReadinessContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
@@ -15385,6 +15386,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "updates:capture-readiness") {
+        setSurface("settings");
+        setReferenceSettingsTab("updates");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture update readiness proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_update_management_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `update-readiness-${Date.now()}`,
+              },
+            },
+            { throwOnError: true },
+          );
+          setUpdateManagementReadinessContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Update readiness proof captured: ${pathLeaf(artifactPath)}.`
+              : "Update readiness proof captured.",
+            "info",
+          );
+          await refreshAll("update-management-readiness");
+        } catch (error) {
+          pushToast(`Update readiness proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "fusion:capture-readiness") {
         setSurface("settings");
         setReferenceSettingsTab("runtimes");
@@ -19449,6 +19485,75 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ],
       proof: null,
       nextAction: "Capture live route proof before claiming provider orchestration executed.",
+    },
+    updateManagementReadiness: updateManagementReadinessContract || snapshot?.updateManagementReadiness || {
+      schema: "fluxio.update_management_readiness.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      appVersion: "0.1.0",
+      lockfiles: ["package-lock.json", "uv.lock", "src-tauri/Cargo.lock"],
+      packageManager: "npm",
+      components: [
+        {
+          id: "package-dependencies",
+          label: "App dependencies",
+          status: "pending_live_capture",
+          currentVersion: "0.1.0",
+          latestVersion: "manual check required",
+          detail: "Capture live readiness before changing package.json, lockfiles, or dist assets.",
+          safeAction: "Use npm ci, build, release-proof, and screenshot proof before merging dependency updates.",
+        },
+        {
+          id: "provider-model-definitions",
+          label: "Provider and model definitions",
+          status: "pending_live_capture",
+          currentVersion: "provider route proof pending",
+          latestVersion: "refresh provider docs and route list before changing defaults",
+          detail: "Provider and model updates must remain adapter-backed and proof-driven.",
+          safeAction: "Capture provider orchestration proof after any model or provider list update.",
+        },
+        {
+          id: "runtime-adapters",
+          label: "Hermes / OpenClaw / OpenCode adapters",
+          status: "pending_live_capture",
+          currentVersion: "Hermes primary / OpenClaw and OpenCode fallback",
+          latestVersion: "update one runtime lane at a time",
+          detail: "Hermes stays the primary lane; fallback route proof is required before runtime changes.",
+          safeAction: "Run skill, harness, provider, and preview proof contracts after runtime adapter updates.",
+        },
+        {
+          id: "web-pwa-shell",
+          label: "Web and app shell",
+          status: "pending_live_capture",
+          currentVersion: "service-worker cache proof pending",
+          latestVersion: "bump only with verified dist",
+          detail: "Installed app clients need a visible cache/version story before update prompts.",
+          safeAction: "Build dist, run live-data/web-distribution checks, then archive release proof.",
+        },
+        {
+          id: "release-proof",
+          label: "Release proof workflow",
+          status: "pending_live_capture",
+          currentVersion: ".github/workflows/release-proof.yml",
+          latestVersion: "keep CI proof aligned with update surface",
+          detail: "CI must prove install, build, live data, web distribution, self-improvement, long history, and archived release artifacts.",
+          safeAction: "Do not promote update claims until release-proof is green.",
+        },
+      ],
+      runtimeCommands: [],
+      providerPresence: {},
+      priorProofContracts: [],
+      priorProofContractCount: 0,
+      safeUpgradeWorkflow: [
+        { step: "snapshot", detail: "Capture update readiness and current route/runtime proof before touching dependencies." },
+        { step: "isolate", detail: "Update one component family per PR: dependencies, providers, runtime adapter, or app shell." },
+        { step: "verify", detail: "Run frontend build, focused tests, visual smoke, and release-proof before promotion." },
+        { step: "rollback", detail: "Keep lockfile and previous cache version reviewable so failed updates can be reverted cleanly." },
+      ],
+      blockers: ["Live capture has not run in this browser session."],
+      nextAction: "Capture update readiness proof before changing dependencies, provider definitions, or runtime adapters.",
+      proof: null,
     },
     chatgptConnection: {
       localApiUrl: localhostApiBaseUrl ? `${localhostApiBaseUrl}/v1/state` : "",
