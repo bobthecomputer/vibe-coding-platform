@@ -84,7 +84,7 @@
     "sync:nas-audit": "python scripts/sync_nas_system_audit.py --push-local-evidence-files --publish-remote-snapshot",
     "verify:launcher-package": "python scripts/verify_launcher_package.py --write",
     "verify:beginner-launch": "python scripts/control_route_responsive_smoke.py --assert-launch-interactions --expect \"Recommended route\" --expect \"Quick start\"",
-    "verify:long-history": "python scripts/control_route_responsive_smoke.py --long-history-fixture --expect Builder --expect \"Long-History Proof Load\" --expect \"Side-by-side proof diff\"",
+    "verify:long-history": "python scripts/control_route_responsive_smoke.py --long-history-fixture --expect Builder --expect \"Long-History Proof Load\" --expect \"Fixture readiness proof\"",
     "verify:release-artifacts": "python scripts/archive_release_proofs.py --require-long-history --require-proof-digest",
     "verify:release-candidate": "python scripts/archive_release_proofs.py --require-long-history --require-proof-digest --require-public-web-deployment",
     "verify:pr-stack": "python scripts/pr_stack_health.py --max-chain 5",
