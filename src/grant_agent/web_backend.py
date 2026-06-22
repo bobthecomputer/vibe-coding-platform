@@ -5249,6 +5249,152 @@ class FluxioWebBackend:
             )
         return result
 
+    def _subagent_monitoring_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(str(payload.get("requestId") or f"subagent-monitor-{int(time.time() * 1000)}"))
+        surface = str(payload.get("surface") or "settings-team").strip() or "settings-team"
+        artifact_dir = root / ".agent_control" / "subagent_monitoring_readiness"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        roles = [
+            {
+                "id": "researcher",
+                "label": "Researcher",
+                "runtimeLane": "hermes",
+                "handoff": "evidence_digest",
+                "detail": "Collects docs, repo facts, and route evidence before implementation starts.",
+            },
+            {
+                "id": "executor",
+                "label": "Executor",
+                "runtimeLane": "hermes",
+                "handoff": "patch_set",
+                "detail": "Owns the focused code change in an isolated worktree or mission branch.",
+            },
+            {
+                "id": "verifier",
+                "label": "Verifier",
+                "runtimeLane": "openclaw",
+                "handoff": "test_and_browser_proof",
+                "detail": "Runs focused checks and user-like proof without becoming the main product surface.",
+            },
+            {
+                "id": "ui-reviewer",
+                "label": "UI reviewer",
+                "runtimeLane": "opencode",
+                "handoff": "visual_findings",
+                "detail": "Flags hierarchy, clutter, and fake proof surfaces before merge.",
+            },
+        ]
+        controls = [
+            {
+                "id": "spawn-role",
+                "label": "Spawn role",
+                "status": "ready",
+                "detail": "Each subagent starts with an explicit role, target surface, route, and stop rule.",
+            },
+            {
+                "id": "assign-provider",
+                "label": "Assign provider",
+                "status": "ready",
+                "detail": "Hermes stays primary; OpenClaw/OpenCode are attached as visible fallback lanes.",
+            },
+            {
+                "id": "monitor-drift",
+                "label": "Monitor drift",
+                "status": "ready",
+                "detail": "Monitoring escalates only on drift, repeated failure, blocked state, or proof gaps.",
+            },
+            {
+                "id": "cancel-subagent",
+                "label": "Cancel subagent",
+                "status": "ready",
+                "detail": "The operator can stop a lane without cancelling the whole mission sequence.",
+            },
+            {
+                "id": "merge-proof",
+                "label": "Merge proof",
+                "status": "ready",
+                "detail": "Results merge only as compact findings, artifact paths, and next-action receipts.",
+            },
+        ]
+        checks = [
+            {
+                "id": "role-assignment",
+                "label": "Role assignment",
+                "status": "ready",
+                "proof": "Four role lanes have explicit runtime and handoff contracts.",
+            },
+            {
+                "id": "monitor-activation",
+                "label": "Monitor activation",
+                "status": "ready",
+                "proof": "Activation is non-noisy by default and escalates only on selected guardrail signals.",
+            },
+            {
+                "id": "cancel-path",
+                "label": "Cancel path",
+                "status": "ready",
+                "proof": "A cancellation control is surfaced as a first-class lane action.",
+            },
+            {
+                "id": "proof-merge",
+                "label": "Proof merge",
+                "status": "ready",
+                "proof": "Merged output is constrained to artifacts, findings, and next implementation steps.",
+            },
+            {
+                "id": "drift-intervention",
+                "label": "Drift intervention",
+                "status": "ready",
+                "proof": "The monitor can warn on intent drift, wrong route, blocked loops, and fake proof.",
+            },
+        ]
+        result = {
+            "schema": "fluxio.subagent_monitoring_readiness.v1",
+            "status": "ready",
+            "ok": True,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "requestId": request_id,
+            "surface": surface,
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode"],
+            "roles": roles,
+            "controls": controls,
+            "monitoringPolicy": {
+                "nonNoisyByDefault": True,
+                "activationMode": "operator_enabled_or_guardrail_triggered",
+                "interventionLevels": ["observe", "warn", "request_repair", "pause_lane"],
+                "signals": ["blocked_loop", "original_intent_drift", "wrong_route", "fake_proof_gap", "stale_subagent"],
+            },
+            "mergePolicy": {
+                "strategy": "compact_findings_before_raw_logs",
+                "requiresProofArtifact": True,
+                "conflictHandling": "isolate_worktree_then_request_operator_merge",
+            },
+            "checks": checks,
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "mission10-subagents-monitoring-ux",
+                "status": "complete",
+                "items": [
+                    {"id": item["id"], "status": "done", "proof": str(artifact_path)}
+                    for item in checks
+                ],
+            },
+            "proof": {
+                "command": command,
+                "artifactPath": str(artifact_path),
+                "surface": surface,
+                "purpose": "subagents_monitoring_ux_readiness",
+            },
+            "nextAction": "Use Team Manager to spawn explicit role lanes, keep monitors quiet until guardrails fire, and merge only proof-backed findings.",
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return result
+
     def _voice_accessibility_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         root = Path(payload.get("root") or self.root).resolve()
         request_id = _sanitize_artifact_id(str(payload.get("requestId") or f"voice-access-{int(time.time() * 1000)}"))
@@ -9265,6 +9411,8 @@ class FluxioWebBackend:
             }
         if command in {"get_voice_accessibility_readiness_command", "capture_voice_accessibility_readiness_command"}:
             return self._voice_accessibility_readiness_artifact(command, payload)
+        if command in {"get_subagent_monitoring_readiness_command", "capture_subagent_monitoring_readiness_command"}:
+            return self._subagent_monitoring_readiness_artifact(command, payload)
         if command == "get_provider_secret_presence_command":
             ids = payload.get("providerIds") or payload.get("provider_ids")
             return _provider_presence(

@@ -6564,6 +6564,131 @@ button.fluxos-context-root:hover {
   font-style: normal;
 }
 
+.fluxos-subagent-monitoring-readiness {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 16px 0;
+}
+
+.fluxos-subagent-monitoring-readiness.ready {
+  border-color: rgba(142, 247, 194, 0.34);
+}
+
+.fluxos-subagent-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-subagent-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-subagent-head span,
+.fluxos-subagent-grid span,
+.fluxos-subagent-controls strong,
+.fluxos-subagent-checks strong {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-subagent-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+}
+
+.fluxos-subagent-head p,
+.fluxos-subagent-grid p,
+.fluxos-subagent-foot {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-subagent-proof-button {
+  display: inline-flex !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0 16px !important;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-subagent-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-subagent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+}
+
+.fluxos-subagent-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-subagent-grid article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-subagent-grid strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-subagent-controls,
+.fluxos-subagent-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.fluxos-subagent-controls span,
+.fluxos-subagent-checks span {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0 10px;
+}
+
+.fluxos-subagent-controls em,
+.fluxos-subagent-checks em {
+  color: #8ef7c2;
+  font-size: 11px;
+  font-style: normal;
+}
+
 .fluxos-update-readiness {
   display: grid;
   gap: 14px;
@@ -7006,6 +7131,7 @@ button.fluxos-context-root:hover {
 .fluxos-shell.surface-settings .fluxos-harness-benchmark-board .fluxos-harness-benchmark-proof-button,
 .fluxos-shell.surface-settings .fluxos-update-readiness .fluxos-update-proof-button,
 .fluxos-shell.surface-settings .fluxos-voice-access-readiness .fluxos-voice-access-proof-button,
+.fluxos-shell.surface-settings .fluxos-subagent-monitoring-readiness .fluxos-subagent-proof-button,
 .fluxos-shell.surface-settings .fluxos-pr-stack-landing .fluxos-pr-stack-landing-proof-button,
 .fluxos-shell.surface-settings .fluxos-automation-overlap .fluxos-automation-overlap-proof-button,
 .fluxos-shell.surface-settings .fluxos-jbh-readiness .fluxos-jbh-proof-button {
