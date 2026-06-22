@@ -289,6 +289,32 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".fluxos-voice-access-readiness", styles)
         self.assertIn("data-settings-voice-access-panel", reference_shell)
 
+    def test_settings_team_manager_surfaces_subagent_monitoring_readiness(self) -> None:
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        web_backend = WEB_BACKEND.read_text(encoding="utf-8")
+
+        self.assertIn('data-settings-team-panel="true"', reference_shell)
+        self.assertIn('data-subagent-monitoring-readiness="true"', reference_shell)
+        self.assertIn('data-subagent-monitoring-schema={subagentMonitoringReadiness.schema || "fluxio.subagent_monitoring_readiness.v1"}', reference_shell)
+        self.assertIn("Subagents and monitoring", reference_shell)
+        self.assertIn("Capture monitor proof", reference_shell)
+        self.assertIn("Role lanes", reference_shell)
+        self.assertIn("Monitor mode", reference_shell)
+        self.assertIn("Cancel path", reference_shell)
+        self.assertIn("Proof merge", reference_shell)
+        self.assertIn("Drift intervention", reference_shell)
+        self.assertIn("subagents:capture-monitoring-readiness", reference_shell)
+        self.assertIn("subagentMonitoringReadiness", shell)
+        self.assertIn("get_subagent_monitoring_readiness_command", shell)
+        self.assertIn("setSubagentMonitoringReadinessContract", shell)
+        self.assertIn("subagents_monitoring_ux_readiness", web_backend)
+        self.assertIn("fluxio.subagent_monitoring_readiness.v1", web_backend)
+        self.assertIn(".fluxos-subagent-monitoring-readiness", styles)
+        self.assertIn(".fluxos-subagent-grid", styles)
+        self.assertIn(".fluxos-subagent-proof-button", styles)
+
     def test_tauri_frontend_dist_points_at_web_build(self) -> None:
         tauri_conf = json.loads(TAURI_CONF.read_text(encoding="utf-8"))
         self.assertEqual(tauri_conf["build"]["frontendDist"], "../web/dist")

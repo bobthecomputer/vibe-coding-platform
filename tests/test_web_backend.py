@@ -76,6 +76,46 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(artifact["requestId"], "mission9-proof")
             self.assertEqual(artifact["proof"]["purpose"], "dictation_voice_accessibility_readiness")
 
+    def test_subagent_monitoring_readiness_command_writes_mission10_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "get_subagent_monitoring_readiness_command",
+                {"payload": {"requestId": "mission10-proof", "surface": "settings-team"}},
+            )
+
+            self.assertEqual(result["schema"], "fluxio.subagent_monitoring_readiness.v1")
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", result["fallbackRuntimeLanes"])
+            self.assertIn("opencode", result["fallbackRuntimeLanes"])
+            self.assertTrue(result["monitoringPolicy"]["nonNoisyByDefault"])
+            self.assertTrue(result["mergePolicy"]["requiresProofArtifact"])
+            role_ids = {item["id"] for item in result["roles"]}
+            self.assertIn("researcher", role_ids)
+            self.assertIn("executor", role_ids)
+            self.assertIn("verifier", role_ids)
+            self.assertIn("ui-reviewer", role_ids)
+            control_ids = {item["id"] for item in result["controls"]}
+            self.assertIn("spawn-role", control_ids)
+            self.assertIn("cancel-subagent", control_ids)
+            self.assertIn("merge-proof", control_ids)
+            check_ids = {item["id"] for item in result["checks"]}
+            self.assertIn("role-assignment", check_ids)
+            self.assertIn("monitor-activation", check_ids)
+            self.assertIn("cancel-path", check_ids)
+            self.assertIn("proof-merge", check_ids)
+            self.assertIn("drift-intervention", check_ids)
+            self.assertEqual(result["missionGate"]["mission"], "mission10-subagents-monitoring-ux")
+            self.assertEqual(result["missionGate"]["status"], "complete")
+            artifact_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(artifact_path.exists())
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["requestId"], "mission10-proof")
+            self.assertEqual(artifact["proof"]["purpose"], "subagents_monitoring_ux_readiness")
+
     def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

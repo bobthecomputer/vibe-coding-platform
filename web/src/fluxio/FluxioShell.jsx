@@ -5196,6 +5196,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [prStackLandingReadinessContract, setPrStackLandingReadinessContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
   const [voiceAccessibilityReadinessContract, setVoiceAccessibilityReadinessContract] = useState(null);
+  const [subagentMonitoringReadinessContract, setSubagentMonitoringReadinessContract] = useState(null);
   const [appUpdateState, setAppUpdateState] = useState({
     status: "",
     detail: "",
@@ -15590,6 +15591,42 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "subagents:capture-monitoring-readiness") {
+        setSurface("settings");
+        setReferenceSettingsTab("team");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture subagent monitoring proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_subagent_monitoring_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `subagent-monitor-${Date.now()}`,
+                surface,
+              },
+            },
+            { throwOnError: true },
+          );
+          setSubagentMonitoringReadinessContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Subagent monitoring proof captured: ${pathLeaf(artifactPath)}.`
+              : "Subagent monitoring proof captured.",
+            "info",
+          );
+          await refreshAll("subagent-monitoring-readiness");
+        } catch (error) {
+          pushToast(`Subagent monitoring proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "pr-stack:capture-landing-readiness") {
         setSurface("settings");
         setReferenceSettingsTab("updates");
@@ -19829,6 +19866,43 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ],
       proof: null,
       nextAction: "Capture voice/accessibility proof before calling this workflow ready.",
+    },
+    subagentMonitoringReadiness: subagentMonitoringReadinessContract || snapshot?.subagentMonitoringReadiness || {
+      schema: "fluxio.subagent_monitoring_readiness.v1",
+      status: "pending_live_capture",
+      ok: false,
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      roles: [
+        { id: "researcher", label: "Researcher", runtimeLane: "hermes", handoff: "evidence_digest" },
+        { id: "executor", label: "Executor", runtimeLane: "hermes", handoff: "patch_set" },
+        { id: "verifier", label: "Verifier", runtimeLane: "openclaw", handoff: "test_and_browser_proof" },
+        { id: "ui-reviewer", label: "UI reviewer", runtimeLane: "opencode", handoff: "visual_findings" },
+      ],
+      controls: [
+        { id: "spawn-role", label: "Spawn role", status: "pending", detail: "Capture proof before launching parallel lanes." },
+        { id: "monitor-drift", label: "Monitor drift", status: "pending", detail: "Capture proof before enabling intervention." },
+        { id: "cancel-subagent", label: "Cancel subagent", status: "pending", detail: "Capture proof before calling cancel ready." },
+        { id: "merge-proof", label: "Merge proof", status: "pending", detail: "Capture proof before merging lane findings." },
+      ],
+      monitoringPolicy: {
+        nonNoisyByDefault: true,
+        activationMode: "operator_enabled_or_guardrail_triggered",
+        interventionLevels: ["observe", "warn", "request_repair", "pause_lane"],
+      },
+      mergePolicy: {
+        strategy: "compact_findings_before_raw_logs",
+        requiresProofArtifact: true,
+      },
+      checks: [
+        { id: "role-assignment", label: "Role assignment", status: "pending" },
+        { id: "monitor-activation", label: "Monitor activation", status: "pending" },
+        { id: "cancel-path", label: "Cancel path", status: "pending" },
+        { id: "proof-merge", label: "Proof merge", status: "pending" },
+        { id: "drift-intervention", label: "Drift intervention", status: "pending" },
+      ],
+      proof: null,
+      nextAction: "Capture subagent monitoring proof before claiming role lanes, cancellation, and proof merge are ready.",
     },
     prStackLandingReadiness: prStackLandingReadinessContract || snapshot?.prStackLandingReadiness || {
       schema: "fluxio.pr_stack_landing_readiness.v1",

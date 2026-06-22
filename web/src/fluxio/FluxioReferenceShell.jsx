@@ -11523,6 +11523,23 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const voiceAccessA11y = voiceAccessibilityReadiness.accessibility && typeof voiceAccessibilityReadiness.accessibility === "object"
     ? voiceAccessibilityReadiness.accessibility
     : {};
+  const subagentMonitoringReadiness =
+    settingsState?.subagentMonitoringReadiness && typeof settingsState.subagentMonitoringReadiness === "object"
+      ? settingsState.subagentMonitoringReadiness
+      : {};
+  const subagentRoles = asList(subagentMonitoringReadiness.roles);
+  const subagentControls = asList(subagentMonitoringReadiness.controls);
+  const subagentChecks = asList(subagentMonitoringReadiness.checks);
+  const subagentMonitoringPolicy =
+    subagentMonitoringReadiness.monitoringPolicy && typeof subagentMonitoringReadiness.monitoringPolicy === "object"
+      ? subagentMonitoringReadiness.monitoringPolicy
+      : {};
+  const subagentMergePolicy =
+    subagentMonitoringReadiness.mergePolicy && typeof subagentMonitoringReadiness.mergePolicy === "object"
+      ? subagentMonitoringReadiness.mergePolicy
+      : {};
+  const subagentProofPath = String(subagentMonitoringReadiness?.proof?.artifactPath || "").trim();
+  const subagentStatus = String(subagentMonitoringReadiness.status || "pending_live_capture");
   const readyProviderCount = providers.filter(item => item.status || item.hasSecret).length;
   const providerOrchestration =
     settingsState?.providerOrchestration && typeof settingsState.providerOrchestration === "object"
@@ -11599,8 +11616,8 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
     {
       id: "team",
       label: "Team Manager",
-      status: setupCards.length ? `${setupCards.length} setup cards` : "Setup",
-      detail: "Beginner setup cards, service actions, and account readiness.",
+      status: subagentProofPath ? "Monitoring ready" : (subagentRoles.length ? `${subagentRoles.length} role lanes` : "Setup"),
+      detail: "Subagent roles, monitor activation, cancellation, proof merge, and account readiness.",
     },
   ];
   const activeSection = settingSections.find(item => item.id === activeTab) || settingSections[0];
@@ -12257,6 +12274,83 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   );
   const renderTeamSettings = () => (
     <div className="fluxos-settings-section-body" data-settings-team-panel="true">
+      <section
+        className={cx("fluxos-subagent-monitoring-readiness", subagentProofPath && "ready")}
+        data-subagent-monitoring-readiness="true"
+        data-subagent-monitoring-primary-lane={subagentMonitoringReadiness.primaryRuntimeLane || "hermes"}
+        data-subagent-monitoring-schema={subagentMonitoringReadiness.schema || "fluxio.subagent_monitoring_readiness.v1"}
+      >
+        <div className="fluxos-subagent-head">
+          <div>
+            <span>Subagents and monitoring</span>
+            <strong>{titleizeToken(subagentStatus)}</strong>
+            <p>
+              Role lanes stay explicit. Monitors stay quiet until drift, blocked loops, wrong routes, or proof gaps need intervention.
+            </p>
+          </div>
+          <button
+            className="fluxos-subagent-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "subagents:capture-monitoring-readiness")}
+            type="button"
+          >
+            Capture monitor proof
+          </button>
+        </div>
+        <div className="fluxos-subagent-grid" aria-label="Subagent monitoring controls">
+          <article>
+            <span>Role lanes</span>
+            <strong>{subagentRoles.length ? `${subagentRoles.length} roles` : "Pending capture"}</strong>
+            <p>{subagentRoles.slice(0, 4).map(item => item.label || titleizeToken(item.id)).join(" / ") || "Capture proof to attach researcher, executor, verifier, and UI reviewer lanes."}</p>
+          </article>
+          <article>
+            <span>Monitor mode</span>
+            <strong>{subagentMonitoringPolicy.nonNoisyByDefault === false ? "Noisy" : "Non-noisy"}</strong>
+            <p>{subagentMonitoringPolicy.activationMode ? titleizeToken(subagentMonitoringPolicy.activationMode) : "Operator-enabled or guardrail-triggered monitoring."}</p>
+          </article>
+          <article>
+            <span>Cancel path</span>
+            <strong>{subagentControls.some(item => item.id === "cancel-subagent" && item.status === "ready") ? "Ready" : "Pending"}</strong>
+            <p>Stop a single lane without cancelling the whole mission sequence.</p>
+          </article>
+          <article>
+            <span>Proof merge</span>
+            <strong>{subagentMergePolicy.requiresProofArtifact === false ? "Loose" : "Artifact-gated"}</strong>
+            <p>{subagentMergePolicy.strategy ? titleizeToken(subagentMergePolicy.strategy) : "Compact findings before raw logs."}</p>
+          </article>
+        </div>
+        <div className="fluxos-subagent-controls" aria-label="Subagent lane controls">
+          {(subagentControls.length ? subagentControls : [
+            { id: "spawn-role", label: "Spawn role", status: "pending" },
+            { id: "monitor-drift", label: "Monitor drift", status: "pending" },
+            { id: "cancel-subagent", label: "Cancel subagent", status: "pending" },
+            { id: "merge-proof", label: "Merge proof", status: "pending" },
+          ]).slice(0, 6).map(control => (
+            <span key={control.id || control.label}>
+              <strong>{control.label || titleizeToken(control.id || "control")}</strong>
+              <em>{titleizeToken(control.status || "pending")}</em>
+            </span>
+          ))}
+        </div>
+        <div className="fluxos-subagent-checks">
+          {(subagentChecks.length ? subagentChecks : [
+            { id: "role-assignment", label: "Role assignment", status: "pending" },
+            { id: "monitor-activation", label: "Monitor activation", status: "pending" },
+            { id: "cancel-path", label: "Cancel path", status: "pending" },
+            { id: "proof-merge", label: "Proof merge", status: "pending" },
+            { id: "drift-intervention", label: "Drift intervention", status: "pending" },
+          ]).slice(0, 5).map(check => (
+            <span key={check.id || check.label}>
+              <strong>{check.label || titleizeToken(check.id || "check")}</strong>
+              <em>{titleizeToken(check.status || "pending")}</em>
+            </span>
+          ))}
+        </div>
+        <p className="fluxos-subagent-foot">
+          {subagentProofPath
+            ? `Proof artifact: ${subagentProofPath}`
+            : subagentMonitoringReadiness.nextAction || "Capture subagent monitoring proof before calling role lanes ready."}
+        </p>
+      </section>
       <div className="fluxos-settings-list">
         {setupCards.length ? setupCards.map(item => (
           <article key={item.id || item.label || item.title}>
