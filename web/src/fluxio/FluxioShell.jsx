@@ -14941,6 +14941,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "skills:capture-runtime-contract") {
+        setSurface("skills");
+        setReferenceStudio(current => ({ ...current, collectionTab: "skill" }));
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture skill runtime proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_skill_runtime_contract_command",
+            {
+              payload: {
+                root: null,
+                requestId: `skills-${Date.now()}`,
+                skillId: payload?.skillId || "",
+                taskBrief: operatorDraft || missionForm.objective || "",
+              },
+            },
+            { throwOnError: true },
+          );
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Skill runtime proof captured: ${pathLeaf(artifactPath)}.`
+              : "Skill runtime proof captured.",
+            "info",
+          );
+          await refreshAll("skill-runtime-contract");
+        } catch (error) {
+          pushToast(`Skill runtime proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "skills:review-system-loss") {
         setSurface("builder");
         setBuilderDetailOpen(true);
@@ -18967,6 +19001,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     activeSkillIds: liveSkillLibraryReady ? uniq([...connectedAppDraftSkills.map(item => item.id), ...liveSkillIds]) : [],
     activeRuleSetId: referenceStudio.activeRuleSetId,
     feedbackLoop: liveSkillLibrary?.feedbackLoop || viewModel.drawers.builder.skillStudio.feedbackLoop,
+    runtimeContract: liveSkillLibrary?.runtimeContract || null,
     liveReady: liveSkillLibraryReady,
     liveSource: liveSkillLibrary ? (snapshot?.skillLibrary ? "control-room snapshot" : "control-room summary") : "",
     managementSummary: liveSkillLibrary?.managementSummary || viewModel.drawers.builder.skillStudio.summary,

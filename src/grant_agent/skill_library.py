@@ -21,6 +21,11 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
 
 
+def _safe_skill_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value.strip()).strip(".-")
+    return cleaned[:96] or "skill"
+
+
 class SkillLibrary:
     def __init__(self, root: Path, registry: SkillRegistry) -> None:
         self.root = root.resolve()
@@ -676,6 +681,171 @@ class SkillLibrary:
             ),
         }
 
+    def build_runtime_contract(
+        self,
+        *,
+        task_brief: str = "",
+        selected_skill_id: str = "",
+    ) -> dict:
+        selected = selected_skill_id.strip()
+        task = task_brief.strip() or "Route the current mission through the most relevant executable skill."
+        retrieved = self.retrieve(task, top_k=4)
+        retrieved_ids = {
+            str(item.get("skillId") or item.get("skill_id") or "").strip()
+            for item in retrieved
+        }
+        registry_rows: list[dict] = []
+        for skill in self.registry.skills:
+            skill_id = skill.name
+            schema_status = "declared" if skill.schema else "missing"
+            registry_rows.append(
+                {
+                    "skillId": skill_id,
+                    "label": skill.name.replace("_", " ").title(),
+                    "description": skill.description,
+                    "sourceKind": "curated",
+                    "inputSchema": skill.schema or {
+                        "type": "object",
+                        "properties": {
+                            "taskBrief": {"type": "string"},
+                        },
+                        "required": ["taskBrief"],
+                    },
+                    "inputContractStatus": schema_status,
+                    "permissions": skill.permissions,
+                    "actionKinds": skill.action_kinds,
+                    "guidanceOnly": skill.guidance_only,
+                    "executionCapable": skill.execution_capable,
+                }
+            )
+        learned_rows = [
+            {
+                "skillId": item.skill_id,
+                "label": item.label,
+                "description": item.description,
+                "sourceKind": "learned",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "taskBrief": {"type": "string"},
+                        "missionId": {"type": "string"},
+                    },
+                    "required": ["taskBrief"],
+                },
+                "inputContractStatus": "generated_minimal",
+                "permissions": item.permissions,
+                "actionKinds": item.tags,
+                "guidanceOnly": False,
+                "executionCapable": not item.disabled,
+            }
+            for item in self.learned_skills
+        ]
+        user_rows = []
+        for item in self.user_installed_skills:
+            skill_id = str(item.get("skillId") or item.get("skill_id") or item.get("name") or item.get("label") or "").strip()
+            if not skill_id:
+                continue
+            schema = item.get("schema") if isinstance(item.get("schema"), dict) else {}
+            user_rows.append(
+                {
+                    "skillId": skill_id,
+                    "label": str(item.get("label") or item.get("name") or skill_id),
+                    "description": str(item.get("description") or item.get("summary") or ""),
+                    "sourceKind": str(item.get("sourceKind") or item.get("originType") or "user_installed"),
+                    "inputSchema": schema or {
+                        "type": "object",
+                        "properties": {"taskBrief": {"type": "string"}},
+                        "required": ["taskBrief"],
+                    },
+                    "inputContractStatus": "declared" if schema else "generated_minimal",
+                    "permissions": item.get("permissions", []) if isinstance(item.get("permissions"), list) else [],
+                    "actionKinds": item.get("actionKinds", []) if isinstance(item.get("actionKinds"), list) else [],
+                    "guidanceOnly": bool(item.get("guidanceOnly", False)),
+                    "executionCapable": not bool(item.get("disabled", False)),
+                }
+            )
+        rows = registry_rows + user_rows + learned_rows
+        if selected:
+            rows.sort(key=lambda item: 0 if item["skillId"] == selected else 1)
+        elif retrieved_ids:
+            rows.sort(key=lambda item: 0 if item["skillId"] in retrieved_ids else 1)
+        skill_contracts = []
+        for index, item in enumerate(rows[:8]):
+            skill_id = str(item.get("skillId") or f"skill_{index}")
+            execution_capable = bool(item.get("executionCapable"))
+            guidance_only = bool(item.get("guidanceOnly"))
+            runtime_lane = "hermes" if execution_capable and not guidance_only else "hermes-guidance"
+            if item.get("sourceKind") in {"openclaw", "workspace", "user_installed"} and not execution_capable:
+                runtime_lane = "openclaw"
+            safe_id = _safe_skill_id(skill_id)
+            feedback_summary = self._feedback_summary(item, skill_id)
+            hold = self._system_loss_hold(feedback_summary)
+            skill_contracts.append(
+                {
+                    "skillId": skill_id,
+                    "label": item.get("label") or skill_id,
+                    "sourceKind": item.get("sourceKind") or "curated",
+                    "selected": skill_id == selected or (not selected and skill_id in retrieved_ids),
+                    "input": {
+                        "schema": item.get("inputSchema") or {},
+                        "status": item.get("inputContractStatus") or "missing",
+                        "required": list((item.get("inputSchema") or {}).get("required", [])),
+                    },
+                    "output": {
+                        "artifactRequired": True,
+                        "artifactPath": f".agent_control/skill_runtime_proofs/{safe_id}.json",
+                        "schema": "fluxio.skill_runtime_result.v1",
+                    },
+                    "route": {
+                        "runtimeLane": runtime_lane,
+                        "primaryRuntimeLane": "hermes",
+                        "fallbackRuntimeLane": "openclaw",
+                        "opencodeFallback": True,
+                        "reason": "Executable skills run through Hermes by default; OpenClaw/OpenCode stay fallback or workspace-skill lanes.",
+                    },
+                    "guardrails": [
+                        "require_input_schema",
+                        "write_output_artifact",
+                        "attach_proof_to_mission",
+                        "deprioritize_when_system_loss_hold_is_active",
+                    ],
+                    "systemLossHold": hold,
+                    "permissions": item.get("permissions", []),
+                    "executionCapable": execution_capable,
+                    "guidanceOnly": guidance_only,
+                }
+            )
+        missing_schema_count = sum(
+            1 for item in skill_contracts if item.get("input", {}).get("status") == "missing"
+        )
+        generated_schema_count = sum(
+            1 for item in skill_contracts if item.get("input", {}).get("status") == "generated_minimal"
+        )
+        held_count = sum(1 for item in skill_contracts if item.get("systemLossHold", {}).get("held"))
+        return {
+            "schema": "fluxio.skill_runtime_contract.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode"],
+            "taskBrief": task,
+            "skillCount": len(rows),
+            "contractCount": len(skill_contracts),
+            "executionReadyCount": sum(1 for item in skill_contracts if item.get("executionCapable") and not item.get("systemLossHold", {}).get("held")),
+            "missingSchemaCount": missing_schema_count,
+            "generatedSchemaCount": generated_schema_count,
+            "heldSkillCount": held_count,
+            "skills": skill_contracts,
+            "loop": {
+                "steps": ["select_skill", "validate_input", "run_hermes_lane", "write_artifact", "verify_output", "attach_proof"],
+                "stopWhen": "artifact_and_verifier_pass_or_guardrail_blocks",
+            },
+            "nextAction": (
+                "Add explicit input schemas for generated-minimal skills before broad autonomous routing."
+                if generated_schema_count or missing_schema_count
+                else "Use the selected Hermes skill lane and attach its proof artifact to the mission."
+            ),
+        }
+
     def build_catalog(
         self,
         recommended_packs: list[SkillPack] | None = None,
@@ -713,6 +883,7 @@ class SkillLibrary:
         ]
         sections = [recommended, curated, user_installed, learned]
         feedback_loop = self._build_feedback_loop(sections)
+        runtime_contract = self.build_runtime_contract()
         return {
             "curatedPacks": curated,
             "recommendedPacks": recommended,
@@ -720,6 +891,7 @@ class SkillLibrary:
             "learnedSkills": learned,
             "managementSummary": self._management_summary(sections),
             "feedbackLoop": feedback_loop,
+            "runtimeContract": runtime_contract,
         }
 
     def _build_feedback_loop(self, sections: list[list[dict]]) -> dict:

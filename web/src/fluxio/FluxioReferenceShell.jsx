@@ -9694,6 +9694,9 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
   const ruleSets = asList(effectiveStudioState?.ruleSets).slice(0, 4);
   const isRuleSets = surface === "rule-sets";
   const feedbackLoop = effectiveStudioState?.feedbackLoop || {};
+  const runtimeContract = effectiveStudioState?.runtimeContract || {};
+  const runtimeContractSkills = asList(runtimeContract?.skills).slice(0, 4);
+  const runtimeContractReady = runtimeContract?.schema === "fluxio.skill_runtime_contract.v1";
   const routing = feedbackLoop.systemLossRouting || {};
   const latestFeedback = asList(feedbackLoop.latest).slice(0, 3);
   const repairProposals = asList(feedbackLoop.repairProposals).slice(0, 3);
@@ -9767,6 +9770,12 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
     ["Frontend", frontendRouteModel, frontendRouteProvider],
     ["Skill format", "SKILL.md", "procedures"],
     ["Source", "Live", skillSourceMode],
+  ];
+  const runtimeContractMetrics = [
+    ["Contracts", runtimeContractReady ? runtimeContract.contractCount || runtimeContractSkills.length : 0, "input/output/proof"],
+    ["Ready", runtimeContractReady ? runtimeContract.executionReadyCount || 0 : 0, "Hermes lanes"],
+    ["Generated", runtimeContractReady ? runtimeContract.generatedSchemaCount || 0 : 0, "minimal schemas"],
+    ["Held", runtimeContractReady ? runtimeContract.heldSkillCount || 0 : 0, "guardrails"],
   ];
   const codeModSkillRows = [
     ["simplify-code", "Hermes", "Code cleanup and targeted refactors"],
@@ -9990,6 +9999,64 @@ function FluxioSkillsSurface({ onRequestAction, studioState, skillStudioState, s
                 <button disabled={!selectedSkillEntry} onClick={() => fluxioAction(onRequestAction, `skill:open:${selectedSkillEntry?.key || "none"}`)} type="button">Open details</button>
               </div>
               {skillEditorStatus ? <p className="fluxos-skill-editor-status">{skillEditorStatus}</p> : null}
+            </div>
+          </section>
+        ) : null}
+        {!isRuleSets ? (
+          <section
+            className={cx("fluxos-skill-runtime-contract", runtimeContractReady ? "ready" : "pending")}
+            aria-label="Skill runtime contract"
+            data-skill-runtime-contract="true"
+            data-skill-runtime-schema={runtimeContractReady ? runtimeContract.schema : "pending"}
+            data-skill-runtime-primary-lane={runtimeContract?.primaryRuntimeLane || "hermes"}
+          >
+            <div className="fluxos-skill-runtime-contract-head">
+              <div>
+                <span>Skill runtime contract</span>
+                <strong>{runtimeContractReady ? "Skills have input, output, route, and proof" : "Waiting for live skill runtime contract"}</strong>
+                <p>
+                  {runtimeContractReady
+                    ? runtimeContract.nextAction || "Use the selected Hermes skill lane and attach its proof artifact to the mission."
+                    : "Capture the contract from the live backend before claiming a skill can execute."}
+                </p>
+              </div>
+              <div className="fluxos-skill-runtime-contract-actions">
+                <span>{`${runtimeContract?.primaryRuntimeLane || "Hermes"} primary · ${(runtimeContract?.fallbackRuntimeLanes || ["openclaw", "opencode"]).join(" / ")} fallback`}</span>
+                <button onClick={() => fluxioAction(onRequestAction, "skills:capture-runtime-contract", { skillId: selectedSkillEntry?.key || "" })} type="button">
+                  Capture skill proof
+                </button>
+              </div>
+            </div>
+            <div className="fluxos-skill-runtime-metrics" aria-label="Skill runtime contract metrics">
+              {runtimeContractMetrics.map(([label, value, detail]) => (
+                <article key={`skill-runtime-metric-${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+            <div className="fluxos-skill-runtime-lanes" aria-label="Skill runtime lanes">
+              {(runtimeContractSkills.length > 0 ? runtimeContractSkills : [{
+                skillId: selectedSkillEntry?.key || "pending-skill",
+                label: selectedSkillDraft.name || "Live contract pending",
+                route: { runtimeLane: "hermes", fallbackRuntimeLane: "openclaw" },
+                input: { status: "pending", required: [] },
+                output: { artifactPath: ".agent_control/skill_runtime_proofs/<skill>.json" },
+                systemLossHold: { held: false },
+              }]).map(item => (
+                <article
+                  className={cx("fluxos-skill-runtime-lane", item?.systemLossHold?.held && "held")}
+                  data-skill-runtime-lane="true"
+                  data-skill-runtime-lane-id={item.skillId || ""}
+                  key={`skill-runtime-lane-${item.skillId || item.label}`}
+                >
+                  <span>{item?.route?.runtimeLane || "hermes"}</span>
+                  <strong>{item.label || item.skillId || "Skill"}</strong>
+                  <p>{`Input ${titleizeToken(item?.input?.status || "pending")} · output ${item?.output?.schema || "fluxio.skill_runtime_result.v1"}`}</p>
+                  <em>{item?.output?.artifactPath || ".agent_control/skill_runtime_proofs/<skill>.json"}</em>
+                </article>
+              ))}
             </div>
           </section>
         ) : null}
