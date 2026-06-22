@@ -567,6 +567,66 @@
   white-space: nowrap;
 }
 
+.fluxos-app-update-cue {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.fluxos-app-update-cue span {
+  color: var(--fluxos-cyan);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.fluxos-app-update-cue strong {
+  color: var(--fluxos-text);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.fluxos-app-update-cue small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fluxos-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-app-update-cue div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fluxos-app-update-cue button {
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--fluxos-muted);
+  font-size: 11px;
+}
+
+.fluxos-app-update-cue button.primary {
+  border-color: rgba(245, 245, 240, 0.72);
+  background: var(--fluxos-text);
+  color: #060708;
+  font-weight: 850;
+}
+
+.fluxos-app-update-rail {
+  width: min(720px, calc(100% - 36px));
+  margin: 8px 18px 0 auto;
+  border-bottom-color: rgba(245, 245, 240, 0.24);
+}
+
 .fluxos-run-config,
 .fluxos-top-actions,
 .fluxos-composer-actions,
@@ -7474,6 +7534,19 @@ button.fluxos-context-root:hover {
   .fluxos-run-config {
     justify-content: flex-start;
     min-width: 0;
+  }
+
+  .fluxos-app-update-cue {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .fluxos-app-update-cue small {
+    white-space: normal;
+  }
+
+  .fluxos-app-update-cue div {
+    justify-content: flex-start;
   }
 
   .fluxos-home,

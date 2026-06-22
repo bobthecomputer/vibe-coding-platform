@@ -11946,6 +11946,7 @@ function FluxioProviderAdmissionTruth({ compact = false, liveDataStatus, routeCo
 function FluxioAgentOS(props) {
   const {
     agentScene = "run",
+    appUpdateState,
     appearance,
     appearanceStyle,
     builderRows,
@@ -11969,6 +11970,9 @@ function FluxioAgentOS(props) {
   const recentLiveRows = sortLiveBuilderRows(builderRows).slice(0, 3);
   const isLiveBackend = liveDataStatus?.previewMode === "live";
   const isLiveLoading = isLiveBackend && liveDataStatus?.loading && recentLiveRows.length === 0;
+  const showAppUpdateCue = Boolean(appUpdateState?.visible);
+  const appUpdateStatus = String(appUpdateState?.status || "");
+  const appUpdateDetail = String(appUpdateState?.detail || "A Fluxio app shell update is waiting.");
   const [activeTheme, setActiveTheme] = useState(() => {
     if (typeof window === "undefined") return "noir";
     const stored = window.localStorage?.getItem(FLUXIO_THEME_STORAGE_KEY);
@@ -12081,6 +12085,30 @@ function FluxioAgentOS(props) {
             <button className="primary" onClick={onMore} type="button">Command</button>
           </div>
         </header>
+
+        {showAppUpdateCue ? (
+          <section
+            aria-label="Fluxio app update"
+            className="fluxos-app-update-cue fluxos-app-update-rail"
+            data-app-update-cue="true"
+            data-app-update-status={appUpdateStatus}
+          >
+            <span>App update</span>
+            <strong>{appUpdateState?.statusLabel || "Update ready"}</strong>
+            <small title={appUpdateDetail}>{appUpdateDetail}</small>
+            <div>
+              <button onClick={() => fluxioAction(onRequestAction, "app-update:review")} type="button">
+                Review
+              </button>
+              <button className="primary" onClick={() => fluxioAction(onRequestAction, "app-update:reload")} type="button">
+                Reload
+              </button>
+              <button onClick={() => fluxioAction(onRequestAction, "app-update:dismiss")} type="button">
+                Dismiss
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         {surface !== "builder" ? (
           <FluxioProviderAdmissionTruth

@@ -5193,6 +5193,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [harnessBenchmarkBoardContract, setHarnessBenchmarkBoardContract] = useState(null);
   const [updateManagementReadinessContract, setUpdateManagementReadinessContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
+  const [appUpdateState, setAppUpdateState] = useState({
+    status: "",
+    detail: "",
+    waiting: false,
+    updatedAt: "",
+  });
+  const [appUpdateDismissed, setAppUpdateDismissed] = useState(false);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
@@ -5640,6 +5647,36 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       browserNotifications.enabled ? "true" : "false",
     );
   }, [browserNotifications.enabled]);
+
+  useEffect(() => {
+    const handlePwaStatus = event => {
+      const detail = event?.detail && typeof event.detail === "object" ? event.detail : {};
+      const status = String(detail.status || "").trim();
+      if (!status) {
+        return;
+      }
+      setAppUpdateState({
+        status,
+        detail: String(detail.detail || ""),
+        waiting: Boolean(detail.waiting || status === "updated"),
+        updatedAt: new Date().toISOString(),
+      });
+      if (status === "updated") {
+        setAppUpdateDismissed(false);
+      }
+    };
+    window.addEventListener("fluxio:pwa-status", handlePwaStatus);
+    const currentStatus = document.documentElement?.dataset?.fluxioPwa || "";
+    if (currentStatus) {
+      setAppUpdateState(current => ({
+        ...current,
+        status: currentStatus,
+        waiting: currentStatus === "updated",
+      }));
+    }
+    return () => window.removeEventListener("fluxio:pwa-status", handlePwaStatus);
+  }, []);
+
   useEffect(() => {
     localStorage.setItem(
       STORAGE_KEYS.dismissedNotificationIds,
@@ -15386,6 +15423,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "app-update:review") {
+        setSurface("settings");
+        setReferenceSettingsTab("updates");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        return;
+      }
+
+      if (normalizedAction === "app-update:dismiss") {
+        setAppUpdateDismissed(true);
+        pushToast("App update cue dismissed for this session.", "info");
+        return;
+      }
+
+      if (normalizedAction === "app-update:reload") {
+        try {
+          window.dispatchEvent(new Event("fluxio:pwa-activate-update"));
+          const registration =
+            "serviceWorker" in navigator
+              ? await navigator.serviceWorker.ready.catch(() => null)
+              : null;
+          if (registration?.waiting) {
+            registration.waiting.postMessage({ type: "SKIP_WAITING" });
+            pushToast("Activating the waiting Fluxio app update.", "info");
+            return;
+          }
+          pushToast("No waiting app shell was found; refreshing the current app.", "info");
+          window.location.reload();
+        } catch (error) {
+          pushToast(`App update activation failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "updates:capture-readiness") {
         setSurface("settings");
         setReferenceSettingsTab("updates");
@@ -19824,6 +19895,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   };
 
   const showBlockingSnapshotLoader = false;
+  const appUpdateVisible = appUpdateState.status === "updated" && !appUpdateDismissed;
+  const referenceAppUpdateState = {
+    ...appUpdateState,
+    visible: appUpdateVisible,
+    statusLabel: appUpdateState.status ? titleizeToken(appUpdateState.status) : "Ready",
+    detail:
+      appUpdateState.detail ||
+      (appUpdateVisible
+        ? "A Fluxio app shell update is waiting."
+        : "Fluxio app shell is current."),
+  };
 
   if (showBlockingSnapshotLoader && initialLiveSnapshotPending) {
     return (
@@ -19891,6 +19973,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }>
         <FluxioReferenceShell
           agentScene={agentScene}
+          appUpdateState={referenceAppUpdateState}
           appearance={referenceAppearance}
           appearanceStyle={referencePreviewStyle}
           builderDetailOpen={builderDetailOpen}

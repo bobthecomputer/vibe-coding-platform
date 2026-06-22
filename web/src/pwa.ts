@@ -1,6 +1,7 @@
 type FluxioPwaStatus = {
   status: "unsupported" | "registering" | "ready" | "updated" | "failed";
   detail: string;
+  waiting?: boolean;
 };
 
 const FLUXIO_PWA_BUILD = "20260602-web-push-diagnostics-v31";
@@ -49,6 +50,7 @@ export function registerFluxioPwa() {
             registration.waiting.postMessage({ type: "SKIP_WAITING" });
           }
         };
+        window.addEventListener("fluxio:pwa-activate-update", activateWaitingWorker);
         registration.addEventListener("updatefound", () => {
           const worker = registration.installing;
           if (!worker) {
@@ -58,9 +60,9 @@ export function registerFluxioPwa() {
             if (worker.state === "installed" && navigator.serviceWorker.controller) {
               emitPwaStatus({
                 status: "updated",
-                detail: "Fluxio app shell update is ready; refreshing the live interface.",
+                detail: "Fluxio app shell update is ready. Reload when convenient.",
+                waiting: true,
               });
-              activateWaitingWorker();
             }
           });
         });
@@ -68,12 +70,24 @@ export function registerFluxioPwa() {
         document.addEventListener("visibilitychange", () => {
           if (document.visibilityState === "visible") {
             registration.update().catch(() => undefined);
-            activateWaitingWorker();
+            if (registration.waiting) {
+              emitPwaStatus({
+                status: "updated",
+                detail: "Fluxio app shell update is waiting.",
+                waiting: true,
+              });
+            }
           }
         });
         window.setInterval(() => {
           registration.update().catch(() => undefined);
-          activateWaitingWorker();
+          if (registration.waiting) {
+            emitPwaStatus({
+              status: "updated",
+              detail: "Fluxio app shell update is waiting.",
+              waiting: true,
+            });
+          }
         }, FLUXIO_PWA_UPDATE_INTERVAL_MS);
         if (registration.active) {
           registration.active.postMessage({
@@ -81,7 +95,6 @@ export function registerFluxioPwa() {
             build: FLUXIO_PWA_BUILD,
           });
         }
-        activateWaitingWorker();
         if (buildChanged && navigator.serviceWorker.controller) {
           const alreadyReloadedBuild = localStorage.getItem(FLUXIO_PWA_RELOAD_STORAGE_KEY) || "";
           if (alreadyReloadedBuild !== FLUXIO_PWA_BUILD) {
@@ -89,12 +102,13 @@ export function registerFluxioPwa() {
             window.setTimeout(() => window.location.reload(), 250);
           }
         }
-        const waiting = registration.waiting || registration.installing;
+        const waiting = navigator.serviceWorker.controller ? registration.waiting : null;
         emitPwaStatus({
           status: waiting ? "updated" : "ready",
           detail: waiting
-            ? "Fluxio app shell update is activating."
+            ? "Fluxio app shell update is waiting."
             : "Fluxio app shell is ready for installed use.",
+          waiting: Boolean(waiting),
         });
       })
       .catch((error: unknown) => {
