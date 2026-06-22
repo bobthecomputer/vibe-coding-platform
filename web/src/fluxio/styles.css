@@ -25753,6 +25753,148 @@ body::-webkit-scrollbar-thumb {
   white-space: nowrap;
 }
 
+.reference-shell.surface-images .image-loop-scheme,
+.fluxos-shell.surface-images .image-loop-scheme {
+  display: grid;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.reference-shell.surface-images .image-loop-scheme-head,
+.fluxos-shell.surface-images .image-loop-scheme-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reference-shell.surface-images .image-loop-scheme-head strong,
+.fluxos-shell.surface-images .image-loop-scheme-head strong {
+  display: block;
+  color: #fff;
+}
+
+.reference-shell.surface-images .image-loop-scheme-head p,
+.fluxos-shell.surface-images .image-loop-scheme-head p,
+.reference-shell.surface-images .image-loop-proof,
+.fluxos-shell.surface-images .image-loop-proof {
+  margin: 3px 0 0;
+  color: rgba(239, 244, 242, 0.7);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.reference-shell.surface-images .image-loop-scheme-head > span,
+.fluxos-shell.surface-images .image-loop-scheme-head > span {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.reference-shell.surface-images .image-loop-scheme-head > span[data-loop-status="proven"],
+.fluxos-shell.surface-images .image-loop-scheme-head > span[data-loop-status="proven"] {
+  border-color: rgba(163, 216, 185, 0.34);
+  color: #dff7e8;
+}
+
+.reference-shell.surface-images .image-loop-scheme-head > span[data-loop-status="blocked"],
+.reference-shell.surface-images .image-loop-scheme-head > span[data-loop-status="attention"],
+.fluxos-shell.surface-images .image-loop-scheme-head > span[data-loop-status="blocked"],
+.fluxos-shell.surface-images .image-loop-scheme-head > span[data-loop-status="attention"] {
+  border-color: rgba(255, 206, 145, 0.35);
+  color: #ffe1b6;
+}
+
+.reference-shell.surface-images .image-loop-route-grid,
+.fluxos-shell.surface-images .image-loop-route-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.reference-shell.surface-images .image-loop-route-grid span,
+.fluxos-shell.surface-images .image-loop-route-grid span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  color: rgba(239, 244, 242, 0.52);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.reference-shell.surface-images .image-loop-route-grid b,
+.fluxos-shell.surface-images .image-loop-route-grid b {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.reference-shell.surface-images .image-loop-scheme ol,
+.fluxos-shell.surface-images .image-loop-scheme ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reference-shell.surface-images .image-loop-scheme li,
+.fluxos-shell.surface-images .image-loop-scheme li {
+  display: grid;
+  gap: 3px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.reference-shell.surface-images .image-loop-scheme li b,
+.fluxos-shell.surface-images .image-loop-scheme li b {
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+}
+
+.reference-shell.surface-images .image-loop-scheme li span,
+.fluxos-shell.surface-images .image-loop-scheme li span {
+  color: rgba(239, 244, 242, 0.64);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.reference-shell.surface-images .image-loop-action,
+.fluxos-shell.surface-images .image-loop-action {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-weight: 750;
+}
+
+.reference-shell.surface-images .image-loop-action:not(:disabled):hover,
+.fluxos-shell.surface-images .image-loop-action:not(:disabled):hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .reference-shell.surface-images :where(button, .image-primary-button, .image-glass-button, .image-secondary-button, .image-mini-button, select, input, textarea),
 .fluxos-shell.surface-images :where(button, .image-primary-button, .image-glass-button, .image-secondary-button, .image-mini-button, select, input, textarea) {
   border-radius: 8px !important;
@@ -25776,6 +25918,11 @@ body::-webkit-scrollbar-thumb {
   .fluxos-shell.surface-images .image-gallery-list {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     max-height: none;
+  }
+
+  .reference-shell.surface-images .image-loop-route-grid,
+  .fluxos-shell.surface-images .image-loop-route-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

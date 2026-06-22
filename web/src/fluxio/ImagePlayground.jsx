@@ -304,6 +304,69 @@ const DRAFT_STATE_LABELS = {
 
 const KEYBOARD_JUMP_TRAIL_LIMIT = 3;
 const KEYBOARD_JUMP_TRAIL_IDLE_MS = 30000;
+const MISSION1_LOOP_SCHEME = [
+  {
+    id: "baseline",
+    label: "1. Single-agent baseline",
+    detail: "Hermes plans from the current screenshot, prompt, layers, and selected artifact before any council is spawned.",
+  },
+  {
+    id: "observe",
+    label: "2. Tool observation",
+    detail: "Preview screenshot, DOM facts, queue receipts, and annotation counts become the feedback channel.",
+  },
+  {
+    id: "repair",
+    label: "3. Critique and repair",
+    detail: "The vision/UI skill proposes one concrete repair and implementation writes only proof-backed changes.",
+  },
+  {
+    id: "verify",
+    label: "4. Verify or escalate",
+    detail: "Stop on screenshot/build/verifier proof; escalate to OpenClaw or human review only when Hermes cannot prove it.",
+  },
+];
+
+function missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedState, queueSummary }) {
+  if (selfRepairBusy) {
+    return {
+      phase: "Inspecting",
+      status: "running",
+      proof: "Runtime loop is collecting screenshot and route evidence.",
+      nextAction: "Wait for verifier proof",
+    };
+  }
+  if (selfRepairProof?.routeStatus === "ok") {
+    return {
+      phase: "Verified",
+      status: "proven",
+      proof: "Route, skill, plan, and verifier artifacts are attached.",
+      nextAction: "Review proof or export context",
+    };
+  }
+  if (selfRepairProof?.routeStatus || providerBlockedState) {
+    return {
+      phase: "Blocked",
+      status: "blocked",
+      proof: selfRepairProof?.message || providerBlockedState?.message || "The loop needs live backend or provider evidence.",
+      nextAction: "Attach backend/NAS artifact bridge",
+    };
+  }
+  if (queueSummary.failed > 0) {
+    return {
+      phase: "Repair needed",
+      status: "attention",
+      proof: "Queue contains a failed or blocked generation receipt.",
+      nextAction: "Run self-repair",
+    };
+  }
+  return {
+    phase: "Ready",
+    status: "ready",
+    proof: "Uses screenshot, route, queue, and skill evidence before claiming success.",
+    nextAction: "Run self-repair",
+  };
+}
 
 export function ImagePlaygroundSurface({ callBackend }) {
   const [project, setProject] = useState(() => loadImageProject());
@@ -578,6 +641,10 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const selfRepairArtifacts = selfRepairProof?.artifacts && typeof selfRepairProof.artifacts === "object"
     ? Object.entries(selfRepairProof.artifacts)
     : [];
+  const loopStatus = useMemo(
+    () => missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedState, queueSummary }),
+    [providerBlockedState, queueSummary, selfRepairBusy, selfRepairProof],
+  );
 
   useEffect(() => {
     if (!libraryItems.length) return;
@@ -2263,6 +2330,41 @@ export function ImagePlaygroundSurface({ callBackend }) {
                 ))}
               </ul>
             ) : null}
+          </div>
+          <div className="image-loop-scheme" data-image-loop-scheme="mission1">
+            <div className="image-loop-scheme-head">
+              <div>
+                <strong>Mission loop scheme</strong>
+                <p>Budget-aware plan → observe → repair → verify.</p>
+              </div>
+              <span data-loop-status={loopStatus.status}>{loopStatus.phase}</span>
+            </div>
+            <div className="image-loop-route-grid" aria-label="Loop route contract">
+              <span>
+                Route
+                <b>{project.visionRoute.runtime} · {project.visionRoute.model}</b>
+              </span>
+              <span>
+                Fallback
+                <b>{project.visionRoute.fallbackRuntime}</b>
+              </span>
+              <span>
+                Stop rule
+                <b>proof or cap</b>
+              </span>
+            </div>
+            <ol>
+              {MISSION1_LOOP_SCHEME.map(item => (
+                <li key={item.id}>
+                  <b>{item.label}</b>
+                  <span>{item.detail}</span>
+                </li>
+              ))}
+            </ol>
+            <p className="image-loop-proof">{loopStatus.proof}</p>
+            <button className="image-loop-action" disabled={selfRepairBusy} onClick={() => void runSelfRepairLoop()} type="button">
+              {loopStatus.nextAction}
+            </button>
           </div>
         </aside>
       </section>

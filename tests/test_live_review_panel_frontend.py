@@ -245,6 +245,11 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn("runSelfRepairLoop", app)
         self.assertIn("image_self_repair_loop_command", app)
         self.assertIn("exportSelectedImage", app)
+        self.assertIn("MISSION1_LOOP_SCHEME", app)
+        self.assertIn('data-image-loop-scheme="mission1"', app)
+        self.assertIn("missionLoopStatus", app)
+        self.assertIn("Budget-aware plan", app)
+        self.assertIn("proof or cap", app)
         self.assertIn("Vision route", app)
         self.assertIn("Image Playground", app)
         self.assertIn("imagePluginMode", app)
@@ -265,6 +270,7 @@ class LiveReviewPanelFrontendTests(unittest.TestCase):
         self.assertIn(".image-command-deck", styles)
         self.assertIn(".image-mission-workbench", styles)
         self.assertIn(".image-self-repair-proof", styles)
+        self.assertIn(".image-loop-scheme", styles)
 
     def test_builder_has_mission2_current_mission_canvas_and_self_repair_path(self) -> None:
         shell = REFERENCE_SHELL.read_text(encoding="utf-8")
