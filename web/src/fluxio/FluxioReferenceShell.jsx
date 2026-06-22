@@ -11283,6 +11283,14 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const setupCards = asList(settingsState?.beginnerSetupCards);
   const runtimes = asList(settingsState?.runtimes);
   const bridgeSessions = asList(settingsState?.bridgeSessions);
+  const harnessBenchmarkBoard =
+    settingsState?.harnessBenchmarkBoard && typeof settingsState.harnessBenchmarkBoard === "object"
+      ? settingsState.harnessBenchmarkBoard
+      : {};
+  const harnessBenchmarkRows = asList(harnessBenchmarkBoard.matrix);
+  const harnessBenchmarkBlockers = asList(harnessBenchmarkBoard.blockers);
+  const harnessBenchmarkProofPath = String(harnessBenchmarkBoard?.proof?.artifactPath || "").trim();
+  const harnessBenchmarkStatus = String(harnessBenchmarkBoard.status || "pending_live_capture");
   const fusionReadiness =
     settingsState?.fusionReadiness && typeof settingsState.fusionReadiness === "object"
       ? settingsState.fusionReadiness
@@ -11620,6 +11628,53 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
         <article><span>Bridge sessions</span><strong>{bridgeSessions.length || "None reported"}</strong></article>
         <article><span>Runtime rows</span><strong>{runtimes.length || "Not reported"}</strong></article>
       </div>
+      <section
+        className={cx("fluxos-harness-benchmark-board", harnessBenchmarkProofPath && "ready")}
+        data-harness-benchmark-board="true"
+        data-harness-benchmark-schema={harnessBenchmarkBoard.schema || "fluxio.harness_benchmark_board.v1"}
+        data-harness-benchmark-primary-lane={harnessBenchmarkBoard.primaryRuntimeLane || "hermes"}
+      >
+        <div className="fluxos-harness-benchmark-head">
+          <div>
+            <span>Harness benchmark board</span>
+            <strong>{titleizeToken(harnessBenchmarkStatus)}</strong>
+            <p>
+              {harnessBenchmarkBoard.decision?.summary ||
+                "Use Hermes as the completion lane, keep OpenClaw/OpenCode visible for fallback and specialist work."}
+            </p>
+          </div>
+          <button
+            className="fluxos-harness-benchmark-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "harness:capture-benchmark-board")}
+            type="button"
+          >
+            Capture benchmark proof
+          </button>
+        </div>
+        <div className="fluxos-harness-benchmark-matrix" aria-label="Model and harness benchmark matrix">
+          {harnessBenchmarkRows.slice(0, 4).map(row => (
+            <article className={cx(row.id === harnessBenchmarkBoard.decision?.production && "selected")} key={row.id || row.label}>
+              <span>{titleizeToken(row.decision || row.runtime || "route")}</span>
+              <strong>{row.label || `${titleizeToken(row.runtime)} + ${titleizeToken(row.harness)}`}</strong>
+              <p>{row.bestFor || "No benchmark role recorded yet."}</p>
+              <small>{row.modelRoute || row.harness || "Model route pending"}</small>
+              <em>{Number.isFinite(Number(row.operatorScore)) ? `${Math.round(Number(row.operatorScore))}/100` : "score pending"}</em>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-harness-benchmark-proof">
+          <article>
+            <span>Primary lane</span>
+            <strong>{titleizeToken(harnessBenchmarkBoard.primaryRuntimeLane || "hermes")}</strong>
+            <p>{asList(harnessBenchmarkBoard.fallbackRuntimeLanes).length ? `Fallback: ${asList(harnessBenchmarkBoard.fallbackRuntimeLanes).join(" / ")}` : "Fallback lanes pending live capture."}</p>
+          </article>
+          <article>
+            <span>Evidence</span>
+            <strong>{`${asList(harnessBenchmarkBoard.sourceEvidence).filter(item => item.status === "ready").length} ready source${asList(harnessBenchmarkBoard.sourceEvidence).filter(item => item.status === "ready").length === 1 ? "" : "s"}`}</strong>
+            <p>{harnessBenchmarkProofPath ? `Proof artifact: ${harnessBenchmarkProofPath}` : harnessBenchmarkBlockers[0] || harnessBenchmarkBoard.nextAction || "Live capture has not run yet."}</p>
+          </article>
+        </div>
+      </section>
       <section
         className={cx("fluxos-fusion-readiness", fusionProofPath && "ready")}
         data-fusion-readiness-contract="true"
