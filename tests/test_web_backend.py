@@ -1341,6 +1341,35 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(proof["proof"]["purpose"], "pr_stack_landing_order_readiness")
             self.assertEqual(proof["landingSequence"][0]["number"], 119)
 
+    def test_pr_stack_landing_readiness_command_accepts_empty_runtime_rows_as_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            contract = backend.dispatch(
+                "get_pr_stack_landing_readiness_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission31-empty-stack-complete",
+                    "maxChain": 5,
+                    "prRows": [],
+                },
+            )
+
+            self.assertEqual(contract["schema"], "fluxio.pr_stack_landing_readiness.v1")
+            self.assertTrue(contract["ok"])
+            self.assertEqual(contract["status"], "no_open_prs")
+            self.assertEqual(contract["source"], "runtime_payload")
+            self.assertEqual(contract["stack"]["openPrCount"], 0)
+            self.assertEqual(contract["continuationPolicy"]["state"], "completed")
+            self.assertFalse(contract["continuationPolicy"]["shouldContinueStackWork"])
+            self.assertEqual(contract["continuationPolicy"]["automationDecision"], "skip_completed_pr_stack")
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["source"], "runtime_payload")
+            self.assertEqual(proof["continuationPolicy"]["state"], "completed")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

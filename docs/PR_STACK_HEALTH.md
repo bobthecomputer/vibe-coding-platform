@@ -18,6 +18,8 @@ npm run proof:pr-stack
 
 The proof script writes `artifacts/pr-stack-health-local/pr-stack-health.json`. A healthy report has `ok=true`, `staleStackDetected=false`, and a `longestChainLength` at or below the configured limit.
 
+For ordered landing work, run the same script with `--landing-readiness`. When all stack PRs are already merged or closed, the readiness report returns `status=no_open_prs` plus `continuationPolicy.automationDecision=skip_completed_pr_stack`. Automations should treat that as a hard handoff: stop reopening PR-stack landing work and start the next fresh compartment from current `origin/master`.
+
 ## GitHub Check
 
 The scheduled/manual workflow lives at `.github/workflows/pr-stack-health.yml`. It runs `python -m unittest tests.test_pr_stack_health`, then writes and uploads `artifacts/pr-stack-health/pr-stack-health.json`.

@@ -19730,6 +19730,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       landingSequence: [],
       blockers: ["Live GitHub PR stack evidence has not been captured in this browser session."],
       nextAction: "Capture PR landing readiness before merging or closing the stacked mission PRs.",
+      continuationPolicy: {
+        state: "pending_live_capture",
+        shouldContinueStackWork: null,
+        automationDecision: "capture_pr_rows",
+        nextCompartmentAction: "Capture PR landing readiness before choosing the next mission.",
+        detail: "The browser has not captured live GitHub PR stack evidence yet.",
+      },
       proof: null,
     },
     automationOverlapStatus: automationOverlapStatusContract || snapshot?.automationOverlapStatus || {
