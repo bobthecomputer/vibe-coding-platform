@@ -122,6 +122,30 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("get_update_management_readiness_command", backend)
         self.assertIn("safe_dependency_runtime_provider_update_readiness", backend)
 
+    def test_settings_updates_surface_exposes_pr_stack_landing_readiness(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        backend = WEB_BACKEND.read_text(encoding="utf-8")
+
+        self.assertIn("prStackLandingReadinessContract", shell)
+        self.assertIn("setPrStackLandingReadinessContract", shell)
+        self.assertIn("get_pr_stack_landing_readiness_command", shell)
+        self.assertIn("pr-stack:capture-landing-readiness", shell)
+        self.assertIn("fluxio.pr_stack_landing_readiness.v1", shell)
+        self.assertIn('data-pr-stack-landing-readiness="true"', reference_shell)
+        self.assertIn('data-pr-stack-landing-schema={prStackLandingReadiness.schema || "fluxio.pr_stack_landing_readiness.v1"}', reference_shell)
+        self.assertIn("PR landing readiness", reference_shell)
+        self.assertIn("Capture PR proof", reference_shell)
+        self.assertIn("Landing frontier", reference_shell)
+        self.assertIn("Hermes is the primary lane", reference_shell)
+        self.assertIn(".fluxos-pr-stack-landing", styles)
+        self.assertIn(".fluxos-pr-stack-landing-grid", styles)
+        self.assertIn(".fluxos-pr-stack-landing-proof-button", styles)
+        self.assertIn("fluxio.pr_stack_landing_readiness.v1", backend)
+        self.assertIn("get_pr_stack_landing_readiness_command", backend)
+        self.assertIn("pr_stack_landing_order_readiness", backend)
+
     def test_settings_rules_surface_exposes_automation_overlap_guard(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
         reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")

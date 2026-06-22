@@ -6406,6 +6406,118 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _pr_stack_landing_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"pr-stack-landing-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "pr_stack_landing_readiness"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        rows_payload = payload.get("prRows") or payload.get("pr_rows") or payload.get("rows")
+        rows = [item for item in rows_payload if isinstance(item, dict)] if isinstance(rows_payload, list) else []
+        source = "runtime_payload" if rows else "github_cli"
+        fetch_error = ""
+        if not rows:
+            gh_path = shutil.which("gh")
+            if not gh_path:
+                fetch_error = "GitHub CLI `gh` is not available to the web backend."
+            else:
+                try:
+                    completed = subprocess.run(
+                        [
+                            gh_path,
+                            "pr",
+                            "list",
+                            "--state",
+                            "open",
+                            "--limit",
+                            str(int(payload.get("limit") or 80)),
+                            "--json",
+                            "number,title,headRefName,baseRefName,isDraft,url,mergeStateStatus,statusCheckRollup,reviewDecision,updatedAt",
+                        ],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        text=True,
+                        timeout=45,
+                    )
+                    decoded = json.loads(completed.stdout or "[]")
+                    rows = [item for item in decoded if isinstance(item, dict)] if isinstance(decoded, list) else []
+                except Exception as exc:
+                    fetch_error = str(exc)
+        max_chain = int(payload.get("maxChain") or payload.get("max_chain") or 20)
+        if rows:
+            import importlib.util
+
+            module_path = root / "scripts" / "pr_stack_health.py"
+            if not module_path.exists():
+                module_path = Path(__file__).resolve().parents[2] / "scripts" / "pr_stack_health.py"
+            if not module_path.exists():
+                raise RuntimeError(f"PR stack health script is missing: {module_path}")
+            spec = importlib.util.spec_from_file_location("fluxio_pr_stack_health", module_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load PR stack health script: {module_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            build_pr_stack_landing_readiness = module.build_pr_stack_landing_readiness
+
+            contract = build_pr_stack_landing_readiness(rows, max_chain=max_chain)
+            contract["source"] = source
+        else:
+            contract = {
+                "schema": "fluxio.pr_stack_landing_readiness.v1",
+                "generatedAt": utc_now_iso(),
+                "ok": False,
+                "status": "blocked_missing_github_rows",
+                "primaryRuntimeLane": "hermes",
+                "fallbackRuntimeLanes": ["openclaw", "opencode"],
+                "source": source,
+                "stack": {
+                    "openPrCount": 0,
+                    "chainCount": 0,
+                    "longestChainLength": 0,
+                    "longestChainPrs": [],
+                    "longestChainHeads": [],
+                    "maxAllowedChain": max_chain,
+                    "staleStackDetected": False,
+                },
+                "summary": {
+                    "readyToLandCount": 0,
+                    "blockedCount": 0,
+                    "draftCount": 0,
+                    "cleanCount": 0,
+                    "releaseProofPassedCount": 0,
+                },
+                "landingFrontier": None,
+                "landingSequence": [],
+                "blockers": [fetch_error or "No GitHub pull request rows were supplied or fetched."],
+                "nextAction": "Provide `prRows` from GitHub or run the command where `gh pr list` is authenticated.",
+                "routeProof": {
+                    "primary": "hermes",
+                    "fallback": ["openclaw", "opencode"],
+                    "purpose": "pr_stack_landing_order_readiness",
+                },
+            }
+        contract["sourceFiles"] = [
+            "scripts/pr_stack_health.py",
+            "src/grant_agent/web_backend.py",
+            "web/src/fluxio/FluxioShell.jsx",
+            "web/src/fluxio/FluxioReferenceShell.jsx",
+            "web/src/fluxio/styles.css",
+        ]
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "pr_stack_landing_order_readiness",
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _automation_overlap_status_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         root = Path(payload.get("root") or self.root).resolve()
         request_id = _sanitize_artifact_id(
@@ -7494,6 +7606,8 @@ class FluxioWebBackend:
             return self._harness_benchmark_board_artifact(command, payload)
         if command in {"update_management_readiness_command", "get_update_management_readiness_command"}:
             return self._update_management_readiness_artifact(command, payload)
+        if command in {"pr_stack_landing_readiness_command", "get_pr_stack_landing_readiness_command"}:
+            return self._pr_stack_landing_readiness_artifact(command, payload)
         if command in {"automation_overlap_status_command", "get_automation_overlap_status_command"}:
             return self._automation_overlap_status_artifact(command, payload)
         if command == "apply_skill_repair_command":

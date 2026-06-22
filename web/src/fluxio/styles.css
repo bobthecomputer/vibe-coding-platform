@@ -6479,6 +6479,127 @@ button.fluxos-context-root:hover {
   gap: 0;
 }
 
+.fluxos-pr-stack-landing {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 16px 0;
+}
+
+.fluxos-pr-stack-landing.ready {
+  border-color: rgba(180, 255, 214, 0.3);
+}
+
+.fluxos-pr-stack-landing.attention {
+  border-top-color: rgba(255, 188, 170, 0.34);
+}
+
+.fluxos-pr-stack-landing-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-pr-stack-landing-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-pr-stack-landing-head span,
+.fluxos-pr-stack-landing-grid span,
+.fluxos-pr-stack-landing-sequence span {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-pr-stack-landing-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+}
+
+.fluxos-pr-stack-landing-head p,
+.fluxos-pr-stack-landing-grid p,
+.fluxos-pr-stack-landing-sequence p,
+.fluxos-pr-stack-landing-foot {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-pr-stack-landing-proof-button {
+  display: inline-flex !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0 16px !important;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-pr-stack-landing-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-pr-stack-landing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+
+.fluxos-pr-stack-landing-grid article,
+.fluxos-pr-stack-landing-sequence article {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-pr-stack-landing-grid article + article,
+.fluxos-pr-stack-landing-sequence article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-pr-stack-landing-grid strong,
+.fluxos-pr-stack-landing-sequence strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-pr-stack-landing-sequence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+}
+
+.fluxos-pr-stack-landing-sequence article.ready span {
+  color: rgba(180, 255, 214, 0.86);
+}
+
+.fluxos-pr-stack-landing-sequence article.blocked span {
+  color: rgba(255, 188, 170, 0.9);
+}
+
 .fluxos-harness-benchmark-board {
   display: grid;
   gap: 14px;
@@ -6677,6 +6798,7 @@ button.fluxos-context-root:hover {
 .fluxos-shell.surface-settings .fluxos-provider-orchestration .fluxos-provider-proof-button,
 .fluxos-shell.surface-settings .fluxos-harness-benchmark-board .fluxos-harness-benchmark-proof-button,
 .fluxos-shell.surface-settings .fluxos-update-readiness .fluxos-update-proof-button,
+.fluxos-shell.surface-settings .fluxos-pr-stack-landing .fluxos-pr-stack-landing-proof-button,
 .fluxos-shell.surface-settings .fluxos-automation-overlap .fluxos-automation-overlap-proof-button,
 .fluxos-shell.surface-settings .fluxos-jbh-readiness .fluxos-jbh-proof-button {
   display: inline-flex !important;
@@ -7526,6 +7648,8 @@ button.fluxos-context-root:hover {
   .fluxos-settings-fact-grid,
   .fluxos-update-component-grid,
   .fluxos-update-proof-grid,
+  .fluxos-pr-stack-landing-grid,
+  .fluxos-pr-stack-landing-sequence,
   .fluxos-harness-benchmark-matrix,
   .fluxos-harness-benchmark-proof,
   .fluxos-fusion-project-grid,
@@ -7539,6 +7663,8 @@ button.fluxos-context-root:hover {
   .fluxos-settings-fact-grid article + article,
   .fluxos-update-component-grid article + article,
   .fluxos-update-proof-grid article + article,
+  .fluxos-pr-stack-landing-grid article + article,
+  .fluxos-pr-stack-landing-sequence article + article,
   .fluxos-harness-benchmark-matrix article + article,
   .fluxos-harness-benchmark-proof article + article,
   .fluxos-fusion-project-grid article + article,

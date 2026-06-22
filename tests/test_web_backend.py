@@ -1256,6 +1256,91 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "automation_overlap_goal_guard")
 
+    def test_pr_stack_landing_readiness_command_blocks_at_oldest_failed_pr(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            rows = [
+                {
+                    "number": 131,
+                    "title": "Mission 13: Add automation overlap guard",
+                    "headRefName": "codex/131-automation-overlap-status",
+                    "baseRefName": "codex/130-in-app-update-cue",
+                    "isDraft": False,
+                    "url": "https://example.test/pull/131",
+                    "mergeStateStatus": "CLEAN",
+                    "reviewDecision": "",
+                    "statusCheckRollup": [
+                        {
+                            "name": "release-proof",
+                            "workflowName": "Fluxio Release Proof",
+                            "status": "COMPLETED",
+                            "conclusion": "SUCCESS",
+                        }
+                    ],
+                },
+                {
+                    "number": 130,
+                    "title": "Mission 12: Add in-app update cue",
+                    "headRefName": "codex/130-in-app-update-cue",
+                    "baseRefName": "codex/119-image-playground-mission1",
+                    "isDraft": False,
+                    "url": "https://example.test/pull/130",
+                    "mergeStateStatus": "CLEAN",
+                    "reviewDecision": "",
+                    "statusCheckRollup": [
+                        {
+                            "name": "release-proof",
+                            "workflowName": "Fluxio Release Proof",
+                            "status": "COMPLETED",
+                            "conclusion": "SUCCESS",
+                        }
+                    ],
+                },
+                {
+                    "number": 119,
+                    "title": "Mission 1: Image Playground self-repair loop",
+                    "headRefName": "codex/119-image-playground-mission1",
+                    "baseRefName": "master",
+                    "isDraft": False,
+                    "url": "https://example.test/pull/119",
+                    "mergeStateStatus": "UNSTABLE",
+                    "reviewDecision": "",
+                    "statusCheckRollup": [
+                        {
+                            "name": "release-proof",
+                            "workflowName": "Fluxio Release Proof",
+                            "status": "COMPLETED",
+                            "conclusion": "FAILURE",
+                        }
+                    ],
+                },
+            ]
+
+            contract = backend.dispatch(
+                "get_pr_stack_landing_readiness_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission14-landing-test",
+                    "maxChain": 20,
+                    "prRows": rows,
+                },
+            )
+
+            self.assertEqual(contract["schema"], "fluxio.pr_stack_landing_readiness.v1")
+            self.assertFalse(contract["ok"])
+            self.assertEqual(contract["status"], "blocked_at_landing_frontier")
+            self.assertEqual(contract["landingFrontier"]["number"], 119)
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertIn("opencode", contract["fallbackRuntimeLanes"])
+            self.assertIn("Fix PR119", contract["nextAction"])
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "pr_stack_landing_order_readiness")
+            self.assertEqual(proof["landingSequence"][0]["number"], 119)
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
