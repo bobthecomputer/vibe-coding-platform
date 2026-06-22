@@ -135,6 +135,8 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("fluxio.pr_stack_landing_readiness.v1", shell)
         self.assertIn('data-pr-stack-landing-readiness="true"', reference_shell)
         self.assertIn('data-pr-stack-landing-schema={prStackLandingReadiness.schema || "fluxio.pr_stack_landing_readiness.v1"}', reference_shell)
+        self.assertIn('data-pr-stack-continuation-state={prStackLandingContinuation.state || "pending_live_capture"}', reference_shell)
+        self.assertIn("Continuation", reference_shell)
         self.assertIn("PR landing readiness", reference_shell)
         self.assertIn("Capture PR proof", reference_shell)
         self.assertIn("Landing frontier", reference_shell)

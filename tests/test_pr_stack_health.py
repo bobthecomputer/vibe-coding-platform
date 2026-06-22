@@ -126,6 +126,18 @@ class PrStackHealthTests(unittest.TestCase):
         self.assertEqual(report["summary"]["draftCount"], 1)
         self.assertEqual(report["summary"]["releaseProofPassedCount"], 3)
 
+    def test_landing_readiness_no_open_prs_returns_completion_handoff(self) -> None:
+        report = build_pr_stack_landing_readiness([], max_chain=5)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["status"], "no_open_prs")
+        self.assertEqual(report["stack"]["openPrCount"], 0)
+        self.assertEqual(report["landingSequence"], [])
+        self.assertEqual(report["continuationPolicy"]["state"], "completed")
+        self.assertFalse(report["continuationPolicy"]["shouldContinueStackWork"])
+        self.assertEqual(report["continuationPolicy"]["automationDecision"], "skip_completed_pr_stack")
+        self.assertIn("Start a fresh mission", report["continuationPolicy"]["nextCompartmentAction"])
+
     def test_operator_doc_matches_scripts_and_workflow(self) -> None:
         doc = (ROOT / "docs" / "PR_STACK_HEALTH.md").read_text(encoding="utf-8")
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
@@ -143,6 +155,7 @@ class PrStackHealthTests(unittest.TestCase):
         self.assertIn(".github/workflows/pr-stack-health.yml", doc)
         self.assertIn("artifacts/pr-stack-health/pr-stack-health.json", doc)
         self.assertIn("Stop opening new broad PRs", doc)
+        self.assertIn("skip_completed_pr_stack", doc)
 
 
 if __name__ == "__main__":

@@ -139,6 +139,42 @@ def _build_chains(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return chains
 
 
+def _continuation_policy(status: str, next_action: str) -> dict[str, Any]:
+    if status == "no_open_prs":
+        return {
+            "state": "completed",
+            "shouldContinueStackWork": False,
+            "automationDecision": "skip_completed_pr_stack",
+            "nextCompartmentAction": (
+                "Start a fresh mission from current origin/master; do not reopen completed PR-stack landing work."
+            ),
+            "detail": "The stack landing compartment has no remaining open PR frontier.",
+        }
+    if status == "blocked_at_landing_frontier":
+        return {
+            "state": "continue_stack_repair",
+            "shouldContinueStackWork": True,
+            "automationDecision": "repair_landing_frontier",
+            "nextCompartmentAction": next_action,
+            "detail": "Stay on the current stack until the oldest blocked PR is repaired or closed.",
+        }
+    if status in {"ready_to_land", "ready_to_land_but_stack_exceeds_limit"}:
+        return {
+            "state": "continue_stack_landing",
+            "shouldContinueStackWork": True,
+            "automationDecision": "land_oldest_pr",
+            "nextCompartmentAction": next_action,
+            "detail": "Land one PR, then re-run readiness before touching newer stacked work.",
+        }
+    return {
+        "state": "unknown",
+        "shouldContinueStackWork": None,
+        "automationDecision": "inspect_manually",
+        "nextCompartmentAction": next_action,
+        "detail": "The readiness status is not recognized by the continuation policy.",
+    }
+
+
 def build_pr_stack_health(rows: list[dict[str, Any]], *, max_chain: int = DEFAULT_MAX_CHAIN) -> dict[str, Any]:
     chains = _build_chains(rows)
     longest = max(chains, key=len, default=[])
@@ -220,6 +256,7 @@ def build_pr_stack_landing_readiness(rows: list[dict[str, Any]], *, max_chain: i
         "landingSequence": landing_sequence,
         "blockers": landing_frontier.get("blockers", []) if landing_frontier else [],
         "nextAction": next_action,
+        "continuationPolicy": _continuation_policy(status, next_action),
         "routeProof": {
             "primary": "hermes",
             "fallback": ["openclaw", "opencode"],

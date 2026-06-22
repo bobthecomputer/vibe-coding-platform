@@ -11320,6 +11320,10 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const prStackLandingBlockers = asList(prStackLandingReadiness.blockers);
   const prStackLandingProofPath = String(prStackLandingReadiness?.proof?.artifactPath || "").trim();
   const prStackLandingStatus = String(prStackLandingReadiness.status || "pending_live_capture");
+  const prStackLandingContinuation =
+    prStackLandingReadiness.continuationPolicy && typeof prStackLandingReadiness.continuationPolicy === "object"
+      ? prStackLandingReadiness.continuationPolicy
+      : {};
   const automationOverlapStatus =
     settingsState?.automationOverlapStatus && typeof settingsState.automationOverlapStatus === "object"
       ? settingsState.automationOverlapStatus
@@ -11634,6 +11638,7 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
         data-pr-stack-landing-readiness="true"
         data-pr-stack-landing-primary-lane={prStackLandingReadiness.primaryRuntimeLane || "hermes"}
         data-pr-stack-landing-schema={prStackLandingReadiness.schema || "fluxio.pr_stack_landing_readiness.v1"}
+        data-pr-stack-continuation-state={prStackLandingContinuation.state || "pending_live_capture"}
       >
         <div className="fluxos-pr-stack-landing-head">
           <div>
@@ -11671,6 +11676,15 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <span>Route</span>
             <strong>{titleizeToken(prStackLandingReadiness.primaryRuntimeLane || "hermes")}</strong>
             <p>{asList(prStackLandingReadiness.fallbackRuntimeLanes).join(" / ") || "openclaw / opencode"}</p>
+          </article>
+          <article>
+            <span>Continuation</span>
+            <strong>{titleizeToken(prStackLandingContinuation.state || "pending")}</strong>
+            <p>
+              {prStackLandingContinuation.nextCompartmentAction
+                || prStackLandingReadiness.nextAction
+                || "Capture PR landing readiness before choosing the next mission."}
+            </p>
           </article>
         </div>
         {prStackLandingRows.length ? (

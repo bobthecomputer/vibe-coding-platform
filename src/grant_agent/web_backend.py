@@ -6414,11 +6414,16 @@ class FluxioWebBackend:
         artifact_dir = root / ".agent_control" / "pr_stack_landing_readiness"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / f"{request_id}.json"
-        rows_payload = payload.get("prRows") or payload.get("pr_rows") or payload.get("rows")
-        rows = [item for item in rows_payload if isinstance(item, dict)] if isinstance(rows_payload, list) else []
-        source = "runtime_payload" if rows else "github_cli"
+        rows_payload = payload.get("prRows")
+        if rows_payload is None:
+            rows_payload = payload.get("pr_rows")
+        if rows_payload is None:
+            rows_payload = payload.get("rows")
+        rows_payload_supplied = isinstance(rows_payload, list)
+        rows = [item for item in rows_payload if isinstance(item, dict)] if rows_payload_supplied else []
+        source = "runtime_payload" if rows_payload_supplied else "github_cli"
         fetch_error = ""
-        if not rows:
+        if not rows and not rows_payload_supplied:
             gh_path = shutil.which("gh")
             if not gh_path:
                 fetch_error = "GitHub CLI `gh` is not available to the web backend."
@@ -6446,10 +6451,11 @@ class FluxioWebBackend:
                     )
                     decoded = json.loads(completed.stdout or "[]")
                     rows = [item for item in decoded if isinstance(item, dict)] if isinstance(decoded, list) else []
+                    source = "github_cli"
                 except Exception as exc:
                     fetch_error = str(exc)
         max_chain = int(payload.get("maxChain") or payload.get("max_chain") or 20)
-        if rows:
+        if rows or rows_payload_supplied:
             import importlib.util
 
             module_path = root / "scripts" / "pr_stack_health.py"
@@ -6495,6 +6501,15 @@ class FluxioWebBackend:
                 "landingSequence": [],
                 "blockers": [fetch_error or "No GitHub pull request rows were supplied or fetched."],
                 "nextAction": "Provide `prRows` from GitHub or run the command where `gh pr list` is authenticated.",
+                "continuationPolicy": {
+                    "state": "missing_evidence",
+                    "shouldContinueStackWork": None,
+                    "automationDecision": "capture_pr_rows",
+                    "nextCompartmentAction": (
+                        "Capture GitHub PR rows before deciding whether to continue stack landing or start fresh work."
+                    ),
+                    "detail": "No runtime PR payload was supplied and the backend could not fetch GitHub PR rows.",
+                },
                 "routeProof": {
                     "primary": "hermes",
                     "fallback": ["openclaw", "opencode"],
