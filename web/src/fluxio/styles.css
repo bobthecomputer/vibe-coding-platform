@@ -6958,7 +6958,9 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-harness-benchmark-head span,
+.fluxos-harness-decision-strip span,
 .fluxos-harness-benchmark-matrix span,
+.fluxos-harness-recommendations span,
 .fluxos-harness-benchmark-proof span {
   color: var(--fluxos-cyan);
   font-size: 11px;
@@ -6974,8 +6976,11 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-harness-benchmark-head p,
+.fluxos-harness-decision-strip p,
 .fluxos-harness-benchmark-matrix p,
 .fluxos-harness-benchmark-matrix small,
+.fluxos-harness-recommendations p,
+.fluxos-harness-recommendations small,
 .fluxos-harness-benchmark-proof p {
   margin: 0;
   color: var(--fluxos-muted);
@@ -7005,6 +7010,34 @@ button.fluxos-context-root:hover {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
 }
 
+.fluxos-harness-decision-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fluxos-harness-decision-strip article {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-harness-decision-strip article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-harness-decision-strip strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 14px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
 .fluxos-harness-benchmark-matrix {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -7031,12 +7064,42 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-harness-benchmark-matrix strong,
+.fluxos-harness-recommendations strong,
 .fluxos-harness-benchmark-proof strong {
   min-width: 0;
   color: var(--fluxos-text);
   font-size: 13px;
   line-height: 1.25;
   overflow-wrap: anywhere;
+}
+
+.fluxos-harness-dimension-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fluxos-harness-dimension-row span {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0 8px;
+  text-transform: none;
+}
+
+.fluxos-harness-dimension-row strong {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 10px;
+}
+
+.fluxos-harness-dimension-row em {
+  border: 0;
+  background: transparent;
+  color: #8ef7c2;
+  padding: 0;
 }
 
 .fluxos-harness-benchmark-matrix em {
@@ -7051,9 +7114,28 @@ button.fluxos-context-root:hover {
   padding: 4px 7px;
 }
 
+.fluxos-harness-recommendations {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fluxos-harness-recommendations article {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-harness-recommendations article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
 .fluxos-harness-benchmark-proof {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
 }
 
@@ -7984,7 +8066,9 @@ button.fluxos-context-root:hover {
   .fluxos-update-proof-grid,
   .fluxos-pr-stack-landing-grid,
   .fluxos-pr-stack-landing-sequence,
+  .fluxos-harness-decision-strip,
   .fluxos-harness-benchmark-matrix,
+  .fluxos-harness-recommendations,
   .fluxos-harness-benchmark-proof,
   .fluxos-fusion-project-grid,
   .fluxos-fusion-next-step,
@@ -7999,7 +8083,9 @@ button.fluxos-context-root:hover {
   .fluxos-update-proof-grid article + article,
   .fluxos-pr-stack-landing-grid article + article,
   .fluxos-pr-stack-landing-sequence article + article,
+  .fluxos-harness-decision-strip article + article,
   .fluxos-harness-benchmark-matrix article + article,
+  .fluxos-harness-recommendations article + article,
   .fluxos-harness-benchmark-proof article + article,
   .fluxos-fusion-project-grid article + article,
   .fluxos-fusion-next-step article + article,

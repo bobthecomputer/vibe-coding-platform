@@ -7555,44 +7555,99 @@ class FluxioWebBackend:
             session_secrets=self.provider_secrets,
         )
         evidence_candidates = [
-            root / ".agent_control" / "image_playground_self_repair",
-            root / ".agent_control" / "ui_self_repair",
-            root / ".agent_control" / "mission_anti_drift_guard" / "mission4-local-proof.json",
-            root / ".agent_control" / "skill_runtime_contracts" / "mission5-local-proof.json",
-            root / ".agent_control" / "provider_orchestration" / "mission6-local-proof.json",
-            root / ".agent_control" / "fusion_readiness" / "mission7-local-proof.json",
-            root / ".agent_control" / "jbh_eaven_redteam_readiness" / "mission8-local-proof.json",
-            root / ".agent_control" / "preview_annotation_readiness" / "mission9-preview-actual.json",
+            {"id": "runtime-route-unification", "label": "Runtime route proof", "path": root / ".agent_control" / "runtime_route_unification", "supports": ["providerRouting", "fallbackPolicy", "routeHealth"]},
+            {"id": "runtime-status-cache", "label": "Runtime status cache", "path": root / ".agent_control" / "cache" / "runtime_statuses.json", "supports": ["providerRouting", "routeHealth", "runtimeReadiness"]},
+            {"id": "harness-quality-gate", "label": "Harness quality gate", "path": root / ".agent_control" / "harness_quality_gate", "supports": ["proofCapture", "longHorizon", "verification"]},
+            {"id": "harness-benchmark-live-proof", "label": "Harness benchmark proof", "path": root / ".agent_control" / "harness_benchmark_board", "supports": ["proofCapture", "routeHealth", "benchmarkSamples"]},
+            {"id": "anti-drift-monitoring", "label": "Anti-drift monitor", "path": root / ".agent_control" / "mission_anti_drift_guard", "supports": ["reliability", "longHorizon", "recovery"]},
+            {"id": "skill-runtime", "label": "Skill runtime proof", "path": root / ".agent_control" / "skill_runtime_proofs", "supports": ["skillUsage", "proofCapture"]},
+            {"id": "skill-runtime-contracts", "label": "Skill runtime contracts", "path": root / ".agent_control" / "skill_runtime_contracts", "supports": ["skillUsage", "routing"]},
+            {"id": "provider-orchestration", "label": "Provider orchestration", "path": root / ".agent_control" / "provider_orchestration", "supports": ["cost", "speed", "providerRouting"]},
+            {"id": "preview-annotation", "label": "Preview annotation proof", "path": root / ".agent_control" / "preview_annotation_readiness", "supports": ["previewControl", "proofCapture"]},
+            {"id": "ui-self-repair", "label": "UI self-repair proof", "path": root / ".agent_control" / "ui_self_repair", "supports": ["previewControl", "longHorizon", "verification"]},
+            {"id": "self-improvement-evidence", "label": "Self-improvement evidence", "path": root / ".agent_control" / "self_improvement_evidence", "supports": ["previewControl", "proofCapture", "verification"]},
+            {"id": "voice-accessibility", "label": "Voice/access proof", "path": root / ".agent_control" / "voice_accessibility_readiness", "supports": ["accessibility", "operatorControl"]},
+            {"id": "subagent-monitoring", "label": "Subagent monitoring proof", "path": root / ".agent_control" / "subagent_monitoring_readiness", "supports": ["longHorizon", "parallelWork", "proofMerge"]},
+            {"id": "mission-sequence-memory", "label": "Mission sequence memory", "path": Path.home() / ".codex" / "automations" / "fluxio-night-school-real-agent-transcript-proof" / "mission-sequence.json", "supports": ["longHorizon", "completionHistory"]},
+            {"id": "automation-memory", "label": "Automation memory", "path": Path.home() / ".codex" / "automations" / "fluxio-night-school-real-agent-transcript-proof" / "memory.md", "supports": ["completionHistory", "proofIndex"]},
         ]
 
-        def evidence_state(path: Path) -> dict[str, Any]:
+        def latest_json_child(path: Path) -> Path | None:
+            if not path.is_dir():
+                return None
+            children = sorted(
+                path.rglob("*.json"),
+                key=lambda item: item.stat().st_mtime if item.exists() else 0,
+                reverse=True,
+            )
+            return children[0] if children else None
+
+        def evidence_state(candidate: dict[str, Any]) -> dict[str, Any]:
+            path = Path(candidate["path"])
+            latest_child = latest_json_child(path)
             if path.is_dir():
-                children = sorted(path.rglob("*.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
                 return {
+                    "id": candidate["id"],
+                    "label": candidate["label"],
                     "path": str(path),
-                    "status": "ready" if children else "empty",
-                    "jsonArtifactCount": len(children),
-                    "latestArtifact": str(children[0]) if children else "",
+                    "status": "ready" if latest_child else "empty",
+                    "jsonArtifactCount": len(list(path.rglob("*.json"))),
+                    "latestArtifact": str(latest_child) if latest_child else "",
+                    "supports": candidate.get("supports", []),
+                }
+            if path.exists():
+                suffix = path.suffix.lower()
+                return {
+                    "id": candidate["id"],
+                    "label": candidate["label"],
+                    "path": str(path),
+                    "status": "ready" if suffix in {".json", ".md", ".py", ".jsx", ".js", ".css"} else "present",
+                    "jsonArtifactCount": 1 if suffix == ".json" else 0,
+                    "latestArtifact": str(path),
+                    "supports": candidate.get("supports", []),
                 }
             return {
+                "id": candidate["id"],
+                "label": candidate["label"],
                 "path": str(path),
-                "status": "ready" if path.exists() else "missing",
-                "jsonArtifactCount": 1 if path.exists() else 0,
-                "latestArtifact": str(path) if path.exists() else "",
+                "status": "missing",
+                "jsonArtifactCount": 0,
+                "latestArtifact": "",
+                "supports": candidate.get("supports", []),
             }
 
-        source_evidence = [evidence_state(path) for path in evidence_candidates]
+        source_evidence = [evidence_state(candidate) for candidate in evidence_candidates]
         ready_evidence_count = sum(1 for item in source_evidence if item["status"] == "ready")
-        skill_contract_ready = any("skill_runtime_contracts" in item["path"] and item["status"] == "ready" for item in source_evidence)
-        preview_contract_ready = any("preview_annotation_readiness" in item["path"] and item["status"] == "ready" for item in source_evidence)
-        provider_contract_ready = any("provider_orchestration" in item["path"] and item["status"] == "ready" for item in source_evidence)
+        skill_contract_ready = any(item["id"] in {"skill-runtime", "skill-runtime-contracts"} and item["status"] == "ready" for item in source_evidence)
+        preview_contract_ready = any(item["id"] in {"preview-annotation", "ui-self-repair"} and item["status"] == "ready" for item in source_evidence)
+        provider_contract_ready = any(item["id"] == "provider-orchestration" and item["status"] == "ready" for item in source_evidence)
+        monitoring_contract_ready = any(item["id"] in {"anti-drift-monitoring", "subagent-monitoring"} and item["status"] == "ready" for item in source_evidence)
         primary_runtime_ready = bool(hermes_command) or hermes_wsl_available
         fallback_runtime_ready = bool(openclaw_command) or bool(opencode_command)
-        status = "ready_for_decision_board"
-        if not primary_runtime_ready:
-            status = "blocked_missing_hermes_route"
+        runtime_ready_for_board = primary_runtime_ready or fallback_runtime_ready
+        status = "ready_for_decision_board" if primary_runtime_ready else "ready_with_fallback_runtime"
+        if not runtime_ready_for_board:
+            status = "blocked_missing_runtime_route"
         elif ready_evidence_count < 3:
             status = "needs_more_live_benchmark_samples"
+
+        score_dimensions = [
+            {"id": "reliability", "label": "Reliability", "weight": 18, "why": "Finishes without loops, drift, or fake proof."},
+            {"id": "speed", "label": "Speed", "weight": 10, "why": "Keeps operator wait time low."},
+            {"id": "cost", "label": "Cost", "weight": 8, "why": "Uses expensive routes only where they matter."},
+            {"id": "contextHandling", "label": "Context", "weight": 14, "why": "Keeps mission state compact and recoverable."},
+            {"id": "previewControl", "label": "Preview", "weight": 12, "why": "Can inspect UI/browser state and feed findings back."},
+            {"id": "skillUsage", "label": "Skills", "weight": 12, "why": "Uses durable skills instead of ad hoc prompting."},
+            {"id": "proofCapture", "label": "Proof", "weight": 14, "why": "Writes artifacts and blocks unsupported claims."},
+            {"id": "longHorizon", "label": "Long horizon", "weight": 12, "why": "Handles multi-mission work without drifting."},
+        ]
+        weights = {item["id"]: int(item["weight"]) for item in score_dimensions}
+
+        def weighted_operator_score(item: dict[str, Any]) -> int:
+            scores = item.get("dimensionScores") if isinstance(item.get("dimensionScores"), dict) else {}
+            total = sum(int(scores.get(key, 0) or 0) * weight for key, weight in weights.items())
+            return round(total / max(sum(weights.values()), 1))
+
         matrix = [
             {
                 "id": "hermes-fluxio-hybrid",
@@ -7601,15 +7656,17 @@ class FluxioWebBackend:
                 "harness": "fluxio_hybrid",
                 "modelRoute": str(payload.get("primaryModel") or "openrouter/z-ai/glm-5.2"),
                 "bestFor": "long mission completion, proof capture, skill routing, and verifier loops",
-                "reliability": 94 if primary_runtime_ready else 48,
-                "speed": 72,
-                "cost": 74,
-                "contextHandling": 92,
-                "previewControl": 86 if preview_contract_ready else 64,
-                "skillUsage": 92 if skill_contract_ready else 58,
-                "proofCapture": 94 if ready_evidence_count >= 5 else 72,
-                "longHorizon": 95,
-                "decision": "Use as production lane for serious completion work.",
+                "dimensionScores": {
+                    "reliability": 94 if primary_runtime_ready else 64,
+                    "speed": 72,
+                    "cost": 74,
+                    "contextHandling": 92,
+                    "previewControl": 86 if preview_contract_ready else 64,
+                    "skillUsage": 92 if skill_contract_ready else 58,
+                    "proofCapture": 94 if ready_evidence_count >= 5 else 72,
+                    "longHorizon": 95 if monitoring_contract_ready else 82,
+                },
+                "decision": "Production policy lane for serious completion work.",
                 "evidence": ["Hermes route discovery", "skill runtime contract", "preview annotation readiness"],
             },
             {
@@ -7619,15 +7676,17 @@ class FluxioWebBackend:
                 "harness": "fluxio_hybrid",
                 "modelRoute": str(payload.get("fallbackModel") or "provider exploration lane"),
                 "bestFor": "tool exploration, gateway experiments, provider fallback, and shadow sampling",
-                "reliability": 82 if openclaw_command else 50,
-                "speed": 78,
-                "cost": 70,
-                "contextHandling": 76,
-                "previewControl": 80 if preview_contract_ready else 58,
-                "skillUsage": 76 if skill_contract_ready else 52,
-                "proofCapture": 82 if ready_evidence_count >= 4 else 62,
-                "longHorizon": 78,
-                "decision": "Keep as shadow and fallback lane; do not replace Hermes for completion loops.",
+                "dimensionScores": {
+                    "reliability": 82 if openclaw_command else 50,
+                    "speed": 78,
+                    "cost": 70,
+                    "contextHandling": 76,
+                    "previewControl": 80 if preview_contract_ready else 58,
+                    "skillUsage": 76 if skill_contract_ready else 52,
+                    "proofCapture": 82 if ready_evidence_count >= 4 else 62,
+                    "longHorizon": 78,
+                },
+                "decision": "Shadow and fallback lane; do not replace Hermes for completion loops.",
                 "evidence": ["OpenClaw CLI discovery", "provider route fallback", "gateway/session evidence"],
             },
             {
@@ -7637,15 +7696,17 @@ class FluxioWebBackend:
                 "harness": "fluxio_hybrid",
                 "modelRoute": "openrouter/z-ai/glm-5.2",
                 "bestFor": "coding or vision-heavy repair planning when provider auth is ready",
-                "reliability": 78 if provider_contract_ready else 58,
-                "speed": 68,
-                "cost": 82,
-                "contextHandling": 80,
-                "previewControl": 72,
-                "skillUsage": 74,
-                "proofCapture": 76 if provider_contract_ready else 56,
-                "longHorizon": 70,
-                "decision": "Use as routed specialist, not the primary mission harness.",
+                "dimensionScores": {
+                    "reliability": 78 if provider_contract_ready else 58,
+                    "speed": 68,
+                    "cost": 82,
+                    "contextHandling": 80,
+                    "previewControl": 72,
+                    "skillUsage": 74,
+                    "proofCapture": 76 if provider_contract_ready else 56,
+                    "longHorizon": 70,
+                },
+                "decision": "Routed specialist, not the primary mission harness.",
                 "evidence": ["provider orchestration contract", "GLM-5.2 route target", "OpenCode command discovery"],
             },
             {
@@ -7655,31 +7716,30 @@ class FluxioWebBackend:
                 "harness": "legacy_autonomous_engine",
                 "modelRoute": "workspace default",
                 "bestFor": "regression comparison only",
-                "reliability": 48,
-                "speed": 62,
-                "cost": 58,
-                "contextHandling": 45,
-                "previewControl": 35,
-                "skillUsage": 32,
-                "proofCapture": 40,
-                "longHorizon": 38,
-                "decision": "Keep visible for benchmark parity; do not use for new completion missions.",
+                "dimensionScores": {
+                    "reliability": 48,
+                    "speed": 62,
+                    "cost": 58,
+                    "contextHandling": 45,
+                    "previewControl": 35,
+                    "skillUsage": 32,
+                    "proofCapture": 40,
+                    "longHorizon": 38,
+                },
+                "decision": "Regression baseline only; do not use for new completion missions.",
                 "evidence": ["legacy shadow candidate"],
             },
         ]
         for item in matrix:
-            scores = [
-                item["reliability"],
-                item["speed"],
-                item["cost"],
-                item["contextHandling"],
-                item["previewControl"],
-                item["skillUsage"],
-                item["proofCapture"],
-                item["longHorizon"],
-            ]
-            item["operatorScore"] = round(sum(scores) / len(scores))
+            item["operatorScore"] = weighted_operator_score(item)
+            ranked_scores = sorted(item["dimensionScores"].items(), key=lambda pair: int(pair[1]), reverse=True)
+            item["strengths"] = [key for key, _value in ranked_scores[:3]]
+            item["risks"] = [key for key, value in ranked_scores[-2:] if int(value) < 70]
         matrix.sort(key=lambda item: item["operatorScore"], reverse=True)
+        production_candidate = next((item for item in matrix if item["id"] == "hermes-fluxio-hybrid"), matrix[0])
+        fallback_candidate = next((item for item in matrix if item["runtime"] in {"openclaw", "opencode"} and item["operatorScore"] >= 65), matrix[1] if len(matrix) > 1 else matrix[0])
+        specialist_candidate = next((item for item in matrix if item["id"] == "opencode-glm52-coding-vision"), fallback_candidate)
+        mission_gate_status = "complete" if status in {"ready_for_decision_board", "ready_with_fallback_runtime"} else "needs_samples"
         contract = {
             "schema": "fluxio.harness_benchmark_board.v1",
             "generatedAt": utc_now_iso(),
@@ -7689,19 +7749,24 @@ class FluxioWebBackend:
             "productionHarness": "fluxio_hybrid",
             "shadowHarnesses": ["legacy_autonomous_engine"],
             "decision": {
-                "production": matrix[0]["id"],
-                "summary": "Use Hermes + Syntelos Hybrid for completion missions; keep OpenClaw/OpenCode as visible fallback and specialist lanes.",
+                "production": production_candidate["id"],
+                "operationalFallback": fallback_candidate["id"],
+                "specialist": specialist_candidate["id"],
+                "summary": "Use Hermes + Syntelos Hybrid as the production policy for completion missions; use OpenClaw/OpenCode as visible fallback and specialist lanes when route health requires it.",
                 "nextBenchmark": "Collect live samples per task class before changing production routing.",
             },
-            "scoreDimensions": [
-                "reliability",
-                "speed",
-                "cost",
-                "contextHandling",
-                "previewControl",
-                "skillUsage",
-                "proofCapture",
-                "longHorizon",
+            "scoreDimensions": score_dimensions,
+            "taskClassRecommendations": [
+                {"id": "completion-mission", "label": "Completion missions", "use": production_candidate["id"], "why": "Highest weighted score for reliability, context handling, proof capture, and long-horizon execution.", "guardrail": "Do not call complete until mission gate artifacts and user-like proof exist."},
+                {"id": "provider-gateway-exploration", "label": "Provider/gateway exploration", "use": fallback_candidate["id"], "why": "Keeps experimental routing out of the production completion lane while preserving fallback proof.", "guardrail": "Promote only after provider route proof and health checks pass."},
+                {"id": "vision-coding-specialist", "label": "Vision/coding specialist", "use": specialist_candidate["id"], "why": "Good fit for UI repair planning and GLM/Z.AI-backed coding or vision lanes.", "guardrail": "Use as a routed specialist, then return results through the harness proof gate."},
+                {"id": "legacy-regression", "label": "Legacy regression", "use": "legacy-autonomous-engine", "why": "Only useful as a baseline to prove the newer harness is better.", "guardrail": "Never select for new autonomous missions."},
+            ],
+            "routingRules": [
+                "Hermes + Syntelos Hybrid is the production policy lane for mission completion.",
+                "OpenClaw is a fallback/shadow lane for gateway, tool, and provider experiments.",
+                "OpenCode / GLM-5.2 is a specialist lane for coding and vision-heavy repair planning.",
+                "Legacy autonomous engine remains a regression baseline only.",
             ],
             "matrix": matrix,
             "routeProof": {
@@ -7715,35 +7780,36 @@ class FluxioWebBackend:
                 "opencode": {"available": bool(opencode_command), "selected": False},
                 "fallbackRuntimeAvailable": fallback_runtime_ready,
                 "providerPresence": provider_presence,
+                "selectedOperationalLane": "hermes" if primary_runtime_ready else ("openclaw" if openclaw_command else ("opencode" if opencode_command else "none")),
             },
             "skillsUsed": [
-                {
-                    "id": "harness_benchmark_reader",
-                    "input": "Mission proof artifacts, provider route proof, skill contracts, preview readiness, and runtime CLI discovery",
-                    "output": "normalized model+harness matrix",
-                    "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
-                    "artifact": f"{request_id}.json",
-                },
-                {
-                    "id": "practical_route_decider",
-                    "input": "score matrix plus current mission-completion preference",
-                    "output": "production, fallback, and specialist lane decision",
-                    "route": {"runtime": "hermes", "fallbackRuntime": "opencode"},
-                    "artifact": f"{request_id}.json",
-                },
-                {
-                    "id": "benchmark_proof_verifier",
-                    "input": "CLI discovery, source artifact existence, and UI capture target",
-                    "output": "honest ready/needs-samples status",
-                    "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
-                    "artifact": f"{request_id}.json",
-                },
+                {"id": "harness_benchmark_reader", "input": "Mission proof artifacts, provider route proof, skill contracts, preview readiness, and runtime CLI discovery", "output": "normalized weighted model+harness matrix", "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"}, "artifact": f"{request_id}.json"},
+                {"id": "practical_route_decider", "input": "weighted score matrix plus task-class requirements", "output": "production, fallback, specialist, and baseline lane decisions", "route": {"runtime": "hermes", "fallbackRuntime": "opencode"}, "artifact": f"{request_id}.json"},
+                {"id": "benchmark_proof_verifier", "input": "CLI discovery, source artifact existence, and UI capture target", "output": "honest ready/needs-samples status", "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"}, "artifact": f"{request_id}.json"},
             ],
             "sourceEvidence": source_evidence,
-            "blockers": [] if status == "ready_for_decision_board" else [
-                "Hermes route was not discoverable." if not primary_runtime_ready else "Fewer than three live proof artifacts were available for benchmark confidence."
+            "samplePlan": [
+                {"taskClass": "completion-mission", "minimumSamples": 3, "metric": "complete_with_proof_without_reopen"},
+                {"taskClass": "vision-coding-specialist", "minimumSamples": 3, "metric": "usable_patch_plus_visual_proof"},
+                {"taskClass": "provider-gateway-exploration", "minimumSamples": 2, "metric": "route_health_and_fallback_success"},
+                {"taskClass": "legacy-regression", "minimumSamples": 1, "metric": "baseline_failure_or_lower_score"},
             ],
-            "nextAction": "Run benchmark samples per task class, then promote only routes with proof-backed wins.",
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "mission11-harness-benchmark-board",
+                "status": mission_gate_status,
+                "items": [
+                    {"id": "weighted-scorecard", "status": "done", "proof": "Weighted dimensions and matrix generated."},
+                    {"id": "practical-recommendations", "status": "done", "proof": "Task-class recommendations generated."},
+                    {"id": "runtime-route-proof", "status": "done" if runtime_ready_for_board else "blocked", "proof": "Hermes primary checked; OpenClaw/OpenCode fallback checked."},
+                    {"id": "source-evidence", "status": "done" if ready_evidence_count >= 3 else "needs_samples", "proof": f"{ready_evidence_count} ready evidence sources."},
+                    {"id": "proof-artifact", "status": "done", "proof": "artifact pending write"},
+                ],
+            },
+            "blockers": [] if mission_gate_status == "complete" else [
+                "No runtime route was discoverable." if not runtime_ready_for_board else "Fewer than three source evidence records were available for benchmark confidence."
+            ],
+            "nextAction": "Use the task-class recommendations now; collect the sample plan before changing production routing.",
             "sourceFiles": [
                 "src/grant_agent/web_backend.py",
                 "web/src/fluxio/FluxioShell.jsx",
@@ -7757,6 +7823,7 @@ class FluxioWebBackend:
             "artifactPath": str(artifact_path),
             "purpose": "hermes_first_harness_benchmark_board",
         }
+        contract["missionGate"]["items"][-1]["proof"] = str(artifact_path)
         tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
         tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
         tmp.replace(artifact_path)
