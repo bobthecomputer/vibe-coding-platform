@@ -6889,6 +6889,10 @@ class FluxioWebBackend:
             or payload.get("target_url")
             or "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench"
         ).strip()
+        if target_url.startswith("/"):
+            base_url = str(payload.get("baseUrl") or payload.get("base_url") or payload.get("origin") or "").strip().rstrip("/")
+            if base_url:
+                target_url = f"{base_url}{target_url}"
         visual_smoke_script = root / "scripts" / "control_route_visual_smoke.py"
         selected_event_id = str(payload.get("selectedEventId") or payload.get("eventId") or "").strip()
         selected_annotation_id = str(payload.get("selectedAnnotationId") or payload.get("annotationId") or "").strip()
@@ -6905,6 +6909,60 @@ class FluxioWebBackend:
                 or "Attach the screenshot, DOM facts, and annotation target to the next planner/executor handoff."
             ).strip(),
         }
+        auto_capture = {
+            "requested": bool(payload.get("autoCapture") or payload.get("auto_capture")),
+            "status": "skipped",
+            "error": "",
+        }
+        supplied_screenshot_exists = bool(screenshot_path and Path(screenshot_path).exists())
+        supplied_dom_exists = bool(dom_path and Path(dom_path).exists())
+        supplied_check_exists = bool(check_path and Path(check_path).exists())
+        if auto_capture["requested"] and target_url and (not supplied_screenshot_exists or not supplied_dom_exists):
+            capture_dir = artifact_dir / "captures"
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            captured_screenshot = capture_dir / f"{request_id}.png"
+            captured_dom = capture_dir / f"{request_id}.dom.html"
+            captured_check = capture_dir / f"{request_id}.check.json"
+            try:
+                from playwright.sync_api import sync_playwright  # type: ignore
+
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    page = browser.new_page(viewport={"width": 1440, "height": 960})
+                    page.goto(target_url, wait_until="networkidle", timeout=20000)
+                    page.screenshot(path=str(captured_screenshot), full_page=True)
+                    captured_dom.write_text(page.content(), encoding="utf-8")
+                    try:
+                        visible_text = page.locator("body").inner_text(timeout=2500)
+                    except Exception:
+                        visible_text = ""
+                    captured_check.write_text(
+                        json.dumps(
+                            {
+                                "ok": captured_screenshot.exists() and captured_dom.exists(),
+                                "title": page.title(),
+                                "url": page.url,
+                                "visibleTextSample": visible_text[:1200],
+                                "capturedAt": utc_now_iso(),
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    browser.close()
+                if not supplied_screenshot_exists:
+                    screenshot_path = str(captured_screenshot.resolve())
+                    supplied_screenshot_exists = True
+                if not supplied_dom_exists:
+                    dom_path = str(captured_dom.resolve())
+                    supplied_dom_exists = True
+                if not supplied_check_exists:
+                    check_path = str(captured_check.resolve())
+                    supplied_check_exists = True
+                auto_capture["status"] = "captured"
+            except Exception as exc:  # pragma: no cover - browser availability varies by host.
+                auto_capture["status"] = "failed"
+                auto_capture["error"] = str(exc)[:1600]
         skills_used = [
             {
                 "id": "preview_screenshot_breakdown",
@@ -6971,12 +7029,106 @@ class FluxioWebBackend:
                 "detail": finding["nextImplementationStep"],
             },
         ]
-        blockers = [
-            item["detail"]
+        incomplete_checks = [
+            item
             for item in readiness_checks
-            if item["status"] == "blocked"
+            if item["status"] != "ready"
         ]
+        blockers = [item["detail"] for item in incomplete_checks]
         status = "ready_for_preview_annotation_loop" if not blockers else "blocked_missing_preview_capture"
+        screenshot_ready = readiness_checks[1]["status"] == "ready"
+        dom_ready = readiness_checks[2]["status"] == "ready"
+        annotation_ready = readiness_checks[3]["status"] == "ready" and bool(finding["id"] and finding["finding"])
+        check_ready = bool(check_path and Path(check_path).exists())
+        target_is_local = target_url.startswith(("http://127.0.0.1", "http://localhost", "https://localhost", "file:"))
+        annotation_map_path = artifact_dir / f"{request_id}-annotation-map.json"
+        runtime_handoff_path = artifact_dir / f"{request_id}-runtime-handoff.json"
+        annotation_map = {
+            "schema": "fluxio.preview_annotation_map.v1",
+            "generatedAt": utc_now_iso(),
+            "requestId": request_id,
+            "target": {
+                "url": target_url,
+                "surface": str(payload.get("surface") or "builder-live-review"),
+                "selectedEventId": selected_event_id,
+                "selectedAnnotationId": selected_annotation_id,
+            },
+            "annotation": {
+                "id": finding["id"],
+                "severity": finding["severity"],
+                "finding": finding["finding"],
+                "nextImplementationStep": finding["nextImplementationStep"],
+                "region": visual_finding.get("region")
+                or visual_finding.get("rectangle")
+                or visual_finding.get("pin")
+                or {},
+            },
+            "evidence": {
+                "screenshotPath": screenshot_path,
+                "domPath": dom_path,
+                "checkPath": check_path,
+                "screenshotCaptured": screenshot_ready,
+                "domCaptured": dom_ready,
+                "checkCaptured": check_ready,
+            },
+            "route": {
+                "primaryRuntimeLane": "hermes",
+                "fallbackRuntimeLanes": ["openclaw", "opencode", "browser-cdp"],
+                "skills": [item["id"] for item in skills_used],
+            },
+        }
+        runtime_handoff = {
+            "schema": "fluxio.preview_annotation_handoff.v1",
+            "generatedAt": utc_now_iso(),
+            "requestId": request_id,
+            "channel": "agent_runtime",
+            "source": "preview_browser_annotation",
+            "message": finding["finding"],
+            "nextImplementationStep": finding["nextImplementationStep"],
+            "selectedEventId": selected_event_id,
+            "selectedAnnotationId": finding["id"],
+            "evidence": {
+                "screenshotPath": screenshot_path,
+                "domPath": dom_path,
+                "checkPath": check_path,
+                "annotationMapPath": str(annotation_map_path),
+            },
+        }
+        mission_gate_checks = [
+            {
+                "id": "local-preview-target",
+                "label": "Local or served preview target",
+                "status": "complete" if target_url else "missing",
+                "detail": target_url or "No browser target URL supplied.",
+            },
+            {
+                "id": "screenshot-captured",
+                "label": "Screenshot captured",
+                "status": "complete" if screenshot_ready else "missing",
+                "detail": screenshot_path or "No screenshot artifact supplied.",
+            },
+            {
+                "id": "dom-captured",
+                "label": "DOM/text captured",
+                "status": "complete" if dom_ready else "missing",
+                "detail": dom_path or "No DOM artifact supplied.",
+            },
+            {
+                "id": "annotation-map-written",
+                "label": "Annotation map written",
+                "status": "complete",
+                "detail": str(annotation_map_path),
+            },
+            {
+                "id": "runtime-handoff-written",
+                "label": "Runtime handoff written",
+                "status": "complete" if annotation_ready else "missing",
+                "detail": str(runtime_handoff_path) if annotation_ready else "Visual finding did not include a next implementation step.",
+            },
+        ]
+        mission_gate_complete = all(item["status"] == "complete" for item in mission_gate_checks)
+        annotation_map_path.write_text(json.dumps(annotation_map, indent=2), encoding="utf-8")
+        runtime_handoff_path.write_text(json.dumps(runtime_handoff, indent=2), encoding="utf-8")
         contract = {
             "schema": "fluxio.preview_annotation_readiness.v1",
             "generatedAt": utc_now_iso(),
@@ -7025,6 +7177,27 @@ class FluxioWebBackend:
                 },
             ],
             "selectedFinding": finding,
+            "executionProof": {
+                "schema": "fluxio.preview_execution_proof.v1",
+                "targetUrl": target_url,
+                "targetIsLocalOrServed": target_is_local,
+                "appRunsLocally": target_is_local and screenshot_ready,
+                "screenshotCaptured": screenshot_ready,
+                "domCaptured": dom_ready,
+                "checkCaptured": check_ready,
+                "annotationFeedsRuntime": annotation_ready,
+                "autoCapture": auto_capture,
+                "runtimeHandoffPath": str(runtime_handoff_path),
+                "annotationMapPath": str(annotation_map_path),
+            },
+            "annotationMap": annotation_map,
+            "runtimeHandoff": runtime_handoff,
+            "missionGate": {
+                "schema": "fluxio.preview_browser_annotation_gate.v1",
+                "missionId": "mission7-preview-browser-annotation",
+                "status": "complete" if mission_gate_complete else "needs_capture",
+                "checks": mission_gate_checks,
+            },
             "routeProof": {
                 "hermes": {
                     "available": bool(hermes_command) or hermes_wsl_available,
@@ -7042,6 +7215,8 @@ class FluxioWebBackend:
                 "screenshotPath": screenshot_path,
                 "domPath": dom_path,
                 "checkPath": check_path,
+                "annotationMapPath": str(annotation_map_path),
+                "runtimeHandoffPath": str(runtime_handoff_path),
             },
             "sourceFiles": [
                 "scripts/control_route_visual_smoke.py",

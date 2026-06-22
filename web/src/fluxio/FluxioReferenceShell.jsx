@@ -10582,22 +10582,58 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
           readinessChecks: [],
           blockers: ["Live capture has not run in this browser session."],
           nextAction: "Capture preview annotation proof from the live backend.",
+          executionProof: {
+            schema: "fluxio.preview_execution_proof.v1",
+            screenshotCaptured: false,
+            domCaptured: false,
+            annotationFeedsRuntime: false,
+          },
+          runtimeHandoff: {
+            schema: "fluxio.preview_annotation_handoff.v1",
+            channel: "agent_runtime",
+            nextImplementationStep: "Capture preview annotation proof from the live backend.",
+          },
+          missionGate: {
+            schema: "fluxio.preview_browser_annotation_gate.v1",
+            status: "needs_capture",
+            checks: [],
+          },
           proof: null,
           proofArtifacts: {},
         };
   const previewAnnotationProofPath = String(previewAnnotationReadiness?.proof?.artifactPath || "").trim();
   const previewAnnotationFinding = previewAnnotationReadiness?.selectedFinding || {};
   const previewAnnotationTarget = previewAnnotationReadiness?.previewTarget || {};
+  const previewAnnotationExecutionProof = previewAnnotationReadiness?.executionProof || {};
+  const previewAnnotationRuntimeHandoff = previewAnnotationReadiness?.runtimeHandoff || {};
+  const previewAnnotationMissionGate = previewAnnotationReadiness?.missionGate || {};
   const previewAnnotationSkillIds = asList(previewAnnotationReadiness?.skillsUsed)
     .map(item => item?.id || item?.skill || item)
     .filter(Boolean);
-  const previewAnnotationReady = Boolean(previewAnnotationProofPath);
+  const previewAnnotationGateStatus = String(previewAnnotationMissionGate?.status || previewAnnotationReadiness.status || "needs_capture");
+  const previewAnnotationReady = previewAnnotationGateStatus === "complete";
   const previewAnnotationTargetUrl = String(previewAnnotationTarget.url || previewActionUrl || previewFrameUrl || "").trim();
   const previewAnnotationScreenshotPath = String(
     previewAnnotationReadiness?.proofArtifacts?.screenshotPath ||
       previewAnnotationReadiness?.proofArtifacts?.screenshot ||
       "",
   ).trim();
+  const previewAnnotationAnnotationMapPath = String(previewAnnotationReadiness?.proofArtifacts?.annotationMapPath || "").trim();
+  const previewAnnotationRuntimeHandoffPath = String(previewAnnotationReadiness?.proofArtifacts?.runtimeHandoffPath || "").trim();
+  const previewAnnotationHandoffText = String(
+    previewAnnotationRuntimeHandoff?.nextImplementationStep ||
+      previewAnnotationFinding.nextImplementationStep ||
+      previewAnnotationReadiness.nextAction ||
+      "",
+  ).trim();
+  const previewAnnotationExecutionLabel =
+    previewAnnotationExecutionProof?.screenshotCaptured && previewAnnotationExecutionProof?.domCaptured
+      ? "Screenshot and DOM captured"
+      : "Capture still required";
+  const previewAnnotationHandoffLabel =
+    previewAnnotationExecutionProof?.annotationFeedsRuntime || previewAnnotationRuntimeHandoffPath
+      ? "Finding feeds Agent runtime"
+      : "Runtime handoff pending";
   return (
     <div
       className="fluxos-workbench"
@@ -10782,17 +10818,19 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
         >
           <div className="builder-preview-annotation-head">
             <div>
-              <span>Preview proof loop</span>
-              <strong>{titleizeToken(previewAnnotationReadiness.status || "pending live capture")}</strong>
+              <span>Preview execution receipt</span>
+              <strong>{titleizeToken(previewAnnotationGateStatus || "pending live capture")}</strong>
             </div>
             <button
               disabled={!previewAnnotationTargetUrl}
               onClick={() => fluxioAction(onRequestAction, "preview:capture-annotation-readiness", {
                 surface: "workbench",
                 targetUrl: previewAnnotationTargetUrl,
+                baseUrl: typeof window !== "undefined" ? window.location.origin : "",
                 selectedEventId: workbenchState?.missionId || "",
                 selectedAnnotationId: previewAnnotationFinding.id || "workbench-preview-finding",
                 screenshotPath: previewAnnotationScreenshotPath,
+                autoCapture: true,
               })}
               type="button"
             >
@@ -10808,12 +10846,23 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
               <span>Skills</span>
               <strong>{previewAnnotationSkillIds.slice(0, 3).map(titleizeToken).join(" / ") || "Pending capture"}</strong>
             </article>
+            <article data-preview-execution-proof="true">
+              <span>Execution</span>
+              <strong>{previewAnnotationExecutionLabel}</strong>
+            </article>
+            <article data-preview-runtime-handoff="true">
+              <span>Runtime handoff</span>
+              <strong>{previewAnnotationHandoffLabel}</strong>
+            </article>
           </div>
           <p>{previewAnnotationFinding.finding || previewAnnotationReadiness.nextAction}</p>
+          {previewAnnotationHandoffText ? <p className="builder-preview-annotation-next">Next: {previewAnnotationHandoffText}</p> : null}
           <small>
             {previewAnnotationProofPath
               ? `Proof artifact: ${previewAnnotationProofPath}`
               : previewAnnotationReadiness.nextAction || "Capture preview annotation proof before claiming the finding changed implementation."}
+            {previewAnnotationAnnotationMapPath ? ` | Annotation map: ${previewAnnotationAnnotationMapPath}` : ""}
+            {previewAnnotationRuntimeHandoffPath ? ` | Runtime handoff: ${previewAnnotationRuntimeHandoffPath}` : ""}
           </small>
         </section>
         <div className="fluxos-browser-chrome">
