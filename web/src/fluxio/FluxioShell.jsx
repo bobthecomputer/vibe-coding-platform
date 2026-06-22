@@ -5189,6 +5189,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [providerSecretSaving, setProviderSecretSaving] = useState({});
   const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
   const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
+  const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
@@ -15239,6 +15240,41 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "redteam:capture-jbh-eaven-readiness") {
+        setSurface("settings");
+        setReferenceSettingsTab("rules");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture JBH-EAVEN safe lab proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_jbh_eaven_redteam_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `jbh-eaven-readiness-${Date.now()}`,
+              },
+            },
+            { throwOnError: true },
+          );
+          setJbhEavenReadinessContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `JBH-EAVEN safe lab proof captured: ${pathLeaf(artifactPath)}.`
+              : "JBH-EAVEN safe lab proof captured.",
+            "info",
+          );
+          await refreshAll("jbh-eaven-readiness");
+        } catch (error) {
+          pushToast(`JBH-EAVEN safe lab proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "settings:run-action") {
         const action = payload?.action;
         if (!action?.actionId) {
@@ -19275,6 +19311,42 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       },
       blockers: ["Live capture has not run in this browser session."],
       nextAction: "Capture fusion proof before claiming SOLANTIR/MIND TOWER fusion readiness.",
+      proof: null,
+    },
+    jbhEavenReadiness: jbhEavenReadinessContract || {
+      schema: "fluxio.jbh_eaven_redteam_readiness.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode", "local-model"],
+      project: {
+        id: "jbh-eaven",
+        label: "JBH-EAVEN / JBheaven",
+        status: "pending",
+        selectedRoot: "",
+        skillRoot: "",
+        redTeamSkills: [],
+      },
+      scenarioGate: {
+        mode: "synthetic_authorized_lab_only",
+        requiresScenarioMetadata: true,
+        requiresFakeTargetBoundary: true,
+        requiresAuthorizationLabel: true,
+        rawPayloadExport: false,
+        blockedRealWorldActions: [
+          "credential theft",
+          "stealth or persistence",
+          "data exfiltration",
+          "malware or exploit delivery",
+          "unauthorized access",
+          "real target probing",
+        ],
+      },
+      firstRunTarget: {
+        title: "Safe synthetic scenario gate",
+        summary: "Capture fake target metadata, authorization labels, blocked real-world actions, and proof paths before any JBH-EAVEN run.",
+      },
+      blockers: ["Live capture has not run in this browser session."],
+      nextAction: "Capture safe synthetic red-team readiness before enabling scenario runs.",
       proof: null,
     },
     setupServices: [

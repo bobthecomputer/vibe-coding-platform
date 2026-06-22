@@ -1288,6 +1288,97 @@ def _fusion_file_count(path: Path, patterns: tuple[str, ...]) -> int:
     return count
 
 
+def _jbh_eaven_candidate_roots(root: Path) -> list[Path]:
+    explicit = os.environ.get("FLUXIO_JBH_EAVEN_HOME") or os.environ.get("JBHEAVEN_HOME")
+    homes = _fusion_home_candidates(root)
+    direct_candidates: list[Path] = []
+    project_names = ("Jbheaven", "JBheaven", "JBHABCN", "JBH-EAVEN", "jbh-eaven")
+    if explicit:
+        direct = Path(explicit).expanduser()
+        if direct.name.lower() in {"jbheaven", "jbhabcn", "jbh-eaven", "jbh_eaven"}:
+            direct_candidates.append(direct)
+        direct_candidates.extend(
+            [
+                *(direct / name for name in project_names),
+                *(direct / "Projects" / name for name in project_names),
+                *(direct / "SynologyDrive" / name for name in project_names),
+            ]
+        )
+    nested_roots = [
+        *(home / "Projects" / name for home in homes for name in project_names),
+        *(home / "SynologyDrive" / name for home in homes for name in project_names),
+        *(home / "open clawd experiment" / name for home in homes for name in project_names),
+    ]
+    return _fusion_existing_paths([*direct_candidates, *nested_roots])
+
+
+def _jbh_eaven_archived_skill_roots(root: Path) -> list[Path]:
+    homes = _fusion_home_candidates(root)
+    return _fusion_existing_paths(
+        [
+            *(home / ".codex" / "skills-archived-20260427" / name for home in homes for name in (
+                "jbheaven-loop-operator",
+                "jbheaven-memory-optimizer",
+                "jbheaven-redblue-runner",
+                "jbheaven-unsloth-synology",
+            )),
+        ]
+    )
+
+
+def _jbh_eaven_manifest(root: Path) -> dict[str, Any]:
+    payload = _fusion_read_json_value(root / "config" / "connected_apps.json")
+    rows = payload if isinstance(payload, list) else []
+    for row in rows:
+        if isinstance(row, dict) and row.get("app_id") == "jbheaven":
+            return row
+    return {}
+
+
+def _jbh_eaven_api_status(manifest: dict[str, Any]) -> dict[str, Any]:
+    bridge = manifest.get("bridge") if isinstance(manifest.get("bridge"), dict) else {}
+    endpoint = str(bridge.get("endpoint") or "http://127.0.0.1:8081/api")
+    parsed = urlparse(endpoint)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    online = tcp_port_accepts_connection(host, int(port), timeout_seconds=0.15)
+    return {
+        "endpoint": endpoint,
+        "healthcheck": str(bridge.get("healthcheck") or "/health"),
+        "status": "online" if online else "offline",
+        "checkedBy": "tcp_port_accepts_connection",
+    }
+
+
+def _jbh_eaven_file_count(path: Path | None, patterns: tuple[str, ...], *, limit: int = 2000) -> int:
+    if not path or not path.exists():
+        return 0
+    skip_dirs = {
+        ".git",
+        ".ruff_cache",
+        "__pycache__",
+        "autonomous_results",
+        "dist",
+        "node_modules",
+        "out",
+        "tauri_bundle",
+        "ui_bundle",
+        "webui_forge_cu121_torch231",
+    }
+    count = 0
+    try:
+        for current_root, dirs, files in os.walk(path):
+            dirs[:] = [name for name in dirs if name not in skip_dirs and not name.startswith(".")]
+            for filename in files:
+                if any(Path(filename).match(pattern) for pattern in patterns):
+                    count += 1
+                    if count >= limit:
+                        return count
+    except OSError:
+        return count
+    return count
+
+
 def _provider_secret_store_path(root: Path) -> Path:
     return root / ".agent_control" / "provider_secrets.json"
 
@@ -4717,6 +4808,137 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _jbh_eaven_redteam_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        manifest = _jbh_eaven_manifest(root)
+        project_candidates = _jbh_eaven_candidate_roots(root)
+        archived_skill_roots = _jbh_eaven_archived_skill_roots(root)
+        project_root = project_candidates[0] if project_candidates else None
+        red_team_skill_root = project_root / "skills" / "red-teaming" if project_root else None
+        red_team_skill_names = _fusion_child_dirs(project_root / "skills", "red-teaming", limit=12) if project_root else []
+        package_payload = _fusion_read_json(project_root / "package.json") if project_root else {}
+        api_status = _jbh_eaven_api_status(manifest)
+        scenario_gate = {
+            "mode": "synthetic_authorized_lab_only",
+            "requiresScenarioMetadata": True,
+            "requiresFakeTargetBoundary": True,
+            "requiresAuthorizationLabel": True,
+            "rawPayloadExport": False,
+            "allowedScenarioTypes": [
+                "fake_target_prompt_injection_lab",
+                "refusal_boundary_analysis",
+                "defensive_hardening_rehearsal",
+                "dataset_quality_scoring",
+                "blue_team_detection_review",
+            ],
+            "blockedRealWorldActions": [
+                "credential theft",
+                "stealth or persistence",
+                "data exfiltration",
+                "malware or exploit delivery",
+                "unauthorized access",
+                "real target probing",
+            ],
+        }
+        project = {
+            "id": "jbh-eaven",
+            "label": "JBH-EAVEN / JBheaven",
+            "status": "detected" if project_root else "missing",
+            "selectedRoot": str(project_root) if project_root else "",
+            "candidateRoots": [str(path) for path in project_candidates],
+            "packageName": str(package_payload.get("name") or ""),
+            "packageVersion": str(package_payload.get("version") or ""),
+            "skillRoot": str(red_team_skill_root) if red_team_skill_root and red_team_skill_root.exists() else "",
+            "redTeamSkills": red_team_skill_names,
+            "archivedSkillRoots": [str(path) for path in archived_skill_roots],
+            "fileCounts": {
+                "redTeamSkillFiles": _fusion_file_count(red_team_skill_root, ("SKILL.md",)) if red_team_skill_root else 0,
+                "python": _jbh_eaven_file_count(project_root, ("*.py",)),
+                "jsonl": _jbh_eaven_file_count(project_root, ("*.jsonl",)),
+                "markdown": _jbh_eaven_file_count(project_root, ("*.md",)),
+            },
+            "survivesAs": [
+                "safe synthetic red-team scenario lab",
+                "Hermes JBheaven skill pack inventory",
+                "aggregate-only refusal and difficulty scoring",
+                "blue-team detection and proof receipts",
+            ],
+        }
+        blockers = [
+            blocker
+            for blocker in [
+                "" if project_root else "JBH-EAVEN/JBheaven project root is missing.",
+                "" if red_team_skill_names else "No local red-teaming skill directory was detected.",
+                "JBheaven local API is offline; only file and manifest readiness can be proven."
+                if api_status["status"] != "online"
+                else "",
+            ]
+            if blocker
+        ]
+        contract = {
+            "schema": "fluxio.jbh_eaven_redteam_readiness.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode", "local-model"],
+            "status": "ready_for_synthetic_scenario_gate" if project_root and red_team_skill_names else "blocked_missing_lab_evidence",
+            "project": project,
+            "api": api_status,
+            "manifest": {
+                "appId": str(manifest.get("app_id") or "jbheaven"),
+                "name": str(manifest.get("name") or "JBheaven"),
+                "permissions": [str(item) for item in manifest.get("permissions", []) if isinstance(item, str)],
+                "authMode": str((manifest.get("auth") if isinstance(manifest.get("auth"), dict) else {}).get("mode") or "local_session"),
+            },
+            "scenarioGate": scenario_gate,
+            "readinessChecks": [
+                {
+                    "id": "synthetic-boundary",
+                    "label": "Synthetic target boundary",
+                    "status": "required",
+                    "detail": "Every run must declare a fake target, authorization label, and no-real-world-impact scope.",
+                },
+                {
+                    "id": "aggregate-only-output",
+                    "label": "Aggregate-only proof",
+                    "status": "enforced",
+                    "detail": "The app may record scores, refusal categories, and safety notes, not raw harmful payloads.",
+                },
+                {
+                    "id": "blue-team-review",
+                    "label": "Blue-team review lane",
+                    "status": "planned",
+                    "detail": "Detection, hardening, and refusal analysis remain first-class outputs.",
+                },
+            ],
+            "firstRunTarget": {
+                "title": "Safe synthetic scenario gate",
+                "summary": "Before any JBH-EAVEN run, Fluxio must prove fake target metadata, authorization labels, blocked real-world actions, and proof artifact paths.",
+                "acceptance": [
+                    "Scenario metadata explicitly says the target is synthetic and authorized.",
+                    "Raw payload export is disabled unless a separate review-gated research artifact is created.",
+                    "The run writes aggregate refusal/safety/proof results before any follow-up escalation.",
+                ],
+            },
+            "blockers": blockers,
+            "nextAction": "Build the scenario metadata gate and aggregate-only runner before enabling any live JBH-EAVEN probe controls.",
+        }
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"jbh-eaven-readiness-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "jbh_eaven_redteam_readiness"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "jbh_eaven_safe_synthetic_redteam_readiness",
+            "connectedAppsPath": str(root / "config" / "connected_apps.json"),
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _write_image_playground_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
         provider_id = self._image_provider_id(payload)
@@ -6509,6 +6731,8 @@ class FluxioWebBackend:
             return self._provider_orchestration_artifact(command, payload)
         if command in {"fusion_readiness_command", "get_fusion_readiness_command"}:
             return self._fusion_readiness_artifact(command, payload)
+        if command in {"jbh_eaven_redteam_readiness_command", "get_jbh_eaven_redteam_readiness_command"}:
+            return self._jbh_eaven_redteam_readiness_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (
