@@ -989,6 +989,106 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(proof["proof"]["purpose"], "provider_orchestration_model_switching_contract")
             self.assertEqual(proof["selectedRoute"]["model"], "openrouter/z-ai/glm-5.2")
 
+    def test_runtime_route_unification_prefers_opencode_glm_when_hermes_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command, path=None):  # noqa: ANN001
+                if command in {"hermes", "opencode", "openclaw"}:
+                    return command
+                return None
+
+            def fake_run(args, **kwargs):  # noqa: ANN001
+                return mock.Mock(returncode=0, stdout=f"{args[0]} version 1\n", stderr="")
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):  # noqa: ANN001
+                executable = pathlib.Path(str(args[0])).name.lower()
+                if executable == "opencode" and "models" in args:
+                    return {}, "openrouter/z-ai/glm-5.2\n", "", 75
+                if executable == "hermes":
+                    raise RuntimeError("Hermes provider resolver returned an empty API key.")
+                if executable == "opencode" and "run" in args:
+                    payload = {"type": "text", "part": {"text": "{\"ok\":true,\"route\":\"opencode-glm\"}"}}
+                    return payload, json.dumps(payload), "", 130
+                if executable == "openclaw":
+                    raise AssertionError("OpenClaw inference must stay controlled unless explicitly allowed.")
+                raise AssertionError(f"Unexpected command: {args}")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
+                with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                    with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                        contract = backend.dispatch(
+                            "get_runtime_route_unification_command",
+                            {
+                                "root": str(root),
+                                "requestId": "mission2-route-test",
+                                "probeProviderModels": True,
+                                "probeRuntime": True,
+                                "allowProviderCliProbe": True,
+                                "timeoutSeconds": 5,
+                            },
+                        )
+
+            self.assertEqual(contract["schema"], "fluxio.runtime_route_unification.v1")
+            self.assertEqual(contract["status"], "complete")
+            self.assertEqual(contract["selectedRuntime"], "opencode")
+            self.assertEqual(contract["missionGate"]["status"], "complete")
+            self.assertIsNone(contract["missionGate"]["nextMissing"])
+            self.assertEqual(contract["health"]["calls"]["hermes"]["status"], "failed")
+            self.assertEqual(contract["health"]["calls"]["opencode"]["status"], "ok")
+            self.assertFalse(contract["health"]["calls"]["openclaw"]["attempted"])
+            self.assertIn("controlled", contract["health"]["calls"]["openclaw"]["error"])
+            proof_path = pathlib.Path(contract["artifacts"]["routeHealthPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["selectedRuntime"], "opencode")
+            self.assertTrue(proof["opencode"]["modelsContainGlm52"])
+
+    def test_agent_chat_supports_opencode_runtime_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command, path=None):  # noqa: ANN001
+                if command == "opencode":
+                    return command
+                return None
+
+            def fake_run_process_capture(args, *, cwd, timeout=180, extra_env=None):  # noqa: ANN001
+                executable = pathlib.Path(str(args[0])).name.lower()
+                if executable == "opencode" and "run" in args:
+                    payload = {"type": "text", "part": {"text": "OpenCode lane ready."}}
+                    return payload, json.dumps(payload), "", 140
+                raise AssertionError(f"Unexpected command: {args}")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_run_process_capture):
+                    result = backend.dispatch(
+                        "send_agent_chat_command",
+                        {
+                            "payload": {
+                                "runtime": "opencode",
+                                "message": "prove the lane",
+                                "workspaceId": "workspace_primary",
+                                "workspacePath": str(workspace),
+                                "route": {
+                                    "role": "executor",
+                                    "provider": "openrouter",
+                                    "model": "z-ai/glm-5.2",
+                                    "effort": "high",
+                                },
+                            }
+                        },
+                    )
+
+            self.assertEqual(result["runtime"], "opencode")
+            self.assertEqual(result["route"]["model_id"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(result["reply"], "OpenCode lane ready.")
+            self.assertEqual(result["compartment"]["runtime"], "opencode")
+
     def test_fusion_readiness_command_writes_detected_project_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             user_root = pathlib.Path(temp_dir) / "user"
