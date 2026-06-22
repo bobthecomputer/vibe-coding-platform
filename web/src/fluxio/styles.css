@@ -4351,6 +4351,155 @@ button.fluxos-context-root:hover {
   text-transform: none;
 }
 
+.fluxos-anti-drift-guard {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.95fr) minmax(280px, 1.65fr) minmax(170px, 0.5fr);
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+  padding: 10px;
+}
+
+.fluxos-anti-drift-guard::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.72);
+  transform: translateY(-100%);
+  animation: fluxos-anti-drift-line 2.8s ease-in-out infinite;
+}
+
+.fluxos-anti-drift-guard.tone-bad {
+  border-color: rgba(248, 113, 113, 0.42);
+}
+
+.fluxos-anti-drift-guard.tone-warn {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.fluxos-anti-drift-copy,
+.fluxos-anti-drift-actions,
+.fluxos-anti-drift-signals article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fluxos-anti-drift-copy span,
+.fluxos-anti-drift-actions span,
+.fluxos-anti-drift-signals span {
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.fluxos-anti-drift-copy strong,
+.fluxos-anti-drift-signals strong {
+  color: var(--fluxos-text);
+  line-height: 1.2;
+}
+
+.fluxos-anti-drift-copy p,
+.fluxos-anti-drift-signals p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-anti-drift-signals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.fluxos-anti-drift-signals article {
+  border: 1px solid rgba(255, 255, 255, 0.105);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 8px;
+}
+
+.fluxos-anti-drift-signals article.tone-bad {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.fluxos-anti-drift-signals article.tone-warn {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.fluxos-anti-drift-signals article.tone-pending {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.fluxos-anti-drift-actions {
+  align-content: center;
+  justify-items: end;
+}
+
+.fluxos-anti-drift-actions button {
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #050608;
+  font-size: 11px;
+  font-weight: 760;
+  padding: 0 14px;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.fluxos-anti-drift-actions button:hover {
+  background: #ffffff;
+  transform: translateY(-1px);
+}
+
+@keyframes fluxos-anti-drift-line {
+  0%,
+  24% {
+    transform: translateY(-100%);
+  }
+  58%,
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluxos-anti-drift-guard::before {
+    animation: none;
+    transform: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .fluxos-anti-drift-guard {
+    grid-template-columns: 1fr;
+  }
+
+  .fluxos-anti-drift-actions {
+    justify-items: stretch;
+  }
+
+  .fluxos-anti-drift-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 620px) {
+  .fluxos-anti-drift-signals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .fluxos-beginner-guide {
   display: grid;
   gap: 12px;

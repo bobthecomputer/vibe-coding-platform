@@ -14853,6 +14853,34 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "watchdog:anti-drift-guard") {
+        setSurface("builder");
+        setBuilderDetailOpen(false);
+        setActiveDrawer("builder");
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture anti-drift guard proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_mission_anti_drift_guard_command",
+            { payload: { root: null, requestId: `builder-${Date.now()}` } },
+            { throwOnError: true },
+          );
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Anti-drift guard proof captured: ${pathLeaf(artifactPath)}.`
+              : "Anti-drift guard proof captured.",
+            response?.tone === "bad" ? "warn" : "info",
+          );
+          await refreshAll("watchdog-anti-drift-guard");
+        } catch (error) {
+          pushToast(`Anti-drift guard proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "watchdog:parallelize-worktree") {
         const missionId = String(payload?.missionId || "").trim();
         setOperatorDraft(current => current || `Parallelize worktree for mission ${missionId || "selected mission"}:\n`);

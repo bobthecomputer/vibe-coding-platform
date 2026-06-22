@@ -65,6 +65,10 @@ function asList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function artifactRepairCountFromGoalRows(rows) {
   for (const row of asList(rows)) {
     const text = [
@@ -107,6 +111,132 @@ function titleizeToken(value) {
   return String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+const ANTI_DRIFT_BLOCKED_KINDS = new Set([
+  "delegated_runtime_completed_unreconciled",
+  "delegated_runtime_process_gone",
+  "mission_blocked_or_failed",
+  "runtime_budget_exhausted",
+  "runtime_cycle_state_mismatch",
+  "stale_queue_blocker",
+]);
+
+const ANTI_DRIFT_DRIFT_KINDS = new Set([
+  "delegated_runtime_completed_unreconciled",
+  "running_planner_loop_idle",
+  "stale_running_mission",
+  "stale_runtime_heartbeat",
+]);
+
+const ANTI_DRIFT_ROUTE_KINDS = new Set([
+  "route_contract_incomplete",
+  "runtime_cycle_state_mismatch",
+]);
+
+const ANTI_DRIFT_PROOF_KINDS = new Set([
+  "planned_scope_artifacts_not_ready",
+]);
+
+function issueKind(issue) {
+  return String(issue?.kind || issue?.type || "").trim().toLowerCase();
+}
+
+function issueSeverity(issue) {
+  const severity = String(issue?.severity || "info").trim().toLowerCase();
+  return ["bad", "warn", "info"].includes(severity) ? severity : "info";
+}
+
+function deriveMissionAntiDriftGuard(missionWatchdog, { isLiveBackend = false } = {}) {
+  const report = asRecord(missionWatchdog);
+  const summary = asRecord(report.summary);
+  const hasLiveEvidence = Boolean(isLiveBackend && report.schema === "fluxio.mission_watchdog.v1");
+  const issueSources = [
+    ...asList(report.issues),
+    ...asList(asRecord(report.problemRegistry).problems),
+  ];
+  const seen = new Set();
+  const issues = issueSources.filter((issue, index) => {
+    const item = asRecord(issue);
+    const key = item.problemId || item.issueId || `${item.missionId || item.mission_id || "mission"}:${issueKind(item)}:${index}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const countKinds = kinds => issues.filter(issue => kinds.has(issueKind(issue))).length;
+  const blockedLoopCount = countKinds(ANTI_DRIFT_BLOCKED_KINDS);
+  const driftRiskCount = countKinds(ANTI_DRIFT_DRIFT_KINDS);
+  const routeMismatchCount = countKinds(ANTI_DRIFT_ROUTE_KINDS);
+  const explicitProofGapCount = countKinds(ANTI_DRIFT_PROOF_KINDS);
+  const proofGapCount =
+    explicitProofGapCount +
+    Number(summary.artifactMissing || report.artifactMissing || 0) +
+    Number(summary.artifactPartial || report.artifactPartial || 0);
+  const bad = Number(report.bad ?? summary.bad ?? issues.filter(issue => issueSeverity(issue) === "bad").length);
+  const warn = Number(report.warn ?? summary.warn ?? issues.filter(issue => issueSeverity(issue) === "warn").length);
+  const firstIssue = issues[0] || null;
+  const watchdogNextAction =
+    firstIssue?.firstRepairStep ||
+    firstIssue?.firstStep ||
+    report.nextAction ||
+    "No watchdog issues found. Keep Hermes active.";
+  const nextAction = hasLiveEvidence
+    ? watchdogNextAction
+    : "Refresh live watchdog evidence before claiming monitoring is clear.";
+
+  let status = "clear";
+  let tone = "good";
+  let title = "Mission can continue";
+  if (!hasLiveEvidence) {
+    status = "waiting";
+    tone = "warn";
+    title = "Waiting for live watchdog evidence";
+  } else if (blockedLoopCount > 0 || bad > 0) {
+    status = "intervention";
+    tone = "bad";
+    title = "Intervention required before continuing";
+  } else if (driftRiskCount > 0 || routeMismatchCount > 0 || proofGapCount > 0 || warn > 0) {
+    status = "attention";
+    tone = "warn";
+    title = "Guard sees drift risk";
+  }
+
+  const signal = (id, label, count, detail) => {
+    if (!hasLiveEvidence) {
+      return {
+        id,
+        label,
+        count,
+        status: "pending",
+        detail: "Awaiting live watchdog report.",
+      };
+    }
+    return {
+      id,
+      label,
+      count,
+      status: count > 0 ? (id === "blocked_loop" ? "bad" : "warn") : "clear",
+      detail,
+    };
+  };
+
+  return {
+    status,
+    tone,
+    title,
+    liveEvidence: hasLiveEvidence,
+    primaryRuntimeLane: "hermes",
+    fallbackRuntimeLane: "openclaw",
+    nextAction,
+    firstIssue,
+    issueCount: Number(report.issueCount ?? summary.issueCount ?? issues.length),
+    signals: [
+      signal("blocked_loop", "Blocked loop", blockedLoopCount, blockedLoopCount ? "Runtime cannot advance without repair." : "No hard blocker reported."),
+      signal("original_intent", "Original intent", driftRiskCount, driftRiskCount ? "Planner/runtime movement is stale or idle." : "No active drift signal."),
+      signal("route_mismatch", "Route mismatch", routeMismatchCount, routeMismatchCount ? "Planner, executor, or verifier route contract needs repair." : "Hermes route contract looks aligned."),
+      signal("fake_proof", "Fake proof", proofGapCount, proofGapCount ? "Completion proof is missing or partial." : "No proof gap reported."),
+    ],
+  };
 }
 
 function eventTargetIsInteractive(event) {
@@ -7182,6 +7312,10 @@ function FluxioBuilderSurface(props) {
     asList(missionWatchdog?.problemRegistry?.problems).find(item => !["closed", "resolved", "dismissed"].includes(String(item?.status || "open").toLowerCase())) ||
     asList(missionWatchdog?.issues)[0] ||
     null;
+  const antiDriftGuard = useMemo(
+    () => deriveMissionAntiDriftGuard(missionWatchdog, { isLiveBackend }),
+    [isLiveBackend, missionWatchdog],
+  );
   const firstLiveThreadLine =
     selectedThreadRows.map(item => firstUsefulRuntimeLine(agentMessageDisplayDetail(item))).find(Boolean) ||
     selectedThreadRows.map(item => item.title || item.label || "").find(Boolean) ||
@@ -8083,6 +8217,39 @@ function FluxioBuilderSurface(props) {
             </aside>
           </section>
         ) : null}
+        <section
+          className={cx("fluxos-anti-drift-guard", `tone-${antiDriftGuard.tone}`, antiDriftGuard.liveEvidence ? "has-evidence" : "waiting")}
+          aria-label="Mission anti-drift guard"
+          data-anti-drift-guard="true"
+          data-anti-drift-route-proof="true"
+          data-live-watchdog-evidence={antiDriftGuard.liveEvidence ? "true" : "false"}
+          data-monitoring-control-points="true"
+          data-primary-runtime-lane={antiDriftGuard.primaryRuntimeLane}
+        >
+          <div className="fluxos-anti-drift-copy">
+            <span>Anti-drift guard</span>
+            <strong>{antiDriftGuard.title}</strong>
+            <p>{antiDriftGuard.nextAction}</p>
+          </div>
+          <div className="fluxos-anti-drift-signals" aria-label="Monitoring control points">
+            {antiDriftGuard.signals.map(item => (
+              <article className={`tone-${item.status}`} key={`anti-drift-${item.id}`}>
+                <span>{item.label}</span>
+                <strong>{item.status === "pending" ? "Pending" : item.count > 0 ? item.count : "Clear"}</strong>
+                <p>{item.detail}</p>
+              </article>
+            ))}
+          </div>
+          <div className="fluxos-anti-drift-actions">
+            <span>{`Hermes primary · OpenClaw fallback · ${antiDriftGuard.issueCount} issue${antiDriftGuard.issueCount === 1 ? "" : "s"}`}</span>
+            <button
+              onClick={() => onRequestAction?.("watchdog:anti-drift-guard")}
+              type="button"
+            >
+              Capture guard proof
+            </button>
+          </div>
+        </section>
         {!isLiveBackend ? (
           <section
             className="fluxos-builder-preview-state"
