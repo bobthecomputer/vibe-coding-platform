@@ -11448,6 +11448,12 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const harnessBenchmarkBlockers = asList(harnessBenchmarkBoard.blockers);
   const harnessBenchmarkProofPath = String(harnessBenchmarkBoard?.proof?.artifactPath || "").trim();
   const harnessBenchmarkStatus = String(harnessBenchmarkBoard.status || "pending_live_capture");
+  const harnessBenchmarkRecommendations = asList(harnessBenchmarkBoard.taskClassRecommendations);
+  const harnessBenchmarkRoutingRules = asList(harnessBenchmarkBoard.routingRules);
+  const harnessBenchmarkDecision =
+    harnessBenchmarkBoard.decision && typeof harnessBenchmarkBoard.decision === "object"
+      ? harnessBenchmarkBoard.decision
+      : {};
   const updateManagementReadiness =
     settingsState?.updateManagementReadiness && typeof settingsState.updateManagementReadiness === "object"
       ? settingsState.updateManagementReadiness
@@ -12169,7 +12175,7 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <span>Harness benchmark board</span>
             <strong>{titleizeToken(harnessBenchmarkStatus)}</strong>
             <p>
-              {harnessBenchmarkBoard.decision?.summary ||
+              {harnessBenchmarkDecision.summary ||
                 "Use Hermes as the completion lane, keep OpenClaw/OpenCode visible for fallback and specialist work."}
             </p>
           </div>
@@ -12181,14 +12187,59 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             Capture benchmark proof
           </button>
         </div>
+        <div className="fluxos-harness-decision-strip" aria-label="Harness routing decisions">
+          <article>
+            <span>Production policy</span>
+            <strong>{harnessBenchmarkDecision.production || "hermes-fluxio-hybrid"}</strong>
+            <p>Default for completion missions that need proof-backed stopping.</p>
+          </article>
+          <article>
+            <span>Operational fallback</span>
+            <strong>{harnessBenchmarkDecision.operationalFallback || "openclaw-fluxio-hybrid"}</strong>
+            <p>Used when route health or tool coverage makes Hermes unavailable.</p>
+          </article>
+          <article>
+            <span>Specialist lane</span>
+            <strong>{harnessBenchmarkDecision.specialist || "opencode-glm52-coding-vision"}</strong>
+            <p>Used for coding, vision, and GLM/Z.AI repair planning.</p>
+          </article>
+        </div>
         <div className="fluxos-harness-benchmark-matrix" aria-label="Model and harness benchmark matrix">
           {harnessBenchmarkRows.slice(0, 4).map(row => (
-            <article className={cx(row.id === harnessBenchmarkBoard.decision?.production && "selected")} key={row.id || row.label}>
+            <article className={cx(row.id === harnessBenchmarkDecision.production && "selected")} key={row.id || row.label}>
               <span>{titleizeToken(row.decision || row.runtime || "route")}</span>
               <strong>{row.label || `${titleizeToken(row.runtime)} + ${titleizeToken(row.harness)}`}</strong>
               <p>{row.bestFor || "No benchmark role recorded yet."}</p>
               <small>{row.modelRoute || row.harness || "Model route pending"}</small>
+              {row.dimensionScores && typeof row.dimensionScores === "object" ? (
+                <div className="fluxos-harness-dimension-row" aria-label={`${row.label || row.id} score dimensions`}>
+                  {["reliability", "previewControl", "skillUsage", "proofCapture", "longHorizon"].map(key => (
+                    <span key={key}>
+                      <strong>{titleizeToken(key)}</strong>
+                      <em>{row.dimensionScores[key] ?? "-"}</em>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <em>{Number.isFinite(Number(row.operatorScore)) ? `${Math.round(Number(row.operatorScore))}/100` : "score pending"}</em>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-harness-recommendations" aria-label="Practical harness recommendations">
+          {(harnessBenchmarkRecommendations.length ? harnessBenchmarkRecommendations : [
+            {
+              id: "completion-mission",
+              label: "Completion missions",
+              use: "hermes-fluxio-hybrid",
+              why: "Use the production completion lane for proof-backed mission work.",
+              guardrail: "Capture live benchmark proof before changing routing.",
+            },
+          ]).slice(0, 4).map(item => (
+            <article key={item.id || item.label}>
+              <span>{item.label || titleizeToken(item.id || "recommendation")}</span>
+              <strong>{item.use || "Route pending"}</strong>
+              <p>{item.why || "No recommendation detail reported."}</p>
+              <small>{item.guardrail || "Keep proof attached before promoting this route."}</small>
             </article>
           ))}
         </div>
@@ -12202,6 +12253,11 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <span>Evidence</span>
             <strong>{`${asList(harnessBenchmarkBoard.sourceEvidence).filter(item => item.status === "ready").length} ready source${asList(harnessBenchmarkBoard.sourceEvidence).filter(item => item.status === "ready").length === 1 ? "" : "s"}`}</strong>
             <p>{harnessBenchmarkProofPath ? `Proof artifact: ${harnessBenchmarkProofPath}` : harnessBenchmarkBlockers[0] || harnessBenchmarkBoard.nextAction || "Live capture has not run yet."}</p>
+          </article>
+          <article>
+            <span>Routing rules</span>
+            <strong>{harnessBenchmarkRoutingRules.length ? `${harnessBenchmarkRoutingRules.length} rules` : "Pending"}</strong>
+            <p>{harnessBenchmarkRoutingRules[0] || harnessBenchmarkDecision.nextBenchmark || "Capture proof to generate promotion rules."}</p>
           </article>
         </div>
       </section>
