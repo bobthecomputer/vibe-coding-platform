@@ -25745,6 +25745,16 @@ body::-webkit-scrollbar-thumb {
   font-size: 11px;
 }
 
+.reference-shell.surface-images .image-handoff-receipt-actions code,
+.fluxos-shell.surface-images .image-handoff-receipt-actions code {
+  overflow: hidden;
+  max-width: 100%;
+  color: rgba(197, 226, 255, 0.8);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .reference-shell.surface-images .image-handoff-receipt p,
 .fluxos-shell.surface-images .image-handoff-receipt p {
   display: grid;
@@ -25937,6 +25947,50 @@ body::-webkit-scrollbar-thumb {
   white-space: nowrap;
 }
 
+.reference-shell.surface-images .image-mission-gate,
+.fluxos-shell.surface-images .image-mission-gate {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.reference-shell.surface-images .image-mission-gate[data-image-mission-gate="complete"],
+.fluxos-shell.surface-images .image-mission-gate[data-image-mission-gate="complete"] {
+  border-color: rgba(163, 216, 185, 0.26);
+  background: rgba(163, 216, 185, 0.055);
+}
+
+.reference-shell.surface-images .image-mission-gate span,
+.fluxos-shell.surface-images .image-mission-gate span {
+  color: rgba(239, 244, 242, 0.52);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.reference-shell.surface-images .image-mission-gate strong,
+.fluxos-shell.surface-images .image-mission-gate strong {
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+  text-align: right;
+  text-transform: capitalize;
+}
+
+.reference-shell.surface-images .image-mission-gate em,
+.fluxos-shell.surface-images .image-mission-gate em {
+  grid-column: 1 / -1;
+  color: rgba(239, 244, 242, 0.66);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
 .reference-shell.surface-images .image-loop-scheme ol,
 .fluxos-shell.surface-images .image-loop-scheme ol {
   display: grid;
@@ -25986,6 +26040,28 @@ body::-webkit-scrollbar-thumb {
 .reference-shell.surface-images :where(button, .image-primary-button, .image-glass-button, .image-secondary-button, .image-mini-button, select, input, textarea),
 .fluxos-shell.surface-images :where(button, .image-primary-button, .image-glass-button, .image-secondary-button, .image-mini-button, select, input, textarea) {
   border-radius: 8px !important;
+}
+
+.reference-shell.surface-images .image-route-probe-toggle,
+.fluxos-shell.surface-images .image-route-probe-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  color: rgba(239, 244, 242, 0.72);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.reference-shell.surface-images .image-route-probe-toggle input,
+.fluxos-shell.surface-images .image-route-probe-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: #eff4f2;
 }
 
 .reference-shell.surface-images :where(button, select, input, textarea):focus-visible,

@@ -328,6 +328,8 @@ const MISSION1_LOOP_SCHEME = [
 ];
 
 function missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedState, queueSummary }) {
+  const missionGate = selfRepairProof?.missionGate;
+  const nextMissing = missionGate?.nextMissing;
   if (selfRepairBusy) {
     return {
       phase: "Inspecting",
@@ -336,12 +338,20 @@ function missionLoopStatus({ selfRepairBusy, selfRepairProof, providerBlockedSta
       nextAction: "Wait for verifier proof",
     };
   }
-  if (selfRepairProof?.routeStatus === "ok") {
+  if (missionGate?.status === "complete") {
     return {
-      phase: "Verified",
+      phase: "Mission complete",
       status: "proven",
-      proof: "Route, skill, plan, and verifier artifacts are attached.",
+      proof: "Every Mission 1 acceptance item has proof.",
       nextAction: "Review proof or export context",
+    };
+  }
+  if (missionGate?.status) {
+    return {
+      phase: missionGate.status === "blocked" ? "Blocked" : "Incomplete",
+      status: missionGate.status === "blocked" ? "blocked" : "attention",
+      proof: nextMissing?.proof || selfRepairProof?.message || "Mission gate still has missing acceptance items.",
+      nextAction: nextMissing?.id === "runtime-route-probed" ? "Enable route probe" : "Continue mission",
     };
   }
   if (selfRepairProof?.routeStatus || providerBlockedState) {
@@ -381,6 +391,7 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const [providerMessage, setProviderMessage] = useState("Ready for layered generation.");
   const [selfRepairBusy, setSelfRepairBusy] = useState(false);
   const [selfRepairProof, setSelfRepairProof] = useState(null);
+  const [routeProbeEnabled, setRouteProbeEnabled] = useState(false);
   const [selectedLibraryId, setSelectedLibraryId] = useState("");
   const [exportTarget, setExportTarget] = useState("agent");
   const [providerBlockedState, setProviderBlockedState] = useState(null);
@@ -648,6 +659,10 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const selfRepairArtifacts = selfRepairProof?.artifacts && typeof selfRepairProof.artifacts === "object"
     ? Object.entries(selfRepairProof.artifacts)
     : [];
+  const missionGateItems = Array.isArray(selfRepairProof?.missionGate?.items)
+    ? selfRepairProof.missionGate.items
+    : [];
+  const missionGateMissing = missionGateItems.filter(item => item?.status !== "done");
   const latestHandoffReceipt = useMemo(() => {
     const comments = Array.isArray(project.annotationReadiness?.comments)
       ? project.annotationReadiness.comments
@@ -661,6 +676,7 @@ export function ImagePlaygroundSurface({ callBackend }) {
       artifactTitle: receipt.artifactTitle || selectedLibraryItem?.title || "Selected artifact",
       artifactUrl: receipt.artifactUrl || "",
       manifestUrl: receipt.manifestUrl || "",
+      backendReceiptPath: receipt.backendReceiptPath || "",
       createdAt: receipt.createdAt || "",
     };
   }, [project.annotationReadiness?.comments, selectedLibraryItem?.title]);
@@ -2025,8 +2041,11 @@ export function ImagePlaygroundSurface({ callBackend }) {
           provider: project.provider.id,
           visionRoute: project.visionRoute,
           promptHash: tinyPromptHash(project.prompt.text),
+          routeProbeEnabled,
         },
         timeoutSeconds: 45,
+        probeExternalRoutes: routeProbeEnabled,
+        probeProviderModels: routeProbeEnabled,
       });
       setSelfRepairProof(result);
       updateProject(current => ({
@@ -2069,19 +2088,21 @@ export function ImagePlaygroundSurface({ callBackend }) {
     }
   }
 
-  function exportSelectedImage(target = exportTarget) {
+  async function exportSelectedImage(target = exportTarget) {
     if (!selectedLibraryItem) {
       pushOperationEvent("Export blocked", "No image artifact is selected in the gallery.", "warn");
       return;
     }
     const label = handoffTargetLabel(target);
+    const commentId = makeId("comment");
+    const requestId = makeId("image-handoff");
     updateProject(current => ({
       ...current,
       annotationReadiness: {
         ...(current.annotationReadiness || {}),
         comments: [
           {
-            id: makeId("comment"),
+            id: commentId,
             type: "export",
             text: `Exported ${selectedLibraryItem.title} to ${label}.`,
             target,
@@ -2089,6 +2110,8 @@ export function ImagePlaygroundSurface({ callBackend }) {
             artifactTitle: selectedLibraryItem.title,
             artifactUrl: selectedLibraryItem.src,
             manifestUrl: selectedLibraryItem.manifestUrl || "",
+            backendReceiptPath: "",
+            requestId,
             createdAt: nowIso(),
           },
           ...((current.annotationReadiness || {}).comments || []),
@@ -2096,6 +2119,39 @@ export function ImagePlaygroundSurface({ callBackend }) {
       },
     }));
     pushOperationEvent("Image exported", `${selectedLibraryItem.title} sent to ${label}.`, "good");
+    if (typeof callBackend !== "function") {
+      pushOperationEvent("Handoff proof pending", "Live backend bridge is unavailable, so only the local export comment was recorded.", "warn");
+      return;
+    }
+    try {
+      const result = await callBackend("image_playground_handoff_command", {
+        requestId,
+        target,
+        targetLabel: label,
+        artifactTitle: selectedLibraryItem.title,
+        artifactUrl: selectedLibraryItem.src,
+        manifestUrl: selectedLibraryItem.manifestUrl || "",
+      });
+      updateProject(current => ({
+        ...current,
+        annotationReadiness: {
+          ...(current.annotationReadiness || {}),
+          comments: ((current.annotationReadiness || {}).comments || []).map(item => (
+            item.id === commentId
+              ? {
+                ...item,
+                backendReceiptPath: result?.receiptPath || "",
+                text: result?.message || item.text,
+              }
+              : item
+          )),
+        },
+      }));
+      pushOperationEvent("Handoff proof recorded", result?.receiptPath || "Backend receipt recorded for export.", "good");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || "Backend handoff receipt failed.");
+      pushOperationEvent("Handoff proof failed", message, "warn");
+    }
   }
 
   function resetImageHorizontalScroll() {
@@ -2254,12 +2310,20 @@ export function ImagePlaygroundSurface({ callBackend }) {
           <button className="image-primary-button" disabled={busy || !project.prompt.text.trim()} onClick={() => runOperation("generate", { imagePluginMode: true })} type="button">
             <WandSparkles size={18} /> {busy ? "Generating..." : "Generate"}
           </button>
-          <button className="image-glass-button" disabled={!selectedLibraryItem} onClick={() => exportSelectedImage()} type="button">
+          <button className="image-glass-button" disabled={!selectedLibraryItem} onClick={() => void exportSelectedImage()} type="button">
             <Download size={16} /> Export selected
           </button>
           <button className="image-glass-button" disabled={selfRepairBusy} onClick={() => void runSelfRepairLoop()} type="button">
             <Sparkles size={16} /> {selfRepairBusy ? "Inspecting..." : "Run self-repair"}
           </button>
+          <label className="image-route-probe-toggle">
+            <input
+              checked={routeProbeEnabled}
+              onChange={event => setRouteProbeEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Probe Hermes/OpenClaw route</span>
+          </label>
         </div>
       </section>
 
@@ -2342,7 +2406,7 @@ export function ImagePlaygroundSurface({ callBackend }) {
           <div className="image-inspector-actions">
             <button onClick={addFocusedPin} type="button">Add pin</button>
             <button onClick={addFocusedRectangle} type="button">Add region</button>
-            <button onClick={() => exportSelectedImage("agent")} type="button">Send to Agent</button>
+            <button onClick={() => void exportSelectedImage("agent")} type="button">Send to Agent</button>
           </div>
           <div className={cx("image-handoff-receipt", latestHandoffReceipt && "has-receipt")} data-image-handoff-receipt="true" role="status" aria-live="polite">
             <div className="image-handoff-receipt-head">
@@ -2356,11 +2420,12 @@ export function ImagePlaygroundSurface({ callBackend }) {
                   <span>sent to {latestHandoffReceipt.label}</span>
                 </p>
                 <div className="image-handoff-receipt-actions">
-                  <span>Proof comment attached</span>
+                  <span>{latestHandoffReceipt.backendReceiptPath ? "Backend receipt recorded" : "Proof comment attached"}</span>
+                  {latestHandoffReceipt.backendReceiptPath ? <code>{latestHandoffReceipt.backendReceiptPath}</code> : null}
                   {latestHandoffReceipt.manifestUrl ? (
                     <a href={latestHandoffReceipt.manifestUrl} rel="noreferrer" target="_blank">Manifest</a>
                   ) : null}
-                  <button onClick={() => exportSelectedImage(latestHandoffReceipt.target)} type="button">Send again</button>
+                  <button onClick={() => void exportSelectedImage(latestHandoffReceipt.target)} type="button">Send again</button>
                 </div>
               </>
             ) : (
@@ -2413,6 +2478,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
               ))}
             </ol>
             <p className="image-loop-proof">{loopStatus.proof}</p>
+            {missionGateItems.length ? (
+              <div className="image-mission-gate" data-image-mission-gate={selfRepairProof?.missionGate?.status || "unknown"}>
+                <span>Mission gate</span>
+                <strong>{selfRepairProof?.missionGate?.status || "unknown"}</strong>
+                {missionGateMissing.length ? <em>{missionGateMissing[0]?.label || "Next acceptance item"} remains</em> : <em>Ready for Mission 2</em>}
+              </div>
+            ) : null}
             <button className="image-loop-action" disabled={selfRepairBusy} onClick={() => void runSelfRepairLoop()} type="button">
               {loopStatus.nextAction}
             </button>
