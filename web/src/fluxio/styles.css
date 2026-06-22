@@ -6185,6 +6185,118 @@ button.fluxos-context-root:hover {
   border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.fluxos-provider-orchestration {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 16px 0;
+}
+
+.fluxos-provider-orchestration.pending {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.fluxos-provider-orchestration.ready {
+  border-color: rgba(180, 255, 214, 0.32);
+}
+
+.fluxos-provider-orchestration-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-provider-orchestration-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-provider-orchestration-head span,
+.fluxos-provider-route-health span,
+.fluxos-provider-route-card span {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-provider-orchestration-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-provider-orchestration-head p,
+.fluxos-provider-orchestration-foot,
+.fluxos-provider-route-card p,
+.fluxos-provider-route-card small {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.fluxos-provider-orchestration-head .fluxos-provider-proof-button {
+  border: 1px solid rgba(245, 245, 245, 0.22);
+  border-radius: 999px;
+  background: rgba(245, 245, 245, 0.94);
+  color: #050505;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-provider-orchestration-head .fluxos-provider-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-provider-route-health,
+.fluxos-provider-route-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+
+.fluxos-provider-route-health article,
+.fluxos-provider-route-card {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-provider-route-health article + article,
+.fluxos-provider-route-card + .fluxos-provider-route-card {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-provider-route-health strong,
+.fluxos-provider-route-card strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-provider-route-card.ready span {
+  color: rgba(180, 255, 214, 0.86);
+}
+
+.fluxos-provider-orchestration-foot {
+  overflow-wrap: anywhere;
+}
+
 .fluxos-settings-list article,
 .fluxos-settings-list button {
   border-top: 1px solid rgba(255, 255, 255, 0.08);

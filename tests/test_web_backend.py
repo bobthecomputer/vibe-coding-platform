@@ -835,6 +835,61 @@ class FluxioWebBackendTests(unittest.TestCase):
                 )
                 self.assertFalse(cleared["openai"])
 
+    def test_provider_orchestration_command_writes_model_switching_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "",
+                    "ANTHROPIC_API_KEY": "",
+                    "OPENROUTER_API_KEY": "",
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                    "OPENCODE_API_KEY": "",
+                    "HOME": str(root / "home"),
+                    "OPENCLAW_STATE_DIR": str(root / "home" / ".openclaw"),
+                },
+            ):
+                self.assertTrue(
+                    backend.dispatch(
+                        "save_provider_secret_command",
+                        {"providerId": "openrouter", "secret": "test-openrouter-key"},
+                    )
+                )
+                contract = backend.dispatch(
+                    "get_provider_orchestration_command",
+                    {
+                        "root": str(root),
+                        "requestId": "mission6-provider-route",
+                        "taskBrief": "Use GLM-5.2 vision route for screenshot UI review and annotation.",
+                        "activeProvider": "openai-codex",
+                        "activeModel": "gpt-5.5",
+                    },
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.provider_orchestration_contract.v1")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertIn("opencode", contract["fallbackRuntimeLanes"])
+            self.assertIn("vision", contract["requiredCapabilities"])
+            self.assertEqual(contract["selectionMode"], "ready_best_fit")
+            self.assertTrue(contract["shouldSwitch"])
+            selected = contract["selectedRoute"]
+            self.assertEqual(selected["role"], "reviewer")
+            self.assertEqual(selected["provider"], "openrouter")
+            self.assertEqual(selected["model"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(selected["health"], "ready")
+            self.assertEqual(selected["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", selected["fallbackRuntimeLanes"])
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "provider_orchestration_model_switching_contract")
+            self.assertEqual(proof["selectedRoute"]["model"], "openrouter/z-ai/glm-5.2")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

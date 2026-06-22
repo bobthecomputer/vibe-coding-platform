@@ -221,6 +221,63 @@ PROVIDER_ENV = {
     "minimax-portal": ("MINIMAX_OAUTH_TOKEN", "FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT"),
     "opencode-go": ("OPENCODE_API_KEY",),
 }
+PROVIDER_ORCHESTRATION_CATALOG = [
+    {
+        "provider": "openai-codex",
+        "label": "OpenAI / Codex",
+        "models": ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex"],
+        "authIds": ["openai-codex", "openai"],
+        "runtimeLanes": ["hermes"],
+        "capabilities": ["planning", "coding", "verification", "tool_use", "long_context", "reasoning"],
+        "useWhen": "Use for planner, verifier, long-context coding, and high-effort proof review.",
+        "costTier": "premium",
+        "latencyTier": "balanced",
+    },
+    {
+        "provider": "minimax",
+        "label": "MiniMax",
+        "models": ["MiniMax-M3", "MiniMax-M3-thinking"],
+        "authIds": ["minimax", "minimax-cn", "minimax-portal"],
+        "runtimeLanes": ["hermes", "openclaw"],
+        "capabilities": ["frontend_ui", "visual_polish", "coding"],
+        "useWhen": "Use for frontend/UI execution while Hermes keeps continuity and proof.",
+        "costTier": "balanced",
+        "latencyTier": "fast",
+    },
+    {
+        "provider": "openrouter",
+        "label": "OpenRouter / Z.AI",
+        "models": ["openrouter/z-ai/glm-5.2", "openrouter/z-ai/glm-5"],
+        "authIds": ["openrouter"],
+        "runtimeLanes": ["hermes", "openclaw"],
+        "capabilities": ["vision", "ui_review", "coding", "structured_output", "provider_fallback"],
+        "useWhen": "Use for GLM/Z.AI vision or coding routes when OpenRouter is configured.",
+        "costTier": "balanced",
+        "latencyTier": "balanced",
+    },
+    {
+        "provider": "opencode-go",
+        "label": "OpenCodeGo",
+        "models": ["opencode-go/glm-5.2", "opencode-go/glm-5", "opencode-go/kimi-k2.5"],
+        "authIds": ["opencode-go"],
+        "runtimeLanes": ["hermes", "openclaw", "opencode"],
+        "capabilities": ["coding", "provider_exploration", "tool_use", "fallback_execution"],
+        "useWhen": "Use for OpenCode-compatible provider exploration and fallback execution lanes.",
+        "costTier": "balanced",
+        "latencyTier": "variable",
+    },
+    {
+        "provider": "anthropic",
+        "label": "Anthropic",
+        "models": ["claude-sonnet-4.5", "claude-opus-4.1"],
+        "authIds": ["anthropic"],
+        "runtimeLanes": ["hermes"],
+        "capabilities": ["planning", "review", "reasoning", "writing"],
+        "useWhen": "Use for review, planning, writing, and alternative reasoning lanes when configured.",
+        "costTier": "premium",
+        "latencyTier": "balanced",
+    },
+]
 PROVIDER_SECRET_ENV = {
     "openai": "OPENAI_API_KEY",
     "openai-codex": "OPENAI_API_KEY",
@@ -1111,6 +1168,46 @@ def _provider_presence(
             )
         output[provider_id] = present
     return output
+
+
+def _provider_orchestration_task_capabilities(task_brief: str) -> tuple[list[str], str]:
+    normalized = str(task_brief or "").lower()
+    capabilities = ["coding"]
+    role = "executor"
+    if any(token in normalized for token in ("screenshot", "image", "vision", "annotat", "ui review", "visual")):
+        capabilities = ["vision", "ui_review", "structured_output", "coding"]
+        role = "reviewer"
+    elif any(token in normalized for token in ("frontend", "front-end", "ui", "ux", "react", "css", "mobile", "polish")):
+        capabilities = ["frontend_ui", "visual_polish", "coding"]
+        role = "executor"
+    elif any(token in normalized for token in ("verify", "proof", "test", "regression", "audit")):
+        capabilities = ["verification", "tool_use", "reasoning"]
+        role = "verifier"
+    elif any(token in normalized for token in ("provider", "route", "model switch", "opencode", "openrouter", "glm", "z.ai")):
+        capabilities = ["provider_exploration", "tool_use", "provider_fallback"]
+        role = "router"
+    elif any(token in normalized for token in ("plan", "architecture", "research", "design")):
+        capabilities = ["planning", "reasoning", "long_context"]
+        role = "planner"
+    return capabilities, role
+
+
+def _provider_orchestration_score(candidate: dict[str, Any], required_capabilities: list[str], auth_present: bool) -> int:
+    candidate_capabilities = {str(item) for item in candidate.get("capabilities", [])}
+    matched = sum(1 for item in required_capabilities if item in candidate_capabilities)
+    score = matched * 22
+    if auth_present:
+        score += 30
+    provider = str(candidate.get("provider") or "")
+    if provider == "openai-codex" and {"planning", "verification", "reasoning"} & set(required_capabilities):
+        score += 12
+    if provider == "minimax" and "frontend_ui" in required_capabilities:
+        score += 16
+    if provider == "openrouter" and {"vision", "ui_review"} & set(required_capabilities):
+        score += 18
+    if provider == "opencode-go" and "provider_exploration" in required_capabilities:
+        score += 16
+    return score
 
 
 def _provider_secret_store_path(root: Path) -> Path:
@@ -4220,6 +4317,126 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _provider_orchestration_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        task_brief = str(
+            payload.get("taskBrief")
+            or payload.get("task_brief")
+            or "Select the best provider/model route for the current Fluxio mission."
+        ).strip()
+        active_provider = str(payload.get("activeProvider") or payload.get("active_provider") or "").strip().lower()
+        active_model = str(payload.get("activeModel") or payload.get("active_model") or "").strip()
+        required_capabilities, selected_role = _provider_orchestration_task_capabilities(task_brief)
+        provider_ids = sorted({
+            provider_id
+            for item in PROVIDER_ORCHESTRATION_CATALOG
+            for provider_id in [str(item.get("provider") or ""), *[str(auth_id) for auth_id in item.get("authIds", [])]]
+            if provider_id
+        })
+        presence = _provider_presence(provider_ids, session_secrets=self.provider_secrets)
+        candidates: list[dict[str, Any]] = []
+        for item in PROVIDER_ORCHESTRATION_CATALOG:
+            provider = str(item.get("provider") or "").strip().lower()
+            auth_ids = [str(auth_id) for auth_id in item.get("authIds", []) if str(auth_id).strip()]
+            auth_present = any(bool(presence.get(auth_id)) for auth_id in auth_ids)
+            matched_capabilities = [
+                capability
+                for capability in required_capabilities
+                if capability in {str(value) for value in item.get("capabilities", [])}
+            ]
+            score = _provider_orchestration_score(item, required_capabilities, auth_present)
+            health = "ready" if auth_present else "auth_required"
+            candidates.append(
+                {
+                    **item,
+                    "authPresent": auth_present,
+                    "authIds": auth_ids,
+                    "health": health,
+                    "score": score,
+                    "matchedCapabilities": matched_capabilities,
+                    "primaryRuntimeLane": "hermes",
+                    "fallbackRuntimeLanes": [
+                        lane for lane in ["openclaw", "opencode"] if lane in item.get("runtimeLanes", [])
+                    ] or ["openclaw"],
+                    "blocker": "" if auth_present else f"Authenticate {provider} before dispatch.",
+                }
+            )
+        candidates.sort(key=lambda item: (-int(item.get("score", 0)), not bool(item.get("authPresent")), str(item.get("provider") or "")))
+        selected = candidates[0] if candidates else {}
+        selected_ready = bool(selected.get("authPresent"))
+        fallback_routes = [
+            {
+                "provider": item.get("provider"),
+                "model": (item.get("models") or ["model-unreported"])[0],
+                "health": item.get("health"),
+                "score": item.get("score"),
+                "reason": item.get("useWhen"),
+            }
+            for item in candidates
+            if item is not selected
+        ][:4]
+        selected_route = {
+            "role": selected_role,
+            "provider": selected.get("provider", ""),
+            "model": (selected.get("models") or ["model-unreported"])[0],
+            "effort": "high" if selected_role in {"planner", "verifier", "reviewer"} else "medium",
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": selected.get("fallbackRuntimeLanes") or ["openclaw"],
+            "health": selected.get("health", "unresolved"),
+            "score": selected.get("score", 0),
+            "reason": selected.get("useWhen", ""),
+        }
+        active_matches_selected = (
+            bool(active_provider)
+            and active_provider == str(selected_route["provider"]).lower()
+            and (not active_model or active_model == selected_route["model"])
+        )
+        contract = {
+            "schema": "fluxio.provider_orchestration_contract.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode"],
+            "taskBrief": task_brief,
+            "requiredCapabilities": required_capabilities,
+            "selectedRole": selected_role,
+            "selectedRoute": selected_route,
+            "fallbackRoutes": fallback_routes,
+            "providers": candidates,
+            "authPresence": presence,
+            "activeRoute": {
+                "provider": active_provider,
+                "model": active_model,
+                "matchesSelected": active_matches_selected,
+            },
+            "selectionMode": "ready_best_fit" if selected_ready else "auth_required_best_fit",
+            "shouldSwitch": bool(active_provider and not active_matches_selected),
+            "sourceDocs": [
+                "https://vercel.com/docs/ai-gateway",
+                "https://ai-sdk.dev/docs/foundations/providers-and-models",
+            ],
+            "nextAction": (
+                "Use the selected provider route now and keep fallback lanes attached."
+                if selected_route.get("health") == "ready"
+                else f"Authenticate {selected_route.get('provider') or 'the selected provider'} before dispatch; use the fallback list for recovery."
+            ),
+        }
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"provider-orchestration-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "provider_orchestration"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "provider_orchestration_model_switching_contract",
+            "catalogSize": len(PROVIDER_ORCHESTRATION_CATALOG),
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _write_image_playground_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = _safe_identifier(payload.get("requestId") or f"image_{int(time.time())}", "image_request")
         provider_id = self._image_provider_id(payload)
@@ -6008,6 +6225,8 @@ class FluxioWebBackend:
             return self._mission_anti_drift_guard_artifact(command, payload)
         if command in {"skill_runtime_contract_command", "get_skill_runtime_contract_command"}:
             return self._skill_runtime_contract_artifact(command, payload)
+        if command in {"provider_orchestration_command", "get_provider_orchestration_command"}:
+            return self._provider_orchestration_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (
