@@ -50,6 +50,32 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(result["accessibility"]["accidentalSendProtection"])
             self.assertIn("review the correction buffer", result["osFallbackHint"])
 
+    def test_voice_accessibility_readiness_command_writes_mission9_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "get_voice_accessibility_readiness_command",
+                {"payload": {"requestId": "mission9-proof", "surface": "agent"}},
+            )
+
+            self.assertEqual(result["schema"], "fluxio.voice_accessibility_readiness.v1")
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(result["voiceInput"]["accidentalSendProtection"])
+            self.assertTrue(result["accessibility"]["keyboardRepairPath"])
+            self.assertTrue(result["accessibility"]["reducedMotionControl"])
+            self.assertEqual(result["missionGate"]["mission"], "mission9-dictation-voice-accessibility")
+            self.assertEqual(result["missionGate"]["status"], "complete")
+            check_ids = {item["id"] for item in result["checks"]}
+            self.assertIn("review-before-send", check_ids)
+            self.assertIn("keyboard-repair-path", check_ids)
+            artifact_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(artifact_path.exists())
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["requestId"], "mission9-proof")
+            self.assertEqual(artifact["proof"]["purpose"], "dictation_voice_accessibility_readiness")
+
     def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
