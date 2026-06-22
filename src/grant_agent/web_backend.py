@@ -5813,6 +5813,203 @@ class FluxioWebBackend:
             ),
         }
 
+    def _preview_annotation_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"preview-annotation-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "preview_annotation_readiness"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        def artifact_path(value: object) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            candidate = Path(text).expanduser()
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            return str(candidate.resolve())
+
+        screenshot_path = artifact_path(payload.get("screenshotPath") or payload.get("screenshot_path"))
+        dom_path = artifact_path(payload.get("domPath") or payload.get("dom_path"))
+        check_path = artifact_path(payload.get("checkPath") or payload.get("check_path"))
+        target_url = str(
+            payload.get("targetUrl")
+            or payload.get("target_url")
+            or "http://127.0.0.1:1420/control?preview-control=1&fixture=live_review&mode=builder&surface=workbench"
+        ).strip()
+        visual_smoke_script = root / "scripts" / "control_route_visual_smoke.py"
+        selected_event_id = str(payload.get("selectedEventId") or payload.get("eventId") or "").strip()
+        selected_annotation_id = str(payload.get("selectedAnnotationId") or payload.get("annotationId") or "").strip()
+        visual_finding = payload.get("visualFinding") if isinstance(payload.get("visualFinding"), dict) else {}
+        finding = {
+            "id": str(visual_finding.get("id") or selected_annotation_id or "preview-proof-surface").strip(),
+            "severity": str(visual_finding.get("severity") or "medium").strip(),
+            "finding": str(
+                visual_finding.get("finding")
+                or "Preview proof must show what the browser saw before it asks Agent or Builder to change the UI."
+            ).strip(),
+            "nextImplementationStep": str(
+                visual_finding.get("nextImplementationStep")
+                or "Attach the screenshot, DOM facts, and annotation target to the next planner/executor handoff."
+            ).strip(),
+        }
+        skills_used = [
+            {
+                "id": "preview_screenshot_breakdown",
+                "input": "live preview URL, screenshot path, DOM dump, visible text, and selected event",
+                "output": "dominant surface, clutter, missing focus, fake proof, and annotation targets",
+                "route": {"runtime": "hermes", "fallbackRuntime": "openclaw", "tool": "browser-cdp"},
+                "artifact": "preview_annotation_readiness.json",
+            },
+            {
+                "id": "ui_taste_review",
+                "input": "preview breakdown plus operator UI first-viewport rules",
+                "output": "repair priority and controls that should remain visible",
+                "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
+                "artifact": "preview_annotation_readiness.json",
+            },
+            {
+                "id": "preview_annotation_router",
+                "input": "visual finding, selected annotation id, selected event id, and route context",
+                "output": "planner/executor handoff payload and proof attachment fields",
+                "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
+                "artifact": "preview_annotation_readiness.json",
+            },
+            {
+                "id": "proof_attachment_verifier",
+                "input": "screenshot, DOM, check report, artifact path, and next implementation step",
+                "output": "readiness checks proving the preview finding can drive implementation",
+                "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
+                "artifact": "preview_annotation_readiness.json",
+            },
+        ]
+        env = self._provider_env()
+        hermes_command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
+        hermes_wsl_available = False
+        if not hermes_command:
+            try:
+                hermes_wsl_available = _wsl_has_command("hermes")
+            except Exception:
+                hermes_wsl_available = False
+        openclaw_command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
+        opencode_command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+        readiness_checks = [
+            {
+                "id": "visual-smoke-script",
+                "label": "Browser capture script",
+                "status": "ready" if visual_smoke_script.exists() else "blocked",
+                "detail": str(visual_smoke_script),
+            },
+            {
+                "id": "screenshot-artifact",
+                "label": "Screenshot proof",
+                "status": "ready" if screenshot_path and Path(screenshot_path).exists() else "pending",
+                "detail": screenshot_path or "No screenshot path supplied yet.",
+            },
+            {
+                "id": "dom-artifact",
+                "label": "DOM/text proof",
+                "status": "ready" if dom_path and Path(dom_path).exists() else "pending",
+                "detail": dom_path or "No DOM path supplied yet.",
+            },
+            {
+                "id": "annotation-handoff",
+                "label": "Annotation drives next step",
+                "status": "ready" if finding["nextImplementationStep"] else "blocked",
+                "detail": finding["nextImplementationStep"],
+            },
+        ]
+        blockers = [
+            item["detail"]
+            for item in readiness_checks
+            if item["status"] == "blocked"
+        ]
+        status = "ready_for_preview_annotation_loop" if not blockers else "blocked_missing_preview_capture"
+        contract = {
+            "schema": "fluxio.preview_annotation_readiness.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode", "browser-cdp"],
+            "status": status,
+            "previewTarget": {
+                "url": target_url,
+                "surface": str(payload.get("surface") or "builder-live-review"),
+                "selectedEventId": selected_event_id,
+                "selectedAnnotationId": selected_annotation_id,
+                "visualSmokeScript": str(visual_smoke_script),
+            },
+            "captureCapabilities": [
+                "open local app or served URL",
+                "capture screenshot artifact",
+                "dump DOM and visible text",
+                "run nonblank screenshot and text-fragment checks",
+                "route visual finding into Agent/Builder follow-up context",
+            ],
+            "skillsUsed": skills_used,
+            "annotationLoop": [
+                {
+                    "step": "capture",
+                    "input": target_url,
+                    "output": screenshot_path or "screenshot path pending",
+                    "status": readiness_checks[1]["status"],
+                },
+                {
+                    "step": "breakdown",
+                    "input": dom_path or "DOM path pending",
+                    "output": "preview_screenshot_breakdown finding set",
+                    "status": readiness_checks[2]["status"],
+                },
+                {
+                    "step": "annotate",
+                    "input": finding["id"],
+                    "output": "visual finding attached to browser annotation lane",
+                    "status": "ready",
+                },
+                {
+                    "step": "repair",
+                    "input": finding["finding"],
+                    "output": finding["nextImplementationStep"],
+                    "status": readiness_checks[3]["status"],
+                },
+            ],
+            "selectedFinding": finding,
+            "routeProof": {
+                "hermes": {
+                    "available": bool(hermes_command) or hermes_wsl_available,
+                    "nativeCommandVisible": bool(hermes_command),
+                    "wslCommandVisible": hermes_wsl_available,
+                    "selected": True,
+                },
+                "openclaw": {"available": bool(openclaw_command), "selected": False},
+                "opencode": {"available": bool(opencode_command), "selected": False},
+            },
+            "readinessChecks": readiness_checks,
+            "blockers": blockers,
+            "nextAction": finding["nextImplementationStep"],
+            "proofArtifacts": {
+                "screenshotPath": screenshot_path,
+                "domPath": dom_path,
+                "checkPath": check_path,
+            },
+            "sourceFiles": [
+                "scripts/control_route_visual_smoke.py",
+                "web/src/fluxio/FluxioReferenceShell.jsx",
+                "web/src/fluxio/FluxioShell.jsx",
+                "web/src/fluxio/styles.css",
+            ],
+        }
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "preview_browser_annotation_readiness",
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
@@ -6733,6 +6930,8 @@ class FluxioWebBackend:
             return self._fusion_readiness_artifact(command, payload)
         if command in {"jbh_eaven_redteam_readiness_command", "get_jbh_eaven_redteam_readiness_command"}:
             return self._jbh_eaven_redteam_readiness_artifact(command, payload)
+        if command in {"preview_annotation_readiness_command", "get_preview_annotation_readiness_command"}:
+            return self._preview_annotation_readiness_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

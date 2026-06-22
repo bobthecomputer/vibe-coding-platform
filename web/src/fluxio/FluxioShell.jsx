@@ -5187,6 +5187,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
   const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
   const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
+  const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
@@ -10329,6 +10330,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const tutorialStudio = viewModel.drawers.builder.tutorialStudio;
   const recommendationStudio = viewModel.drawers.builder.recommendationStudio;
   const liveReviewStudio = viewModel.drawers.builder.liveReviewStudio;
+  const previewAnnotationReadiness =
+    previewAnnotationReadinessContract ||
+    liveReviewStudio.previewAnnotationReadiness ||
+    {
+      schema: "fluxio.preview_annotation_readiness.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode", "browser-cdp"],
+      previewTarget: {
+        url: liveReviewStudio.previewActionUrl || liveReviewStudio.previewUrl || "",
+        surface: "builder-live-review",
+      },
+      captureCapabilities: [
+        "open local app or served URL",
+        "capture screenshot artifact",
+        "dump DOM and visible text",
+        "route visual finding into Agent/Builder follow-up context",
+      ],
+      skillsUsed: [],
+      selectedFinding: {
+        id: "pending-preview-finding",
+        severity: "medium",
+        finding: "Capture a preview artifact before claiming a browser annotation changed the implementation.",
+        nextImplementationStep: "Capture preview annotation proof from the live backend.",
+      },
+      readinessChecks: [],
+      blockers: ["Live capture has not run in this browser session."],
+      nextAction: "Capture preview annotation proof from the live backend.",
+      proof: null,
+      proofArtifacts: {},
+    };
+  const previewAnnotationProofPath = String(previewAnnotationReadiness?.proof?.artifactPath || "").trim();
+  const previewAnnotationFinding = previewAnnotationReadiness?.selectedFinding || {};
+  const previewAnnotationTarget = previewAnnotationReadiness?.previewTarget || {};
+  const previewAnnotationSkillIds = asList(previewAnnotationReadiness?.skillsUsed)
+    .map(item => item?.id || item?.skill || item)
+    .filter(Boolean);
+  const previewAnnotationReady = Boolean(previewAnnotationProofPath);
   const continuationSupervisor = liveReviewStudio.continuationSupervisor || null;
   const missionWatchdog = liveReviewStudio.missionWatchdog || null;
   const builderQueuePressureRows = useMemo(() => {
@@ -13275,6 +13314,47 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         : liveReviewMatchesSelectedMission
           ? liveReviewState.previewSourceDetail || ""
           : "The Builder preview belongs to another mission, so the Agent preview is waiting for selected mission evidence.";
+    const workbenchPreviewUrl =
+      requestedLocalPreviewUrl ||
+      missionScopedPreviewUrl ||
+      (liveReviewMatchesSelectedMission ? liveReviewState.previewUrl || "" : "");
+    const workbenchPreviewActionUrl =
+      requestedLocalPreviewUrl ||
+      missionScopedPreviewUrl ||
+      (liveReviewMatchesSelectedMission
+        ? liveReviewState.previewActionUrl || liveReviewState.previewUrl || ""
+        : "");
+    const workbenchPreviewAnnotationReadiness =
+      previewAnnotationReadinessContract ||
+      liveReviewState.previewAnnotationReadiness ||
+      {
+        schema: "fluxio.preview_annotation_readiness.v1",
+        status: "pending_live_capture",
+        primaryRuntimeLane: "hermes",
+        fallbackRuntimeLanes: ["openclaw", "opencode", "browser-cdp"],
+        previewTarget: {
+          url: workbenchPreviewActionUrl || workbenchPreviewUrl,
+          surface: "workbench-preview",
+        },
+        captureCapabilities: [
+          "open local app or served URL",
+          "capture screenshot artifact",
+          "dump DOM and visible text",
+          "route visual finding into Agent/Builder follow-up context",
+        ],
+        skillsUsed: [],
+        selectedFinding: {
+          id: "pending-preview-finding",
+          severity: "medium",
+          finding: "Capture a preview artifact before claiming a browser annotation changed the implementation.",
+          nextImplementationStep: "Capture preview annotation proof from the live backend.",
+        },
+        readinessChecks: [],
+        blockers: ["Live capture has not run in this browser session."],
+        nextAction: "Capture preview annotation proof from the live backend.",
+        proof: null,
+        proofArtifacts: {},
+      };
     const liveProgress = deriveLiveMissionProgress(mission, missionDetailSnapshot);
     const plannedScopeEntries = asList(liveProgress.entries).slice(0, 8);
     const runtimeContractLanes =
@@ -13537,24 +13617,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         source: mission?.mission_id ? "live mission proof drawer" : "",
         totalRows: viewModel.drawers?.proof?.itemsCount || 0,
       },
-      previewUrl:
-        requestedLocalPreviewUrl ||
-        missionScopedPreviewUrl ||
-        (liveReviewMatchesSelectedMission ? liveReviewState.previewUrl || "" : ""),
-      previewActionUrl:
-        requestedLocalPreviewUrl ||
-        missionScopedPreviewUrl ||
-        (liveReviewMatchesSelectedMission
-          ? liveReviewState.previewActionUrl || liveReviewState.previewUrl || ""
-          : ""),
+      previewUrl: workbenchPreviewUrl,
+      previewActionUrl: workbenchPreviewActionUrl,
       previewLabel: requestedLocalPreviewLabel || missionScopedPreviewLabel,
       previewSourceLabel: requestedLocalPreviewLabel || missionScopedPreviewLabel,
       previewSourceDetail: requestedLocalPreviewUrl
         ? "Preview URL came from the local Workbench verifier target."
         : missionScopedPreviewDetail,
       liveReview: liveReviewMatchesSelectedMission ? liveReviewState || null : null,
+      previewAnnotationReadiness: workbenchPreviewAnnotationReadiness,
     };
-  }, [agentTraceTurns, bridgeSessions, data.pendingApprovals, data.pendingQuestions, mission, missionDetailSnapshot, referenceAgentMessages, referenceChangedItems, referenceLaneControlReceipt, referenceStudio, providerSecretPresence, openAICodexAuthReady, openAICodexAuthPath, minimaxAuthReady, minimaxAuthPath, openCodeGoAuthReady, searchParams, snapshot?.bridgeLab?.recommendation, snapshot?.bridgeLab?.schema, snapshot?.guidance?.productImprovements, summarySnapshot?.bridgeLab?.recommendation, summarySnapshot?.bridgeLab?.schema, viewModel.drawers?.builder?.liveReviewStudio, viewModel.drawers?.builder?.serviceStudio, viewModel.tutorialStudio]);
+  }, [agentTraceTurns, bridgeSessions, data.pendingApprovals, data.pendingQuestions, mission, missionDetailSnapshot, previewAnnotationReadinessContract, referenceAgentMessages, referenceChangedItems, referenceLaneControlReceipt, referenceStudio, providerSecretPresence, openAICodexAuthReady, openAICodexAuthPath, minimaxAuthReady, minimaxAuthPath, openCodeGoAuthReady, searchParams, snapshot?.bridgeLab?.recommendation, snapshot?.bridgeLab?.schema, snapshot?.guidance?.productImprovements, summarySnapshot?.bridgeLab?.recommendation, summarySnapshot?.bridgeLab?.schema, viewModel.drawers?.builder?.liveReviewStudio, viewModel.drawers?.builder?.serviceStudio, viewModel.tutorialStudio]);
   const referencePreviewStyle = useMemo(
     () => ({
       "--ref-violet": referenceAppearance.accent,
@@ -14596,6 +14669,75 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "preview:capture-annotation-readiness") {
+        const captureSurface = String(payload?.surface || "").trim().toLowerCase();
+        const captureFromWorkbench = captureSurface === "workbench";
+        setSurface(captureFromWorkbench ? "workbench" : "builder");
+        setBuilderDetailOpen(!captureFromWorkbench);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture preview annotation proof.", "warn");
+          return;
+        }
+        const firstAnnotation = asList(liveReviewStudio.annotationReadiness?.blocks)[0] || {};
+        const payloadFinding = payload?.visualFinding && typeof payload.visualFinding === "object"
+          ? payload.visualFinding
+          : {};
+        const targetUrl =
+          String(payload?.targetUrl || "").trim() ||
+          String(selectedLiveReviewEvent?.previewUrl || "").trim() ||
+          String(
+              liveReviewStudio.previewActionUrl ||
+              liveReviewStudio.previewUrl ||
+              referenceWorkbenchState?.previewActionUrl ||
+              referenceWorkbenchState?.previewUrl ||
+              "",
+          ).trim();
+        try {
+          const response = await callBackend(
+            "get_preview_annotation_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `preview-annotation-${Date.now()}`,
+                surface: captureFromWorkbench ? "workbench-preview" : "builder-live-review",
+                targetUrl,
+                selectedEventId: String(payload?.selectedEventId || selectedLiveReviewEvent?.id || "").trim(),
+                selectedAnnotationId: String(payload?.selectedAnnotationId || firstAnnotation.id || "").trim(),
+                screenshotPath: String(payload?.screenshotPath || selectedLiveReviewFrame?.path || "").trim(),
+                domPath: String(payload?.domPath || "").trim(),
+                checkPath: String(payload?.checkPath || "").trim(),
+                visualFinding: {
+                  id: String(payloadFinding.id || firstAnnotation.id || "preview-proof-surface"),
+                  severity: String(payloadFinding.severity || firstAnnotation.severity || "medium"),
+                  finding:
+                    payloadFinding.finding ||
+                    firstAnnotation.note ||
+                    "Preview proof must show what the browser saw before it asks Agent or Builder to change the UI.",
+                  nextImplementationStep:
+                    payloadFinding.nextImplementationStep ||
+                    firstAnnotation.recoveryAction ||
+                    "Attach the screenshot, DOM facts, and annotation target to the next planner/executor handoff.",
+                },
+              },
+            },
+            { throwOnError: true },
+          );
+          setPreviewAnnotationReadinessContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Preview annotation proof captured: ${pathLeaf(artifactPath)}.`
+              : "Preview annotation proof captured.",
+            "info",
+          );
+          await refreshAll("preview-annotation-readiness");
+        } catch (error) {
+          pushToast(`Preview annotation proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "agent:open-preview" || normalizedAction === "composer:plus:preview") {
         setSurface("workbench");
         setBuilderDetailOpen(false);
@@ -15378,6 +15520,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [
       activeChatSessionId,
       activeEffectiveRoute,
+      callBackend,
       clearOperatorAttachments,
       createChatSessionForWorkspace,
       activeCommentTarget,
@@ -15388,6 +15531,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       handleReferenceMissionSelect,
       handleSubAgentLaneControl,
       builderSchedulingQueue,
+      liveReviewStudio.annotationReadiness?.blocks,
+      liveReviewStudio.previewActionUrl,
+      liveReviewStudio.previewUrl,
       markAction,
       mission,
       missionForm.model,
@@ -15405,6 +15551,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       runWorkspaceActionSpec,
       selectLiveMission,
       selectedAgentRoute,
+      selectedLiveReviewEvent,
+      selectedLiveReviewFrame,
       selectedMissionId,
       workspace?.default_runtime,
       workspace?.name,
@@ -15414,6 +15562,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       workspaces,
       selectedWorkspaceId,
       surface,
+      referenceWorkbenchState?.previewActionUrl,
+      referenceWorkbenchState?.previewUrl,
     ],
   );
 
@@ -22841,6 +22991,45 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                               <strong>Browser annotations</strong>
                               <span className="mini-pill muted">{(liveReviewStudio.annotationReadiness?.blocks || []).length} marks</span>
                             </div>
+                            <section
+                              className={`builder-preview-annotation-contract ${previewAnnotationReady ? "ready" : "pending"}`.trim()}
+                              data-preview-annotation-readiness-contract="true"
+                              data-preview-annotation-primary-lane={previewAnnotationReadiness.primaryRuntimeLane || "hermes"}
+                              data-preview-annotation-schema={previewAnnotationReadiness.schema || "fluxio.preview_annotation_readiness.v1"}
+                            >
+                              <div className="builder-preview-annotation-head">
+                                <div>
+                                  <span>Preview proof loop</span>
+                                  <strong>{titleizeToken(previewAnnotationReadiness.status || "pending live capture")}</strong>
+                                </div>
+                                <button
+                                  onClick={() => void handleReferenceAction("preview:capture-annotation-readiness", {
+                                    selectedEventId: selectedLiveReviewEvent?.id || "",
+                                    selectedAnnotationId: (liveReviewStudio.annotationReadiness?.blocks || [])[0]?.id || "",
+                                    screenshotPath: selectedLiveReviewFrame?.path || "",
+                                  })}
+                                  type="button"
+                                >
+                                  Capture preview proof
+                                </button>
+                              </div>
+                              <div className="builder-preview-annotation-grid">
+                                <article>
+                                  <span>Target</span>
+                                  <strong>{previewAnnotationTarget.url || liveReviewStudio.previewUrl || "No live preview URL yet"}</strong>
+                                </article>
+                                <article>
+                                  <span>Skills</span>
+                                  <strong>{previewAnnotationSkillIds.slice(0, 3).map(titleizeToken).join(" / ") || "Pending capture"}</strong>
+                                </article>
+                              </div>
+                              <p>{previewAnnotationFinding.finding || previewAnnotationReadiness.nextAction}</p>
+                              <small>
+                                {previewAnnotationProofPath
+                                  ? `Proof artifact: ${previewAnnotationProofPath}`
+                                  : previewAnnotationReadiness.nextAction || "Capture preview annotation proof before claiming the finding changed implementation."}
+                              </small>
+                            </section>
                             <div className="builder-live-annotation-list">
                               {(liveReviewStudio.annotationReadiness?.blocks || []).map(block => (
                                 <article className={`builder-live-annotation-item severity-${block.severity || "low"}`.trim()} key={block.id}>
