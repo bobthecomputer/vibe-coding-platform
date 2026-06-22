@@ -72,6 +72,29 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn("/api/auth/status", fluxio_app)
         self.assertIn("8000,", fluxio_app)
 
+    def test_settings_runtime_surface_exposes_harness_benchmark_board(self) -> None:
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        backend = WEB_BACKEND.read_text(encoding="utf-8")
+
+        self.assertIn("harnessBenchmarkBoardContract", shell)
+        self.assertIn("setHarnessBenchmarkBoardContract", shell)
+        self.assertIn("get_harness_benchmark_board_command", shell)
+        self.assertIn("harness:capture-benchmark-board", shell)
+        self.assertIn("fluxio.harness_benchmark_board.v1", shell)
+        self.assertIn('data-harness-benchmark-board="true"', reference_shell)
+        self.assertIn("Harness benchmark board", reference_shell)
+        self.assertIn("Capture benchmark proof", reference_shell)
+        self.assertIn("Hermes + Syntelos Hybrid", shell)
+        self.assertIn("OpenClaw + Syntelos Hybrid", shell)
+        self.assertIn("OpenCode / GLM-5.2 route", shell)
+        self.assertIn("fluxos-harness-benchmark-board", styles)
+        self.assertIn("fluxos-harness-benchmark-matrix", styles)
+        self.assertIn("fluxio.harness_benchmark_board.v1", backend)
+        self.assertIn("get_harness_benchmark_board_command", backend)
+        self.assertIn("hermes_first_harness_benchmark_board", backend)
+
     def test_web_shell_is_installable_pwa_with_offline_fallback(self) -> None:
         html = INDEX_HTML.read_text(encoding="utf-8")
         main_tsx = MAIN_TSX.read_text(encoding="utf-8")

@@ -1077,6 +1077,55 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(proof["proof"]["purpose"], "preview_browser_annotation_readiness")
             self.assertEqual(proof["proofArtifacts"]["screenshotPath"], str(screenshot.resolve()))
 
+    def test_harness_benchmark_board_command_writes_hermes_first_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            agent_control = root / ".agent_control"
+            for relative in (
+                "image_playground_self_repair/mission1/route_proof.json",
+                "ui_self_repair/mission2/ui_breakdown.json",
+                "mission_anti_drift_guard/mission4-local-proof.json",
+                "skill_runtime_contracts/mission5-local-proof.json",
+                "provider_orchestration/mission6-local-proof.json",
+                "preview_annotation_readiness/mission9-preview-actual.json",
+            ):
+                artifact = agent_control / relative
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command: str, **_kwargs: object) -> str | None:
+                if command in {"hermes", "openclaw", "opencode"}:
+                    return f"C:/tools/{command}.exe"
+                return None
+
+            with mock.patch("shutil.which", side_effect=fake_which):
+                contract = backend.dispatch(
+                    "get_harness_benchmark_board_command",
+                    {
+                        "root": str(root),
+                        "requestId": "mission10-harness-test",
+                        "primaryModel": "openrouter/z-ai/glm-5.2",
+                    },
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.harness_benchmark_board.v1")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertIn("opencode", contract["fallbackRuntimeLanes"])
+            self.assertEqual(contract["status"], "ready_for_decision_board")
+            self.assertEqual(contract["decision"]["production"], "hermes-fluxio-hybrid")
+            labels = {item["label"] for item in contract["matrix"]}
+            self.assertIn("Hermes + Syntelos Hybrid", labels)
+            self.assertIn("OpenClaw + Syntelos Hybrid", labels)
+            self.assertIn("OpenCode / GLM-5.2 route", labels)
+            self.assertTrue(contract["routeProof"]["hermes"]["available"])
+            self.assertIn("harness_benchmark_reader", {item["id"] for item in contract["skillsUsed"]})
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "hermes_first_harness_benchmark_board")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

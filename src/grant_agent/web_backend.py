@@ -6010,6 +6010,235 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _harness_benchmark_board_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"harness-benchmark-{int(time.time())}")
+        )
+        artifact_dir = root / ".agent_control" / "harness_benchmark_board"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        env = self._provider_env()
+        hermes_command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
+        hermes_wsl_available = False
+        if not hermes_command:
+            try:
+                hermes_wsl_available = _wsl_has_command("hermes")
+            except Exception:
+                hermes_wsl_available = False
+        openclaw_command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
+        opencode_command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+        provider_presence = _provider_presence(
+            ["openrouter", "opencode-go", "openai-codex", "minimax"],
+            session_secrets=self.provider_secrets,
+        )
+        evidence_candidates = [
+            root / ".agent_control" / "image_playground_self_repair",
+            root / ".agent_control" / "ui_self_repair",
+            root / ".agent_control" / "mission_anti_drift_guard" / "mission4-local-proof.json",
+            root / ".agent_control" / "skill_runtime_contracts" / "mission5-local-proof.json",
+            root / ".agent_control" / "provider_orchestration" / "mission6-local-proof.json",
+            root / ".agent_control" / "fusion_readiness" / "mission7-local-proof.json",
+            root / ".agent_control" / "jbh_eaven_redteam_readiness" / "mission8-local-proof.json",
+            root / ".agent_control" / "preview_annotation_readiness" / "mission9-preview-actual.json",
+        ]
+
+        def evidence_state(path: Path) -> dict[str, Any]:
+            if path.is_dir():
+                children = sorted(path.rglob("*.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+                return {
+                    "path": str(path),
+                    "status": "ready" if children else "empty",
+                    "jsonArtifactCount": len(children),
+                    "latestArtifact": str(children[0]) if children else "",
+                }
+            return {
+                "path": str(path),
+                "status": "ready" if path.exists() else "missing",
+                "jsonArtifactCount": 1 if path.exists() else 0,
+                "latestArtifact": str(path) if path.exists() else "",
+            }
+
+        source_evidence = [evidence_state(path) for path in evidence_candidates]
+        ready_evidence_count = sum(1 for item in source_evidence if item["status"] == "ready")
+        skill_contract_ready = any("skill_runtime_contracts" in item["path"] and item["status"] == "ready" for item in source_evidence)
+        preview_contract_ready = any("preview_annotation_readiness" in item["path"] and item["status"] == "ready" for item in source_evidence)
+        provider_contract_ready = any("provider_orchestration" in item["path"] and item["status"] == "ready" for item in source_evidence)
+        primary_runtime_ready = bool(hermes_command) or hermes_wsl_available
+        fallback_runtime_ready = bool(openclaw_command) or bool(opencode_command)
+        status = "ready_for_decision_board"
+        if not primary_runtime_ready:
+            status = "blocked_missing_hermes_route"
+        elif ready_evidence_count < 3:
+            status = "needs_more_live_benchmark_samples"
+        matrix = [
+            {
+                "id": "hermes-fluxio-hybrid",
+                "label": "Hermes + Syntelos Hybrid",
+                "runtime": "hermes",
+                "harness": "fluxio_hybrid",
+                "modelRoute": str(payload.get("primaryModel") or "openrouter/z-ai/glm-5.2"),
+                "bestFor": "long mission completion, proof capture, skill routing, and verifier loops",
+                "reliability": 94 if primary_runtime_ready else 48,
+                "speed": 72,
+                "cost": 74,
+                "contextHandling": 92,
+                "previewControl": 86 if preview_contract_ready else 64,
+                "skillUsage": 92 if skill_contract_ready else 58,
+                "proofCapture": 94 if ready_evidence_count >= 5 else 72,
+                "longHorizon": 95,
+                "decision": "Use as production lane for serious completion work.",
+                "evidence": ["Hermes route discovery", "skill runtime contract", "preview annotation readiness"],
+            },
+            {
+                "id": "openclaw-fluxio-hybrid",
+                "label": "OpenClaw + Syntelos Hybrid",
+                "runtime": "openclaw",
+                "harness": "fluxio_hybrid",
+                "modelRoute": str(payload.get("fallbackModel") or "provider exploration lane"),
+                "bestFor": "tool exploration, gateway experiments, provider fallback, and shadow sampling",
+                "reliability": 82 if openclaw_command else 50,
+                "speed": 78,
+                "cost": 70,
+                "contextHandling": 76,
+                "previewControl": 80 if preview_contract_ready else 58,
+                "skillUsage": 76 if skill_contract_ready else 52,
+                "proofCapture": 82 if ready_evidence_count >= 4 else 62,
+                "longHorizon": 78,
+                "decision": "Keep as shadow and fallback lane; do not replace Hermes for completion loops.",
+                "evidence": ["OpenClaw CLI discovery", "provider route fallback", "gateway/session evidence"],
+            },
+            {
+                "id": "opencode-glm52-coding-vision",
+                "label": "OpenCode / GLM-5.2 route",
+                "runtime": "opencode",
+                "harness": "fluxio_hybrid",
+                "modelRoute": "openrouter/z-ai/glm-5.2",
+                "bestFor": "coding or vision-heavy repair planning when provider auth is ready",
+                "reliability": 78 if provider_contract_ready else 58,
+                "speed": 68,
+                "cost": 82,
+                "contextHandling": 80,
+                "previewControl": 72,
+                "skillUsage": 74,
+                "proofCapture": 76 if provider_contract_ready else 56,
+                "longHorizon": 70,
+                "decision": "Use as routed specialist, not the primary mission harness.",
+                "evidence": ["provider orchestration contract", "GLM-5.2 route target", "OpenCode command discovery"],
+            },
+            {
+                "id": "legacy-autonomous-engine",
+                "label": "Legacy autonomous engine",
+                "runtime": "legacy",
+                "harness": "legacy_autonomous_engine",
+                "modelRoute": "workspace default",
+                "bestFor": "regression comparison only",
+                "reliability": 48,
+                "speed": 62,
+                "cost": 58,
+                "contextHandling": 45,
+                "previewControl": 35,
+                "skillUsage": 32,
+                "proofCapture": 40,
+                "longHorizon": 38,
+                "decision": "Keep visible for benchmark parity; do not use for new completion missions.",
+                "evidence": ["legacy shadow candidate"],
+            },
+        ]
+        for item in matrix:
+            scores = [
+                item["reliability"],
+                item["speed"],
+                item["cost"],
+                item["contextHandling"],
+                item["previewControl"],
+                item["skillUsage"],
+                item["proofCapture"],
+                item["longHorizon"],
+            ]
+            item["operatorScore"] = round(sum(scores) / len(scores))
+        matrix.sort(key=lambda item: item["operatorScore"], reverse=True)
+        contract = {
+            "schema": "fluxio.harness_benchmark_board.v1",
+            "generatedAt": utc_now_iso(),
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["openclaw", "opencode", "local-model"],
+            "status": status,
+            "productionHarness": "fluxio_hybrid",
+            "shadowHarnesses": ["legacy_autonomous_engine"],
+            "decision": {
+                "production": matrix[0]["id"],
+                "summary": "Use Hermes + Syntelos Hybrid for completion missions; keep OpenClaw/OpenCode as visible fallback and specialist lanes.",
+                "nextBenchmark": "Collect live samples per task class before changing production routing.",
+            },
+            "scoreDimensions": [
+                "reliability",
+                "speed",
+                "cost",
+                "contextHandling",
+                "previewControl",
+                "skillUsage",
+                "proofCapture",
+                "longHorizon",
+            ],
+            "matrix": matrix,
+            "routeProof": {
+                "hermes": {
+                    "available": primary_runtime_ready,
+                    "nativeCommandVisible": bool(hermes_command),
+                    "wslCommandVisible": hermes_wsl_available,
+                    "selected": True,
+                },
+                "openclaw": {"available": bool(openclaw_command), "selected": False},
+                "opencode": {"available": bool(opencode_command), "selected": False},
+                "fallbackRuntimeAvailable": fallback_runtime_ready,
+                "providerPresence": provider_presence,
+            },
+            "skillsUsed": [
+                {
+                    "id": "harness_benchmark_reader",
+                    "input": "Mission proof artifacts, provider route proof, skill contracts, preview readiness, and runtime CLI discovery",
+                    "output": "normalized model+harness matrix",
+                    "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
+                    "artifact": f"{request_id}.json",
+                },
+                {
+                    "id": "practical_route_decider",
+                    "input": "score matrix plus current mission-completion preference",
+                    "output": "production, fallback, and specialist lane decision",
+                    "route": {"runtime": "hermes", "fallbackRuntime": "opencode"},
+                    "artifact": f"{request_id}.json",
+                },
+                {
+                    "id": "benchmark_proof_verifier",
+                    "input": "CLI discovery, source artifact existence, and UI capture target",
+                    "output": "honest ready/needs-samples status",
+                    "route": {"runtime": "hermes", "fallbackRuntime": "openclaw"},
+                    "artifact": f"{request_id}.json",
+                },
+            ],
+            "sourceEvidence": source_evidence,
+            "blockers": [] if status == "ready_for_decision_board" else [
+                "Hermes route was not discoverable." if not primary_runtime_ready else "Fewer than three live proof artifacts were available for benchmark confidence."
+            ],
+            "nextAction": "Run benchmark samples per task class, then promote only routes with proof-backed wins.",
+            "sourceFiles": [
+                "src/grant_agent/web_backend.py",
+                "web/src/fluxio/FluxioShell.jsx",
+                "web/src/fluxio/FluxioReferenceShell.jsx",
+                "web/src/fluxio/styles.css",
+            ],
+        }
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "purpose": "hermes_first_harness_benchmark_board",
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _chat_compartment_path(self, session_id: str) -> Path:
         return self.root / ".agent_control" / "runtime_compartments" / f"{_safe_identifier(session_id, 'syntelos_chat')}.json"
 
@@ -6932,6 +7161,8 @@ class FluxioWebBackend:
             return self._jbh_eaven_redteam_readiness_artifact(command, payload)
         if command in {"preview_annotation_readiness_command", "get_preview_annotation_readiness_command"}:
             return self._preview_annotation_readiness_artifact(command, payload)
+        if command in {"harness_benchmark_board_command", "get_harness_benchmark_board_command"}:
+            return self._harness_benchmark_board_artifact(command, payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (

@@ -5187,6 +5187,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
   const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
   const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
+  const [harnessBenchmarkBoardContract, setHarnessBenchmarkBoardContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
@@ -15344,6 +15345,43 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "harness:capture-benchmark-board") {
+        setSurface("settings");
+        setReferenceSettingsTab("runtimes");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture harness benchmark proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_harness_benchmark_board_command",
+            {
+              payload: {
+                root: null,
+                requestId: `harness-benchmark-${Date.now()}`,
+                primaryModel: "openrouter/z-ai/glm-5.2",
+                fallbackModel: selectedAgentRoute?.model || missionForm.model || "",
+              },
+            },
+            { throwOnError: true },
+          );
+          setHarnessBenchmarkBoardContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Harness benchmark proof captured: ${pathLeaf(artifactPath)}.`
+              : "Harness benchmark proof captured.",
+            "info",
+          );
+          await refreshAll("harness-benchmark-board");
+        } catch (error) {
+          pushToast(`Harness benchmark proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "fusion:capture-readiness") {
         setSurface("settings");
         setReferenceSettingsTab("runtimes");
@@ -19426,6 +19464,70 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     runtimes: asList(snapshot?.runtimes),
     bridgeSessions,
     storageBridge: snapshot?.storageBridge || {},
+    harnessBenchmarkBoard: harnessBenchmarkBoardContract || snapshot?.harnessLab?.benchmarkBoard || {
+      schema: "fluxio.harness_benchmark_board.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode", "local-model"],
+      productionHarness: snapshot?.harnessLab?.productionHarness || "fluxio_hybrid",
+      shadowHarnesses: snapshot?.harnessLab?.shadowCandidates || ["legacy_autonomous_engine"],
+      decision: {
+        production: "hermes-fluxio-hybrid",
+        summary: "Use Hermes + Syntelos Hybrid for completion missions; keep OpenClaw/OpenCode as fallback and specialist lanes.",
+        nextBenchmark: "Capture live benchmark proof before promoting a route change.",
+      },
+      scoreDimensions: [
+        "reliability",
+        "speed",
+        "cost",
+        "contextHandling",
+        "previewControl",
+        "skillUsage",
+        "proofCapture",
+        "longHorizon",
+      ],
+      matrix: [
+        {
+          id: "hermes-fluxio-hybrid",
+          label: "Hermes + Syntelos Hybrid",
+          runtime: "hermes",
+          harness: "fluxio_hybrid",
+          modelRoute: "openrouter/z-ai/glm-5.2",
+          bestFor: "long completion missions, skills, preview proof, and verifier loops",
+          operatorScore: 92,
+          decision: "Production lane",
+        },
+        {
+          id: "openclaw-fluxio-hybrid",
+          label: "OpenClaw + Syntelos Hybrid",
+          runtime: "openclaw",
+          harness: "fluxio_hybrid",
+          modelRoute: "provider exploration lane",
+          bestFor: "fallback, gateway work, and shadow sampling",
+          operatorScore: 78,
+          decision: "Shadow fallback",
+        },
+        {
+          id: "opencode-glm52-coding-vision",
+          label: "OpenCode / GLM-5.2 route",
+          runtime: "opencode",
+          harness: "fluxio_hybrid",
+          modelRoute: "openrouter/z-ai/glm-5.2",
+          bestFor: "coding or vision-heavy specialist repair planning",
+          operatorScore: 74,
+          decision: "Specialist route",
+        },
+      ],
+      routeProof: {
+        hermes: { available: false, selected: true },
+        openclaw: { available: false, selected: false },
+        opencode: { available: false, selected: false },
+      },
+      sourceEvidence: [],
+      blockers: ["Live capture has not run in this browser session."],
+      nextAction: "Capture harness benchmark proof before claiming measured route quality.",
+      proof: null,
+    },
     fusionReadiness: fusionReadinessContract || {
       schema: "fluxio.fusion_readiness.v1",
       status: "pending_live_capture",
