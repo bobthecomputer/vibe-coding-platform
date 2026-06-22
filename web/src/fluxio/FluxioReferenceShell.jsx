@@ -11300,6 +11300,14 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const updateBlockers = asList(updateManagementReadiness.blockers);
   const updateProofPath = String(updateManagementReadiness?.proof?.artifactPath || "").trim();
   const updateStatus = String(updateManagementReadiness.status || "pending_live_capture");
+  const automationOverlapStatus =
+    settingsState?.automationOverlapStatus && typeof settingsState.automationOverlapStatus === "object"
+      ? settingsState.automationOverlapStatus
+      : {};
+  const automationOverlapChecks = asList(automationOverlapStatus.checks);
+  const automationOverlapProofPath = String(automationOverlapStatus?.proof?.artifactPath || "").trim();
+  const automationOverlapTone = String(automationOverlapStatus.tone || "warn");
+  const automationOverlapStatusLabel = String(automationOverlapStatus.status || "pending_live_capture");
   const fusionReadiness =
     settingsState?.fusionReadiness && typeof settingsState.fusionReadiness === "object"
       ? settingsState.fusionReadiness
@@ -11649,6 +11657,57 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   );
   const renderRulesSettings = () => (
     <div className="fluxos-settings-section-body" data-settings-rules-panel="true">
+      <section
+        className={cx("fluxos-automation-overlap", automationOverlapProofPath && "ready", automationOverlapTone === "warn" && "attention")}
+        data-automation-overlap-status="true"
+        data-automation-overlap-schema={automationOverlapStatus.schema || "fluxio.automation_overlap_status.v1"}
+        data-automation-overlap-decision={automationOverlapStatusLabel}
+      >
+        <div className="fluxos-automation-overlap-head">
+          <div>
+            <span>Automation overlap guard</span>
+            <strong>{titleizeToken(automationOverlapStatusLabel)}</strong>
+            <p>{automationOverlapStatus.decision || automationOverlapStatus.nextAction || "Capture overlap status before the heartbeat creates another goal."}</p>
+          </div>
+          <button
+            className="fluxos-automation-overlap-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "automation:capture-overlap-status")}
+            type="button"
+          >
+            Capture overlap proof
+          </button>
+        </div>
+        <div className="fluxos-automation-overlap-grid" aria-label="Automation overlap checks">
+          <article>
+            <span>Next action</span>
+            <strong>{automationOverlapStatus.nextAction || "Check active goal, then skip completed missions."}</strong>
+            <p>{automationOverlapProofPath ? `Proof artifact: ${automationOverlapProofPath}` : "No live overlap artifact captured yet."}</p>
+          </article>
+          <article>
+            <span>Completed memory</span>
+            <strong>{`Mission ${automationOverlapStatus.highestCompletedMission || 0}`}</strong>
+            <p>{asList(automationOverlapStatus.completedMissionNumbers).length ? `Recorded: ${asList(automationOverlapStatus.completedMissionNumbers).join(", ")}` : "Completion memory pending live capture."}</p>
+          </article>
+          <article>
+            <span>Live mission state</span>
+            <strong>{`${automationOverlapStatus.liveMissionState?.active || 0} active / ${automationOverlapStatus.liveMissionState?.queued || 0} queued`}</strong>
+            <p>{automationOverlapStatus.liveMissionState?.supervisorActive ? "Watchdog supervisor is active." : "Watchdog supervisor not proven active in this browser session."}</p>
+          </article>
+          <article>
+            <span>Route</span>
+            <strong>{titleizeToken(automationOverlapStatus.primaryRuntimeLane || "hermes")}</strong>
+            <p>{asList(automationOverlapStatus.fallbackRuntimeLanes).length ? `Fallback: ${asList(automationOverlapStatus.fallbackRuntimeLanes).join(" / ")}` : "Fallback route pending."}</p>
+          </article>
+        </div>
+        <div className="fluxos-automation-overlap-checks">
+          {automationOverlapChecks.slice(0, 4).map(check => (
+            <span key={check.id || check.label}>
+              <strong>{check.label || titleizeToken(check.id || "check")}</strong>
+              <em>{titleizeToken(check.status || "pending")}</em>
+            </span>
+          ))}
+        </div>
+      </section>
       <section
         className={cx("fluxos-jbh-readiness", jbhProofPath && "ready")}
         data-jbh-eaven-readiness-contract="true"

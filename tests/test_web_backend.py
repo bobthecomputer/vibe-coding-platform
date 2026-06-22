@@ -1206,6 +1206,56 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(proof["proof"]["purpose"], "safe_dependency_runtime_provider_update_readiness")
             self.assertEqual(proof["components"][0]["status"], "ready")
 
+    def test_automation_overlap_status_command_defers_when_thread_goal_active(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            memory_path = root / "automation-memory.md"
+            memory_path.write_text(
+                "\n".join(
+                    [
+                        "## 2026-06-22T03:47:00+02:00",
+                        "- Current state: Mission 11 has a focused PR.",
+                        "## 2026-06-22T04:10:00+02:00",
+                        "- PR130 opened and green: https://github.com/bobthecomputer/vibe-coding-platform/pull/130",
+                        "- Current state: Mission 12 has a focused PR, real DOM/screenshot proof, and green release-proof.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            control_dir = root / ".agent_control"
+            control_dir.mkdir(parents=True)
+            (control_dir / "mission_watchdog_supervisor.json").write_text(
+                json.dumps({"schema": "fluxio.mission_watchdog_supervisor.v1", "loopActive": True, "loopStatus": "active"}),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+            contract = backend.dispatch(
+                "get_automation_overlap_status_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission13-overlap-test",
+                    "automationId": "fluxio-night-school-real-agent-transcript-proof",
+                    "automationMemoryPath": str(memory_path),
+                    "threadGoalStatus": "active",
+                    "threadGoalObjective": "Mission 13 test goal",
+                    "currentMissionNumber": 13,
+                },
+            )
+
+            self.assertEqual(contract["schema"], "fluxio.automation_overlap_status.v1")
+            self.assertEqual(contract["status"], "defer_new_goal")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertEqual(contract["highestCompletedMission"], 12)
+            self.assertEqual(contract["threadGoal"]["source"], "runtime_payload")
+            self.assertTrue(contract["liveMissionState"]["supervisorActive"])
+            self.assertIn("Do not create or override", contract["decision"])
+            self.assertIn("https://github.com/bobthecomputer/vibe-coding-platform/pull/130", contract["proofLinks"])
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "automation_overlap_goal_guard")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
