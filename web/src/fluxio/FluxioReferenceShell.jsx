@@ -7200,30 +7200,35 @@ function FluxioBuilderSurface(props) {
     setBuilderSelfRepairBusy(true);
     try {
       const result = await callBackend?.("ui_self_repair_loop_command", {
-        requestId: `mission2-builder-${Date.now()}`,
-        surface: "builder",
+        requestId: `mission8-broader-ui-${Date.now()}`,
+        surface: "core-surfaces",
+        surfaces: ["builder", "agent", "runtime", "skills", "images", "preview"],
         clarityMode: normalizedBuilderClarityMode,
         previewMode: liveDataStatus?.previewMode || "fixture",
         missionCount: liveDataStatus?.missionCount || builderRows?.length || 0,
         selectedMissionId: workbenchState?.missionId || "",
         selectedMissionTitle: workbenchState?.missionTitle || "",
-        screenshotPath: "artifacts/mission2-ui-self-repair/before-builder-fixture-surface.png",
+        screenshotPath: "artifacts/mission8-broader-ui-self-repair/before-builder-surface.png",
         domFacts: {
-          firstViewport: "Builder preview/current mission surface",
-          visibleProblem: "status/proof cards compete with current mission command path",
-          intendedRepair: "current mission command canvas with folded proof",
+          firstViewport: "Builder current mission canvas plus core navigation surfaces",
+          visibleProblem: "mission-specific proof widgets can outlive their mission labels and compete with the current repair objective",
+          intendedRepair: "broader UI repair receipt with audited surfaces, selected cleanup, route, proof, and next action",
         },
       });
       const proof = result && typeof result === "object" ? result : {};
       setBuilderSelfRepairProof({
-        status: proof.routeStatus || proof.status || "recorded",
+        status: proof.missionGate?.status || proof.status || proof.routeStatus || "recorded",
         message: proof.message || "UI self-repair proof artifacts were written.",
         artifacts: proof.artifacts || {},
+        missionGate: proof.missionGate || {},
+        selectedRepair: proof.plan?.selectedRepair || "",
+        auditedSurfaces: asList(proof.surfaceAudit?.targetSurfaces),
         skillsUsed: asList(proof.skillsUsed).map(item => item.id || item.skill || item).filter(Boolean),
       });
       onRequestAction?.("builder:self-repair-proof", {
-        surface: "builder",
+        surface: "core-surfaces",
         artifacts: proof.artifacts || {},
+        missionGate: proof.missionGate || {},
         route: proof.route || {},
       });
     } catch (error) {
@@ -7849,7 +7854,7 @@ function FluxioBuilderSurface(props) {
     {
       label: "Proof",
       value: builderSelfRepairProof ? titleizeToken(builderSelfRepairProof.status) : proofDiffRows.length ? `${proofDiffRows.length} rows` : "Folded",
-      detail: builderSelfRepairProof?.message || "Use self-repair to write route, breakdown, plan, and verifier artifacts.",
+      detail: builderSelfRepairProof?.selectedRepair || builderSelfRepairProof?.message || "Use self-repair to write route, breakdown, plan, and verifier artifacts.",
       tone: builderSelfRepairProof?.status === "failed" ? "bad" : builderSelfRepairProof ? "good" : "neutral",
     },
   ];
@@ -8024,7 +8029,9 @@ function FluxioBuilderSurface(props) {
           className="fluxos-builder-current-mission"
           aria-label="Builder current mission command canvas"
           data-builder-current-mission="true"
-          data-ui-self-repair-canvas="mission2"
+          data-ui-self-repair-canvas="mission8"
+          data-broader-ui-self-repair-receipt="true"
+          data-broader-ui-self-repair-status={builderSelfRepairProof?.missionGate?.status || builderSelfRepairProof?.status || "pending"}
         >
           <div className="fluxos-builder-current-copy">
             <span>{isLiveBackend ? "Current mission" : "Fixture mission"}</span>
@@ -8070,6 +8077,18 @@ function FluxioBuilderSurface(props) {
               </article>
             ))}
           </div>
+          {builderSelfRepairProof ? (
+            <div className="fluxos-builder-current-repair-receipt" aria-label="Broader UI self-repair receipt">
+              <span>Mission 8 UI repair receipt</span>
+              <strong>{builderSelfRepairProof.selectedRepair || "Broader UI self-repair proof recorded"}</strong>
+              <p>
+                {(builderSelfRepairProof.auditedSurfaces || []).length
+                  ? `Audited ${(builderSelfRepairProof.auditedSurfaces || []).join(", ")}.`
+                  : builderSelfRepairProof.message}
+              </p>
+              <small>{builderSelfRepairProof.artifacts?.missionGatePath || builderSelfRepairProof.artifacts?.surfaceAuditPath || "Proof artifact pending"}</small>
+            </div>
+          ) : null}
         </section>
         {isLiveBackend ? (
           <section

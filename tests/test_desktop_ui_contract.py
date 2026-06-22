@@ -852,6 +852,22 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertNotIn("AgentIdleSurface", shell)
         self.assertIn('onRequestAction?.("settings:export-data")', shell)
 
+    def test_builder_self_repair_receipt_is_broader_mission8_loop(self) -> None:
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        backend = WEB_BACKEND.read_text(encoding="utf-8")
+
+        self.assertIn('requestId: `mission8-broader-ui-${Date.now()}`', reference_shell)
+        self.assertIn('surfaces: ["builder", "agent", "runtime", "skills", "images", "preview"]', reference_shell)
+        self.assertIn('data-ui-self-repair-canvas="mission8"', reference_shell)
+        self.assertIn('data-broader-ui-self-repair-receipt="true"', reference_shell)
+        self.assertIn("Mission 8 UI repair receipt", reference_shell)
+        self.assertNotIn('data-ui-self-repair-canvas="mission2"', reference_shell)
+        self.assertIn("fluxos-builder-current-repair-receipt", styles)
+        self.assertIn("fluxio.broader_ui_surface_audit.v1", backend)
+        self.assertIn("fluxio.broader_ui_self_repair_gate.v1", backend)
+        self.assertIn("broader_ui_surface_audit", backend)
+
     def test_preview_annotation_readiness_is_wired_to_live_browser_surface(self) -> None:
         reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
