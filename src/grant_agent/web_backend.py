@@ -3239,6 +3239,316 @@ class FluxioWebBackend:
             "source": "backend_runtime_path_and_last_successful_chat",
         }
 
+    def _runtime_command_row(self, runtime_id: str, command_name: str, *, env: dict[str, str], allow_wsl: bool = False) -> dict[str, Any]:
+        command = shutil.which(command_name, path=env.get("PATH") or os.environ.get("PATH"))
+        source = "native" if command else ""
+        version = ""
+        if command:
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    [command, "--version"],
+                    cwd=str(self.root),
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                    env={**os.environ, **env},
+                    **hidden_windows_subprocess_kwargs(),
+                )
+                version = (completed.stdout or completed.stderr or "").strip().splitlines()[0]
+            except Exception:
+                version = ""
+        elif allow_wsl:
+            try:
+                wsl_command = _wsl_command_path(command_name)
+            except Exception:
+                wsl_command = ""
+            if wsl_command:
+                command = f"wsl:{wsl_command}"
+                source = "wsl"
+                version = _wsl_command_version(command_name)
+        return {
+            "id": runtime_id,
+            "commandName": command_name,
+            "available": bool(command),
+            "command": command or "",
+            "source": source,
+            "version": version,
+        }
+
+    def _runtime_route_unification_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _safe_identifier(payload.get("requestId") or payload.get("request_id") or "mission2-runtime-route")
+        env = self._provider_env()
+        artifact_dir = root / ".agent_control" / "runtime_route_unification" / request_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        runtime_rows = [
+            self._runtime_command_row("hermes", "hermes", env=env, allow_wsl=True),
+            self._runtime_command_row("opencode", "opencode", env=env),
+            self._runtime_command_row("openclaw", "openclaw", env=env),
+        ]
+        runtime_by_id = {str(item["id"]): item for item in runtime_rows}
+
+        opencode_auth_store = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+        opencode_auth_providers: list[str] = []
+        if opencode_auth_store.exists():
+            try:
+                loaded_auth = json.loads(opencode_auth_store.read_text(encoding="utf-8"))
+                if isinstance(loaded_auth, dict):
+                    opencode_auth_providers = sorted(str(key) for key in loaded_auth.keys())
+            except (OSError, json.JSONDecodeError):
+                opencode_auth_providers = []
+
+        provider_presence = _provider_presence(
+            ["openai", "openai-codex", "openrouter", "opencode-go", "minimax", "minimax-portal", "anthropic"],
+            session_secrets=self.provider_secrets,
+        )
+        provider_presence["openrouter_opencode_auth"] = "openrouter" in opencode_auth_providers
+
+        probe_provider_models = bool(payload.get("probeProviderModels") or payload.get("probe_provider_models"))
+        opencode_models_contains_glm52 = False
+        opencode_models_error = ""
+        opencode_command = str(runtime_by_id.get("opencode", {}).get("command") or "")
+        if opencode_command and probe_provider_models:
+            try:
+                _models_payload, models_stdout, _models_stderr, _models_elapsed_ms = _run_process_capture(
+                    [opencode_command, "models"],
+                    cwd=root,
+                    timeout=max(5, min(int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 12), 20)),
+                    extra_env=env,
+                )
+                opencode_models_contains_glm52 = "openrouter/z-ai/glm-5.2" in models_stdout
+            except Exception as exc:  # noqa: BLE001 - route proof should keep the exact failure.
+                opencode_models_error = str(exc)
+        elif opencode_command:
+            opencode_models_error = "OpenCode model-list probe was not requested."
+        else:
+            opencode_models_error = "OpenCode CLI was not found on PATH."
+
+        route = {
+            "runtime": "hermes",
+            "provider": "openrouter",
+            "model": "z-ai/glm-5.2",
+            "modelId": "openrouter/z-ai/glm-5.2",
+            "effort": "high",
+            "role": "runtime-route-proof",
+            "fallbackRuntime": "opencode",
+            "controlledFallbackRuntime": "openclaw",
+        }
+        route_payload = {
+            "message": "Return concise JSON only: {\"ok\":true,\"route\":\"runtime-route-unification\"}.",
+            "route": {
+                "provider": route["provider"],
+                "model": route["model"],
+                "effort": route["effort"],
+                "role": route["role"],
+            },
+            "workspacePath": str(root),
+            "workspaceId": root.name,
+            "sessionId": request_id,
+            "timeoutSeconds": int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 45),
+        }
+
+        def route_call(runtime_name: str) -> dict[str, Any]:
+            return {
+                "runtime": runtime_name,
+                "attempted": False,
+                "available": bool(runtime_by_id.get(runtime_name, {}).get("available")),
+                "status": "not_attempted",
+                "reply": "",
+                "error": "",
+                "elapsedMs": 0,
+                "command": "",
+            }
+
+        calls = {
+            "hermes": route_call("hermes"),
+            "opencode": route_call("opencode"),
+            "openclaw": route_call("openclaw"),
+        }
+        probe_runtime = bool(payload.get("probeRuntime") or payload.get("probe_runtime"))
+        allow_provider_cli_probe = bool(payload.get("allowProviderCliProbe") or payload.get("allow_provider_cli_probe"))
+        allow_openclaw_infer_probe = bool(payload.get("allowOpenClawInferProbe") or payload.get("allow_openclaw_infer_probe"))
+
+        if probe_runtime and not allow_provider_cli_probe:
+            for item in calls.values():
+                item.update(
+                    {
+                        "attempted": False,
+                        "status": "blocked",
+                        "error": "Runtime probe requested but blocked by safety guard; set allowProviderCliProbe=true.",
+                    }
+                )
+        elif probe_runtime:
+            if calls["hermes"]["available"]:
+                calls["hermes"]["attempted"] = True
+                try:
+                    result = self._run_hermes_chat(route_payload)
+                    calls["hermes"].update(
+                        {
+                            "status": "ok",
+                            "reply": result.get("reply") or "",
+                            "elapsedMs": result.get("elapsedMs") or 0,
+                            "command": result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - health proof records route failure.
+                    calls["hermes"].update({"status": "failed", "error": str(exc)})
+            else:
+                calls["hermes"]["error"] = "Hermes CLI was not found on PATH or WSL."
+
+            if calls["hermes"]["status"] != "ok" and calls["opencode"]["available"] and opencode_models_contains_glm52:
+                calls["opencode"]["attempted"] = True
+                try:
+                    result = self._run_opencode_chat(route_payload)
+                    calls["opencode"].update(
+                        {
+                            "status": "ok",
+                            "reply": result.get("reply") or "",
+                            "elapsedMs": result.get("elapsedMs") or 0,
+                            "command": result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - health proof records route failure.
+                    calls["opencode"].update({"status": "failed", "error": str(exc)})
+            elif calls["hermes"]["status"] != "ok" and calls["opencode"]["available"]:
+                calls["opencode"]["error"] = opencode_models_error or "OpenCode GLM-5.2 route was not discovered."
+            elif calls["hermes"]["status"] != "ok":
+                calls["opencode"]["error"] = "OpenCode CLI was not found on PATH."
+
+            if calls["hermes"]["status"] != "ok" and calls["opencode"]["status"] != "ok":
+                if calls["openclaw"]["available"] and allow_openclaw_infer_probe:
+                    calls["openclaw"]["attempted"] = True
+                    try:
+                        result = self._run_openclaw_chat(route_payload)
+                        calls["openclaw"].update(
+                            {
+                                "status": "ok",
+                                "reply": result.get("reply") or "",
+                                "elapsedMs": result.get("elapsedMs") or 0,
+                                "command": result.get("command") or "",
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001 - health proof records route failure.
+                        calls["openclaw"].update({"status": "failed", "error": str(exc)})
+                elif calls["openclaw"]["available"]:
+                    calls["openclaw"]["error"] = (
+                        "OpenClaw inference probe is available but controlled; set allowOpenClawInferProbe=true "
+                        "because local OpenClaw can outlive Windows timeouts."
+                    )
+                else:
+                    calls["openclaw"]["error"] = "OpenClaw CLI was not found on PATH."
+            elif calls["openclaw"]["available"]:
+                calls["openclaw"]["error"] = (
+                    "OpenClaw controlled inference probe was skipped because an earlier runtime returned usable output; "
+                    "set allowOpenClawInferProbe=true to run it explicitly."
+                )
+        else:
+            for runtime_name, item in calls.items():
+                item["status"] = "discovery_only" if item["available"] else "missing"
+                if not item["available"]:
+                    item["error"] = f"{runtime_name} CLI was not found."
+
+        selected_runtime = ""
+        for runtime_name in ("hermes", "opencode", "openclaw"):
+            if calls[runtime_name]["status"] == "ok":
+                selected_runtime = runtime_name
+                break
+        if not selected_runtime:
+            selected_runtime = "hermes" if calls["hermes"]["available"] else ("opencode" if calls["opencode"]["available"] else "openclaw")
+
+        health = {
+            "schema": "fluxio.runtime_route_health.v1",
+            "requestId": request_id,
+            "checkedAt": _utc_now(),
+            "command": command,
+            "route": route,
+            "selectedRuntime": selected_runtime,
+            "runtimeRows": runtime_rows,
+            "providerPresence": provider_presence,
+            "opencode": {
+                "authProviders": opencode_auth_providers,
+                "modelsContainGlm52": opencode_models_contains_glm52,
+                "modelListProbeRequested": probe_provider_models,
+                "modelListError": opencode_models_error,
+            },
+            "probe": {
+                "probeRuntime": probe_runtime,
+                "allowProviderCliProbe": allow_provider_cli_probe,
+                "allowOpenClawInferProbe": allow_openclaw_infer_probe,
+            },
+            "calls": calls,
+        }
+        gate_items = [
+            {
+                "id": "runtime-discovery",
+                "label": "Runtime CLIs discovered",
+                "status": "done" if any(item["available"] for item in runtime_rows) else "blocked",
+                "proof": ", ".join(f"{item['id']}={item['source'] or 'missing'}" for item in runtime_rows),
+            },
+            {
+                "id": "glm52-route-discovered",
+                "label": "GLM-5.2 subscription/fallback route discovered",
+                "status": "done" if opencode_models_contains_glm52 else "blocked",
+                "proof": "OpenCode model list includes openrouter/z-ai/glm-5.2." if opencode_models_contains_glm52 else opencode_models_error,
+            },
+            {
+                "id": "timeout-safe-openclaw",
+                "label": "OpenClaw is controlled fallback",
+                "status": "done" if (not calls["openclaw"]["attempted"] or allow_openclaw_infer_probe) else "blocked",
+                "proof": calls["openclaw"].get("error") or "OpenClaw was explicitly allowed for this probe.",
+            },
+            {
+                "id": "route-output",
+                "label": "A runtime route returned model output",
+                "status": "done" if any(item["status"] == "ok" for item in calls.values()) else ("missing" if not probe_runtime else "blocked"),
+                "proof": f"{selected_runtime} returned output." if any(item["status"] == "ok" for item in calls.values()) else "No runtime returned output.",
+            },
+            {
+                "id": "artifact-written",
+                "label": "Route health proof artifact written",
+                "status": "done",
+                "proof": str(artifact_dir / "route_health.json"),
+            },
+        ]
+        gate_status = "complete" if all(item["status"] == "done" for item in gate_items) else (
+            "blocked" if any(item["status"] == "blocked" for item in gate_items) else "incomplete"
+        )
+        mission_gate = {
+            "schema": "fluxio.mission_completion_gate.v1",
+            "mission": "mission2-runtime-route-unification",
+            "status": gate_status,
+            "items": gate_items,
+            "nextMissing": next((item for item in gate_items if item["status"] != "done"), None),
+        }
+        contract = {
+            "schema": "fluxio.runtime_route_unification.v1",
+            "requestId": request_id,
+            "status": gate_status,
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["opencode", "openclaw"],
+            "selectedRuntime": selected_runtime,
+            "route": route,
+            "health": health,
+            "missionGate": mission_gate,
+            "artifacts": {
+                "routeHealthPath": str(artifact_dir / "route_health.json"),
+                "missionGatePath": str(artifact_dir / "mission_completion_gate.json"),
+                "contractPath": str(artifact_dir / "contract.json"),
+            },
+            "cleanup": {
+                "staleStatePolicy": "Runtime status must come from this artifact or a newer runtime_route_proof.json, not from decorative fixture badges.",
+                "openclawDefault": "controlled_fallback",
+            },
+        }
+        for name, artifact in (
+            ("route_health.json", health),
+            ("mission_completion_gate.json", mission_gate),
+            ("contract.json", contract),
+        ):
+            (artifact_dir / name).write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        return contract
+
     def _with_provider_env(self, callback):
         env = self._provider_env()
         previous = {key: os.environ.get(key) for key in env}
@@ -7635,6 +7945,8 @@ class FluxioWebBackend:
                 result = self._run_openclaw_chat(payload)
         elif runtime == "codex":
             result = self._run_codex_chat(payload)
+        elif runtime == "opencode":
+            result = self._run_opencode_chat(payload)
         else:
             raise RuntimeError(f"Unsupported chat runtime: {runtime}")
         result["compartment"] = self._save_chat_compartment(payload, result)
@@ -7893,6 +8205,8 @@ class FluxioWebBackend:
             return self._skill_runtime_contract_artifact(command, payload)
         if command in {"provider_orchestration_command", "get_provider_orchestration_command"}:
             return self._provider_orchestration_artifact(command, payload)
+        if command in {"runtime_route_unification_command", "get_runtime_route_unification_command"}:
+            return self._runtime_route_unification_artifact(command, payload)
         if command in {"fusion_readiness_command", "get_fusion_readiness_command"}:
             return self._fusion_readiness_artifact(command, payload)
         if command in {"jbh_eaven_redteam_readiness_command", "get_jbh_eaven_redteam_readiness_command"}:
