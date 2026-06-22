@@ -35,8 +35,8 @@ jobs:
   pr-stack-health:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Test PR stack guard
@@ -50,7 +50,7 @@ jobs:
           python scripts/pr_stack_health.py \
             --max-chain "$MAX_CHAIN" \
             --output artifacts/pr-stack-health/pr-stack-health.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: pr-stack-health
