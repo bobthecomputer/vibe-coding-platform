@@ -6349,6 +6349,20 @@ button.fluxos-context-root:hover {
   overflow-wrap: anywhere;
 }
 
+.fluxos-provider-route-policy {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 0 2px;
+  color: rgba(245, 245, 245, 0.86);
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.fluxos-provider-route-policy small {
+  color: var(--fluxos-muted);
+}
+
 .fluxos-provider-route-card.ready span {
   color: rgba(180, 255, 214, 0.86);
 }

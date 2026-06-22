@@ -232,6 +232,8 @@ PROVIDER_ORCHESTRATION_CATALOG = [
         "useWhen": "Use for planner, verifier, long-context coding, and high-effort proof review.",
         "costTier": "premium",
         "latencyTier": "balanced",
+        "contextTier": "large",
+        "qualityTier": "high",
     },
     {
         "provider": "minimax",
@@ -243,6 +245,8 @@ PROVIDER_ORCHESTRATION_CATALOG = [
         "useWhen": "Use for frontend/UI execution while Hermes keeps continuity and proof.",
         "costTier": "balanced",
         "latencyTier": "fast",
+        "contextTier": "medium",
+        "qualityTier": "balanced",
     },
     {
         "provider": "openrouter",
@@ -254,6 +258,8 @@ PROVIDER_ORCHESTRATION_CATALOG = [
         "useWhen": "Use for GLM/Z.AI vision or coding routes when OpenRouter is configured.",
         "costTier": "balanced",
         "latencyTier": "balanced",
+        "contextTier": "large",
+        "qualityTier": "high",
     },
     {
         "provider": "opencode-go",
@@ -265,6 +271,8 @@ PROVIDER_ORCHESTRATION_CATALOG = [
         "useWhen": "Use for OpenCode-compatible provider exploration and fallback execution lanes.",
         "costTier": "balanced",
         "latencyTier": "variable",
+        "contextTier": "medium",
+        "qualityTier": "balanced",
     },
     {
         "provider": "anthropic",
@@ -276,8 +284,38 @@ PROVIDER_ORCHESTRATION_CATALOG = [
         "useWhen": "Use for review, planning, writing, and alternative reasoning lanes when configured.",
         "costTier": "premium",
         "latencyTier": "balanced",
+        "contextTier": "large",
+        "qualityTier": "high",
     },
 ]
+PROVIDER_COST_SCORE = {
+    "free": 100,
+    "low": 88,
+    "balanced": 72,
+    "premium": 44,
+    "unknown": 50,
+}
+PROVIDER_LATENCY_SCORE = {
+    "fast": 92,
+    "balanced": 74,
+    "variable": 56,
+    "slow": 38,
+    "unknown": 50,
+}
+PROVIDER_CONTEXT_SCORE = {
+    "small": 38,
+    "medium": 64,
+    "large": 88,
+    "huge": 96,
+    "unknown": 50,
+}
+PROVIDER_QUALITY_SCORE = {
+    "basic": 44,
+    "balanced": 68,
+    "high": 88,
+    "frontier": 96,
+    "unknown": 50,
+}
 PROVIDER_SECRET_ENV = {
     "openai": "OPENAI_API_KEY",
     "openai-codex": "OPENAI_API_KEY",
@@ -1182,33 +1220,105 @@ def _provider_presence(
 
 
 def _provider_orchestration_task_capabilities(task_brief: str) -> tuple[list[str], str]:
+    profile = _provider_orchestration_task_profile(task_brief)
+    return list(profile["requiredCapabilities"]), str(profile["selectedRole"])
+
+
+def _provider_orchestration_task_profile(task_brief: str) -> dict[str, Any]:
     normalized = str(task_brief or "").lower()
+
+    def has_any(tokens: tuple[str, ...]) -> bool:
+        for token in tokens:
+            if token in {"ui", "ux", "css"}:
+                if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", normalized):
+                    return True
+            elif token in normalized:
+                return True
+        return False
+
     capabilities = ["coding"]
     role = "executor"
-    if any(token in normalized for token in ("screenshot", "image", "vision", "annotat", "ui review", "visual")):
+    priorities = {
+        "quality": 0.36,
+        "speed": 0.22,
+        "cost": 0.16,
+        "context": 0.18,
+        "auth": 0.08,
+    }
+    if has_any(("screenshot", "image", "vision", "annotat", "ui review", "visual")):
         capabilities = ["vision", "ui_review", "structured_output", "coding"]
         role = "reviewer"
-    elif any(token in normalized for token in ("frontend", "front-end", "ui", "ux", "react", "css", "mobile", "polish")):
+        priorities = {"quality": 0.34, "speed": 0.14, "cost": 0.12, "context": 0.24, "auth": 0.16}
+    elif has_any(("frontend", "front-end", "ui", "ux", "react", "css", "mobile", "polish")):
         capabilities = ["frontend_ui", "visual_polish", "coding"]
         role = "executor"
-    elif any(token in normalized for token in ("verify", "proof", "test", "regression", "audit")):
-        capabilities = ["verification", "tool_use", "reasoning"]
-        role = "verifier"
-    elif any(token in normalized for token in ("provider", "route", "model switch", "opencode", "openrouter", "glm", "z.ai")):
+        priorities = {"quality": 0.30, "speed": 0.26, "cost": 0.14, "context": 0.14, "auth": 0.16}
+    elif has_any(("provider", "route", "model switch", "opencode", "openrouter", "glm", "z.ai")):
         capabilities = ["provider_exploration", "tool_use", "provider_fallback"]
         role = "router"
-    elif any(token in normalized for token in ("plan", "architecture", "research", "design")):
+        priorities = {"quality": 0.22, "speed": 0.20, "cost": 0.14, "context": 0.18, "auth": 0.26}
+    elif has_any(("verify", "proof", "test", "regression", "audit")):
+        capabilities = ["verification", "tool_use", "reasoning"]
+        role = "verifier"
+        priorities = {"quality": 0.34, "speed": 0.16, "cost": 0.12, "context": 0.22, "auth": 0.16}
+    elif has_any(("plan", "architecture", "research", "design")):
         capabilities = ["planning", "reasoning", "long_context"]
         role = "planner"
-    return capabilities, role
+        priorities = {"quality": 0.34, "speed": 0.12, "cost": 0.10, "context": 0.30, "auth": 0.14}
+    return {
+        "schema": "fluxio.provider_task_profile.v1",
+        "selectedRole": role,
+        "requiredCapabilities": capabilities,
+        "priorities": priorities,
+        "routingGoal": "route_to_ready_best_fit_with_explicit_fallbacks",
+    }
 
 
 def _provider_orchestration_score(candidate: dict[str, Any], required_capabilities: list[str], auth_present: bool) -> int:
+    profile = {
+        "requiredCapabilities": required_capabilities,
+        "priorities": {
+            "quality": 0.36,
+            "speed": 0.22,
+            "cost": 0.16,
+            "context": 0.18,
+            "auth": 0.08,
+        },
+    }
+    return int(_provider_orchestration_scorecard(candidate, profile, auth_present)["score"])
+
+
+def _provider_tier_score(mapping: dict[str, int], value: object) -> int:
+    return int(mapping.get(str(value or "unknown").strip().lower(), mapping["unknown"]))
+
+
+def _provider_orchestration_scorecard(
+    candidate: dict[str, Any],
+    task_profile: dict[str, Any],
+    auth_present: bool,
+) -> dict[str, Any]:
+    required_capabilities = [
+        str(item)
+        for item in task_profile.get("requiredCapabilities", [])
+        if str(item).strip()
+    ]
+    priorities = task_profile.get("priorities") if isinstance(task_profile.get("priorities"), dict) else {}
     candidate_capabilities = {str(item) for item in candidate.get("capabilities", [])}
-    matched = sum(1 for item in required_capabilities if item in candidate_capabilities)
-    score = matched * 22
-    if auth_present:
-        score += 30
+    matched_capabilities = [item for item in required_capabilities if item in candidate_capabilities]
+    capability_score = int(round((len(matched_capabilities) / max(1, len(required_capabilities))) * 100))
+    quality_score = _provider_tier_score(PROVIDER_QUALITY_SCORE, candidate.get("qualityTier"))
+    speed_score = _provider_tier_score(PROVIDER_LATENCY_SCORE, candidate.get("latencyTier"))
+    cost_score = _provider_tier_score(PROVIDER_COST_SCORE, candidate.get("costTier"))
+    context_score = _provider_tier_score(PROVIDER_CONTEXT_SCORE, candidate.get("contextTier"))
+    auth_score = 100 if auth_present else 0
+    weighted_score = (
+        quality_score * float(priorities.get("quality", 0.30))
+        + speed_score * float(priorities.get("speed", 0.20))
+        + cost_score * float(priorities.get("cost", 0.15))
+        + context_score * float(priorities.get("context", 0.20))
+        + auth_score * float(priorities.get("auth", 0.15))
+    )
+    score = int(round((capability_score * 0.52) + (weighted_score * 0.48)))
     provider = str(candidate.get("provider") or "")
     if provider == "openai-codex" and {"planning", "verification", "reasoning"} & set(required_capabilities):
         score += 12
@@ -1218,7 +1328,69 @@ def _provider_orchestration_score(candidate: dict[str, Any], required_capabiliti
         score += 18
     if provider == "opencode-go" and "provider_exploration" in required_capabilities:
         score += 16
-    return score
+    if not auth_present:
+        score -= 14
+    return {
+        "schema": "fluxio.provider_scorecard.v1",
+        "score": max(0, min(100, score)),
+        "matchedCapabilities": matched_capabilities,
+        "capabilityScore": capability_score,
+        "qualityScore": quality_score,
+        "speedScore": speed_score,
+        "costScore": cost_score,
+        "contextScore": context_score,
+        "authScore": auth_score,
+        "priorities": priorities,
+        "tierSummary": {
+            "cost": str(candidate.get("costTier") or "unknown"),
+            "latency": str(candidate.get("latencyTier") or "unknown"),
+            "context": str(candidate.get("contextTier") or "unknown"),
+            "quality": str(candidate.get("qualityTier") or "unknown"),
+        },
+    }
+
+
+def _provider_route_health(
+    candidate: dict[str, Any],
+    *,
+    auth_present: bool,
+    runtime_availability: dict[str, bool],
+) -> dict[str, Any]:
+    lanes = [str(item).strip().lower() for item in candidate.get("runtimeLanes", []) if str(item).strip()]
+    hermes_supported = "hermes" in lanes
+    hermes_ready = hermes_supported and bool(runtime_availability.get("hermes"))
+    fallback_lanes = [
+        lane
+        for lane in ("openclaw", "opencode")
+        if lane in lanes and bool(runtime_availability.get(lane))
+    ]
+    if auth_present and hermes_ready:
+        status = "ready"
+    elif auth_present and fallback_lanes:
+        status = "fallback_ready"
+    elif auth_present:
+        status = "runtime_unavailable"
+    else:
+        status = "auth_required"
+    blockers = []
+    if not auth_present:
+        blockers.append("provider_auth_missing")
+    if hermes_supported and not hermes_ready:
+        blockers.append("hermes_unavailable")
+    if auth_present and not hermes_ready and not fallback_lanes:
+        blockers.append("no_runtime_lane_ready")
+    return {
+        "schema": "fluxio.provider_route_health.v1",
+        "status": status,
+        "authPresent": auth_present,
+        "hermesSupported": hermes_supported,
+        "hermesReady": hermes_ready,
+        "fallbackReady": bool(fallback_lanes),
+        "fallbackRuntimeLanes": fallback_lanes or [
+            lane for lane in ("openclaw", "opencode") if lane in lanes
+        ],
+        "blockers": blockers,
+    }
 
 
 def _fusion_home_candidates(root: Path) -> list[Path]:
@@ -5086,7 +5258,9 @@ class FluxioWebBackend:
         ).strip()
         active_provider = str(payload.get("activeProvider") or payload.get("active_provider") or "").strip().lower()
         active_model = str(payload.get("activeModel") or payload.get("active_model") or "").strip()
-        required_capabilities, selected_role = _provider_orchestration_task_capabilities(task_brief)
+        task_profile = _provider_orchestration_task_profile(task_brief)
+        required_capabilities = list(task_profile["requiredCapabilities"])
+        selected_role = str(task_profile["selectedRole"])
         provider_ids = sorted({
             provider_id
             for item in PROVIDER_ORCHESTRATION_CATALOG
@@ -5094,6 +5268,11 @@ class FluxioWebBackend:
             if provider_id
         })
         presence = _provider_presence(provider_ids, session_secrets=self.provider_secrets)
+        runtime_availability = {
+            "hermes": bool(shutil.which("hermes")),
+            "openclaw": bool(shutil.which("openclaw")),
+            "opencode": bool(shutil.which("opencode")),
+        }
         candidates: list[dict[str, Any]] = []
         for item in PROVIDER_ORCHESTRATION_CATALOG:
             provider = str(item.get("provider") or "").strip().lower()
@@ -5104,37 +5283,73 @@ class FluxioWebBackend:
                 for capability in required_capabilities
                 if capability in {str(value) for value in item.get("capabilities", [])}
             ]
-            score = _provider_orchestration_score(item, required_capabilities, auth_present)
-            health = "ready" if auth_present else "auth_required"
+            scorecard = _provider_orchestration_scorecard(item, task_profile, auth_present)
+            route_health = _provider_route_health(
+                item,
+                auth_present=auth_present,
+                runtime_availability=runtime_availability,
+            )
+            health = str(route_health["status"])
             candidates.append(
                 {
                     **item,
                     "authPresent": auth_present,
                     "authIds": auth_ids,
                     "health": health,
-                    "score": score,
+                    "score": scorecard["score"],
+                    "scorecard": scorecard,
+                    "routeHealth": route_health,
                     "matchedCapabilities": matched_capabilities,
                     "primaryRuntimeLane": "hermes",
-                    "fallbackRuntimeLanes": [
-                        lane for lane in ["openclaw", "opencode"] if lane in item.get("runtimeLanes", [])
-                    ] or ["openclaw"],
+                    "fallbackRuntimeLanes": route_health["fallbackRuntimeLanes"] or ["openclaw"],
                     "blocker": "" if auth_present else f"Authenticate {provider} before dispatch.",
                 }
             )
-        candidates.sort(key=lambda item: (-int(item.get("score", 0)), not bool(item.get("authPresent")), str(item.get("provider") or "")))
+        candidates.sort(
+            key=lambda item: (
+                str(item.get("health") or "") not in {"ready", "fallback_ready"},
+                -int(item.get("score", 0)),
+                not bool(item.get("authPresent")),
+                str(item.get("provider") or ""),
+            )
+        )
         selected = candidates[0] if candidates else {}
-        selected_ready = bool(selected.get("authPresent"))
+        selected_health = str(selected.get("health") or "unresolved")
+        selected_ready = selected_health in {"ready", "fallback_ready"}
         fallback_routes = [
             {
                 "provider": item.get("provider"),
                 "model": (item.get("models") or ["model-unreported"])[0],
                 "health": item.get("health"),
                 "score": item.get("score"),
+                "fallbackRuntimeLanes": item.get("fallbackRuntimeLanes") or [],
+                "matchedCapabilities": item.get("matchedCapabilities") or [],
+                "scorecard": item.get("scorecard") or {},
                 "reason": item.get("useWhen"),
             }
             for item in candidates
             if item is not selected
         ][:4]
+        route_policy = {
+            "schema": "fluxio.provider_route_policy.v1",
+            "selectionOrder": [
+                "ready_or_fallback_ready_health",
+                "task_capability_match",
+                "weighted_quality_speed_cost_context_fit",
+                "auth_presence",
+                "stable_provider_id",
+            ],
+            "runtimePreference": ["hermes", "openclaw", "opencode"],
+            "healthGate": "ready or fallback_ready routes can execute; auth_required routes are recommendations only.",
+            "switchRule": "Switch when the active provider/model does not match the selected ready route or when active health is weaker than selected health.",
+            "sourceDocs": [
+                "https://opencode.ai/docs/providers/",
+                "https://opencode.ai/docs/models/",
+                "https://ai-sdk.dev/docs/foundations/providers-and-models",
+                "https://ai-sdk.dev/providers/ai-sdk-providers/ai-gateway",
+                "https://vercel.com/docs/ai-gateway/models-and-providers",
+            ],
+        }
         selected_route = {
             "role": selected_role,
             "provider": selected.get("provider", ""),
@@ -5142,8 +5357,10 @@ class FluxioWebBackend:
             "effort": "high" if selected_role in {"planner", "verifier", "reviewer"} else "medium",
             "primaryRuntimeLane": "hermes",
             "fallbackRuntimeLanes": selected.get("fallbackRuntimeLanes") or ["openclaw"],
-            "health": selected.get("health", "unresolved"),
+            "health": selected_health,
             "score": selected.get("score", 0),
+            "scorecard": selected.get("scorecard", {}),
+            "routeHealth": selected.get("routeHealth", {}),
             "reason": selected.get("useWhen", ""),
         }
         active_matches_selected = (
@@ -5151,12 +5368,28 @@ class FluxioWebBackend:
             and active_provider == str(selected_route["provider"]).lower()
             and (not active_model or active_model == selected_route["model"])
         )
+        active_candidate = next(
+            (
+                item
+                for item in candidates
+                if str(item.get("provider") or "").lower() == active_provider
+            ),
+            {},
+        )
+        active_health = str(active_candidate.get("health") or ("unknown" if active_provider else "not_set"))
+        should_switch = bool(active_provider and not active_matches_selected and selected_ready)
+        if active_provider and active_matches_selected and active_health not in {"ready", "fallback_ready"} and selected_ready:
+            should_switch = True
+        mission_gate_status = "complete" if candidates and selected.get("scorecard") and selected_route.get("provider") else "blocked"
         contract = {
             "schema": "fluxio.provider_orchestration_contract.v1",
             "generatedAt": utc_now_iso(),
             "primaryRuntimeLane": "hermes",
             "fallbackRuntimeLanes": ["openclaw", "opencode"],
             "taskBrief": task_brief,
+            "taskProfile": task_profile,
+            "routePolicy": route_policy,
+            "runtimeAvailability": runtime_availability,
             "requiredCapabilities": required_capabilities,
             "selectedRole": selected_role,
             "selectedRoute": selected_route,
@@ -5167,16 +5400,45 @@ class FluxioWebBackend:
                 "provider": active_provider,
                 "model": active_model,
                 "matchesSelected": active_matches_selected,
+                "health": active_health,
             },
             "selectionMode": "ready_best_fit" if selected_ready else "auth_required_best_fit",
-            "shouldSwitch": bool(active_provider and not active_matches_selected),
-            "sourceDocs": [
-                "https://vercel.com/docs/ai-gateway",
-                "https://ai-sdk.dev/docs/foundations/providers-and-models",
-            ],
+            "shouldSwitch": should_switch,
+            "sourceDocs": route_policy["sourceDocs"],
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "mission6-provider-orchestration",
+                "status": mission_gate_status,
+                "items": [
+                    {
+                        "id": "task-profile",
+                        "label": "Task capability profile generated",
+                        "status": "done" if required_capabilities else "blocked",
+                        "proof": ", ".join(required_capabilities),
+                    },
+                    {
+                        "id": "route-scorecards",
+                        "label": "Provider scorecards generated",
+                        "status": "done" if all(item.get("scorecard") for item in candidates) else "blocked",
+                        "proof": f"{len(candidates)} candidates scored.",
+                    },
+                    {
+                        "id": "fallback-policy",
+                        "label": "Fallback policy and runtime health exposed",
+                        "status": "done" if route_policy and runtime_availability else "blocked",
+                        "proof": "Hermes-first with OpenClaw/OpenCode fallback lanes.",
+                    },
+                    {
+                        "id": "route-proof-artifact",
+                        "label": "Provider route proof artifact written",
+                        "status": "done",
+                        "proof": "artifact pending write",
+                    },
+                ],
+            },
             "nextAction": (
                 "Use the selected provider route now and keep fallback lanes attached."
-                if selected_route.get("health") == "ready"
+                if selected_route.get("health") in {"ready", "fallback_ready"}
                 else f"Authenticate {selected_route.get('provider') or 'the selected provider'} before dispatch; use the fallback list for recovery."
             ),
         }
@@ -5192,6 +5454,7 @@ class FluxioWebBackend:
             "purpose": "provider_orchestration_model_switching_contract",
             "catalogSize": len(PROVIDER_ORCHESTRATION_CATALOG),
         }
+        contract["missionGate"]["items"][-1]["proof"] = str(artifact_path)
         tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
         tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
         tmp.replace(artifact_path)

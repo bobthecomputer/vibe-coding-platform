@@ -940,6 +940,11 @@ class FluxioWebBackendTests(unittest.TestCase):
             root = pathlib.Path(temp_dir)
             backend = FluxioWebBackend(root, root)
 
+            def fake_which(command, path=None):  # noqa: ANN001
+                if command in {"hermes", "openclaw", "opencode"}:
+                    return command
+                return None
+
             with mock.patch.dict(
                 "os.environ",
                 {
@@ -952,7 +957,7 @@ class FluxioWebBackendTests(unittest.TestCase):
                     "HOME": str(root / "home"),
                     "OPENCLAW_STATE_DIR": str(root / "home" / ".openclaw"),
                 },
-            ):
+            ), mock.patch("shutil.which", side_effect=fake_which):
                 self.assertTrue(
                     backend.dispatch(
                         "save_provider_secret_command",
@@ -977,6 +982,14 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("vision", contract["requiredCapabilities"])
             self.assertEqual(contract["selectionMode"], "ready_best_fit")
             self.assertTrue(contract["shouldSwitch"])
+            self.assertEqual(contract["runtimeAvailability"]["hermes"], True)
+            self.assertEqual(contract["runtimeAvailability"]["openclaw"], True)
+            self.assertEqual(contract["runtimeAvailability"]["opencode"], True)
+            self.assertEqual(contract["taskProfile"]["schema"], "fluxio.provider_task_profile.v1")
+            self.assertEqual(contract["routePolicy"]["schema"], "fluxio.provider_route_policy.v1")
+            self.assertIn("https://opencode.ai/docs/providers/", contract["sourceDocs"])
+            self.assertIn("https://ai-sdk.dev/docs/foundations/providers-and-models", contract["sourceDocs"])
+            self.assertEqual(contract["missionGate"]["status"], "complete")
             selected = contract["selectedRoute"]
             self.assertEqual(selected["role"], "reviewer")
             self.assertEqual(selected["provider"], "openrouter")
@@ -984,11 +997,80 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(selected["health"], "ready")
             self.assertEqual(selected["primaryRuntimeLane"], "hermes")
             self.assertIn("openclaw", selected["fallbackRuntimeLanes"])
+            self.assertEqual(selected["scorecard"]["schema"], "fluxio.provider_scorecard.v1")
+            self.assertEqual(selected["routeHealth"]["schema"], "fluxio.provider_route_health.v1")
+            self.assertGreaterEqual(selected["scorecard"]["capabilityScore"], 75)
             proof_path = pathlib.Path(contract["proof"]["artifactPath"])
             self.assertTrue(proof_path.is_file())
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "provider_orchestration_model_switching_contract")
             self.assertEqual(proof["selectedRoute"]["model"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(proof["missionGate"]["status"], "complete")
+
+    def test_provider_orchestration_uses_opencode_fallback_when_hermes_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command, path=None):  # noqa: ANN001
+                if command == "opencode":
+                    return command
+                return None
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "",
+                    "ANTHROPIC_API_KEY": "",
+                    "OPENROUTER_API_KEY": "",
+                    "MINIMAX_API_KEY": "",
+                    "MINIMAX_OAUTH_TOKEN": "",
+                    "OPENCODE_API_KEY": "",
+                    "HOME": str(root / "home"),
+                    "OPENCLAW_STATE_DIR": str(root / "home" / ".openclaw"),
+                },
+            ), mock.patch("shutil.which", side_effect=fake_which):
+                self.assertTrue(
+                    backend.dispatch(
+                        "save_provider_secret_command",
+                        {"providerId": "opencode-go", "secret": "test-opencode-key"},
+                    )
+                )
+                contract = backend.dispatch(
+                    "get_provider_orchestration_command",
+                    {
+                        "root": str(root),
+                        "requestId": "mission6-opencode-fallback",
+                        "taskBrief": "Audit provider routes and choose a model switch fallback through OpenCode.",
+                        "activeProvider": "openai-codex",
+                        "activeModel": "gpt-5.5",
+                    },
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.provider_orchestration_contract.v1")
+            self.assertEqual(contract["runtimeAvailability"]["hermes"], False)
+            self.assertEqual(contract["runtimeAvailability"]["openclaw"], False)
+            self.assertEqual(contract["runtimeAvailability"]["opencode"], True)
+            self.assertEqual(contract["selectionMode"], "ready_best_fit")
+            selected = contract["selectedRoute"]
+            self.assertEqual(selected["provider"], "opencode-go")
+            self.assertEqual(selected["health"], "fallback_ready")
+            self.assertFalse(selected["routeHealth"]["hermesReady"])
+            self.assertTrue(selected["routeHealth"]["fallbackReady"])
+            self.assertIn("opencode", selected["fallbackRuntimeLanes"])
+            self.assertIn("hermes_unavailable", selected["routeHealth"]["blockers"])
+            self.assertTrue(contract["shouldSwitch"])
+            self.assertEqual(contract["missionGate"]["status"], "complete")
+            self.assertIn("fallback", contract["nextAction"].lower())
+
+    def test_provider_orchestration_task_profile_does_not_treat_fluxio_as_ux(self) -> None:
+        profile = web_backend._provider_orchestration_task_profile(
+            "Audit provider routes and choose a model switch fallback through OpenCode for Fluxio Mission 6."
+        )
+
+        self.assertEqual(profile["selectedRole"], "router")
+        self.assertIn("provider_exploration", profile["requiredCapabilities"])
+        self.assertNotIn("frontend_ui", profile["requiredCapabilities"])
 
     def test_runtime_route_unification_prefers_opencode_glm_when_hermes_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
