@@ -8,12 +8,14 @@ Fluxio workflows now use Node 24-compatible GitHub Action majors for the actions
 - `actions/setup-node@v5`
 - `actions/setup-python@v6`
 - `actions/upload-artifact@v6`
+- `actions/upload-pages-artifact@v5`
+- `actions/deploy-pages@v5`
 
 The workflow Node toolchain remains `node-version: 22`; this change updates the JavaScript runtime used by GitHub Actions themselves, not the app's package runtime.
 
 ## Rationale
 
-The latest CI proof emitted GitHub's Node 20 deprecation annotation for `actions/checkout@v4`, `actions/setup-node@v4`, `actions/setup-python@v5`, and `actions/upload-artifact@v4`. GitHub's changelog says Node 20 has reached EOL and runners are moving JavaScript actions to Node 24. Official action release notes document Node 24-compatible majors for `setup-node`, `setup-python`, `checkout`, and `upload-artifact`.
+The latest CI proof emitted GitHub's Node 20 deprecation annotation for `actions/checkout@v4`, `actions/setup-node@v4`, `actions/setup-python@v5`, and `actions/upload-artifact@v4`. The post-merge deploy proof then showed that the Pages upload action still pulled an internal `upload-artifact@v4` path. GitHub's changelog says Node 20 has reached EOL and runners are moving JavaScript actions to Node 24. Official action release notes document Node 24-compatible majors for `setup-node`, `setup-python`, `checkout`, `upload-artifact`, `upload-pages-artifact`, and `deploy-pages`.
 
 ## Verification
 

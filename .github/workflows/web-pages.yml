@@ -33,7 +33,7 @@ jobs:
       - run: npm ci
       - run: npm run frontend:build
       - run: npm run verify:web-distribution -- --require-built-dist
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web/dist
 
@@ -45,7 +45,7 @@ jobs:
     needs: build
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: Record public web deployment evidence
         run: |
           mkdir -p .agent_control/deployment_evidence
