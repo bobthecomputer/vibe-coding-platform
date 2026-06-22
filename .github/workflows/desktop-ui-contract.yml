@@ -1,0 +1,36 @@
+name: Desktop UI Contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tests/test_desktop_ui_contract.py"
+      - "package.json"
+      - "desktop-ui/**"
+      - "web/**"
+      - ".github/workflows/desktop-ui-contract.yml"
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "tests/test_desktop_ui_contract.py"
+      - "package.json"
+      - "desktop-ui/**"
+      - "web/**"
+      - ".github/workflows/desktop-ui-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ui-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-ui-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m unittest tests.test_desktop_ui_contract
