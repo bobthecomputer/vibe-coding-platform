@@ -27415,6 +27415,93 @@ body::-webkit-scrollbar-thumb {
   transform: translate(-50%, -50%);
 }
 
+.builder-preview-annotation-contract {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.018)),
+    rgba(6, 7, 8, 0.68);
+  padding: 10px;
+}
+
+.builder-preview-annotation-contract.ready {
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.builder-preview-annotation-head,
+.builder-preview-annotation-grid {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.builder-preview-annotation-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.builder-preview-annotation-head > div,
+.builder-preview-annotation-grid article {
+  display: grid;
+  gap: 4px;
+}
+
+.builder-preview-annotation-head span,
+.builder-preview-annotation-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.builder-preview-annotation-head strong,
+.builder-preview-annotation-grid strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.builder-preview-annotation-head button {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: #f4f2ec;
+  color: #0b0c0d;
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0.48rem 0.78rem;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.builder-preview-annotation-head button:hover {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: #ffffff;
+  transform: translateY(-1px);
+}
+
+.builder-preview-annotation-grid {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr);
+}
+
+.builder-preview-annotation-grid article {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+  padding: 8px;
+}
+
+.builder-preview-annotation-contract p,
+.builder-preview-annotation-contract small {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .builder-cowork-status-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }

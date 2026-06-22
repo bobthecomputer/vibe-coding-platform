@@ -1022,6 +1022,61 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "jbh_eaven_safe_synthetic_redteam_readiness")
 
+    def test_preview_annotation_readiness_command_writes_capture_contract_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            (scripts / "control_route_visual_smoke.py").write_text("# visual smoke fixture\n", encoding="utf-8")
+            proof_dir = root / "artifacts" / "mission9-preview-annotation"
+            proof_dir.mkdir(parents=True)
+            screenshot = proof_dir / "before.png"
+            dom = proof_dir / "before.dom.html"
+            check = proof_dir / "before.check.json"
+            screenshot.write_bytes(b"\x89PNG\r\n\x1a\n")
+            dom.write_text("<main data-preview='true'>Preview fixture</main>", encoding="utf-8")
+            check.write_text(json.dumps({"ok": True}), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            contract = backend.dispatch(
+                "get_preview_annotation_readiness_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission9-preview-test",
+                    "surface": "builder-live-review",
+                    "targetUrl": "http://127.0.0.1:5185/control?surface=builder",
+                    "selectedEventId": "event-preview",
+                    "selectedAnnotationId": "annotation-preview",
+                    "screenshotPath": str(screenshot),
+                    "domPath": str(dom),
+                    "checkPath": str(check),
+                    "visualFinding": {
+                        "id": "annotation-preview",
+                        "severity": "high",
+                        "finding": "Preview capture shows proof cards crowding the browser work surface.",
+                        "nextImplementationStep": "Fold raw proof behind the browser annotation lane before the next UI edit.",
+                    },
+                },
+            )
+
+            self.assertEqual(contract["schema"], "fluxio.preview_annotation_readiness.v1")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertIn("browser-cdp", contract["fallbackRuntimeLanes"])
+            self.assertEqual(contract["status"], "ready_for_preview_annotation_loop")
+            self.assertEqual(contract["previewTarget"]["selectedEventId"], "event-preview")
+            self.assertIn("capture screenshot artifact", contract["captureCapabilities"])
+            self.assertEqual(contract["selectedFinding"]["id"], "annotation-preview")
+            self.assertIn("Fold raw proof", contract["nextAction"])
+            self.assertIn("preview_screenshot_breakdown", {item["id"] for item in contract["skillsUsed"]})
+            self.assertEqual({item["step"] for item in contract["annotationLoop"]}, {"capture", "breakdown", "annotate", "repair"})
+            self.assertTrue(all(item["status"] != "blocked" for item in contract["readinessChecks"]))
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "preview_browser_annotation_readiness")
+            self.assertEqual(proof["proofArtifacts"]["screenshotPath"], str(screenshot.resolve()))
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

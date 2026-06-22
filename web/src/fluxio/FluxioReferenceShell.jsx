@@ -10554,6 +10554,50 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
     : artifacts.length > 0
       ? "The selected mission has output artifacts, but no served iframe URL. Open the artifact rows below for review."
       : "No placeholder preview is drawn. The selected mission thread, progress, and runtime events are the current evidence.";
+  const previewAnnotationReadiness =
+    workbenchState?.previewAnnotationReadiness && typeof workbenchState.previewAnnotationReadiness === "object"
+      ? workbenchState.previewAnnotationReadiness
+      : {
+          schema: "fluxio.preview_annotation_readiness.v1",
+          status: "pending_live_capture",
+          primaryRuntimeLane: "hermes",
+          fallbackRuntimeLanes: ["openclaw", "opencode", "browser-cdp"],
+          previewTarget: {
+            url: previewActionUrl,
+            surface: "workbench-preview",
+          },
+          captureCapabilities: [
+            "open local app or served URL",
+            "capture screenshot artifact",
+            "dump DOM and visible text",
+            "route visual finding into Agent/Builder follow-up context",
+          ],
+          skillsUsed: [],
+          selectedFinding: {
+            id: "pending-preview-finding",
+            severity: "medium",
+            finding: "Capture a preview artifact before claiming a browser annotation changed the implementation.",
+            nextImplementationStep: "Capture preview annotation proof from the live backend.",
+          },
+          readinessChecks: [],
+          blockers: ["Live capture has not run in this browser session."],
+          nextAction: "Capture preview annotation proof from the live backend.",
+          proof: null,
+          proofArtifacts: {},
+        };
+  const previewAnnotationProofPath = String(previewAnnotationReadiness?.proof?.artifactPath || "").trim();
+  const previewAnnotationFinding = previewAnnotationReadiness?.selectedFinding || {};
+  const previewAnnotationTarget = previewAnnotationReadiness?.previewTarget || {};
+  const previewAnnotationSkillIds = asList(previewAnnotationReadiness?.skillsUsed)
+    .map(item => item?.id || item?.skill || item)
+    .filter(Boolean);
+  const previewAnnotationReady = Boolean(previewAnnotationProofPath);
+  const previewAnnotationTargetUrl = String(previewAnnotationTarget.url || previewActionUrl || previewFrameUrl || "").trim();
+  const previewAnnotationScreenshotPath = String(
+    previewAnnotationReadiness?.proofArtifacts?.screenshotPath ||
+      previewAnnotationReadiness?.proofArtifacts?.screenshot ||
+      "",
+  ).trim();
   return (
     <div
       className="fluxos-workbench"
@@ -10729,6 +10773,49 @@ function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction
             </div>
           </section>
         ) : null}
+        <section
+          aria-label="Preview annotation readiness"
+          className={cx("builder-preview-annotation-contract", previewAnnotationReady ? "ready" : "pending")}
+          data-preview-annotation-readiness-contract="true"
+          data-preview-annotation-primary-lane={previewAnnotationReadiness.primaryRuntimeLane || "hermes"}
+          data-preview-annotation-schema={previewAnnotationReadiness.schema || "fluxio.preview_annotation_readiness.v1"}
+        >
+          <div className="builder-preview-annotation-head">
+            <div>
+              <span>Preview proof loop</span>
+              <strong>{titleizeToken(previewAnnotationReadiness.status || "pending live capture")}</strong>
+            </div>
+            <button
+              disabled={!previewAnnotationTargetUrl}
+              onClick={() => fluxioAction(onRequestAction, "preview:capture-annotation-readiness", {
+                surface: "workbench",
+                targetUrl: previewAnnotationTargetUrl,
+                selectedEventId: workbenchState?.missionId || "",
+                selectedAnnotationId: previewAnnotationFinding.id || "workbench-preview-finding",
+                screenshotPath: previewAnnotationScreenshotPath,
+              })}
+              type="button"
+            >
+              Capture preview proof
+            </button>
+          </div>
+          <div className="builder-preview-annotation-grid">
+            <article>
+              <span>Target</span>
+              <strong>{previewAnnotationTargetUrl || "No live preview URL yet"}</strong>
+            </article>
+            <article>
+              <span>Skills</span>
+              <strong>{previewAnnotationSkillIds.slice(0, 3).map(titleizeToken).join(" / ") || "Pending capture"}</strong>
+            </article>
+          </div>
+          <p>{previewAnnotationFinding.finding || previewAnnotationReadiness.nextAction}</p>
+          <small>
+            {previewAnnotationProofPath
+              ? `Proof artifact: ${previewAnnotationProofPath}`
+              : previewAnnotationReadiness.nextAction || "Capture preview annotation proof before claiming the finding changed implementation."}
+          </small>
+        </section>
         <div className="fluxos-browser-chrome">
           <span />
           <strong>{workbenchState?.previewLabel || (isLiveBackend ? "No live preview frame attached" : "local layout preview")}</strong>
