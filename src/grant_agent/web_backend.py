@@ -796,6 +796,17 @@ def _parse_json_objects_from_text(raw: str) -> list[dict[str, Any]]:
     return objects
 
 
+def _extract_opencode_text_reply(stdout: str) -> str:
+    for event in reversed(_parse_json_objects_from_text(stdout)):
+        if str(event.get("type") or "").lower() != "text":
+            continue
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        text = str(part.get("text") or event.get("text") or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _push_tool_timeline_event(
     events: list[dict[str, str]],
     *,
@@ -5280,6 +5291,7 @@ class FluxioWebBackend:
         route_attempts: dict[str, dict[str, Any]] = {
             "hermes": empty_route_call("hermes", bool(hermes_command) or hermes_wsl_available),
             "openclaw": empty_route_call("openclaw", bool(openclaw_command)),
+            "opencode": empty_route_call("opencode", bool(opencode_command)),
         }
         route_payload = {
             "message": route_prompt,
@@ -5295,6 +5307,8 @@ class FluxioWebBackend:
             "timeoutSeconds": int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 45),
         }
         provider_cli_probe_allowed = bool(payload.get("allowProviderCliProbe") or payload.get("allow_provider_cli_probe"))
+        openclaw_infer_probe_allowed = bool(payload.get("allowOpenClawInferProbe") or payload.get("allow_openclaw_infer_probe"))
+        prefer_opencode_glm_route = bool(opencode_command and opencode_models_contains_glm52 and not openclaw_infer_probe_allowed)
         if probe_external_routes and not provider_cli_probe_allowed:
             route_attempts["hermes"].update(
                 {
@@ -5345,8 +5359,40 @@ class FluxioWebBackend:
         else:
             route_attempts["hermes"]["error"] = "Hermes CLI was not found on PATH or WSL."
 
-        if probe_external_routes and provider_cli_probe_allowed and route_attempts["hermes"]["status"] != "ok":
-            if route_attempts["openclaw"]["available"]:
+        if (
+            probe_external_routes
+            and provider_cli_probe_allowed
+            and route_attempts["hermes"]["status"] != "ok"
+            and prefer_opencode_glm_route
+        ):
+            if route_attempts["opencode"]["available"]:
+                try:
+                    route_result = self._run_opencode_chat(route_payload)
+                    route_attempts["opencode"].update(
+                        {
+                            "status": "ok",
+                            "reply": route_result.get("reply") or "",
+                            "elapsedMs": route_result.get("elapsedMs") or 0,
+                            "command": route_result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
+                    route_attempts["opencode"].update({"status": "failed", "error": str(exc)})
+            else:
+                route_attempts["opencode"]["error"] = "OpenCode CLI was not found on PATH."
+            if route_attempts["opencode"]["status"] == "ok" and route_attempts["openclaw"]["available"]:
+                route_attempts["openclaw"]["error"] = (
+                    "OpenClaw inference probe was skipped because the GLM-5.2 OpenCode route returned usable output first; "
+                    "set allowOpenClawInferProbe=true to run OpenClaw explicitly."
+                )
+
+        if (
+            probe_external_routes
+            and provider_cli_probe_allowed
+            and route_attempts["hermes"]["status"] != "ok"
+            and route_attempts["opencode"]["status"] != "ok"
+        ):
+            if route_attempts["openclaw"]["available"] and (openclaw_infer_probe_allowed or not prefer_opencode_glm_route):
                 try:
                     route_result = self._run_openclaw_chat(route_payload)
                     route_attempts["openclaw"].update(
@@ -5359,10 +5405,46 @@ class FluxioWebBackend:
                     )
                 except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
                     route_attempts["openclaw"].update({"status": "failed", "error": str(exc)})
+            elif route_attempts["openclaw"]["available"]:
+                route_attempts["openclaw"]["error"] = (
+                    "OpenClaw inference probe was skipped because the GLM-5.2 OpenCode route is available and "
+                    "OpenClaw can outlive Windows timeouts; set allowOpenClawInferProbe=true to run it explicitly."
+                )
             else:
                 route_attempts["openclaw"]["error"] = "OpenClaw CLI was not found on PATH."
 
-        selected_runtime = "hermes" if route_attempts["hermes"]["status"] in {"ok", "discovery_only"} else "openclaw"
+        if (
+            probe_external_routes
+            and route_attempts["hermes"]["status"] != "ok"
+            and route_attempts["openclaw"]["status"] != "ok"
+            and route_attempts["opencode"]["status"] != "ok"
+        ):
+            if route_attempts["opencode"]["available"]:
+                try:
+                    route_result = self._run_opencode_chat(route_payload)
+                    route_attempts["opencode"].update(
+                        {
+                            "status": "ok",
+                            "reply": route_result.get("reply") or "",
+                            "elapsedMs": route_result.get("elapsedMs") or 0,
+                            "command": route_result.get("command") or "",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - timeout/failure is part of the route proof.
+                    route_attempts["opencode"].update({"status": "failed", "error": str(exc)})
+            else:
+                route_attempts["opencode"]["error"] = "OpenCode CLI was not found on PATH."
+
+        if route_attempts["hermes"]["status"] == "ok":
+            selected_runtime = "hermes"
+        elif route_attempts["openclaw"]["status"] == "ok":
+            selected_runtime = "openclaw"
+        elif route_attempts["opencode"]["status"] == "ok":
+            selected_runtime = "opencode"
+        elif route_attempts["hermes"]["status"] == "discovery_only":
+            selected_runtime = "hermes"
+        else:
+            selected_runtime = "openclaw"
         route_call: dict[str, Any] = route_attempts[selected_runtime]
         route_call = {
             **route_call,
@@ -5451,7 +5533,7 @@ class FluxioWebBackend:
             },
             {
                 "id": "runtime-route-probed",
-                "label": "Hermes/OpenClaw route probed",
+                "label": "Runtime route probed",
                 "status": "done" if route_call["status"] == "ok" else ("missing" if not probe_external_routes else "blocked"),
                 "proof": (
                     f"{route_call['selectedRuntime']} returned model output."
@@ -5513,10 +5595,12 @@ class FluxioWebBackend:
                 "modelsContainGlm52": opencode_models_contains_glm52,
                 "error": opencode_models_error,
                 "modelListProbeRequested": probe_provider_models,
+                "call": route_attempts["opencode"],
             },
             "providerPresence": provider_presence,
             "probeExternalRoutes": probe_external_routes,
             "allowProviderCliProbe": provider_cli_probe_allowed,
+            "allowOpenClawInferProbe": openclaw_infer_probe_allowed,
             "hermes": {
                 "available": bool(hermes_command) or hermes_wsl_available,
                 "nativeCommandVisible": bool(hermes_command),
@@ -7309,6 +7393,78 @@ class FluxioWebBackend:
         return {
             "reply": reply,
             "runtime": "openclaw",
+            "sessionId": session_id,
+            "route": route,
+            "raw": result,
+            "elapsedMs": elapsed_ms,
+            "command": display_command,
+            "toolTimeline": tool_timeline,
+            "filesChanged": files_changed,
+        }
+
+    def _run_opencode_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = str(payload.get("message") or "").strip()
+        if not prompt:
+            prompt = _chat_prompt(payload)
+        prompt = (
+            "You are running inside the Fluxio app runtime. Do not ask clarifying questions. "
+            "Use the provided screenshot path and DOM facts when available, and return the requested result directly.\n\n"
+            + prompt
+        )
+        prompt = re.sub(r"\s+", " ", prompt).strip()
+        env = self._provider_env()
+        command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+        if not command:
+            raise RuntimeError("OpenCode CLI was not found on PATH.")
+        route = self._chat_route(payload)
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+        workspace_id = _safe_identifier(payload.get("workspaceId") or workspace_path.name, "workspace")
+        session_id = _safe_identifier(payload.get("sessionId") or f"opencode_chat_{workspace_id}", "opencode_chat")
+        model_id = route["model_id"]
+        args = [
+            command,
+            "run",
+            "--pure",
+            "--format",
+            "json",
+        ]
+        if model_id:
+            args.extend(["--model", model_id])
+        args.append(prompt)
+        display_command = self._display_command(args[:-1] + ["<prompt>"])
+        try:
+            timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 120)
+        except (TypeError, ValueError):
+            timeout_seconds = 120
+        timeout_seconds = max(5, min(timeout_seconds, 240))
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=timeout_seconds,
+            extra_env=env,
+        )
+        reply = _extract_opencode_text_reply(stdout) or _extract_model_reply(result)
+        if not reply:
+            for event in reversed(_parse_json_objects_from_text(stdout)):
+                part = event.get("part") if isinstance(event.get("part"), dict) else {}
+                text = str(part.get("text") or event.get("text") or "").strip()
+                if text:
+                    reply = text
+                    break
+        if not reply:
+            raise RuntimeError("OpenCode finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
+        return {
+            "reply": reply,
+            "runtime": "opencode",
             "sessionId": session_id,
             "route": route,
             "raw": result,
