@@ -54,6 +54,15 @@ export const DEFAULT_IMAGE_PROJECT = {
     quality: "high",
     size: "1024x1024",
   },
+  visionRoute: {
+    runtime: "hermes",
+    provider: "openrouter",
+    model: "z-ai/glm-5.2",
+    modelId: "openrouter/z-ai/glm-5.2",
+    effort: "high",
+    role: "vision-ui-self-repair",
+    fallbackRuntime: "openclaw",
+  },
   designReferences: [
     IMAGEGEN_LIBRARY_ARTIFACT,
     {
@@ -298,6 +307,7 @@ export function normalizeProject(project) {
   next.canvas = { ...base.canvas, ...(next.canvas || {}) };
   next.prompt = { ...base.prompt, ...(next.prompt || {}) };
   next.provider = { ...base.provider, ...(next.provider || {}) };
+  next.visionRoute = { ...base.visionRoute, ...(next.visionRoute || {}) };
   next.designReferences = Array.isArray(next.designReferences) ? next.designReferences : base.designReferences;
   for (const reference of base.designReferences) {
     if (!next.designReferences.some(item => item?.id === reference.id || item?.artifactId === reference.artifactId)) {

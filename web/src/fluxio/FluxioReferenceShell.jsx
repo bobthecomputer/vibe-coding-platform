@@ -9805,123 +9805,6 @@ Approval:
   );
 }
 
-const FLUXIO_REAL_IMAGE_SESSIONS_KEY = "fluxio.images.real_sessions";
-
-function loadFluxioRealImageSessions() {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(FLUXIO_REAL_IMAGE_SESSIONS_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed.filter(item => item?.requestId && item?.previewUrl).slice(0, 12) : [];
-  } catch {
-    return [];
-  }
-}
-
-function FluxioImagesSurface({ callBackend, onRequestAction }) {
-  const [prompt, setPrompt] = useState("Create a calm Fluxio agent command center with live preview, evidence rail, and approval state.");
-  const [sessions, setSessions] = useState(loadFluxioRealImageSessions);
-  const [status, setStatus] = useState({ state: "idle", message: "" });
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(FLUXIO_REAL_IMAGE_SESSIONS_KEY, JSON.stringify(sessions.slice(0, 12)));
-  }, [sessions]);
-
-  const generateImage = async () => {
-    const text = prompt.trim();
-    if (!text) {
-      setStatus({ state: "blocked", message: "Write an image prompt first." });
-      return;
-    }
-    if (typeof callBackend !== "function") {
-      setStatus({ state: "blocked", message: "Live backend bridge is unavailable." });
-      return;
-    }
-    const requestId = `imgreq-ui-${Date.now().toString(36)}`;
-    setStatus({ state: "running", message: "Generating through Codex GPT-Image..." });
-    try {
-      const result = await callBackend("image_playground_operation_command", {
-        requestId,
-        operation: "generate",
-        providerId: "codex_subscription_gpt_image2",
-        size: "1024x1024",
-        canvas: { width: 1024, height: 1024 },
-        prompt: { text },
-      });
-      if (!result?.previewUrl || result?.providerStatus !== "available") {
-        throw new Error(result?.message || "Image provider did not return a generated artifact.");
-      }
-      const session = {
-        requestId: result.requestId || requestId,
-        prompt: text,
-        previewUrl: result.previewUrl,
-        manifestUrl: result.manifestUrl || "",
-        manifestPath: result.manifestPath || "",
-        outputArtifactPath: result.outputArtifactPath || result.imagePath || "",
-        provider: result.provider || "openai-codex",
-        model: result.model || "gpt-image-2",
-        createdAt: new Date().toISOString(),
-        receipt: result.receipt || {},
-      };
-      setSessions(current => [session, ...current.filter(item => item.requestId !== session.requestId)].slice(0, 12));
-      setStatus({ state: "ready", message: "Minted real Codex image session with artifact proof." });
-    } catch (error) {
-      setStatus({ state: "blocked", message: String(error?.message || error || "Image generation failed.") });
-    }
-  };
-
-  return (
-    <div className="fluxos-images">
-      <section className="fluxos-image-prompt">
-        <div className="fluxos-section-head">
-          <span>Image studio</span>
-          <strong>Codex GPT-Image sessions</strong>
-        </div>
-        <textarea aria-label="Image prompt" onChange={event => setPrompt(event.target.value)} value={prompt} />
-        <div className="fluxos-review-actions">
-          <button onClick={() => fluxioAction(onRequestAction, "images:add-reference")} type="button">Add reference</button>
-          <button className="primary" disabled={status.state === "running"} onClick={() => void generateImage()} type="button">
-            {status.state === "running" ? "Generating..." : "Generate"}
-          </button>
-        </div>
-        {status.message ? <p className={`fluxos-image-status state-${status.state}`}>{status.message}</p> : null}
-        <div className="fluxos-reference-strip">
-          <span>Provider openai-codex</span>
-          <span>Model gpt-image-2</span>
-          <span>{sessions.length} minted session{sessions.length === 1 ? "" : "s"}</span>
-        </div>
-      </section>
-      <section className="fluxos-variant-grid">
-        {sessions.length ? sessions.map((session, index) => (
-          <button className="fluxos-variant-card minted" key={session.requestId} onClick={() => fluxioAction(onRequestAction, `images:variant:${session.requestId}`)} type="button">
-            <img alt={`Generated Fluxio session ${index + 1}`} src={resolveReferenceArtifactUrl(session.previewUrl)} />
-            <strong>{session.prompt.slice(0, 42) || "Generated image"}</strong>
-            <span>{session.provider} · {session.model}</span>
-            <em>{new Date(session.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</em>
-          </button>
-        )) : (
-          <article className="fluxos-empty-minted-session">
-            <strong>No minted image sessions yet</strong>
-            <p>Generate through the Codex GPT-Image lane to create a real artifact-backed session.</p>
-          </article>
-        )}
-      </section>
-      <section className="fluxos-image-inspector">
-        <div className="fluxos-section-head">
-          <span>Inspector</span>
-          <strong>{sessions[0]?.requestId || "Awaiting artifact"}</strong>
-        </div>
-        <p>
-          {sessions[0]
-            ? `${sessions[0].provider} / ${sessions[0].model} wrote ${sessions[0].outputArtifactPath || "a served artifact"}.`
-            : "Generated sessions keep prompt, provider proof, manifest, preview URL, and export target together."}
-        </p>
-        <button onClick={() => fluxioAction(onRequestAction, "images:send-to-builder")} type="button">Attach to review bundle</button>
-        <button disabled={!sessions[0]?.previewUrl} onClick={() => callBackend?.("image.export", { prompt, session: sessions[0] })} type="button">Export asset</button>
-      </section>
-    </div>
-  );
-}
-
 function FluxioWorkbenchSurface({ liveDataStatus, messages = [], onRequestAction, onSetSurface, timelineMoments = [], workbenchState }) {
   const isLiveBackend = liveDataStatus?.previewMode === "live";
   const [workbenchClarityMode, setWorkbenchClarityMode] = useState(() => {
@@ -11070,7 +10953,20 @@ function FluxioSurfaceContent(props) {
   if (props.surface === "builder") return <FluxioBuilderSurface {...props} />;
   if (props.surface === "phone") return <FluxioPhoneProgressSurface {...props} />;
   if (props.surface === "skills" || props.surface === "rule-sets") return <FluxioSkillsSurface {...props} />;
-  if (props.surface === "images") return <FluxioImagesSurface {...props} />;
+  if (props.surface === "images") {
+    return (
+      <Suspense
+        fallback={(
+          <section className="image-playground-shell image-playground-loading" data-image-playground-loading="true">
+            <p className="reference-kicker">Image Playground</p>
+            <h1>Loading image workspace</h1>
+          </section>
+        )}
+      >
+        <ImagePlaygroundSurface callBackend={props.callBackend} />
+      </Suspense>
+    );
+  }
   if (props.surface === "workbench") return <FluxioWorkbenchSurface {...props} />;
   if (props.surface === "settings") return <FluxioSettingsSurface {...props} />;
   return (

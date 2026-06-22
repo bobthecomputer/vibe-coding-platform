@@ -1714,7 +1714,10 @@ function hasCommandBackend() {
 }
 
 function fixturesAllowedForSearch(searchParams) {
-  return Boolean(import.meta.env?.DEV && searchParams.get("preview-control") === "1");
+  return Boolean(
+    (import.meta.env?.DEV || import.meta.env?.VITE_FLUXIO_ALLOW_PREVIEW_FIXTURES === "1") &&
+      searchParams.get("preview-control") === "1"
+  );
 }
 
 function localPreviewUrlFromSearch(searchParams) {

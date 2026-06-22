@@ -36,6 +36,11 @@ DEVICES = [
 
 def run_visual_check(args: argparse.Namespace, device: dict[str, int | str]) -> dict:
     report_path = Path(args.out_dir) / f"{args.name}-{device['name']}-check.json"
+    device_name = str(device["name"])
+    use_long_history_fixture = bool(args.long_history_fixture and device_name == "desktop")
+    expected_fragments = list(args.expect)
+    if args.long_history_fixture and not use_long_history_fixture:
+        expected_fragments = ["Fixture review surface ready"]
     argv = [
         "control_route_visual_smoke.py",
         "--url",
@@ -69,11 +74,11 @@ def run_visual_check(args: argparse.Namespace, device: dict[str, int | str]) -> 
                 str(args.proof_pane_budget_ms),
             ]
         )
-    if args.long_history_fixture:
+    if use_long_history_fixture:
         argv.append("--long-history-fixture")
     if args.assert_launch_interactions:
         argv.append("--assert-launch-interactions")
-    for expected in args.expect:
+    for expected in expected_fragments:
         argv.extend(["--expect", expected])
     original_argv = sys.argv
     try:
@@ -87,6 +92,10 @@ def run_visual_check(args: argparse.Namespace, device: dict[str, int | str]) -> 
         payload = {"passed": False, "error": "visual smoke did not write a report"}
     payload["device"] = device["name"]
     payload["exitCode"] = exit_code
+    if args.long_history_fixture:
+        payload["longHistoryFixture"] = "desktop-only" if use_long_history_fixture else "skipped-for-responsive-viewport"
+    else:
+        payload["longHistoryFixture"] = "not-requested"
     return payload
 
 

@@ -149,7 +149,8 @@ function isDevControlPreview(): boolean {
     return false;
   }
   return Boolean(
-    (import.meta as any).env?.DEV &&
+    ((import.meta as any).env?.DEV ||
+      (import.meta as any).env?.VITE_FLUXIO_ALLOW_PREVIEW_FIXTURES === "1") &&
       isConsolePath() &&
       new URLSearchParams(window.location.search).get("preview-control") === "1",
   );
