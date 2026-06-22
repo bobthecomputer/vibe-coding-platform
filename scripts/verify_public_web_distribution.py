@@ -10,6 +10,11 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+try:
+    from scripts.verify_github_action_runtimes import verify_github_action_runtimes
+except ModuleNotFoundError:  # pragma: no cover - supports direct script execution.
+    from verify_github_action_runtimes import verify_github_action_runtimes
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -226,6 +231,7 @@ def verify_public_web_distribution(root: Path, *, require_built_dist: bool = Fal
     manifest_payload = _load_json(root / "web" / "public" / "manifest.webmanifest")
     service_worker_text = _read_text(root / "web" / "public" / "service-worker.js")
     offline_text = _read_text(root / "web" / "public" / "offline.html")
+    action_runtime_guard = verify_github_action_runtimes(root)
 
     checks = [
         {
@@ -265,6 +271,22 @@ def verify_public_web_distribution(root: Path, *, require_built_dist: bool = Fal
                 )
             ),
             "details": "Pages deployment records the deployed URL, commit, workflow run, and release-candidate attachment as an artifact.",
+        },
+        {
+            "checkId": "github_action_runtime_guard",
+            "passed": bool(action_runtime_guard.get("ok")),
+            "details": (
+                "Workflow actions satisfy the Node 24-compatible runtime guard "
+                f"({action_runtime_guard.get('checkedActionRefCount', 0)} refs checked)."
+                if action_runtime_guard.get("ok")
+                else "Workflow actions include stale majors that can reintroduce Node 20 runner warnings."
+            ),
+            "runtimeGuard": {
+                "schema": action_runtime_guard.get("schema"),
+                "workflowCount": action_runtime_guard.get("workflowCount", 0),
+                "checkedActionRefCount": action_runtime_guard.get("checkedActionRefCount", 0),
+                "violations": action_runtime_guard.get("violations", []),
+            },
         },
         {
             "checkId": "package_scripts",
