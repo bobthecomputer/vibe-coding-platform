@@ -5195,6 +5195,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [automationOverlapStatusContract, setAutomationOverlapStatusContract] = useState(null);
   const [prStackLandingReadinessContract, setPrStackLandingReadinessContract] = useState(null);
   const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
+  const [voiceAccessibilityReadinessContract, setVoiceAccessibilityReadinessContract] = useState(null);
   const [appUpdateState, setAppUpdateState] = useState({
     status: "",
     detail: "",
@@ -15553,6 +15554,42 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "voice-access:capture-readiness") {
+        setSurface("settings");
+        setReferenceSettingsTab("voice-access");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to capture voice/accessibility proof.", "warn");
+          return;
+        }
+        try {
+          const response = await callBackend(
+            "get_voice_accessibility_readiness_command",
+            {
+              payload: {
+                root: null,
+                requestId: `voice-access-${Date.now()}`,
+                surface,
+              },
+            },
+            { throwOnError: true },
+          );
+          setVoiceAccessibilityReadinessContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          pushToast(
+            artifactPath
+              ? `Voice/accessibility proof captured: ${pathLeaf(artifactPath)}.`
+              : "Voice/accessibility proof captured.",
+            "info",
+          );
+          await refreshAll("voice-accessibility-readiness");
+        } catch (error) {
+          pushToast(`Voice/accessibility proof failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "pr-stack:capture-landing-readiness") {
         setSurface("settings");
         setReferenceSettingsTab("updates");
@@ -19761,6 +19798,37 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       blockers: ["Live capture has not run in this browser session."],
       nextAction: "Capture update readiness proof before changing dependencies, provider definitions, or runtime adapters.",
       proof: null,
+    },
+    voiceAccessibilityReadiness: voiceAccessibilityReadinessContract || snapshot?.voiceAccessibilityReadiness || {
+      schema: "fluxio.voice_accessibility_readiness.v1",
+      status: "pending_live_capture",
+      ok: false,
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["openclaw", "opencode"],
+      strategy: "system_dictation_bridge_with_review_gate",
+      voiceInput: {
+        localSttConfigured: false,
+        osFallbackHint: "Use OS dictation, then let Fluxio review and repair the composed command before sending.",
+        accidentalSendProtection: true,
+        commandAmbiguityDetection: true,
+        correctionBuffer: true,
+      },
+      accessibility: {
+        ariaLiveStatus: true,
+        keyboardRepairPath: true,
+        reducedMotionControl: true,
+        highContrastControl: true,
+        largerTargetsControl: true,
+        focusVisible: true,
+      },
+      checks: [
+        { id: "review-before-send", label: "Review before send", status: "pending" },
+        { id: "correction-buffer", label: "Correction buffer", status: "pending" },
+        { id: "keyboard-repair-path", label: "Keyboard repair path", status: "pending" },
+        { id: "accessible-status", label: "Accessible status", status: "pending" },
+      ],
+      proof: null,
+      nextAction: "Capture voice/accessibility proof before calling this workflow ready.",
     },
     prStackLandingReadiness: prStackLandingReadinessContract || snapshot?.prStackLandingReadiness || {
       schema: "fluxio.pr_stack_landing_readiness.v1",

@@ -4697,6 +4697,36 @@ function dictationAmbiguityFinding(value) {
   return match ? match[0] : "";
 }
 
+function dictationQualityGate(value, guardEnabled = true) {
+  const text = String(value || "").trim();
+  const finding = guardEnabled ? dictationAmbiguityFinding(text) : "";
+  if (!text) {
+    return {
+      status: "empty",
+      score: 0,
+      finding: "",
+      label: "Waiting for command",
+      detail: "Dictate or type a command before sending.",
+    };
+  }
+  if (finding) {
+    return {
+      status: "review_required",
+      score: 62,
+      finding,
+      label: `Review ${finding}`,
+      detail: "The command has a dictation marker or uncertainty cue. Review it before sending.",
+    };
+  }
+  return {
+    status: "clear",
+    score: Math.min(100, 84 + Math.min(12, Math.floor(text.length / 28))),
+    finding: "",
+    label: "Clear to send",
+    detail: "No dictation ambiguity markers detected.",
+  };
+}
+
 function cleanDictationDraft(value) {
   return String(value || "")
     .replace(/\b(scratch that|delete that|correction|i mean|no wait|wait no|start over)\b[:,.;\s-]*/gi, "")
@@ -4721,9 +4751,21 @@ function FluxioComposer({
   const [plusOpen, setPlusOpen] = useState(false);
   const [dictationReviewOpen, setDictationReviewOpen] = useState(false);
   const [dictationGuardEnabled, setDictationGuardEnabled] = useState(true);
+  const [accessibilityPrefs, setAccessibilityPrefs] = useState({
+    reducedMotion: true,
+    highContrast: true,
+    largerTargets: false,
+  });
   const [dictationStatus, setDictationStatus] = useState("System dictation route ready");
-  const dictationFinding = useMemo(() => dictationAmbiguityFinding(currentDraft), [currentDraft]);
+  const dictationGate = useMemo(
+    () => dictationQualityGate(currentDraft, dictationGuardEnabled),
+    [currentDraft, dictationGuardEnabled],
+  );
+  const dictationFinding = dictationGate.finding;
   const dictationNeedsReview = Boolean(dictationGuardEnabled && dictationFinding);
+  const toggleAccessibilityPref = key => {
+    setAccessibilityPrefs(current => ({ ...current, [key]: !current[key] }));
+  };
   const performSubmit = () => {
     if (typeof onSubmit === "function") {
       onSubmit();
@@ -4738,8 +4780,12 @@ function FluxioComposer({
   const submit = ({ force = false } = {}) => {
     if (!force && dictationNeedsReview) {
       setDictationReviewOpen(true);
-      setDictationStatus(`Review needed: ${dictationFinding}`);
-      fluxioAction(onRequestAction, "dictation:review-required", { finding: dictationFinding });
+      setDictationStatus(`Review needed: ${dictationFinding}; quality ${dictationGate.score}/100`);
+      fluxioAction(onRequestAction, "dictation:review-required", {
+        finding: dictationFinding,
+        score: dictationGate.score,
+        status: dictationGate.status,
+      });
       return;
     }
     setDictationReviewOpen(false);
@@ -4768,6 +4814,21 @@ function FluxioComposer({
     onChangeDraft?.(cleaned);
     setDictationStatus(cleaned === currentDraft.trim() ? "No dictation markers found" : "Correction markers cleaned");
   };
+  const handleComposerKeyDown = event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "m") {
+      event.preventDefault();
+      armDictation();
+    }
+    if (event.key === "Escape" && dictationReviewOpen) {
+      event.preventDefault();
+      setDictationReviewOpen(false);
+      setDictationStatus("Correction buffer closed; draft preserved");
+    }
+  };
   const runPlusAction = (actionId, payload) => {
     setPlusOpen(false);
     if (actionId === "composer:attach") {
@@ -4795,8 +4856,12 @@ function FluxioComposer({
       className="fluxos-composer"
       aria-label="Fluxio command composer"
       data-accessibility-control-points="true"
+      data-accessibility-high-contrast={accessibilityPrefs.highContrast ? "true" : "false"}
+      data-accessibility-larger-targets={accessibilityPrefs.largerTargets ? "true" : "false"}
+      data-accessibility-reduced-motion={accessibilityPrefs.reducedMotion ? "true" : "false"}
       data-dictation-ambiguity-guard={dictationGuardEnabled ? "true" : "false"}
       data-dictation-control="true"
+      data-dictation-quality-gate={dictationGate.status}
     >
       {activeCommentTarget?.id ? (
         <div className="reference-comment-target" data-executable-comment-target="true">
@@ -4820,6 +4885,7 @@ function FluxioComposer({
         aria-describedby="fluxos-dictation-status"
         data-agent-composer-draft="true"
         onChange={event => onChangeDraft?.(event.target.value)}
+        onKeyDown={handleComposerKeyDown}
         placeholder={placeholder}
         value={currentDraft}
       />
@@ -4830,7 +4896,12 @@ function FluxioComposer({
       >
         <div className="fluxos-dictation-copy">
           <span>Voice guard</span>
-          <strong>{dictationNeedsReview ? `Review ${dictationFinding}` : "Review before send"}</strong>
+          <strong>{dictationGate.label}</strong>
+        </div>
+        <div className="fluxos-dictation-meter" aria-label="Dictation quality gate">
+          <span>Quality</span>
+          <strong>{dictationGate.score}/100</strong>
+          <i style={{ "--dictation-score": `${dictationGate.score}%` }} />
         </div>
         <div className="fluxos-dictation-checks" aria-label="Dictation safeguards">
           <span>Review before send</span>
@@ -4879,7 +4950,7 @@ function FluxioComposer({
             <span>Correction buffer</span>
             <strong>{dictationFinding ? `Check ${dictationFinding} before launch` : "Text is ready to verify"}</strong>
             <p>
-              Speak or paste into the composer, clean obvious dictation markers, then send only when the command reads correctly.
+              {dictationGate.detail} Ctrl+Enter sends after the gate passes; Escape closes this review without deleting text.
             </p>
           </div>
           <div className="fluxos-dictation-review-actions">
@@ -4895,6 +4966,24 @@ function FluxioComposer({
           </div>
         </div>
       ) : null}
+      <div className="fluxos-accessibility-controls" data-accessibility-preferences="true" aria-label="Accessibility preferences">
+        {[
+          ["reducedMotion", "Reduced motion"],
+          ["highContrast", "High contrast"],
+          ["largerTargets", "Larger targets"],
+        ].map(([key, label]) => (
+          <button
+            aria-pressed={accessibilityPrefs[key] ? "true" : "false"}
+            className={accessibilityPrefs[key] ? "active" : ""}
+            data-accessibility-toggle={key}
+            key={key}
+            onClick={() => toggleAccessibilityPref(key)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="fluxos-composer-bar">
         <div className="fluxos-composer-actions">
           <div className="fluxos-composer-left-actions">
@@ -11421,6 +11510,19 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
       : {};
   const jbhBlockers = asList(jbhEavenReadiness.blockers);
   const jbhProofPath = String(jbhEavenReadiness?.proof?.artifactPath || "").trim();
+  const voiceAccessibilityReadiness =
+    settingsState?.voiceAccessibilityReadiness && typeof settingsState.voiceAccessibilityReadiness === "object"
+      ? settingsState.voiceAccessibilityReadiness
+      : {};
+  const voiceAccessChecks = asList(voiceAccessibilityReadiness.checks);
+  const voiceAccessProofPath = String(voiceAccessibilityReadiness?.proof?.artifactPath || "").trim();
+  const voiceAccessStatus = String(voiceAccessibilityReadiness.status || "pending_live_capture");
+  const voiceInput = voiceAccessibilityReadiness.voiceInput && typeof voiceAccessibilityReadiness.voiceInput === "object"
+    ? voiceAccessibilityReadiness.voiceInput
+    : {};
+  const voiceAccessA11y = voiceAccessibilityReadiness.accessibility && typeof voiceAccessibilityReadiness.accessibility === "object"
+    ? voiceAccessibilityReadiness.accessibility
+    : {};
   const readyProviderCount = providers.filter(item => item.status || item.hasSecret).length;
   const providerOrchestration =
     settingsState?.providerOrchestration && typeof settingsState.providerOrchestration === "object"
@@ -11469,6 +11571,12 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
       label: "Appearance",
       status: themes.find(theme => theme.id === activeTheme)?.label || activeTheme,
       detail: "Theme, density, contrast, and command feel.",
+    },
+    {
+      id: "voice-access",
+      label: "Voice & Access",
+      status: titleizeToken(voiceAccessStatus),
+      detail: "Dictation repair, accidental-send protection, keyboard path, contrast, and motion controls.",
     },
     {
       id: "rules",
@@ -11847,6 +11955,79 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
       </div>
     </div>
   );
+  const renderVoiceAccessSettings = () => (
+    <div className="fluxos-settings-section-body" data-settings-voice-access-panel="true">
+      <section
+        className={cx("fluxos-voice-access-readiness", voiceAccessProofPath && "ready")}
+        data-voice-accessibility-readiness="true"
+        data-voice-accessibility-schema={voiceAccessibilityReadiness.schema || "fluxio.voice_accessibility_readiness.v1"}
+      >
+        <div className="fluxos-voice-access-head">
+          <div>
+            <span>Voice and accessibility readiness</span>
+            <strong>{titleizeToken(voiceAccessStatus)}</strong>
+            <p>
+              Dictation uses the system speech route, then Fluxio protects the send path with ambiguity review,
+              correction cleanup, keyboard repair, focus visibility, and motion/contrast controls.
+            </p>
+          </div>
+          <button
+            className="fluxos-voice-access-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "voice-access:capture-readiness")}
+            type="button"
+          >
+            Capture voice proof
+          </button>
+        </div>
+        <div className="fluxos-voice-access-grid" aria-label="Voice and accessibility controls">
+          <article>
+            <span>Voice input</span>
+            <strong>{voiceInput.localSttConfigured ? "Local STT" : "OS dictation bridge"}</strong>
+            <p>{voiceInput.osFallbackHint || "Use OS dictation, then review the command before sending."}</p>
+          </article>
+          <article>
+            <span>Send gate</span>
+            <strong>{voiceInput.accidentalSendProtection === false ? "Manual" : "Protected"}</strong>
+            <p>{voiceInput.commandAmbiguityDetection === false ? "Capture proof to confirm ambiguity detection." : "Ambiguity markers open the correction buffer first."}</p>
+          </article>
+          <article>
+            <span>Keyboard path</span>
+            <strong>{voiceAccessA11y.keyboardRepairPath === false ? "Pending" : "Ready"}</strong>
+            <p>Ctrl+Shift+M opens voice review; Ctrl+Enter sends after review; Escape closes the buffer.</p>
+          </article>
+          <article>
+            <span>Access controls</span>
+            <strong>
+              {[
+                voiceAccessA11y.reducedMotionControl !== false && "Motion",
+                voiceAccessA11y.highContrastControl !== false && "Contrast",
+                voiceAccessA11y.largerTargetsControl !== false && "Targets",
+              ].filter(Boolean).join(" / ") || "Pending"}
+            </strong>
+            <p>Controls are visible at the composer and do not require hunting through hidden settings.</p>
+          </article>
+        </div>
+        <div className="fluxos-voice-access-checks">
+          {(voiceAccessChecks.length ? voiceAccessChecks : [
+            { id: "review-before-send", label: "Review before send", status: "pending" },
+            { id: "correction-buffer", label: "Correction buffer", status: "pending" },
+            { id: "keyboard-repair-path", label: "Keyboard repair path", status: "pending" },
+            { id: "accessible-status", label: "Accessible status", status: "pending" },
+          ]).slice(0, 5).map(check => (
+            <span key={check.id || check.label}>
+              <strong>{check.label || titleizeToken(check.id || "check")}</strong>
+              <em>{titleizeToken(check.status || "pending")}</em>
+            </span>
+          ))}
+        </div>
+        <p className="fluxos-voice-access-foot">
+          {voiceAccessProofPath
+            ? `Proof artifact: ${voiceAccessProofPath}`
+            : voiceAccessibilityReadiness.nextAction || "Capture voice/accessibility proof before calling this workflow ready."}
+        </p>
+      </section>
+    </div>
+  );
   const renderRulesSettings = () => (
     <div className="fluxos-settings-section-body" data-settings-rules-panel="true">
       <section
@@ -12098,6 +12279,7 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
     if (activeTab === "updates") return renderUpdateSettings();
     if (activeTab === "workspace") return renderWorkspaceSettings();
     if (activeTab === "appearance") return renderAppearanceSettings();
+    if (activeTab === "voice-access") return renderVoiceAccessSettings();
     if (activeTab === "rules") return renderRulesSettings();
     if (activeTab === "runtimes") return renderRuntimeSettings();
     if (activeTab === "databases") return renderDatabaseSettings();

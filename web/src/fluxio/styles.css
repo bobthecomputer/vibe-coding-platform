@@ -1301,7 +1301,7 @@
 
 .fluxos-dictation-strip {
   display: grid;
-  grid-template-columns: minmax(132px, 0.72fr) minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(132px, 0.72fr) minmax(118px, 0.5fr) minmax(220px, 1fr) auto;
   align-items: center;
   gap: 8px;
   border: 1px solid rgba(255, 255, 255, 0.09);
@@ -1335,9 +1335,46 @@
   white-space: nowrap;
 }
 
+.fluxos-dictation-meter {
+  display: grid;
+  gap: 4px;
+  min-width: 112px;
+}
+
+.fluxos-dictation-meter span {
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fluxos-dictation-meter strong {
+  color: var(--fluxos-text);
+  font-size: 12px;
+}
+
+.fluxos-dictation-meter i {
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.fluxos-dictation-meter i::after {
+  display: block;
+  width: var(--dictation-score, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #e5e7eb, #8ef7c2);
+  content: "";
+}
+
 .fluxos-dictation-checks,
 .fluxos-dictation-controls,
-.fluxos-dictation-review-actions {
+.fluxos-dictation-review-actions,
+.fluxos-accessibility-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1398,6 +1435,41 @@
 .fluxos-dictation-review-actions button.primary {
   background: #f4f4f5;
   color: #09090b;
+}
+
+.fluxos-accessibility-controls {
+  margin-top: -2px;
+}
+
+.fluxos-accessibility-controls button {
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: rgba(245, 245, 245, 0.68);
+  font-size: 11px;
+}
+
+.fluxos-accessibility-controls button.active {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fluxos-text);
+}
+
+.fluxos-composer[data-accessibility-high-contrast="true"] textarea:focus,
+.fluxos-composer[data-accessibility-high-contrast="true"] button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.88);
+  outline-offset: 2px;
+}
+
+.fluxos-composer[data-accessibility-larger-targets="true"] button {
+  min-height: 38px;
+}
+
+.fluxos-composer[data-accessibility-reduced-motion="true"] *,
+.fluxos-composer[data-accessibility-reduced-motion="true"] *::before,
+.fluxos-composer[data-accessibility-reduced-motion="true"] *::after {
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
 }
 
 .fluxos-home-lobby .fluxos-composer textarea {
@@ -6371,6 +6443,127 @@ button.fluxos-context-root:hover {
   overflow-wrap: anywhere;
 }
 
+.fluxos-voice-access-readiness {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 16px 0;
+}
+
+.fluxos-voice-access-readiness.ready {
+  border-color: rgba(142, 247, 194, 0.34);
+}
+
+.fluxos-voice-access-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-voice-access-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-voice-access-head span,
+.fluxos-voice-access-grid span,
+.fluxos-voice-access-checks strong {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-voice-access-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+}
+
+.fluxos-voice-access-head p,
+.fluxos-voice-access-grid p,
+.fluxos-voice-access-foot {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-voice-access-proof-button {
+  display: inline-flex !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0 16px !important;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-voice-access-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-voice-access-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+}
+
+.fluxos-voice-access-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-voice-access-grid article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-voice-access-grid strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-voice-access-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.fluxos-voice-access-checks span {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0 10px;
+}
+
+.fluxos-voice-access-checks em {
+  color: #8ef7c2;
+  font-size: 11px;
+  font-style: normal;
+}
+
 .fluxos-update-readiness {
   display: grid;
   gap: 14px;
@@ -6812,6 +7005,7 @@ button.fluxos-context-root:hover {
 .fluxos-shell.surface-settings .fluxos-provider-orchestration .fluxos-provider-proof-button,
 .fluxos-shell.surface-settings .fluxos-harness-benchmark-board .fluxos-harness-benchmark-proof-button,
 .fluxos-shell.surface-settings .fluxos-update-readiness .fluxos-update-proof-button,
+.fluxos-shell.surface-settings .fluxos-voice-access-readiness .fluxos-voice-access-proof-button,
 .fluxos-shell.surface-settings .fluxos-pr-stack-landing .fluxos-pr-stack-landing-proof-button,
 .fluxos-shell.surface-settings .fluxos-automation-overlap .fluxos-automation-overlap-proof-button,
 .fluxos-shell.surface-settings .fluxos-jbh-readiness .fluxos-jbh-proof-button {
@@ -7971,12 +8165,14 @@ button.fluxos-context-root:hover {
   }
 
   .fluxos-dictation-controls,
-  .fluxos-dictation-review-actions {
+  .fluxos-dictation-review-actions,
+  .fluxos-accessibility-controls {
     justify-content: stretch;
   }
 
   .fluxos-dictation-controls button,
-  .fluxos-dictation-review-actions button {
+  .fluxos-dictation-review-actions button,
+  .fluxos-accessibility-controls button {
     flex: 1 1 120px;
   }
 
