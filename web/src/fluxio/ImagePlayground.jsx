@@ -392,6 +392,7 @@ export function ImagePlaygroundSurface({ callBackend }) {
   const [selfRepairBusy, setSelfRepairBusy] = useState(false);
   const [selfRepairProof, setSelfRepairProof] = useState(null);
   const [routeProbeEnabled, setRouteProbeEnabled] = useState(false);
+  const [allowProviderCliProbe, setAllowProviderCliProbe] = useState(false);
   const [selectedLibraryId, setSelectedLibraryId] = useState("");
   const [exportTarget, setExportTarget] = useState("agent");
   const [providerBlockedState, setProviderBlockedState] = useState(null);
@@ -2046,6 +2047,7 @@ export function ImagePlaygroundSurface({ callBackend }) {
         timeoutSeconds: 45,
         probeExternalRoutes: routeProbeEnabled,
         probeProviderModels: routeProbeEnabled,
+        allowProviderCliProbe: routeProbeEnabled && allowProviderCliProbe,
       });
       setSelfRepairProof(result);
       updateProject(current => ({
@@ -2319,10 +2321,22 @@ export function ImagePlaygroundSurface({ callBackend }) {
           <label className="image-route-probe-toggle">
             <input
               checked={routeProbeEnabled}
-              onChange={event => setRouteProbeEnabled(event.target.checked)}
+              onChange={event => {
+                setRouteProbeEnabled(event.target.checked);
+                if (!event.target.checked) setAllowProviderCliProbe(false);
+              }}
               type="checkbox"
             />
             <span>Probe Hermes/OpenClaw route</span>
+          </label>
+          <label className={cx("image-route-probe-toggle", !routeProbeEnabled && "muted")}>
+            <input
+              checked={allowProviderCliProbe}
+              disabled={!routeProbeEnabled}
+              onChange={event => setAllowProviderCliProbe(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Allow slow model call</span>
           </label>
         </div>
       </section>

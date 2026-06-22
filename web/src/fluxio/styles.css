@@ -26064,6 +26064,11 @@ body::-webkit-scrollbar-thumb {
   accent-color: #eff4f2;
 }
 
+.reference-shell.surface-images .image-route-probe-toggle.muted,
+.fluxos-shell.surface-images .image-route-probe-toggle.muted {
+  color: rgba(239, 244, 242, 0.44);
+}
+
 .reference-shell.surface-images :where(button, select, input, textarea):focus-visible,
 .fluxos-shell.surface-images :where(button, select, input, textarea):focus-visible {
   outline: 2px solid rgba(197, 226, 255, 0.76) !important;
