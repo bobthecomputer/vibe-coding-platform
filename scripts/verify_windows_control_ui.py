@@ -63,9 +63,10 @@ SURFACES = [
     {
         "name": "images-desktop",
         "surface": "images",
+        "mode": "agent",
         "width": 1440,
         "height": 960,
-        "expect": ["Image studio"],
+        "expect": ["Image Playground", "Prompt", "Generate image"],
     },
     {
         "name": "settings-models-desktop",
@@ -244,6 +245,8 @@ def run_surface_check(
         str(surface.get("min_width", 1000)),
         "--min-height",
         str(surface.get("min_height", 700)),
+        "--render-timeout",
+        str(timeout),
     ]
     if browser_path:
         command.extend(["--browser-path", browser_path])

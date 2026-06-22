@@ -226,7 +226,11 @@ def wait_for_rendered_surface(cdp: Cdp, expected: list[str], timeout: float = 30
         ready_state = str(cdp_eval(cdp, "document.readyState") or "")
         text = str(cdp_eval(cdp, "document.body ? document.body.innerText : ''") or "")
         last_text = text
-        loading = "Loading live control shell" in text
+        loading = (
+            "Loading live control shell" in text
+            or "Loading image workspace" in text
+            or bool(cdp_eval(cdp, "Boolean(document.querySelector('[data-image-playground-loading=\"true\"]'))"))
+        )
         has_shell = bool(cdp_eval(cdp, "Boolean(document.querySelector('.fluxos-shell, .reference-shell, .fluxio-shell'))"))
         normalized_text = text.casefold()
         has_expected = all(fragment.casefold() in normalized_text for fragment in expected)
@@ -427,7 +431,11 @@ async def _capture_chromium_with_playwright_async(
                     continue
                 normalized_text = visible_text.casefold()
                 has_expected = all(fragment.casefold() in normalized_text for fragment in expected)
-                loading = "Loading live control shell" in visible_text
+                loading = (
+                    "Loading live control shell" in visible_text
+                    or "Loading image workspace" in visible_text
+                    or bool(await page.locator("[data-image-playground-loading='true']").count())
+                )
                 if has_shell and has_expected and not loading:
                     break
                 await page.wait_for_timeout(250)
@@ -795,6 +803,7 @@ def main() -> int:
     parser.add_argument("--min-height", type=int, default=700)
     parser.add_argument("--browser", choices=["auto", "chrome", "chromium", "edge", "zen"], default="auto")
     parser.add_argument("--browser-path", default="")
+    parser.add_argument("--render-timeout", type=int, default=45)
     parser.add_argument("--measure-performance", action="store_true")
     parser.add_argument("--warm-tab-budget-ms", type=int, default=2500)
     parser.add_argument("--mission-switch-budget-ms", type=int, default=2500)
@@ -851,6 +860,7 @@ def main() -> int:
                 width=args.width,
                 height=args.height,
                 expected=expected,
+                timeout=args.render_timeout,
             )
         except Exception as exc:
             fallback_errors.append(f"playwright-chromium: {str(exc)[:700]}")
@@ -865,6 +875,7 @@ def main() -> int:
                     width=args.width,
                     height=args.height,
                     expected=expected,
+                    timeout=args.render_timeout,
                 )
                 capture_report["fallbackFrom"] = "playwright-chromium"
                 capture_report["fallbackReason"] = fallback_errors[-1]
@@ -878,7 +889,7 @@ def main() -> int:
                     width=args.width,
                     height=args.height,
                     expected=expected,
-                    timeout=30,
+                    timeout=args.render_timeout,
                 )
                 capture_report["fallbackFrom"] = "playwright-chromium, chromium-devtools"
                 capture_report["fallbackReason"] = " | ".join(fallback_errors)[:1200]

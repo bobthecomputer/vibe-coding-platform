@@ -149,6 +149,50 @@ function manifestUrlForRecord(record) {
   return resolveArtifactUrl(record?.manifestUrl || record?.manifestPath || "");
 }
 
+function artifactUnavailableDetail(src) {
+  const source = String(src || "").trim();
+  if (!source) return "No artifact URL is recorded for this image.";
+  if (source.includes("/api/artifact")) {
+    return "Start the live backend or NAS artifact bridge to serve this image.";
+  }
+  return "The recorded image source did not load in this browser session.";
+}
+
+function ArtifactImage({ alt = "", className = "", detail = "", provider = "", src = "", title = "", variant = "thumb" }) {
+  const [failedSource, setFailedSource] = useState("");
+  const source = String(src || "").trim();
+  const unavailable = !source || failedSource === source;
+
+  useEffect(() => {
+    setFailedSource("");
+  }, [source]);
+
+  if (unavailable) {
+    return (
+      <div
+        aria-label={`${title || alt || "Image artifact"} unavailable`}
+        className={cx("image-artifact-visual", `variant-${variant}`, "is-unavailable", className)}
+        data-image-artifact-state="unavailable"
+        role="img"
+      >
+        <span>Artifact unavailable</span>
+        <strong>{title || "Image artifact"}</strong>
+        {provider ? <em>{provider}</em> : null}
+        <small>{detail || artifactUnavailableDetail(source)}</small>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={cx("image-artifact-visual", `variant-${variant}`, className)}
+      onError={() => setFailedSource(source)}
+      src={source}
+    />
+  );
+}
+
 function providerRouteFromReceipt(receipt) {
   const route = String(receipt?.route || receipt?.fallback || "").trim();
   return route || "Unknown";
@@ -2145,7 +2189,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                 onClick={() => setSelectedLibraryId(item.id)}
                 type="button"
               >
-                <img alt="" src={item.src} />
+                <ArtifactImage
+                  alt=""
+                  provider={item.provider}
+                  src={item.src}
+                  title={item.title}
+                  variant="gallery"
+                />
                 <span>{item.title}</span>
               </button>
             ))}
@@ -2156,7 +2206,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
           {selectedLibraryItem ? (
             <>
               <div className="image-selected-frame">
-                <img alt={selectedLibraryItem.title} src={selectedLibraryItem.src} />
+                <ArtifactImage
+                  alt={selectedLibraryItem.title}
+                  provider={selectedLibraryItem.provider}
+                  src={selectedLibraryItem.src}
+                  title={selectedLibraryItem.title}
+                  variant="selected"
+                />
                 <div className="image-selected-overlay">{renderOverlayShapes(focusedOverlaySnapshot, "preview")}</div>
               </div>
               <div className="image-selected-caption">
@@ -2306,7 +2362,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                   <article className={cx("image-reference-row", referenceImage && "has-image")} key={ref.id}>
                     {referenceImage ? (
                       <div className="image-reference-thumb">
-                        <img alt={ref.title || "Generated design reference"} src={referenceImage} />
+                        <ArtifactImage
+                          alt={ref.title || "Generated design reference"}
+                          provider={ref.provider || ref.source}
+                          src={referenceImage}
+                          title={ref.title || "Generated design reference"}
+                          variant="reference"
+                        />
                       </div>
                     ) : null}
                     <div>
@@ -2326,7 +2388,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                 <article className="image-reference-row">
                   {selectedGeneratedDesignReferenceUrl ? (
                     <div className="image-reference-thumb large">
-                      <img alt="Selected generated artifact" src={selectedGeneratedDesignReferenceUrl} />
+                      <ArtifactImage
+                        alt="Selected generated artifact"
+                        provider={selectedGeneratedDesignReference.source}
+                        src={selectedGeneratedDesignReferenceUrl}
+                        title={selectedGeneratedDesignReference.artifactId || selectedGeneratedDesignReference.requestId || "Selected generated artifact"}
+                        variant="reference"
+                      />
                     </div>
                   ) : null}
                   <b>{selectedGeneratedDesignReference.artifactId || selectedGeneratedDesignReference.requestId || "generated-reference"}</b>
@@ -2518,7 +2586,15 @@ export function ImagePlaygroundSurface({ callBackend }) {
                     onPointerDown={event => startLayerDrag(event, layer)}
                     style={canvasLayerStyle(layer, layer.id === project.selectedLayerId)}
                   >
-                    {layer.type === "image" && layer.src ? <img alt="" draggable="false" src={layer.src} /> : null}
+                    {layer.type === "image" && layer.src ? (
+                      <ArtifactImage
+                        alt=""
+                        className="image-layer-artifact"
+                        src={layer.src}
+                        title={layer.name}
+                        variant="layer"
+                      />
+                    ) : null}
                     {layer.id === project.selectedLayerId && !layer.locked ? (
                       <button className="image-resize-handle" onPointerDown={event => startResize(event, layer)} type="button" />
                     ) : null}
@@ -2611,7 +2687,14 @@ export function ImagePlaygroundSurface({ callBackend }) {
                     {layer.visible === false ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                   <div className="image-layer-thumb" style={{ background: layer.type === "shape" ? layer.fill : "rgba(255,255,255,.08)" }}>
-                    {layer.type === "image" && layer.src ? <img alt="" src={layer.src} /> : null}
+                    {layer.type === "image" && layer.src ? (
+                      <ArtifactImage
+                        alt=""
+                        src={layer.src}
+                        title={layer.name}
+                        variant="layer-thumb"
+                      />
+                    ) : null}
                   </div>
                   <div>
                     <strong>{layer.name}</strong>
@@ -2747,7 +2830,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                     <strong>{item.title || "History item"}</strong>
                     {historyPreview ? (
                       <div className="image-history-preview">
-                        <img alt={item.title || "History image preview"} src={historyPreview} />
+                        <ArtifactImage
+                          alt={item.title || "History image preview"}
+                          provider={item.provider || item.providerId}
+                          src={historyPreview}
+                          title={item.title || "History image preview"}
+                          variant="history"
+                        />
                       </div>
                     ) : null}
                     {keyboardReady ? <small className="image-kbd-ready-badge">kbd ready</small> : null}
@@ -3107,7 +3196,13 @@ export function ImagePlaygroundSurface({ callBackend }) {
                   <small>{queueFlow.stageMeta[item.state]?.label || "Pending"} · {queueFlow.stageMeta[item.state]?.detail || "Awaiting update"}</small>
                   {item.generatedPreview ? (
                     <div className="image-queue-preview">
-                      <img alt="Generated preview" src={item.generatedPreview} />
+                      <ArtifactImage
+                        alt="Generated preview"
+                        provider={item.providerName || item.providerId}
+                        src={item.generatedPreview}
+                        title={item.title || "Generated preview"}
+                        variant="queue"
+                      />
                       {(item.annotationSnapshot?.pins?.length || item.annotationSnapshot?.rectangles?.length) ? (
                         <div className="image-queue-preview-overlays" aria-label="Queue annotation overlays">
                           {renderOverlayShapes(item.annotationSnapshot, "queue")}
