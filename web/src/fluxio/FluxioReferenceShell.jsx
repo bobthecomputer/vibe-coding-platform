@@ -11203,6 +11203,20 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const fusionProjects = asList(fusionReadiness.projects);
   const fusionBlockers = asList(fusionReadiness.blockers);
   const fusionProofPath = String(fusionReadiness?.proof?.artifactPath || "").trim();
+  const jbhEavenReadiness =
+    settingsState?.jbhEavenReadiness && typeof settingsState.jbhEavenReadiness === "object"
+      ? settingsState.jbhEavenReadiness
+      : {};
+  const jbhScenarioGate =
+    jbhEavenReadiness.scenarioGate && typeof jbhEavenReadiness.scenarioGate === "object"
+      ? jbhEavenReadiness.scenarioGate
+      : {};
+  const jbhProject =
+    jbhEavenReadiness.project && typeof jbhEavenReadiness.project === "object"
+      ? jbhEavenReadiness.project
+      : {};
+  const jbhBlockers = asList(jbhEavenReadiness.blockers);
+  const jbhProofPath = String(jbhEavenReadiness?.proof?.artifactPath || "").trim();
   const readyProviderCount = providers.filter(item => item.status || item.hasSecret).length;
   const providerOrchestration =
     settingsState?.providerOrchestration && typeof settingsState.providerOrchestration === "object"
@@ -11459,6 +11473,48 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   );
   const renderRulesSettings = () => (
     <div className="fluxos-settings-section-body" data-settings-rules-panel="true">
+      <section
+        className={cx("fluxos-jbh-readiness", jbhProofPath && "ready")}
+        data-jbh-eaven-readiness-contract="true"
+        data-jbh-eaven-schema={jbhEavenReadiness.schema || "fluxio.jbh_eaven_redteam_readiness.v1"}
+      >
+        <div className="fluxos-jbh-readiness-head">
+          <div>
+            <span>JBH-EAVEN safe lab</span>
+            <strong>{titleizeToken(jbhEavenReadiness.status || "pending live capture")}</strong>
+            <p>{jbhEavenReadiness.firstRunTarget?.summary || jbhEavenReadiness.nextAction || "Capture safe synthetic red-team readiness before enabling scenario runs."}</p>
+          </div>
+          <button
+            className="fluxos-jbh-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "redteam:capture-jbh-eaven-readiness")}
+            type="button"
+          >
+            Capture safe lab proof
+          </button>
+        </div>
+        <div className="fluxos-jbh-readiness-grid">
+          <article className={cx(jbhProject.status && !String(jbhProject.status).includes("missing") && "ready")}>
+            <span>{titleizeToken(jbhProject.status || "pending")}</span>
+            <strong>{jbhProject.label || "JBH-EAVEN / JBheaven"}</strong>
+            <p>{jbhProject.selectedRoot || jbhProject.skillRoot || "No local lab path captured yet."}</p>
+          </article>
+          <article>
+            <span>Scenario gate</span>
+            <strong>{jbhEavenReadiness.firstRunTarget?.title || "Safe synthetic scenario gate"}</strong>
+            <p>{jbhScenarioGate.rawPayloadExport === false ? "Raw payload export disabled; aggregate proof only." : "Capture live readiness to confirm payload policy."}</p>
+          </article>
+          <article>
+            <span>Blocked actions</span>
+            <strong>{`${asList(jbhScenarioGate.blockedRealWorldActions).length || 6} real-world actions blocked`}</strong>
+            <p>{asList(jbhScenarioGate.blockedRealWorldActions).slice(0, 3).join(" / ") || "Credential theft / persistence / exfiltration stay blocked."}</p>
+          </article>
+          <article>
+            <span>Blockers</span>
+            <strong>{jbhBlockers.length ? `${jbhBlockers.length} blocker${jbhBlockers.length === 1 ? "" : "s"}` : "No hard blockers reported"}</strong>
+            <p>{jbhBlockers[0] || (jbhProofPath ? `Proof artifact: ${jbhProofPath}` : "Live capture has not run yet.")}</p>
+          </article>
+        </div>
+      </section>
       <div className="fluxos-settings-fact-grid">
         <article><span>Active rule set</span><strong>{settingsState?.activeRuleSet?.name || "Default policy"}</strong><p>{settingsState?.activeRuleSet?.description || "No rule-set detail reported."}</p></article>
         <article><span>Execution targets</span>{renderOptionChips(executionTargets)}</article>

@@ -1432,6 +1432,27 @@ class DesktopUiContractTests(unittest.TestCase):
         self.assertIn(".fluxos-fusion-project-grid", styles)
         self.assertIn(".fluxos-fusion-proof-button", styles)
 
+    def test_settings_rules_has_jbh_eaven_safe_redteam_readiness_panel(self) -> None:
+        reference_shell = FLUXIO_REFERENCE_SHELL.read_text(encoding="utf-8")
+        shell = FLUXIO_SHELL.read_text(encoding="utf-8")
+        styles = FLUXIO_STYLES.read_text(encoding="utf-8")
+        web_backend = WEB_BACKEND.read_text(encoding="utf-8")
+
+        self.assertIn('data-settings-rules-panel="true"', reference_shell)
+        self.assertIn('data-jbh-eaven-readiness-contract="true"', reference_shell)
+        self.assertIn('data-jbh-eaven-schema={jbhEavenReadiness.schema || "fluxio.jbh_eaven_redteam_readiness.v1"}', reference_shell)
+        self.assertIn("JBH-EAVEN safe lab", reference_shell)
+        self.assertIn("Capture safe lab proof", reference_shell)
+        self.assertIn("redteam:capture-jbh-eaven-readiness", reference_shell)
+        self.assertIn("get_jbh_eaven_redteam_readiness_command", shell)
+        self.assertIn("synthetic_authorized_lab_only", shell)
+        self.assertIn("rawPayloadExport: false", shell)
+        self.assertIn("fluxio.jbh_eaven_redteam_readiness.v1", web_backend)
+        self.assertIn("jbh_eaven_safe_synthetic_redteam_readiness", web_backend)
+        self.assertIn(".fluxos-jbh-readiness", styles)
+        self.assertIn(".fluxos-jbh-readiness-grid", styles)
+        self.assertIn(".fluxos-jbh-proof-button", styles)
+
     def test_packaged_tauri_defaults_to_live_mode_without_fixture(self) -> None:
         shell = FLUXIO_SHELL.read_text(encoding="utf-8")
 

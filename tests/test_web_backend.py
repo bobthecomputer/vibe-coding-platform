@@ -959,6 +959,69 @@ class FluxioWebBackendTests(unittest.TestCase):
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "solantir_mind_tower_fusion_readiness")
 
+    def test_jbh_eaven_redteam_readiness_command_writes_safe_lab_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            user_root = pathlib.Path(temp_dir) / "user"
+            projects = user_root / "Projects"
+            root = projects / "vibe-coding-platform"
+            jbheaven = projects / "Jbheaven"
+            skill_root = jbheaven / "skills" / "red-teaming" / "jbheaven-technique-scorer"
+            root.mkdir(parents=True)
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "connected_apps.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "app_id": "jbheaven",
+                            "name": "JBheaven",
+                            "bridge": {"endpoint": "http://127.0.0.1:1/api", "healthcheck": "/health"},
+                            "permissions": ["task.run", "context.read", "skill.inspect"],
+                            "auth": {"mode": "local_session"},
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("# Technique scorer\n", encoding="utf-8")
+            (jbheaven / "package.json").write_text(
+                json.dumps({"name": "jbheaven", "version": "8.0.0"}),
+                encoding="utf-8",
+            )
+            (jbheaven / "ETHICAL_LOOP_CONTEXT.md").write_text("synthetic lab only\n", encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": str(user_root),
+                    "USERPROFILE": str(user_root),
+                    "FLUXIO_JBH_EAVEN_HOME": str(user_root),
+                },
+            ):
+                contract = backend.dispatch(
+                    "get_jbh_eaven_redteam_readiness_command",
+                    {"root": str(root), "requestId": "mission8-jbh-test"},
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.jbh_eaven_redteam_readiness.v1")
+            self.assertEqual(contract["primaryRuntimeLane"], "hermes")
+            self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
+            self.assertEqual(contract["status"], "ready_for_synthetic_scenario_gate")
+            self.assertEqual(contract["project"]["status"], "detected")
+            self.assertEqual(contract["project"]["packageVersion"], "8.0.0")
+            self.assertIn("jbheaven-technique-scorer", contract["project"]["redTeamSkills"])
+            self.assertEqual(contract["api"]["status"], "offline")
+            self.assertFalse(contract["scenarioGate"]["rawPayloadExport"])
+            self.assertTrue(contract["scenarioGate"]["requiresFakeTargetBoundary"])
+            self.assertIn("credential theft", contract["scenarioGate"]["blockedRealWorldActions"])
+            self.assertIn("Safe synthetic scenario gate", contract["firstRunTarget"]["title"])
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "jbh_eaven_safe_synthetic_redteam_readiness")
+
     def test_provider_presence_reads_native_opencode_go_auth_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
