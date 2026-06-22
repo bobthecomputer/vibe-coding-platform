@@ -6242,10 +6242,10 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-provider-orchestration-head .fluxos-provider-proof-button {
-  border: 1px solid rgba(245, 245, 245, 0.22);
-  border-radius: 999px;
-  background: rgba(245, 245, 245, 0.94);
-  color: #050505;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
   cursor: pointer;
   flex: 0 0 auto;
   padding: 9px 14px;
@@ -6295,6 +6295,122 @@ button.fluxos-context-root:hover {
 
 .fluxos-provider-orchestration-foot {
   overflow-wrap: anywhere;
+}
+
+.fluxos-fusion-readiness {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 16px 0;
+}
+
+.fluxos-fusion-readiness.ready {
+  border-color: rgba(180, 255, 214, 0.3);
+}
+
+.fluxos-fusion-readiness-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-fusion-readiness-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-fusion-readiness-head span,
+.fluxos-fusion-project-grid span,
+.fluxos-fusion-next-step span {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-fusion-readiness-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.12;
+}
+
+.fluxos-fusion-readiness-head p,
+.fluxos-fusion-project-grid p,
+.fluxos-fusion-project-grid small,
+.fluxos-fusion-next-step p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-fusion-proof-button {
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-fusion-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-shell.surface-settings .fluxos-fusion-readiness .fluxos-fusion-proof-button,
+.fluxos-shell.surface-settings .fluxos-provider-orchestration .fluxos-provider-proof-button {
+  display: inline-flex !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  padding: 0 16px !important;
+}
+
+.fluxos-fusion-project-grid,
+.fluxos-fusion-next-step {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+}
+
+.fluxos-fusion-project-grid article,
+.fluxos-fusion-next-step article {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-fusion-project-grid article + article,
+.fluxos-fusion-next-step article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-fusion-project-grid article.ready span {
+  color: rgba(180, 255, 214, 0.86);
+}
+
+.fluxos-fusion-project-grid strong,
+.fluxos-fusion-next-step strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
 }
 
 .fluxos-settings-list article,
@@ -6871,14 +6987,19 @@ button.fluxos-context-root:hover {
   }
 
   .fluxos-settings-route-summary,
-  .fluxos-settings-fact-grid {
+  .fluxos-settings-fact-grid,
+  .fluxos-fusion-project-grid,
+  .fluxos-fusion-next-step {
     grid-template-columns: 1fr;
   }
 
   .fluxos-settings-route-summary article + article,
-  .fluxos-settings-fact-grid article + article {
+  .fluxos-settings-fact-grid article + article,
+  .fluxos-fusion-project-grid article + article,
+  .fluxos-fusion-next-step article + article {
     border-left: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-left: 0;
   }
 
   .fluxos-rail-footer {

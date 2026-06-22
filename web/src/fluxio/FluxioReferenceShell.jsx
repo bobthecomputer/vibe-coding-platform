@@ -11196,6 +11196,13 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const setupCards = asList(settingsState?.beginnerSetupCards);
   const runtimes = asList(settingsState?.runtimes);
   const bridgeSessions = asList(settingsState?.bridgeSessions);
+  const fusionReadiness =
+    settingsState?.fusionReadiness && typeof settingsState.fusionReadiness === "object"
+      ? settingsState.fusionReadiness
+      : {};
+  const fusionProjects = asList(fusionReadiness.projects);
+  const fusionBlockers = asList(fusionReadiness.blockers);
+  const fusionProofPath = String(fusionReadiness?.proof?.artifactPath || "").trim();
   const readyProviderCount = providers.filter(item => item.status || item.hasSecret).length;
   const providerOrchestration =
     settingsState?.providerOrchestration && typeof settingsState.providerOrchestration === "object"
@@ -11470,6 +11477,48 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
         <article><span>Bridge sessions</span><strong>{bridgeSessions.length || "None reported"}</strong></article>
         <article><span>Runtime rows</span><strong>{runtimes.length || "Not reported"}</strong></article>
       </div>
+      <section
+        className={cx("fluxos-fusion-readiness", fusionProofPath && "ready")}
+        data-fusion-readiness-contract="true"
+        data-fusion-readiness-schema={fusionReadiness.schema || "fluxio.fusion_readiness.v1"}
+      >
+        <div className="fluxos-fusion-readiness-head">
+          <div>
+            <span>Solantir / Mind Tower fusion</span>
+            <strong>{titleizeToken(fusionReadiness.status || "pending live capture")}</strong>
+            <p>{fusionReadiness.firstMergeTarget?.summary || fusionReadiness.nextAction || "Capture live readiness before moving modules."}</p>
+          </div>
+          <button
+            className="fluxos-fusion-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "fusion:capture-readiness")}
+            type="button"
+          >
+            Capture fusion proof
+          </button>
+        </div>
+        <div className="fluxos-fusion-project-grid">
+          {fusionProjects.slice(0, 4).map(project => (
+            <article className={cx(project.status && !String(project.status).includes("missing") && "ready")} key={project.id || project.label}>
+              <span>{titleizeToken(project.status || "pending")}</span>
+              <strong>{project.label || titleizeToken(project.id)}</strong>
+              <p>{project.selectedRoot || project.bridgeEndpoint || project.nextAction || "No path reported yet."}</p>
+              <small>{asList(project.survivesAs).slice(0, 3).join(" / ") || "Fusion role pending"}</small>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-fusion-next-step">
+          <article>
+            <span>First merge target</span>
+            <strong>{fusionReadiness.firstMergeTarget?.title || "Read-only fusion inventory"}</strong>
+            <p>{fusionReadiness.nextAction || "Keep this slice read-only until bridge health is proven."}</p>
+          </article>
+          <article>
+            <span>Blockers</span>
+            <strong>{fusionBlockers.length ? `${fusionBlockers.length} blocker${fusionBlockers.length === 1 ? "" : "s"}` : "No hard blockers reported"}</strong>
+            <p>{fusionBlockers[0] || (fusionProofPath ? `Proof artifact: ${fusionProofPath}` : "Live capture has not run yet.")}</p>
+          </article>
+        </div>
+      </section>
       <div className="fluxos-settings-list">
         {runtimes.length ? runtimes.slice(0, 8).map(item => (
           <article key={item.id || item.name || item.label}>
