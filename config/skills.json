@@ -52,6 +52,10 @@
       "required": ["query"]
     },
     "permissions": ["file_read"],
+    "action_kinds": ["workspace_search"],
+    "profile_suitability": ["builder", "advanced", "experimental"],
+    "guidance_only": false,
+    "execution_capable": true,
     "examples": ["Search for TODO|FIXME in src and docs"]
   },
   {

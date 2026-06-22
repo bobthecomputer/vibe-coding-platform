@@ -26,6 +26,11 @@ def _safe_skill_id(value: str) -> str:
     return cleaned[:96] or "skill"
 
 
+def _required_schema_fields(schema: dict) -> list[str]:
+    required = schema.get("required", []) if isinstance(schema, dict) else []
+    return [str(item) for item in required if str(item).strip()]
+
+
 class SkillLibrary:
     def __init__(self, root: Path, registry: SkillRegistry) -> None:
         self.root = root.resolve()
@@ -712,6 +717,9 @@ class SkillLibrary:
                         "required": ["taskBrief"],
                     },
                     "inputContractStatus": schema_status,
+                    "outputSchema": skill.output_schema or {},
+                    "declaredRoute": skill.route or {},
+                    "proofArtifacts": skill.proof_artifacts or [],
                     "permissions": skill.permissions,
                     "actionKinds": skill.action_kinds,
                     "guidanceOnly": skill.guidance_only,
@@ -735,6 +743,9 @@ class SkillLibrary:
                 "inputContractStatus": "generated_minimal",
                 "permissions": item.permissions,
                 "actionKinds": item.tags,
+                "outputSchema": {},
+                "declaredRoute": {},
+                "proofArtifacts": [],
                 "guidanceOnly": False,
                 "executionCapable": not item.disabled,
             }
@@ -758,6 +769,9 @@ class SkillLibrary:
                         "required": ["taskBrief"],
                     },
                     "inputContractStatus": "declared" if schema else "generated_minimal",
+                    "outputSchema": item.get("outputSchema", {}) if isinstance(item.get("outputSchema"), dict) else {},
+                    "declaredRoute": item.get("route", {}) if isinstance(item.get("route"), dict) else {},
+                    "proofArtifacts": item.get("proofArtifacts", []) if isinstance(item.get("proofArtifacts"), list) else [],
                     "permissions": item.get("permissions", []) if isinstance(item.get("permissions"), list) else [],
                     "actionKinds": item.get("actionKinds", []) if isinstance(item.get("actionKinds"), list) else [],
                     "guidanceOnly": bool(item.get("guidanceOnly", False)),
@@ -774,12 +788,15 @@ class SkillLibrary:
             skill_id = str(item.get("skillId") or f"skill_{index}")
             execution_capable = bool(item.get("executionCapable"))
             guidance_only = bool(item.get("guidanceOnly"))
-            runtime_lane = "hermes" if execution_capable and not guidance_only else "hermes-guidance"
+            declared_route = item.get("declaredRoute") if isinstance(item.get("declaredRoute"), dict) else {}
+            declared_runtime = str(declared_route.get("runtime") or "").strip().lower()
+            runtime_lane = declared_runtime or ("hermes" if execution_capable and not guidance_only else "hermes-guidance")
             if item.get("sourceKind") in {"openclaw", "workspace", "user_installed"} and not execution_capable:
                 runtime_lane = "openclaw"
             safe_id = _safe_skill_id(skill_id)
             feedback_summary = self._feedback_summary(item, skill_id)
             hold = self._system_loss_hold(feedback_summary)
+            output_schema = item.get("outputSchema") if isinstance(item.get("outputSchema"), dict) else {}
             skill_contracts.append(
                 {
                     "skillId": skill_id,
@@ -795,12 +812,17 @@ class SkillLibrary:
                         "artifactRequired": True,
                         "artifactPath": f".agent_control/skill_runtime_proofs/{safe_id}.json",
                         "schema": "fluxio.skill_runtime_result.v1",
+                        "outputSchema": output_schema,
+                        "proofArtifacts": item.get("proofArtifacts") if isinstance(item.get("proofArtifacts"), list) else [],
                     },
                     "route": {
                         "runtimeLane": runtime_lane,
                         "primaryRuntimeLane": "hermes",
                         "fallbackRuntimeLane": "openclaw",
                         "opencodeFallback": True,
+                        "preferredProvider": declared_route.get("preferred_provider") or declared_route.get("provider") or "",
+                        "preferredModel": declared_route.get("preferred_model") or declared_route.get("model") or "",
+                        "declaredRoute": declared_route,
                         "reason": "Executable skills run through Hermes by default; OpenClaw/OpenCode stay fallback or workspace-skill lanes.",
                     },
                     "guardrails": [
@@ -844,6 +866,187 @@ class SkillLibrary:
                 if generated_schema_count or missing_schema_count
                 else "Use the selected Hermes skill lane and attach its proof artifact to the mission."
             ),
+        }
+
+    def run_runtime_skill(
+        self,
+        *,
+        task_brief: str = "",
+        selected_skill_id: str = "",
+        skill_input: dict | None = None,
+        mission_id: str = "",
+        request_id: str = "",
+    ) -> dict:
+        task = task_brief.strip() or str((skill_input or {}).get("taskBrief") or "").strip()
+        contract = self.build_runtime_contract(task_brief=task, selected_skill_id=selected_skill_id)
+        skill_rows = contract.get("skills", []) if isinstance(contract.get("skills"), list) else []
+        selected = str(selected_skill_id or "").strip()
+        skill = next(
+            (
+                item
+                for item in skill_rows
+                if str(item.get("skillId") or "").strip() == selected
+            ),
+            None,
+        )
+        if skill is None:
+            skill = next((item for item in skill_rows if item.get("selected")), None)
+        if skill is None and skill_rows:
+            skill = skill_rows[0]
+        if skill is None:
+            return {
+                "schema": "fluxio.skill_runtime_result.v1",
+                "generatedAt": utc_now_iso(),
+                "ok": False,
+                "status": "blocked",
+                "blocker": "no_skill_contract_available",
+                "nextAction": "Add a skill registry entry before invoking a skill runtime lane.",
+                "contract": contract,
+            }
+
+        input_payload = dict(skill_input or {})
+        if task and not str(input_payload.get("taskBrief") or "").strip():
+            input_payload["taskBrief"] = task
+        if mission_id and not str(input_payload.get("missionId") or "").strip():
+            input_payload["missionId"] = mission_id
+        schema = skill.get("input", {}).get("schema", {}) if isinstance(skill.get("input"), dict) else {}
+        missing = [
+            field
+            for field in _required_schema_fields(schema)
+            if not str(input_payload.get(field) or "").strip()
+        ]
+        held = bool(skill.get("systemLossHold", {}).get("held")) if isinstance(skill.get("systemLossHold"), dict) else False
+        execution_capable = bool(skill.get("executionCapable"))
+        if missing or held or not execution_capable:
+            reasons = []
+            if missing:
+                reasons.append(f"missing required input: {', '.join(missing)}")
+            if held:
+                reasons.append("skill is held by system-loss repair policy")
+            if not execution_capable:
+                reasons.append("skill is not marked execution-capable")
+            return {
+                "schema": "fluxio.skill_runtime_result.v1",
+                "generatedAt": utc_now_iso(),
+                "ok": False,
+                "status": "blocked",
+                "requestId": request_id,
+                "missionId": mission_id,
+                "skill": skill,
+                "input": {
+                    "payload": input_payload,
+                    "missing": missing,
+                    "valid": not missing,
+                },
+                "route": skill.get("route", {}),
+                "blocker": "; ".join(reasons),
+                "nextAction": "Repair the skill contract or provide the required input before runtime dispatch.",
+                "contract": {
+                    "schema": contract.get("schema"),
+                    "skillCount": contract.get("skillCount"),
+                    "contractCount": contract.get("contractCount"),
+                },
+            }
+
+        execution = self._execute_runtime_skill(skill, input_payload)
+        ok = execution.get("status") == "complete"
+        return {
+            "schema": "fluxio.skill_runtime_result.v1",
+            "generatedAt": utc_now_iso(),
+            "ok": ok,
+            "status": execution.get("status", "blocked"),
+            "requestId": request_id,
+            "missionId": mission_id,
+            "skill": skill,
+            "input": {
+                "payload": input_payload,
+                "missing": [],
+                "valid": True,
+            },
+            "route": skill.get("route", {}),
+            "execution": execution,
+            "nextAction": (
+                "Attach this skill runtime result to the mission proof surface."
+                if ok
+                else execution.get("nextAction", "Use the prepared route to dispatch the skill through Hermes.")
+            ),
+            "contract": {
+                "schema": contract.get("schema"),
+                "skillCount": contract.get("skillCount"),
+                "contractCount": contract.get("contractCount"),
+            },
+        }
+
+    def _execute_runtime_skill(self, skill: dict, input_payload: dict) -> dict:
+        skill_id = str(skill.get("skillId") or "").strip()
+        action_kinds = {str(item).strip() for item in skill.get("actionKinds", []) if str(item).strip()}
+        if skill_id == "workspace_search" or "workspace_search" in action_kinds:
+            query = str(input_payload.get("query") or input_payload.get("taskBrief") or "").strip()
+            return self._execute_workspace_search_skill(query=query)
+        return {
+            "status": "dispatch_required",
+            "mode": "hermes_runtime_dispatch",
+            "summary": "The skill contract is valid and ready for the selected runtime lane; no deterministic local executor exists for this skill yet.",
+            "nextAction": "Dispatch the skill through Hermes and write the returned output to the declared proof artifact.",
+        }
+
+    def _execute_workspace_search_skill(self, *, query: str) -> dict:
+        tokens = [token for token in sorted(_tokenize(query)) if len(token) >= 3][:8]
+        if not tokens:
+            return {
+                "status": "blocked",
+                "mode": "local_workspace_search",
+                "summary": "Workspace search needs a meaningful query.",
+                "nextAction": "Provide a query or task brief with searchable project terms.",
+            }
+        roots = ["src", "tests", "config", "web/src", "desktop-ui", "docs"]
+        suffixes = {".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".md", ".css", ".rs"}
+        matches: list[dict] = []
+        for root_name in roots:
+            root_path = self.root / root_name
+            if not root_path.exists():
+                continue
+            for path in root_path.rglob("*"):
+                if len(matches) >= 16:
+                    break
+                if not path.is_file() or path.suffix.lower() not in suffixes:
+                    continue
+                try:
+                    if path.stat().st_size > 400_000:
+                        continue
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                lower = text.lower()
+                if not any(token in lower for token in tokens):
+                    continue
+                line_hits = []
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    if any(token in line.lower() for token in tokens):
+                        line_hits.append(
+                            {
+                                "line": line_number,
+                                "text": line.strip()[:220],
+                            }
+                        )
+                    if len(line_hits) >= 3:
+                        break
+                matches.append(
+                    {
+                        "path": str(path.relative_to(self.root)),
+                        "hits": line_hits,
+                    }
+                )
+            if len(matches) >= 16:
+                break
+        return {
+            "status": "complete",
+            "mode": "local_workspace_search",
+            "query": query,
+            "tokens": tokens,
+            "matchCount": len(matches),
+            "matches": matches,
+            "summary": f"Workspace search found {len(matches)} project file(s) for the selected skill.",
         }
 
     def build_catalog(

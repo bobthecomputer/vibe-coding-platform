@@ -15,6 +15,9 @@ class Skill:
     name: str
     description: str
     schema: dict
+    output_schema: dict
+    route: dict
+    proof_artifacts: list[str]
     permissions: list[str]
     examples: list[str]
     action_kinds: list[str]
@@ -40,6 +43,9 @@ class SkillRegistry:
                     name=raw["name"],
                     description=raw["description"],
                     schema=raw.get("schema", {}),
+                    output_schema=raw.get("output_schema", {}),
+                    route=raw.get("route", {}),
+                    proof_artifacts=raw.get("proof_artifacts", []),
                     permissions=raw.get("permissions", []),
                     examples=raw.get("examples", []),
                     action_kinds=raw.get("action_kinds", []),

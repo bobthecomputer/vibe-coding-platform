@@ -15138,13 +15138,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         }
         try {
           const response = await callBackend(
-            "get_skill_runtime_contract_command",
+            "run_skill_runtime_command",
             {
               payload: {
                 root: null,
                 requestId: `skills-${Date.now()}`,
-                skillId: payload?.skillId || "",
+                missionId: mission?.mission_id || mission?.missionId || "skills-runtime-ui",
+                skillId: payload?.skillId || "workspace_search",
                 taskBrief: operatorDraft || missionForm.objective || "",
+                input: {
+                  query: operatorDraft || missionForm.objective || "skill runtime centralization",
+                  taskBrief: operatorDraft || missionForm.objective || "Capture a live skill runtime proof.",
+                },
               },
             },
             { throwOnError: true },
