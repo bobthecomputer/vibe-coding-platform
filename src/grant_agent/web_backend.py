@@ -5011,6 +5011,72 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _run_skill_runtime_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        library = SkillLibrary(root=root, registry=SkillRegistry(root / "config" / "skills.json"))
+        request_id = _sanitize_artifact_id(
+            str(payload.get("requestId") or payload.get("request_id") or f"skill-runtime-result-{int(time.time())}")
+        )
+        mission_id = str(
+            payload.get("missionId")
+            or payload.get("mission_id")
+            or "mission5-skills-runtime-centralization"
+        ).strip()
+        skill_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
+        result = library.run_runtime_skill(
+            task_brief=str(payload.get("taskBrief") or payload.get("task_brief") or ""),
+            selected_skill_id=str(payload.get("skillId") or payload.get("skill_id") or ""),
+            skill_input=skill_input,
+            mission_id=mission_id,
+            request_id=request_id,
+        )
+        artifact_dir = root / ".agent_control" / "skill_runtime_proofs"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        safe_skill_id = _sanitize_artifact_id(str(result.get("skill", {}).get("skillId") or "skill"))
+        artifact_path = artifact_dir / f"{request_id}-{safe_skill_id}.json"
+        result["proof"] = {
+            "command": command,
+            "artifactPath": str(artifact_path),
+            "sourceRegistry": str(root / "config" / "skills.json"),
+            "purpose": "skill_runtime_execution_result",
+        }
+        result["missionGate"] = {
+            "schema": "fluxio.mission_completion_gate.v1",
+            "mission": "mission5-skills-runtime-centralization",
+            "status": "complete" if result.get("ok") else "blocked",
+            "items": [
+                {
+                    "id": "selected-skill-contract",
+                    "status": "done" if result.get("skill") else "blocked",
+                    "proof": str(artifact_path),
+                },
+                {
+                    "id": "input-validation",
+                    "status": "done" if result.get("input", {}).get("valid") else "blocked",
+                    "proof": str(artifact_path),
+                },
+                {
+                    "id": "runtime-result-artifact",
+                    "status": "done" if result.get("ok") else "blocked",
+                    "proof": str(artifact_path),
+                },
+            ],
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        skill = result.get("skill") if isinstance(result.get("skill"), dict) else {}
+        if skill:
+            library.record_usage(
+                skill_id=str(skill.get("skillId") or "skill"),
+                label=str(skill.get("label") or skill.get("skillId") or "Skill"),
+                step_id=request_id,
+                mission_id=mission_id,
+                helped=bool(result.get("ok")),
+                source_kind=str(skill.get("sourceKind") or "unknown"),
+            )
+        return result
+
     def _provider_orchestration_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         root = Path(payload.get("root") or self.root).resolve()
         task_brief = str(
@@ -8659,6 +8725,8 @@ class FluxioWebBackend:
             return self._mission_anti_drift_guard_artifact(command, payload)
         if command in {"skill_runtime_contract_command", "get_skill_runtime_contract_command"}:
             return self._skill_runtime_contract_artifact(command, payload)
+        if command in {"run_skill_runtime_command", "get_run_skill_runtime_command"}:
+            return self._run_skill_runtime_artifact(command, payload)
         if command in {"provider_orchestration_command", "get_provider_orchestration_command"}:
             return self._provider_orchestration_artifact(command, payload)
         if command in {"runtime_route_unification_command", "get_runtime_route_unification_command"}:

@@ -34,6 +34,20 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertIn("gpt_taste_frontend_motion", names)
         self.assertIn("frontend_image_direction", names)
 
+    def test_registry_preserves_runtime_route_and_output_metadata(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        registry = SkillRegistry(root / "config" / "skills.json")
+        skills = {skill.name: skill for skill in registry.skills}
+
+        image_breakdown = skills["image_vision_breakdown"]
+        self.assertEqual(image_breakdown.route["runtime"], "opencode")
+        self.assertEqual(image_breakdown.output_schema["required"], ["findings", "first_focus", "route_capability", "proof_artifact"])
+        self.assertIn("vision_breakdown.json", image_breakdown.proof_artifacts)
+
+        workspace_search = skills["workspace_search"]
+        self.assertTrue(workspace_search.execution_capable)
+        self.assertIn("workspace_search", workspace_search.action_kinds)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3346,6 +3346,113 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(proof_path.exists())
             self.assertIn("skills_runtime_centralization_contract", proof_path.read_text(encoding="utf-8"))
 
+    def test_run_skill_runtime_command_executes_workspace_search_and_writes_result_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "workspace_search",
+                            "description": "Search code and docs quickly to ground planning in project evidence.",
+                            "schema": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            },
+                            "permissions": ["file_read"],
+                            "action_kinds": ["workspace_search"],
+                            "execution_capable": True,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            src_dir = root / "src"
+            src_dir.mkdir()
+            (src_dir / "runtime_notes.py").write_text(
+                "def route_skill():\n    return 'Hermes skill runtime centralization proof'\n",
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "run_skill_runtime_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission5-runtime-search",
+                    "missionId": "mission5",
+                    "skillId": "workspace_search",
+                    "taskBrief": "Find Hermes skill runtime code",
+                    "input": {"query": "Hermes skill runtime"},
+                },
+            )
+
+            self.assertEqual(result["schema"], "fluxio.skill_runtime_result.v1")
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["skill"]["skillId"], "workspace_search")
+            self.assertEqual(result["execution"]["mode"], "local_workspace_search")
+            self.assertGreaterEqual(result["execution"]["matchCount"], 1)
+            self.assertEqual(result["missionGate"]["status"], "complete")
+            proof_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(proof_path.exists())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "skill_runtime_execution_result")
+            self.assertEqual(proof["missionGate"]["status"], "complete")
+            usage_path = root / ".agent_control" / "skill_usage.json"
+            self.assertTrue(usage_path.exists())
+            self.assertIn("workspace_search", usage_path.read_text(encoding="utf-8"))
+
+    def test_run_skill_runtime_command_blocks_missing_required_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "skills.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "workspace_search",
+                            "description": "Search code and docs quickly to ground planning in project evidence.",
+                            "schema": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            },
+                            "permissions": ["file_read"],
+                            "action_kinds": ["workspace_search"],
+                            "execution_capable": True,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch(
+                "run_skill_runtime_command",
+                {
+                    "root": str(root),
+                    "requestId": "mission5-missing-input",
+                    "missionId": "mission5",
+                    "skillId": "workspace_search",
+                    "input": {},
+                },
+            )
+
+            self.assertEqual(result["schema"], "fluxio.skill_runtime_result.v1")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("query", result["input"]["missing"])
+            self.assertEqual(result["missionGate"]["status"], "blocked")
+            proof_path = pathlib.Path(result["proof"]["artifactPath"])
+            self.assertTrue(proof_path.exists())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["missionGate"]["status"], "blocked")
+
     def test_record_delivery_receipt_command_persists_browser_notification_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
