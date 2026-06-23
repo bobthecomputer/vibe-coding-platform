@@ -6689,12 +6689,87 @@ button.fluxos-context-root:hover {
   font-style: normal;
 }
 
+.fluxos-release-overview {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.4fr) auto;
+  gap: 18px;
+  align-items: start;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 20px 0 18px;
+}
+
+.fluxos-release-overview-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fluxos-release-overview-copy span,
+.fluxos-release-overview-facts span,
+.fluxos-update-idle-note span {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-release-overview-copy strong {
+  color: var(--fluxos-text);
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 0.98;
+}
+
+.fluxos-release-overview-copy p,
+.fluxos-release-overview-facts p,
+.fluxos-update-idle-note p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.46;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-release-overview-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  min-width: 0;
+}
+
+.fluxos-release-overview-facts article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 12px 14px 10px 0;
+}
+
+.fluxos-release-overview-facts article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-release-overview-facts strong {
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-release-overview-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: end;
+  flex-wrap: wrap;
+}
+
 .fluxos-update-readiness {
   display: grid;
   gap: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.16);
   border-bottom: 1px solid rgba(255, 255, 255, 0.16);
-  padding: 16px 0;
+  padding: 12px 0 16px;
 }
 
 .fluxos-update-readiness.ready {
@@ -6768,6 +6843,25 @@ button.fluxos-context-root:hover {
 .fluxos-update-proof-button:hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-update-proof-button.secondary {
+  background: transparent !important;
+  color: var(--fluxos-text) !important;
+}
+
+.fluxos-update-idle-note {
+  display: grid;
+  gap: 7px;
+  max-width: 640px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 12px;
+}
+
+.fluxos-update-idle-note strong {
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
 }
 
 .fluxos-update-decision-strip,
@@ -6882,6 +6976,10 @@ button.fluxos-context-root:hover {
 
 .fluxos-pr-stack-landing.ready {
   border-color: rgba(180, 255, 214, 0.3);
+}
+
+.fluxos-pr-stack-landing.folded {
+  display: none;
 }
 
 .fluxos-pr-stack-landing.attention {
@@ -8257,6 +8355,8 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary,
   .fluxos-settings-fact-grid,
+  .fluxos-release-overview,
+  .fluxos-release-overview-facts,
   .fluxos-update-decision-strip,
   .fluxos-update-component-grid,
   .fluxos-update-warning-rail,
@@ -8283,6 +8383,7 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary article + article,
   .fluxos-settings-fact-grid article + article,
+  .fluxos-release-overview-facts article + article,
   .fluxos-update-decision-strip article + article,
   .fluxos-update-component-grid article + article,
   .fluxos-update-warning-rail article + article,

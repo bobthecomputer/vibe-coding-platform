@@ -11858,6 +11858,59 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   );
   const renderUpdateSettings = () => (
     <div className="fluxos-settings-section-body" data-settings-updates-panel="true">
+      <section className="fluxos-release-overview" data-release-command-center="true">
+        <div className="fluxos-release-overview-copy">
+          <span>Release decision</span>
+          <strong>
+            {prStackLandingProofPath
+              ? titleizeToken(prStackLandingStatus)
+              : "Capture live proof"}
+          </strong>
+          <p>
+            {prStackLandingProofPath
+              ? prStackLandingContinuation.nextCompartmentAction || prStackLandingReadiness.nextAction || "Review the landing frontier before merging."
+              : "Start with PR landing proof. Update checks are secondary until a dependency or runtime upgrade is actually being promoted."}
+          </p>
+        </div>
+        <div className="fluxos-release-overview-facts" aria-label="Release landing facts">
+          <article>
+            <span>Frontier</span>
+            <strong>{prStackLandingFrontier.number ? `PR${prStackLandingFrontier.number}` : "Unknown"}</strong>
+            <p>{asList(prStackLandingFrontier.blockers).join(" / ") || prStackLandingBlockers[0] || "Run proof"}</p>
+          </article>
+          <article>
+            <span>Stack</span>
+            <strong>{prStackLandingStack.longestChainLength || 0} open</strong>
+            <p>{prStackLandingRows.slice(0, 4).map(row => `#${row.number}`).join(" -> ") || "No order captured"}</p>
+          </article>
+          <article>
+            <span>Performance</span>
+            <strong>{titleizeToken(prStackPerformanceBudget.status || "pending")}</strong>
+            <p>{prStackPerformanceBudget.largestAsset?.name || "Build proof pending"}</p>
+          </article>
+          <article>
+            <span>Runtime</span>
+            <strong>{titleizeToken(prStackReleaseAgentRun.selectedRuntime || "Hermes")}</strong>
+            <p>{prStackReleaseAgentRun.selectedRuntimeSource || "Primary lane"}</p>
+          </article>
+        </div>
+        <div className="fluxos-release-overview-actions">
+          <button
+            className="fluxos-pr-stack-landing-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "pr-stack:capture-landing-readiness")}
+            type="button"
+          >
+            Capture PR proof
+          </button>
+          <button
+            className="fluxos-update-proof-button secondary"
+            onClick={() => fluxioAction(onRequestAction, "updates:capture-readiness")}
+            type="button"
+          >
+            Capture update proof
+          </button>
+        </div>
+      </section>
       <section
         className={cx("fluxos-update-readiness", updateProofPath && "ready")}
         data-update-management-readiness="true"
@@ -11881,6 +11934,8 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             Capture update proof
           </button>
         </div>
+        {updateProofPath ? (
+          <>
         <div className="fluxos-update-decision-strip" aria-label="Update decision summary">
           <article>
             <span>Mission gate</span>
@@ -11980,9 +12035,20 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <p>{updateDependencyRows.find(item => item.status === "update_available")?.name || "No package update row selected yet."}</p>
           </article>
         </div>
+          </>
+        ) : (
+          <div className="fluxos-update-idle-note" data-update-management-idle="true">
+            <span>Update lane idle</span>
+            <strong>No dependency or runtime upgrade is being promoted.</strong>
+            <p>
+              Keep this folded until you are changing dependencies, providers, runtime adapters, or app shell code.
+              For stack landing, use the release decision above.
+            </p>
+          </div>
+        )}
       </section>
       <section
-        className={cx("fluxos-pr-stack-landing", prStackLandingProofPath && "ready", !prStackLandingReadiness.ok && "attention")}
+        className={cx("fluxos-pr-stack-landing", prStackLandingProofPath && "ready folded", !prStackLandingReadiness.ok && "attention")}
         data-pr-stack-landing-readiness="true"
         data-pr-stack-landing-primary-lane={prStackLandingReadiness.primaryRuntimeLane || "hermes"}
         data-pr-stack-landing-schema={prStackLandingReadiness.schema || "fluxio.pr_stack_landing_readiness.v1"}
