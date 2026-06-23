@@ -15536,6 +15536,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               payload: {
                 root: null,
                 requestId: `update-readiness-${Date.now()}`,
+                includeRegistryCheck: true,
+                includeAuditCheck: true,
               },
             },
             { throwOnError: true },
@@ -19826,9 +19828,37 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       providerPresence: {},
       priorProofContracts: [],
       priorProofContractCount: 0,
+      dependencyRows: [],
+      compatibilityWarnings: [
+        {
+          id: "pending-live-capture",
+          severity: "review",
+          message: "Live update readiness has not been captured yet.",
+          repair: "Capture update proof before changing dependency, runtime, provider, or app-shell versions.",
+        },
+      ],
+      updateFamilyPlan: [
+        { id: "dependencies", label: "Dependencies", risk: "medium", command: "npm ci && npm run frontend:build", rollback: "Revert package.json and package-lock.json together." },
+        { id: "providers", label: "Provider/model definitions", risk: "medium", command: "capture provider orchestration proof", rollback: "Revert provider registry/config rows and keep previous route proof." },
+        { id: "runtimes", label: "Hermes/OpenClaw/OpenCode adapters", risk: "high", command: "capture runtime, skill, harness, and preview proof", rollback: "Revert one adapter lane and keep fallback route selected." },
+        { id: "app-shell", label: "App shell / PWA cache", risk: "medium", command: "npm run frontend:build && release proof", rollback: "Restore previous service-worker cache version and built dist." },
+      ],
+      releaseChannels: [
+        { id: "local-dev", label: "Local dev", promotion: "always available after tests", rollback: "git revert / worktree discard" },
+        { id: "web-dist", label: "Web dist", promotion: "build + live proof", rollback: "restore prior web/dist artifact" },
+        { id: "desktop-app", label: "Desktop app", promotion: "Tauri release candidate only", rollback: "install previous signed build" },
+      ],
+      outdatedCheck: { requested: false, status: "not_requested", outdatedCount: 0 },
+      auditCheck: { requested: false, status: "not_requested", vulnerabilityTotal: 0, vulnerabilities: {} },
+      missionGate: {
+        schema: "fluxio.mission_completion_gate.v1",
+        mission: "mission12-update-dependency-management",
+        status: "pending_live_capture",
+      },
       safeUpgradeWorkflow: [
         { step: "snapshot", detail: "Capture update readiness and current route/runtime proof before touching dependencies." },
         { step: "isolate", detail: "Update one component family per PR: dependencies, providers, runtime adapter, or app shell." },
+        { step: "preview", detail: "Show compatibility warnings and exact rollback path before enabling an update action." },
         { step: "verify", detail: "Run frontend build, focused tests, visual smoke, and release-proof before promotion." },
         { step: "rollback", detail: "Keep lockfile and previous cache version reviewable so failed updates can be reverted cleanly." },
       ],

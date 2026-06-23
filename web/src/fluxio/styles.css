@@ -6715,7 +6715,10 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-update-readiness-head span,
+.fluxos-update-decision-strip span,
 .fluxos-update-component-grid span,
+.fluxos-update-warning-rail span,
+.fluxos-update-family-plan span,
 .fluxos-update-proof-grid span {
   color: var(--fluxos-cyan);
   font-size: 11px;
@@ -6731,9 +6734,13 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-update-readiness-head p,
+.fluxos-update-decision-strip p,
 .fluxos-update-component-grid p,
 .fluxos-update-component-grid small,
 .fluxos-update-component-grid em,
+.fluxos-update-warning-rail p,
+.fluxos-update-family-plan p,
+.fluxos-update-family-plan small,
 .fluxos-update-proof-grid p {
   margin: 0;
   color: var(--fluxos-muted);
@@ -6761,6 +6768,51 @@ button.fluxos-context-root:hover {
 .fluxos-update-proof-button:hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-update-decision-strip,
+.fluxos-update-warning-rail,
+.fluxos-update-family-plan {
+  display: grid;
+  gap: 0;
+}
+
+.fluxos-update-decision-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fluxos-update-warning-rail,
+.fluxos-update-family-plan {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fluxos-update-decision-strip article,
+.fluxos-update-warning-rail article,
+.fluxos-update-family-plan article {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-update-decision-strip article + article,
+.fluxos-update-warning-rail article + article,
+.fluxos-update-family-plan article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-update-decision-strip strong,
+.fluxos-update-warning-rail strong,
+.fluxos-update-family-plan strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .fluxos-update-component-grid {
@@ -6792,6 +6844,15 @@ button.fluxos-context-root:hover {
   color: rgba(255, 188, 170, 0.9);
 }
 
+.fluxos-update-component-grid article.review span,
+.fluxos-update-warning-rail article.attention span {
+  color: rgba(255, 226, 156, 0.92);
+}
+
+.fluxos-update-warning-rail article.blocked span {
+  color: rgba(255, 188, 170, 0.9);
+}
+
 .fluxos-update-component-grid strong,
 .fluxos-update-proof-grid strong {
   min-width: 0;
@@ -6807,7 +6868,7 @@ button.fluxos-context-root:hover {
 
 .fluxos-update-proof-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0;
 }
 
@@ -8062,7 +8123,10 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary,
   .fluxos-settings-fact-grid,
+  .fluxos-update-decision-strip,
   .fluxos-update-component-grid,
+  .fluxos-update-warning-rail,
+  .fluxos-update-family-plan,
   .fluxos-update-proof-grid,
   .fluxos-pr-stack-landing-grid,
   .fluxos-pr-stack-landing-sequence,
@@ -8079,7 +8143,10 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary article + article,
   .fluxos-settings-fact-grid article + article,
+  .fluxos-update-decision-strip article + article,
   .fluxos-update-component-grid article + article,
+  .fluxos-update-warning-rail article + article,
+  .fluxos-update-family-plan article + article,
   .fluxos-update-proof-grid article + article,
   .fluxos-pr-stack-landing-grid article + article,
   .fluxos-pr-stack-landing-sequence article + article,

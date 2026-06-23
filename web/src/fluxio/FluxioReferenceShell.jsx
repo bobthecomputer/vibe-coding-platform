@@ -11461,6 +11461,19 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const updateComponents = asList(updateManagementReadiness.components);
   const updateWorkflow = asList(updateManagementReadiness.safeUpgradeWorkflow);
   const updateBlockers = asList(updateManagementReadiness.blockers);
+  const updateWarnings = asList(updateManagementReadiness.compatibilityWarnings);
+  const updateFamilyPlan = asList(updateManagementReadiness.updateFamilyPlan);
+  const updateReleaseChannels = asList(updateManagementReadiness.releaseChannels);
+  const updateDependencyRows = asList(updateManagementReadiness.dependencyRows);
+  const updateOutdatedCheck = updateManagementReadiness.outdatedCheck && typeof updateManagementReadiness.outdatedCheck === "object"
+    ? updateManagementReadiness.outdatedCheck
+    : {};
+  const updateAuditCheck = updateManagementReadiness.auditCheck && typeof updateManagementReadiness.auditCheck === "object"
+    ? updateManagementReadiness.auditCheck
+    : {};
+  const updateMissionGate = updateManagementReadiness.missionGate && typeof updateManagementReadiness.missionGate === "object"
+    ? updateManagementReadiness.missionGate
+    : {};
   const updateProofPath = String(updateManagementReadiness?.proof?.artifactPath || "").trim();
   const updateStatus = String(updateManagementReadiness.status || "pending_live_capture");
   const prStackLandingReadiness =
@@ -11822,12 +11835,35 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             Capture update proof
           </button>
         </div>
+        <div className="fluxos-update-decision-strip" aria-label="Update decision summary">
+          <article>
+            <span>Mission gate</span>
+            <strong>{titleizeToken(updateMissionGate.status || "pending_live_capture")}</strong>
+            <p>{updateMissionGate.mission || "Mission 12 update readiness has not run yet."}</p>
+          </article>
+          <article>
+            <span>Registry check</span>
+            <strong>{Number(updateOutdatedCheck.outdatedCount || 0)} update{Number(updateOutdatedCheck.outdatedCount || 0) === 1 ? "" : "s"}</strong>
+            <p>{titleizeToken(updateOutdatedCheck.status || "not_requested")}</p>
+          </article>
+          <article>
+            <span>Audit check</span>
+            <strong>{Number(updateAuditCheck.vulnerabilityTotal || 0)} finding{Number(updateAuditCheck.vulnerabilityTotal || 0) === 1 ? "" : "s"}</strong>
+            <p>{titleizeToken(updateAuditCheck.status || "not_requested")}</p>
+          </article>
+          <article>
+            <span>Rollback</span>
+            <strong>{updateFamilyPlan.length || 4} family plans</strong>
+            <p>Every update family keeps an explicit rollback path.</p>
+          </article>
+        </div>
         <div className="fluxos-update-component-grid" aria-label="Update readiness components">
           {updateComponents.slice(0, 5).map(component => (
             <article
               className={cx(
                 component.status === "ready" && "ready",
                 component.status === "blocked" && "blocked",
+                component.status === "review_required" && "review",
               )}
               key={component.id || component.label}
             >
@@ -11836,6 +11872,34 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
               <p>{component.detail || component.safeAction || "No update readiness detail captured yet."}</p>
               <small>{component.currentVersion || "current version pending"} to {component.latestVersion || "latest version pending"}</small>
               {component.safeAction ? <em>{component.safeAction}</em> : null}
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-update-warning-rail" aria-label="Compatibility warnings">
+          {(updateWarnings.length ? updateWarnings : [
+            {
+              id: "no-warnings",
+              severity: "ready",
+              message: "No compatibility warnings captured yet.",
+              repair: "Capture update proof before promoting changes.",
+            },
+          ]).slice(0, 4).map(item => (
+            <article className={cx(item.severity === "blocker" && "blocked", item.severity === "attention" && "attention")} key={item.id || item.message}>
+              <span>{titleizeToken(item.severity || "review")}</span>
+              <strong>{item.message || "Compatibility warning"}</strong>
+              <p>{item.repair || "Review before update promotion."}</p>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-update-family-plan" aria-label="Safe update family plan">
+          {(updateFamilyPlan.length ? updateFamilyPlan : [
+            { id: "dependencies", label: "Dependencies", risk: "medium", command: "npm ci && npm run frontend:build", rollback: "Revert package and lockfile together." },
+          ]).slice(0, 4).map(item => (
+            <article key={item.id || item.label}>
+              <span>{titleizeToken(item.risk || "review")} risk</span>
+              <strong>{item.label || titleizeToken(item.id || "update family")}</strong>
+              <p>{item.command || "Proof command pending."}</p>
+              <small>{item.rollback || "Rollback path pending."}</small>
             </article>
           ))}
         </div>
@@ -11858,6 +11922,16 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <span>Workflow</span>
             <strong>{updateWorkflow.map(item => titleizeToken(item.step)).slice(0, 4).join(" / ") || "Snapshot / Isolate / Verify / Rollback"}</strong>
             <p>{updateWorkflow[0]?.detail || "Capture current state before changing dependencies, models, runtimes, or app shell."}</p>
+          </article>
+          <article>
+            <span>Release channels</span>
+            <strong>{updateReleaseChannels.length || 3} guarded channels</strong>
+            <p>{updateReleaseChannels[0]?.rollback || "Rollback path is required before promotion."}</p>
+          </article>
+          <article>
+            <span>Dependency rows</span>
+            <strong>{updateDependencyRows.length} tracked</strong>
+            <p>{updateDependencyRows.find(item => item.status === "update_available")?.name || "No package update row selected yet."}</p>
           </article>
         </div>
       </section>
