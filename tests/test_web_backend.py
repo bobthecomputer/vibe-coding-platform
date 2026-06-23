@@ -1400,13 +1400,14 @@ class FluxioWebBackendTests(unittest.TestCase):
             ):
                 contract = backend.dispatch(
                     "get_jbh_eaven_redteam_readiness_command",
-                    {"root": str(root), "requestId": "mission8-jbh-test"},
+                    {"root": str(root), "requestId": "mission14-jbh-test"},
                 )
 
             self.assertEqual(contract["schema"], "fluxio.jbh_eaven_redteam_readiness.v1")
+            self.assertEqual(contract["mission"], "mission14-jbh-eaven-redteam-simulation")
             self.assertEqual(contract["primaryRuntimeLane"], "hermes")
             self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
-            self.assertEqual(contract["status"], "ready_for_synthetic_scenario_gate")
+            self.assertEqual(contract["status"], "ready_for_safe_synthetic_lab")
             self.assertEqual(contract["project"]["status"], "detected")
             self.assertEqual(contract["project"]["packageVersion"], "8.0.0")
             self.assertIn("jbheaven-technique-scorer", contract["project"]["redTeamSkills"])
@@ -1414,11 +1415,27 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertFalse(contract["scenarioGate"]["rawPayloadExport"])
             self.assertTrue(contract["scenarioGate"]["requiresFakeTargetBoundary"])
             self.assertIn("credential theft", contract["scenarioGate"]["blockedRealWorldActions"])
+            self.assertEqual(contract["fakeTargetBoundary"]["authorizationLabel"], "synthetic_lab_authorized")
+            self.assertEqual(contract["fakeTargetBoundary"]["networkPolicy"], "no_real_target_probe")
+            self.assertGreaterEqual(len(contract["safeScenarioTemplates"]), 3)
+            self.assertEqual(contract["safeScenarioTemplates"][0]["export"], "aggregate_only")
+            self.assertGreaterEqual(len(contract["scoringRubric"]), 5)
+            self.assertIn("blocked_real_world_abuse", contract["refusalAnalysis"]["expectedCategories"])
+            self.assertEqual(contract["agentRun"]["schema"], "fluxio.jbh_eaven_safe_lab_agent_run.v1")
+            self.assertEqual(contract["agentRun"]["executedBy"], "fluxio_internal_safe_lab_agent")
+            self.assertEqual(contract["agentRun"]["status"], "complete")
+            self.assertEqual(contract["agentRun"]["scenarioCount"], 3)
+            self.assertFalse(contract["agentRun"]["rawPayloadExport"])
+            self.assertIn(contract["agentRun"]["selectedRuntime"], {"hermes", "openclaw", "opencode", "local-safety-evaluator"})
+            self.assertEqual(contract["missionGate"]["status"], "complete")
+            self.assertIn("App internal agent run", [item["label"] for item in contract["missionGate"]["items"]])
+            self.assertIn("JBheaven local API is offline", contract["warnings"][0])
             self.assertIn("Safe synthetic scenario gate", contract["firstRunTarget"]["title"])
             proof_path = pathlib.Path(contract["proof"]["artifactPath"])
             self.assertTrue(proof_path.is_file())
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "jbh_eaven_safe_synthetic_redteam_readiness")
+            self.assertEqual(proof["missionGate"]["items"][-1]["proof"], str(proof_path))
 
     def test_preview_annotation_readiness_command_writes_capture_contract_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
