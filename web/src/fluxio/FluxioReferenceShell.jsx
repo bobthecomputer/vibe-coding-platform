@@ -11514,6 +11514,12 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
       : {};
   const fusionProjects = asList(fusionReadiness.projects);
   const fusionBlockers = asList(fusionReadiness.blockers);
+  const fusionOverlapMap = asList(fusionReadiness.overlapMap);
+  const fusionDecisions = asList(fusionReadiness.fusionDecisions);
+  const fusionMigrationPlan = asList(fusionReadiness.migrationPlan);
+  const fusionMissionGate = fusionReadiness.missionGate && typeof fusionReadiness.missionGate === "object"
+    ? fusionReadiness.missionGate
+    : {};
   const fusionProofPath = String(fusionReadiness?.proof?.artifactPath || "").trim();
   const jbhEavenReadiness =
     settingsState?.jbhEavenReadiness && typeof settingsState.jbhEavenReadiness === "object"
@@ -12354,6 +12360,28 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             Capture fusion proof
           </button>
         </div>
+        <div className="fluxos-fusion-decision-strip" aria-label="Fusion mission decision">
+          <article>
+            <span>Mission gate</span>
+            <strong>{titleizeToken(fusionMissionGate.status || "pending_live_capture")}</strong>
+            <p>{fusionMissionGate.mission || "mission13-solantir-mind-tower-fusion"}</p>
+          </article>
+          <article>
+            <span>Detected roots</span>
+            <strong>{fusionReadiness.detectedCount ?? fusionProjects.filter(project => project.selectedRoot).length} projects</strong>
+            <p>{fusionProjects.map(project => project.label || project.id).join(" / ") || "Capture proof to locate projects."}</p>
+          </article>
+          <article>
+            <span>First merge target</span>
+            <strong>{fusionReadiness.firstMergeTarget?.title || "Shared signal contract"}</strong>
+            <p>{asList(fusionReadiness.firstMergeTarget?.acceptance)[0] || "Map source evidence before UI fusion."}</p>
+          </article>
+          <article>
+            <span>Proof</span>
+            <strong>{fusionProofPath ? "Captured" : "Not captured"}</strong>
+            <p>{fusionProofPath || fusionBlockers[0] || "Live capture has not run yet."}</p>
+          </article>
+        </div>
         <div className="fluxos-fusion-project-grid">
           {fusionProjects.slice(0, 4).map(project => (
             <article className={cx(project.status && !String(project.status).includes("missing") && "ready")} key={project.id || project.label}>
@@ -12361,6 +12389,51 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
               <strong>{project.label || titleizeToken(project.id)}</strong>
               <p>{project.selectedRoot || project.bridgeEndpoint || project.nextAction || "No path reported yet."}</p>
               <small>{asList(project.survivesAs).slice(0, 3).join(" / ") || "Fusion role pending"}</small>
+              <em>
+                {asList(project.capabilities).filter(item => item.status === "present").length || 0} capabilities ·{" "}
+                {project.packageManager || "package manager unknown"}
+              </em>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-fusion-decision-list" aria-label="Survivor and deprecation decisions">
+          {(fusionDecisions.length ? fusionDecisions : [
+            {
+              id: "pending",
+              decision: "capture_required",
+              keep: "Capture fusion proof before selecting survivors.",
+              merge: "Migration target pending.",
+              deprecate: "Deprecation list pending.",
+            },
+          ]).slice(0, 4).map(item => (
+            <article key={item.id || item.decision}>
+              <span>{titleizeToken(item.decision || item.id || "decision")}</span>
+              <strong>{item.keep || "Survivor pending"}</strong>
+              <p>{item.merge || "Merge path pending."}</p>
+              <small>{item.deprecate || "Deprecation rule pending."}</small>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-fusion-overlap-map" aria-label="Fusion overlap map">
+          {(fusionOverlapMap.length ? fusionOverlapMap : [
+            { id: "pending", label: "Overlap pending", decision: "Capture proof to map overlap.", risk: "review" },
+          ]).slice(0, 4).map(item => (
+            <article key={item.id || item.label}>
+              <span>{titleizeToken(item.risk || "review")} risk</span>
+              <strong>{item.label || titleizeToken(item.id || "overlap")}</strong>
+              <p>{item.decision || "No overlap decision captured yet."}</p>
+            </article>
+          ))}
+        </div>
+        <div className="fluxos-fusion-migration-plan" aria-label="Fusion migration slices">
+          {(fusionMigrationPlan.length ? fusionMigrationPlan : [
+            { id: "read-only-inventory", label: "Read-only inventory", status: "pending", owner: "Fluxio", deliverable: "Capture fusion proof." },
+          ]).slice(0, 5).map(item => (
+            <article className={cx(item.status === "done" && "ready", item.status === "blocked" && "blocked", item.status === "next" && "next")} key={item.id || item.label}>
+              <span>{titleizeToken(item.status || "planned")}</span>
+              <strong>{item.label || item.title || titleizeToken(item.id || "slice")}</strong>
+              <p>{item.deliverable || item.doneWhen || "Migration slice detail pending."}</p>
+              <small>{item.owner || "Owner pending"}</small>
             </article>
           ))}
         </div>
