@@ -11496,6 +11496,26 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const prStackLandingBlockers = asList(prStackLandingReadiness.blockers);
   const prStackLandingProofPath = String(prStackLandingReadiness?.proof?.artifactPath || "").trim();
   const prStackLandingStatus = String(prStackLandingReadiness.status || "pending_live_capture");
+  const prStackPerformanceBudget =
+    prStackLandingReadiness.performanceBudget && typeof prStackLandingReadiness.performanceBudget === "object"
+      ? prStackLandingReadiness.performanceBudget
+      : {};
+  const prStackReleasePackage =
+    prStackLandingReadiness.releasePackage && typeof prStackLandingReadiness.releasePackage === "object"
+      ? prStackLandingReadiness.releasePackage
+      : {};
+  const prStackReleaseAgentRun =
+    prStackLandingReadiness.releaseAgentRun && typeof prStackLandingReadiness.releaseAgentRun === "object"
+      ? prStackLandingReadiness.releaseAgentRun
+      : {};
+  const prStackMissionGate =
+    prStackLandingReadiness.missionGate && typeof prStackLandingReadiness.missionGate === "object"
+      ? prStackLandingReadiness.missionGate
+      : {};
+  const prStackLandingDecision =
+    prStackLandingReadiness.landingDecision && typeof prStackLandingReadiness.landingDecision === "object"
+      ? prStackLandingReadiness.landingDecision
+      : {};
   const prStackLandingContinuation =
     prStackLandingReadiness.continuationPolicy && typeof prStackLandingReadiness.continuationPolicy === "object"
       ? prStackLandingReadiness.continuationPolicy
@@ -11606,6 +11626,20 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const orchestrationProofPath = String(providerOrchestration?.proof?.artifactPath || "").trim();
   const orchestrationStatus = String(providerRoute.health || providerOrchestration.status || "pending_live_capture");
   const orchestrationReady = Boolean(orchestrationProofPath || !orchestrationStatus.includes("pending"));
+  const providerChatReliability =
+    settingsState?.providerChatReliability && typeof settingsState.providerChatReliability === "object"
+      ? settingsState.providerChatReliability
+      : {};
+  const providerChatRuntimeSummary =
+    providerChatReliability.runtimeSummary && typeof providerChatReliability.runtimeSummary === "object"
+      ? providerChatReliability.runtimeSummary
+      : {};
+  const providerChatAttempts = asList(providerChatReliability.attempts);
+  const providerChatProofPath = String(providerChatReliability?.proof?.artifactPath || "").trim();
+  const providerChatOkCount = Number(providerChatReliability.okCount || 0);
+  const providerChatAttemptCount = Number(providerChatReliability.attemptCount || 10);
+  const providerChatStatus = String(providerChatReliability.status || "pending_live_capture");
+  const providerChatFirstFailure = providerChatAttempts.find(item => item && item.status && item.status !== "ok") || {};
   const openSettingsTab = tabId => {
     settingsState?.onSetTab?.(tabId);
   };
@@ -11782,6 +11816,72 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             : providerOrchestration.nextAction || "Capture live route proof before claiming provider orchestration executed."}
         </p>
       </section>
+      <section
+        className={cx("fluxos-provider-reliability", providerChatProofPath && "ready", providerChatStatus === "blocked" && "blocked")}
+        data-provider-chat-reliability="true"
+        data-provider-chat-reliability-schema={providerChatReliability.schema || "fluxio.provider_chat_reliability.v1"}
+      >
+        <div className="fluxos-provider-reliability-head">
+          <div>
+            <span>Chat route check</span>
+            <strong>
+              {providerChatProofPath
+                ? `${providerChatOkCount}/${providerChatAttemptCount} chats returned output`
+                : "Run ten real chat checks"}
+            </strong>
+            <p>
+              Uses Hermes first and keeps OpenCode/OpenClaw as fallback lanes. Failures are recorded with exact runtime errors instead of hidden behind green UI.
+            </p>
+          </div>
+          <button
+            className="fluxos-provider-chat-proof-button"
+            onClick={() => fluxioAction(onRequestAction, "providers:run-chat-reliability", {
+              provider: providerRoute.provider || providerChatReliability.provider || "openrouter",
+              model: providerRoute.model || providerChatReliability.model || "z-ai/glm-5.2",
+            })}
+            type="button"
+          >
+            Run 10 chat checks
+          </button>
+        </div>
+        <div className="fluxos-provider-reliability-grid" aria-label="Provider chat reliability">
+          {["hermes", "opencode", "openclaw"].map(runtimeId => {
+            const row = providerChatRuntimeSummary[runtimeId] || {};
+            return (
+              <article key={runtimeId}>
+                <span>{runtimeId}</span>
+                <strong>{Number(row.ok || 0)} / {Number(row.attempted || 0)}</strong>
+                <p>{Number(row.failed || 0)} failed</p>
+              </article>
+            );
+          })}
+          <article>
+            <span>Route</span>
+            <strong>{providerChatReliability.provider || providerRoute.provider || "openrouter"}</strong>
+            <p>{providerChatReliability.model || providerRoute.model || "z-ai/glm-5.2"}</p>
+          </article>
+          <article>
+            <span>Next fix</span>
+            <strong>{providerChatFirstFailure.runtime ? titleizeToken(providerChatFirstFailure.runtime) : titleizeToken(providerChatStatus)}</strong>
+            <p>{providerChatFirstFailure.error || providerChatReliability.nextAction || "Run the check to see the exact connection action."}</p>
+          </article>
+        </div>
+        {providerChatAttempts.length ? (
+          <div className="fluxos-provider-attempt-strip" aria-label="Latest chat check attempts">
+            {providerChatAttempts.slice(-5).map(item => (
+              <span className={cx(item.status === "ok" && "ok", item.status !== "ok" && "failed")} key={`${item.runtime}-${item.index}`}>
+                <strong>{item.index}. {item.runtime}</strong>
+                <em>{titleizeToken(item.status || "unknown")}</em>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <p className="fluxos-provider-orchestration-foot">
+          {providerChatProofPath
+            ? `Proof artifact: ${providerChatProofPath}`
+            : providerChatReliability.nextAction || "Run chat checks before promising that a provider route works."}
+        </p>
+      </section>
       <div className="fluxos-settings-provider-grid" data-settings-provider-grid="true">
         {providers.map(provider => {
           const ready = Boolean(provider.status || provider.hasSecret);
@@ -11861,6 +11961,8 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             Capture update proof
           </button>
         </div>
+        {updateProofPath ? (
+          <>
         <div className="fluxos-update-decision-strip" aria-label="Update decision summary">
           <article>
             <span>Mission gate</span>
@@ -11960,77 +12062,17 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
             <p>{updateDependencyRows.find(item => item.status === "update_available")?.name || "No package update row selected yet."}</p>
           </article>
         </div>
-      </section>
-      <section
-        className={cx("fluxos-pr-stack-landing", prStackLandingProofPath && "ready", !prStackLandingReadiness.ok && "attention")}
-        data-pr-stack-landing-readiness="true"
-        data-pr-stack-landing-primary-lane={prStackLandingReadiness.primaryRuntimeLane || "hermes"}
-        data-pr-stack-landing-schema={prStackLandingReadiness.schema || "fluxio.pr_stack_landing_readiness.v1"}
-        data-pr-stack-continuation-state={prStackLandingContinuation.state || "pending_live_capture"}
-      >
-        <div className="fluxos-pr-stack-landing-head">
-          <div>
-            <span>PR landing readiness</span>
-            <strong>{titleizeToken(prStackLandingStatus)}</strong>
+          </>
+        ) : (
+          <div className="fluxos-update-idle-note" data-update-management-idle="true">
+            <span>Update lane idle</span>
+            <strong>No dependency or runtime upgrade is being promoted.</strong>
             <p>
-              Ordered merge proof for the mission stack. Hermes is the primary lane; OpenClaw and OpenCode remain fallback metadata for route verification.
+              This screen is only for app, dependency, provider-list, and runtime-adapter updates. PR stack landing
+              evidence stays in GitHub and automation artifacts, not in the normal user settings flow.
             </p>
           </div>
-          <button
-            className="fluxos-pr-stack-landing-proof-button"
-            onClick={() => fluxioAction(onRequestAction, "pr-stack:capture-landing-readiness")}
-            type="button"
-          >
-            Capture PR proof
-          </button>
-        </div>
-        <div className="fluxos-pr-stack-landing-grid" aria-label="PR landing readiness summary">
-          <article>
-            <span>Landing frontier</span>
-            <strong>{prStackLandingFrontier.number ? `PR${prStackLandingFrontier.number}` : "Not captured"}</strong>
-            <p>{asList(prStackLandingFrontier.blockers).join(" / ") || prStackLandingBlockers[0] || "No frontier blocker captured yet."}</p>
-          </article>
-          <article>
-            <span>Stack</span>
-            <strong>{`${prStackLandingStack.longestChainLength || 0} PR chain`}</strong>
-            <p>{prStackLandingRows.slice(0, 6).map(row => `#${row.number}`).join(" -> ") || "Landing order pending."}</p>
-          </article>
-          <article>
-            <span>Checks</span>
-            <strong>{`${prStackLandingSummary.releaseProofPassedCount || 0} green / ${prStackLandingSummary.blockedCount || 0} blocked`}</strong>
-            <p>{`${prStackLandingSummary.cleanCount || 0} clean, ${prStackLandingSummary.draftCount || 0} draft.`}</p>
-          </article>
-          <article>
-            <span>Route</span>
-            <strong>{titleizeToken(prStackLandingReadiness.primaryRuntimeLane || "hermes")}</strong>
-            <p>{asList(prStackLandingReadiness.fallbackRuntimeLanes).join(" / ") || "openclaw / opencode"}</p>
-          </article>
-          <article>
-            <span>Continuation</span>
-            <strong>{titleizeToken(prStackLandingContinuation.state || "pending")}</strong>
-            <p>
-              {prStackLandingContinuation.nextCompartmentAction
-                || prStackLandingReadiness.nextAction
-                || "Capture PR landing readiness before choosing the next mission."}
-            </p>
-          </article>
-        </div>
-        {prStackLandingRows.length ? (
-          <div className="fluxos-pr-stack-landing-sequence" aria-label="PR landing order">
-            {prStackLandingRows.slice(0, 5).map(row => (
-              <article className={cx(row.ready && "ready", asList(row.blockers).length && "blocked")} key={row.number || row.headRefName}>
-                <span>{row.number ? `PR${row.number}` : "PR"}</span>
-                <strong>{row.title || row.headRefName || "Untitled pull request"}</strong>
-                <p>{asList(row.blockers).join(" / ") || `${titleizeToken(row.releaseProofStatus || "unknown")} release proof`}</p>
-              </article>
-            ))}
-          </div>
-        ) : null}
-        <p className="fluxos-pr-stack-landing-foot">
-          {prStackLandingProofPath
-            ? `Proof artifact: ${prStackLandingProofPath}`
-            : prStackLandingReadiness.nextAction || "Capture PR landing readiness before merging the stacked mission PRs."}
-        </p>
+        )}
       </section>
     </div>
   );
