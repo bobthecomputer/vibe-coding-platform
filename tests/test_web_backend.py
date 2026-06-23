@@ -1929,11 +1929,19 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
             self.assertIn("opencode", contract["fallbackRuntimeLanes"])
             self.assertIn("Fix PR119", contract["nextAction"])
+            self.assertEqual(contract["performanceBudget"]["schema"], "fluxio.performance_budget.v1")
+            self.assertEqual(contract["releasePackage"]["schema"], "fluxio.release_package_readiness.v1")
+            self.assertEqual(contract["releaseAgentRun"]["schema"], "fluxio.release_landing_agent_run.v1")
+            self.assertEqual(contract["releaseAgentRun"]["executedBy"], "fluxio_internal_release_landing_agent")
+            self.assertEqual(contract["missionGate"]["mission"], "mission15-release-performance-pr-stack-landing")
+            self.assertEqual(contract["landingDecision"]["status"], "hold_for_review")
             proof_path = pathlib.Path(contract["proof"]["artifactPath"])
             self.assertTrue(proof_path.is_file())
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "pr_stack_landing_order_readiness")
             self.assertEqual(proof["landingSequence"][0]["number"], 119)
+            self.assertIn("performanceBudget", proof)
+            self.assertIn("releaseAgentRun", proof)
 
     def test_pr_stack_landing_readiness_command_accepts_empty_runtime_rows_as_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1958,6 +1966,8 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(contract["continuationPolicy"]["state"], "completed")
             self.assertFalse(contract["continuationPolicy"]["shouldContinueStackWork"])
             self.assertEqual(contract["continuationPolicy"]["automationDecision"], "skip_completed_pr_stack")
+            self.assertEqual(contract["releaseAgentRun"]["executedBy"], "fluxio_internal_release_landing_agent")
+            self.assertEqual(contract["landingDecision"]["status"], "hold_for_review")
             proof_path = pathlib.Path(contract["proof"]["artifactPath"])
             self.assertTrue(proof_path.is_file())
             proof = json.loads(proof_path.read_text(encoding="utf-8"))

@@ -11496,6 +11496,26 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
   const prStackLandingBlockers = asList(prStackLandingReadiness.blockers);
   const prStackLandingProofPath = String(prStackLandingReadiness?.proof?.artifactPath || "").trim();
   const prStackLandingStatus = String(prStackLandingReadiness.status || "pending_live_capture");
+  const prStackPerformanceBudget =
+    prStackLandingReadiness.performanceBudget && typeof prStackLandingReadiness.performanceBudget === "object"
+      ? prStackLandingReadiness.performanceBudget
+      : {};
+  const prStackReleasePackage =
+    prStackLandingReadiness.releasePackage && typeof prStackLandingReadiness.releasePackage === "object"
+      ? prStackLandingReadiness.releasePackage
+      : {};
+  const prStackReleaseAgentRun =
+    prStackLandingReadiness.releaseAgentRun && typeof prStackLandingReadiness.releaseAgentRun === "object"
+      ? prStackLandingReadiness.releaseAgentRun
+      : {};
+  const prStackMissionGate =
+    prStackLandingReadiness.missionGate && typeof prStackLandingReadiness.missionGate === "object"
+      ? prStackLandingReadiness.missionGate
+      : {};
+  const prStackLandingDecision =
+    prStackLandingReadiness.landingDecision && typeof prStackLandingReadiness.landingDecision === "object"
+      ? prStackLandingReadiness.landingDecision
+      : {};
   const prStackLandingContinuation =
     prStackLandingReadiness.continuationPolicy && typeof prStackLandingReadiness.continuationPolicy === "object"
       ? prStackLandingReadiness.continuationPolicy
@@ -12013,6 +12033,30 @@ function FluxioSettingsSurface({ activeTheme, onRequestAction, onSelectTheme, se
                 || prStackLandingReadiness.nextAction
                 || "Capture PR landing readiness before choosing the next mission."}
             </p>
+          </article>
+          <article>
+            <span>Performance budget</span>
+            <strong>{titleizeToken(prStackPerformanceBudget.status || "not measured")}</strong>
+            <p>
+              {prStackPerformanceBudget.assetCount
+                ? `${prStackPerformanceBudget.assetCount} assets, ${(Number(prStackPerformanceBudget.totalAssetBytes || 0) / 1024).toFixed(1)} KB total.`
+                : "Run the built app proof to measure web/dist assets."}
+            </p>
+          </article>
+          <article>
+            <span>Release package</span>
+            <strong>{titleizeToken(prStackReleasePackage.status || "pending")}</strong>
+            <p>{asList(prStackReleasePackage.requiredScripts).filter(row => row.status === "missing").map(row => row.id).join(" / ") || "Build, proof, stack, and release scripts checked."}</p>
+          </article>
+          <article>
+            <span>Internal agent</span>
+            <strong>{titleizeToken(prStackReleaseAgentRun.selectedRuntime || "pending")}</strong>
+            <p>{prStackReleaseAgentRun.executedBy || "Capture proof to run the internal release landing agent."}</p>
+          </article>
+          <article>
+            <span>Mission gate</span>
+            <strong>{titleizeToken(prStackMissionGate.status || "pending")}</strong>
+            <p>{prStackLandingDecision.detail || "Mission 15 requires stack, package, performance, and route proof."}</p>
           </article>
         </div>
         {prStackLandingRows.length ? (

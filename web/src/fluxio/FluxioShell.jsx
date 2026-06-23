@@ -19961,6 +19961,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       landingSequence: [],
       blockers: ["Live GitHub PR stack evidence has not been captured in this browser session."],
       nextAction: "Capture PR landing readiness before merging or closing the stacked mission PRs.",
+      performanceBudget: {
+        schema: "fluxio.performance_budget.v1",
+        status: "pending_live_capture",
+        assetCount: 0,
+        totalAssetBytes: 0,
+        warnings: [],
+      },
+      releasePackage: {
+        schema: "fluxio.release_package_readiness.v1",
+        status: "pending_live_capture",
+        requiredScripts: [
+          { id: "frontend:build", status: "pending" },
+          { id: "verify:pr-stack", status: "pending" },
+          { id: "proof:pr-stack", status: "pending" },
+          { id: "verify:release-candidate", status: "pending" },
+        ],
+        files: [],
+      },
+      releaseAgentRun: {
+        schema: "fluxio.release_landing_agent_run.v1",
+        executedBy: "fluxio_internal_release_landing_agent",
+        status: "pending_live_capture",
+        selectedRuntime: "pending",
+      },
+      landingDecision: {
+        status: "pending_live_capture",
+        detail: "Capture PR landing readiness before deciding whether to merge, rebase, or hold the stack.",
+      },
+      missionGate: {
+        schema: "fluxio.mission_completion_gate.v1",
+        mission: "mission15-release-performance-pr-stack-landing",
+        status: "pending_live_capture",
+        items: [],
+      },
       continuationPolicy: {
         state: "pending_live_capture",
         shouldContinueStackWork: null,
