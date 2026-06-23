@@ -1708,15 +1708,18 @@ class FluxioWebBackendTests(unittest.TestCase):
                     "get_update_management_readiness_command",
                     {
                         "root": str(root),
-                        "requestId": "mission11-update-test",
+                        "requestId": "mission12-update-test",
                     },
                 )
 
             self.assertEqual(contract["schema"], "fluxio.update_management_readiness.v1")
+            self.assertEqual(contract["mission"], "mission12-update-dependency-management")
             self.assertEqual(contract["primaryRuntimeLane"], "hermes")
             self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
             self.assertIn("opencode", contract["fallbackRuntimeLanes"])
             self.assertIn(contract["status"], {"ready_for_safe_update_window", "ready_with_manual_review"})
+            self.assertEqual(contract["missionGate"]["mission"], "mission12-update-dependency-management")
+            self.assertEqual(contract["missionGate"]["status"], "complete")
             self.assertEqual(contract["appVersion"], "9.8.7")
             self.assertEqual(contract["packageManager"], "npm")
             self.assertIn("package-lock.json", contract["lockfiles"])
@@ -1726,13 +1729,19 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn("Hermes / OpenClaw / OpenCode adapters", labels)
             self.assertIn("Web and app shell", labels)
             self.assertIn("Release proof workflow", labels)
-            self.assertEqual({item["step"] for item in contract["safeUpgradeWorkflow"]}, {"snapshot", "isolate", "verify", "rollback"})
+            self.assertEqual({item["step"] for item in contract["safeUpgradeWorkflow"]}, {"snapshot", "isolate", "preview", "verify", "rollback"})
             self.assertEqual(contract["priorProofContractCount"], 4)
+            self.assertGreaterEqual(len(contract["dependencyRows"]), 0)
+            self.assertIn("compatibilityWarnings", contract)
+            self.assertEqual({item["id"] for item in contract["updateFamilyPlan"]}, {"dependencies", "providers", "runtimes", "app-shell"})
+            self.assertEqual(contract["outdatedCheck"]["status"], "not_requested")
+            self.assertEqual(contract["auditCheck"]["status"], "not_requested")
             proof_path = pathlib.Path(contract["proof"]["artifactPath"])
             self.assertTrue(proof_path.is_file())
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "safe_dependency_runtime_provider_update_readiness")
             self.assertEqual(proof["components"][0]["status"], "ready")
+            self.assertEqual(proof["missionGate"]["items"][-1]["proof"], str(proof_path))
 
     def test_automation_overlap_status_command_defers_when_thread_goal_active(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

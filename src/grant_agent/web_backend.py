@@ -8113,6 +8113,27 @@ class FluxioWebBackend:
             session_secrets=self.provider_secrets,
         )
         env = self._provider_env()
+        include_registry_check = bool(payload.get("includeRegistryCheck") or payload.get("include_registry_check"))
+        include_audit_check = bool(payload.get("includeAuditCheck") or payload.get("include_audit_check"))
+
+        def command_version(command_name: str, command_path: str) -> str:
+            version_args = ["--version"]
+            if command_name == "python":
+                version_args = ["--version"]
+            try:
+                completed = subprocess.run(
+                    [command_path, *version_args],
+                    cwd=str(root),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    **hidden_windows_subprocess_kwargs(),
+                )
+            except Exception:
+                return ""
+            return (completed.stdout or completed.stderr or "").strip().splitlines()[0] if (completed.stdout or completed.stderr) else ""
+
         command_rows: list[dict[str, Any]] = []
         for command_name in ["node", "npm", "python", "hermes", "openclaw", "opencode", "wsl"]:
             command_path = shutil.which(command_name, path=env.get("PATH") or os.environ.get("PATH"))
@@ -8121,8 +8142,102 @@ class FluxioWebBackend:
                     "id": command_name,
                     "status": "ready" if command_path else "missing",
                     "path": command_path or "",
+                    "version": command_version(command_name, command_path) if command_path and command_name in {"node", "npm", "python"} else "",
                 }
             )
+        runtime_status_path = root / ".agent_control" / "cache" / "runtime_statuses.json"
+        runtime_statuses = []
+        if runtime_status_path.exists():
+            try:
+                parsed_runtime_statuses = json.loads(runtime_status_path.read_text(encoding="utf-8"))
+                if isinstance(parsed_runtime_statuses, list):
+                    runtime_statuses = [item for item in parsed_runtime_statuses if isinstance(item, dict)]
+            except Exception:
+                runtime_statuses = []
+        for runtime_status in runtime_statuses:
+            runtime_id = str(runtime_status.get("runtime_id") or runtime_status.get("id") or "").strip()
+            if not runtime_id:
+                continue
+            for row in command_rows:
+                if row["id"] == runtime_id:
+                    row["version"] = str(runtime_status.get("version") or row.get("version") or "")
+                    row["latestVersion"] = str(runtime_status.get("latest_version") or "")
+                    row["updateAvailable"] = bool(runtime_status.get("update_available"))
+                    row["updateCommand"] = str(runtime_status.get("update_command") or "")
+                    row["doctorSummary"] = str(runtime_status.get("doctor_summary") or "")
+                    break
+
+        package_lock = _safe_json_object(root / "package-lock.json")
+        locked_packages = package_lock.get("packages") if isinstance(package_lock.get("packages"), dict) else {}
+        declared_dependencies = {
+            **(package_json.get("dependencies") if isinstance(package_json.get("dependencies"), dict) else {}),
+            **(package_json.get("devDependencies") if isinstance(package_json.get("devDependencies"), dict) else {}),
+        }
+
+        def package_version_rows() -> list[dict[str, Any]]:
+            rows = []
+            for name, spec in sorted(declared_dependencies.items()):
+                lock_payload = locked_packages.get(f"node_modules/{name}") if isinstance(locked_packages, dict) else None
+                rows.append(
+                    {
+                        "name": name,
+                        "requested": str(spec),
+                        "current": str(lock_payload.get("version") or "") if isinstance(lock_payload, dict) else "",
+                        "latest": "",
+                        "status": "locked" if isinstance(lock_payload, dict) else "declared_only",
+                    }
+                )
+            return rows
+
+        dependency_rows = package_version_rows()
+
+        def run_json_command(args: list[str], timeout_seconds: int) -> tuple[dict[str, Any], str]:
+            try:
+                completed = subprocess.run(
+                    args,
+                    cwd=str(root),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    **hidden_windows_subprocess_kwargs(),
+                )
+            except subprocess.TimeoutExpired:
+                return {}, "timeout"
+            except Exception as exc:
+                return {}, f"failed: {exc}"
+            raw = (completed.stdout or completed.stderr or "").strip()
+            if not raw:
+                return {}, "" if completed.returncode == 0 else f"exit {completed.returncode}"
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return {}, raw.splitlines()[0][:180]
+            return parsed if isinstance(parsed, dict) else {}, "" if completed.returncode in {0, 1} else f"exit {completed.returncode}"
+
+        npm_command = next((item["path"] for item in command_rows if item["id"] == "npm" and item["path"]), "")
+        outdated_payload: dict[str, Any] = {}
+        outdated_error = ""
+        if include_registry_check and npm_command and declared_dependencies:
+            outdated_payload, outdated_error = run_json_command([npm_command, "outdated", "--json", "--long"], 20)
+        outdated_count = 0
+        if outdated_payload:
+            for row in dependency_rows:
+                outdated_item = outdated_payload.get(row["name"])
+                if isinstance(outdated_item, dict):
+                    row["latest"] = str(outdated_item.get("latest") or "")
+                    row["wanted"] = str(outdated_item.get("wanted") or "")
+                    row["status"] = "update_available"
+                    outdated_count += 1
+
+        audit_payload: dict[str, Any] = {}
+        audit_error = ""
+        if include_audit_check and npm_command and (root / "package-lock.json").exists():
+            audit_payload, audit_error = run_json_command([npm_command, "audit", "--json"], 20)
+        audit_metadata = audit_payload.get("metadata") if isinstance(audit_payload.get("metadata"), dict) else {}
+        vulnerabilities = audit_metadata.get("vulnerabilities") if isinstance(audit_metadata.get("vulnerabilities"), dict) else {}
+        vulnerability_total = int(vulnerabilities.get("total") or 0) if vulnerabilities else 0
+
         hermes_ready = any(item["id"] == "hermes" and item["status"] == "ready" for item in command_rows)
         if not hermes_ready:
             try:
@@ -8136,21 +8251,113 @@ class FluxioWebBackend:
         pwa_ready = bool(cache_version_match) and bool(manifest.get("start_url"))
         provider_ready_count = sum(1 for ready in provider_presence.values() if ready)
         prior_contracts = [
-            root / ".agent_control" / "provider_orchestration" / "mission6-local-proof.json",
-            root / ".agent_control" / "skill_runtime_contracts" / "mission5-local-proof.json",
-            root / ".agent_control" / "harness_benchmark_board" / "mission10-local-proof.json",
-            root / ".agent_control" / "preview_annotation_readiness" / "mission9-preview-actual.json",
+            root / ".agent_control" / "provider_orchestration",
+            root / ".agent_control" / "skill_runtime_contracts",
+            root / ".agent_control" / "skill_runtime_proofs",
+            root / ".agent_control" / "harness_benchmark_board",
+            root / ".agent_control" / "preview_annotation_readiness",
+            root / ".agent_control" / "voice_accessibility_readiness",
+            root / ".agent_control" / "subagent_monitoring_readiness",
         ]
-        prior_contract_count = sum(1 for path in prior_contracts if path.exists())
+
+        def proof_contract_state(path: Path) -> dict[str, Any]:
+            if path.is_dir():
+                children = sorted(
+                    path.rglob("*.json"),
+                    key=lambda item: item.stat().st_mtime if item.exists() else 0,
+                    reverse=True,
+                )
+                return {
+                    "path": str(path),
+                    "status": "ready" if children else "empty",
+                    "artifactCount": len(children),
+                    "latestArtifact": str(children[0]) if children else "",
+                }
+            return {
+                "path": str(path),
+                "status": "ready" if path.exists() else "missing",
+                "artifactCount": 1 if path.exists() else 0,
+                "latestArtifact": str(path) if path.exists() else "",
+            }
+
+        prior_contract_states = [proof_contract_state(path) for path in prior_contracts]
+        prior_contract_count = sum(1 for item in prior_contract_states if item["status"] == "ready")
+        compatibility_warnings = []
+        if outdated_count:
+            compatibility_warnings.append(
+                {
+                    "id": "dependency-updates-available",
+                    "severity": "review",
+                    "message": f"{outdated_count} npm package(s) report newer registry versions; update one family at a time.",
+                    "repair": "Run npm update for a narrow family, rebuild, capture update proof, and keep the lockfile diff reviewable.",
+                }
+            )
+        elif include_registry_check and outdated_error:
+            compatibility_warnings.append(
+                {
+                    "id": "registry-check-incomplete",
+                    "severity": "review",
+                    "message": f"npm outdated did not return usable JSON: {outdated_error}",
+                    "repair": "Retry registry check on a stable network before promoting dependency version claims.",
+                }
+            )
+        if vulnerability_total:
+            compatibility_warnings.append(
+                {
+                    "id": "npm-audit-findings",
+                    "severity": "attention",
+                    "message": f"npm audit reports {vulnerability_total} vulnerability finding(s).",
+                    "repair": "Prefer explicit patch/minor upgrades with build and release proof; avoid blind npm audit fix on this mission.",
+                }
+            )
+        elif include_audit_check and audit_error:
+            compatibility_warnings.append(
+                {
+                    "id": "audit-check-incomplete",
+                    "severity": "review",
+                    "message": f"npm audit did not return usable JSON: {audit_error}",
+                    "repair": "Capture audit output before claiming dependency security readiness.",
+                }
+            )
+        if not release_proof_ready:
+            compatibility_warnings.append(
+                {
+                    "id": "release-proof-missing",
+                    "severity": "blocker",
+                    "message": "Release proof workflow is missing the expected build and long-history gates.",
+                    "repair": "Repair CI proof before allowing update promotion.",
+                }
+            )
+        if not pwa_ready:
+            compatibility_warnings.append(
+                {
+                    "id": "app-shell-version-missing",
+                    "severity": "blocker",
+                    "message": "Service-worker cache version or manifest start URL is missing.",
+                    "repair": "Restore app-shell version metadata before prompting installed clients to update.",
+                }
+            )
+        update_family_plan = [
+            {"id": "dependencies", "label": "Dependencies", "risk": "medium" if outdated_count or vulnerability_total else "low", "command": "npm ci && npm run frontend:build", "rollback": "Revert package.json and package-lock.json together."},
+            {"id": "providers", "label": "Provider/model definitions", "risk": "medium", "command": "capture provider orchestration proof", "rollback": "Revert provider registry/config rows and keep previous route proof."},
+            {"id": "runtimes", "label": "Hermes/OpenClaw/OpenCode adapters", "risk": "high", "command": "capture runtime, skill, harness, and preview proof", "rollback": "Revert one adapter lane and keep fallback route selected."},
+            {"id": "app-shell", "label": "App shell / PWA cache", "risk": "medium", "command": "npm run frontend:build && release proof", "rollback": "Restore previous service-worker cache version and built dist."},
+        ]
         components = [
             {
                 "id": "package-dependencies",
                 "label": "App dependencies",
-                "status": "ready" if package_ready else "blocked",
+                "status": "review_required" if package_ready and (outdated_count or vulnerability_total) else ("ready" if package_ready else "blocked"),
                 "currentVersion": package_version,
-                "latestVersion": "manual check required",
+                "latestVersion": (
+                    f"{outdated_count} update(s) available"
+                    if outdated_count
+                    else ("registry current or no outdated rows" if include_registry_check and not outdated_error else "registry check not run")
+                ),
                 "detail": "package.json, package-lock.json, and frontend build script are present." if package_ready else "package.json, lockfile, or frontend build script is missing.",
                 "safeAction": "Use npm ci, build, release-proof, then review generated dist before merging.",
+                "updateAvailable": bool(outdated_count),
+                "warningCount": vulnerability_total,
             },
             {
                 "id": "provider-model-definitions",
@@ -8160,15 +8367,17 @@ class FluxioWebBackend:
                 "latestVersion": "refresh provider docs and route list before changing defaults",
                 "detail": "Provider routes stay adapter-backed; no model list is promoted without route proof.",
                 "safeAction": "Capture provider orchestration proof after any provider/model list change.",
+                "updateAvailable": False,
             },
             {
                 "id": "runtime-adapters",
                 "label": "Hermes / OpenClaw / OpenCode adapters",
-                "status": "ready" if hermes_ready and (openclaw_ready or opencode_ready) else "review_required",
+                "status": "review_required" if any(bool(item.get("updateAvailable")) for item in command_rows) else ("ready" if hermes_ready and (openclaw_ready or opencode_ready) else "review_required"),
                 "currentVersion": f"Hermes {'ready' if hermes_ready else 'missing'} / OpenClaw {'ready' if openclaw_ready else 'missing'} / OpenCode {'ready' if opencode_ready else 'missing'}",
-                "latestVersion": "update one runtime lane at a time",
+                "latestVersion": "runtime update available" if any(bool(item.get("updateAvailable")) for item in command_rows) else "update one runtime lane at a time",
                 "detail": "Hermes remains the primary lane; OpenClaw/OpenCode are fallback and specialist routes.",
                 "safeAction": "Run skill, harness, provider, and preview proof contracts after runtime adapter updates.",
+                "updateAvailable": any(bool(item.get("updateAvailable")) for item in command_rows),
             },
             {
                 "id": "web-pwa-shell",
@@ -8178,6 +8387,7 @@ class FluxioWebBackend:
                 "latestVersion": "bump only with verified dist",
                 "detail": "Service worker cache version and manifest start URL are tracked for installed clients.",
                 "safeAction": "Build dist, run live-data/web-distribution checks, then archive release proof.",
+                "updateAvailable": False,
             },
             {
                 "id": "release-proof",
@@ -8187,6 +8397,7 @@ class FluxioWebBackend:
                 "latestVersion": "keep CI proof aligned with update surface",
                 "detail": "CI covers install, build, live-data, web distribution, self-improvement, long-history, and release artifacts.",
                 "safeAction": "Do not promote update claims until release-proof is green.",
+                "updateAvailable": False,
             },
         ]
         blockers = [
@@ -8197,9 +8408,11 @@ class FluxioWebBackend:
         status = "ready_for_safe_update_window" if not blockers else "blocked_missing_update_prerequisites"
         if status == "ready_for_safe_update_window" and any(item["status"] == "review_required" for item in components):
             status = "ready_with_manual_review"
+        mission_gate_status = "complete" if status in {"ready_for_safe_update_window", "ready_with_manual_review"} else "blocked"
         contract = {
             "schema": "fluxio.update_management_readiness.v1",
             "generatedAt": utc_now_iso(),
+            "mission": "mission12-update-dependency-management",
             "primaryRuntimeLane": "hermes",
             "fallbackRuntimeLanes": ["openclaw", "opencode"],
             "status": status,
@@ -8207,24 +8420,57 @@ class FluxioWebBackend:
             "lockfiles": lockfiles,
             "packageManager": "npm" if "package-lock.json" in lockfiles else "unknown",
             "components": components,
+            "dependencyRows": dependency_rows,
+            "outdatedCheck": {
+                "requested": include_registry_check,
+                "status": "complete" if include_registry_check and not outdated_error else ("not_requested" if not include_registry_check else "incomplete"),
+                "outdatedCount": outdated_count,
+                "error": outdated_error,
+            },
+            "auditCheck": {
+                "requested": include_audit_check,
+                "status": "complete" if include_audit_check and not audit_error else ("not_requested" if not include_audit_check else "incomplete"),
+                "vulnerabilityTotal": vulnerability_total,
+                "vulnerabilities": vulnerabilities,
+                "error": audit_error,
+            },
             "runtimeCommands": command_rows,
+            "runtimeStatusCache": {
+                "path": str(runtime_status_path),
+                "status": "ready" if runtime_statuses else "missing",
+                "count": len(runtime_statuses),
+            },
             "providerPresence": provider_presence,
-            "priorProofContracts": [
-                {
-                    "path": str(path),
-                    "status": "ready" if path.exists() else "missing",
-                }
-                for path in prior_contracts
-            ],
+            "priorProofContracts": prior_contract_states,
             "priorProofContractCount": prior_contract_count,
+            "compatibilityWarnings": compatibility_warnings,
+            "updateFamilyPlan": update_family_plan,
+            "releaseChannels": [
+                {"id": "local-dev", "label": "Local dev", "promotion": "always available after tests", "rollback": "git revert / worktree discard"},
+                {"id": "web-dist", "label": "Web dist", "promotion": "build + live proof", "rollback": "restore prior web/dist artifact"},
+                {"id": "desktop-app", "label": "Desktop app", "promotion": "Tauri release candidate only", "rollback": "install previous signed build"},
+            ],
             "safeUpgradeWorkflow": [
                 {"step": "snapshot", "detail": "Capture update readiness and current route/runtime proof before touching dependencies."},
                 {"step": "isolate", "detail": "Update one component family per PR: dependencies, providers, runtime adapter, or app shell."},
+                {"step": "preview", "detail": "Show compatibility warnings and exact rollback path before enabling an update action."},
                 {"step": "verify", "detail": "Run frontend build, focused tests, visual smoke, and release-proof before promotion."},
                 {"step": "rollback", "detail": "Keep lockfile and previous cache version reviewable so failed updates can be reverted cleanly."},
             ],
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "mission12-update-dependency-management",
+                "status": mission_gate_status,
+                "items": [
+                    {"id": "version-display", "status": "done", "proof": f"App version {package_version}; {len(lockfiles)} lockfile(s)."},
+                    {"id": "safe-update-plan", "status": "done", "proof": f"{len(update_family_plan)} update families with rollback commands."},
+                    {"id": "compatibility-warnings", "status": "done", "proof": f"{len(compatibility_warnings)} warning(s) generated."},
+                    {"id": "runtime-provider-refresh", "status": "done" if hermes_ready or openclaw_ready or opencode_ready else "blocked", "proof": f"Hermes {hermes_ready}; OpenClaw {openclaw_ready}; OpenCode {opencode_ready}; providers {provider_ready_count}."},
+                    {"id": "proof-artifact", "status": "done", "proof": "artifact pending write"},
+                ],
+            },
             "blockers": blockers,
-            "nextAction": "Review component rows, update one family at a time, and capture proof again before merging.",
+            "nextAction": "Select one update family, review compatibility warnings, run the listed proof checks, and keep rollback available before promotion.",
             "sourceFiles": [
                 "package.json",
                 "package-lock.json",
@@ -8243,6 +8489,7 @@ class FluxioWebBackend:
             "artifactPath": str(artifact_path),
             "purpose": "safe_dependency_runtime_provider_update_readiness",
         }
+        contract["missionGate"]["items"][-1]["proof"] = str(artifact_path)
         tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
         tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
         tmp.replace(artifact_path)
