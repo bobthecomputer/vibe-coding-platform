@@ -5815,6 +5815,166 @@ class FluxioWebBackend:
         tmp.replace(artifact_path)
         return contract
 
+    def _provider_chat_reliability_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        request_id = _safe_identifier(payload.get("requestId") or payload.get("request_id") or f"provider-chat-{int(time.time())}")
+        allow_chat_probe = bool(payload.get("allowProviderChatProbe") or payload.get("allow_provider_chat_probe"))
+        try:
+            attempt_count = int(payload.get("attemptCount") or payload.get("attempt_count") or 10)
+        except (TypeError, ValueError):
+            attempt_count = 10
+        attempt_count = max(1, min(attempt_count, 10))
+        try:
+            timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 45)
+        except (TypeError, ValueError):
+            timeout_seconds = 45
+        timeout_seconds = max(8, min(timeout_seconds, 120))
+        env = self._provider_env()
+        runtime_rows = [
+            self._runtime_command_row("hermes", "hermes", env=env, allow_wsl=True),
+            self._runtime_command_row("opencode", "opencode", env=env),
+            self._runtime_command_row("openclaw", "openclaw", env=env),
+        ]
+        runtime_available = {str(item["id"]): bool(item["available"]) for item in runtime_rows}
+        preferred_provider = str(payload.get("provider") or "openrouter").strip() or "openrouter"
+        preferred_model = str(payload.get("model") or "z-ai/glm-5.2").strip() or "z-ai/glm-5.2"
+        fallback_runtime = "opencode" if runtime_available.get("opencode") else "openclaw"
+        runtime_plan = [
+            "hermes" if index < max(1, attempt_count // 2) else fallback_runtime
+            for index in range(attempt_count)
+        ]
+        if not runtime_available.get("hermes"):
+            runtime_plan = [fallback_runtime for _ in runtime_plan]
+        if not runtime_available.get(fallback_runtime):
+            runtime_plan = ["hermes" if runtime_available.get("hermes") else fallback_runtime for _ in runtime_plan]
+        provider_presence = _provider_presence(
+            ["openrouter", "opencode-go", "openai", "openai-codex", "anthropic", "minimax"],
+            session_secrets=self.provider_secrets,
+        )
+        attempts: list[dict[str, Any]] = []
+        for index, runtime_name in enumerate(runtime_plan, start=1):
+            route = {
+                "provider": preferred_provider,
+                "model": preferred_model,
+                "effort": "low",
+                "role": "provider-route-reliability",
+            }
+            attempt = {
+                "index": index,
+                "runtime": runtime_name,
+                "provider": preferred_provider,
+                "model": preferred_model,
+                "status": "not_attempted",
+                "elapsedMs": 0,
+                "replyPreview": "",
+                "command": "",
+                "error": "",
+            }
+            if not allow_chat_probe:
+                attempt["status"] = "blocked"
+                attempt["error"] = "Chat probe requires allowProviderChatProbe=true so the UI never claims a real chat without explicit execution."
+            elif not runtime_available.get(runtime_name):
+                attempt["status"] = "missing_runtime"
+                attempt["error"] = f"{runtime_name} CLI was not detected."
+            else:
+                prompt = (
+                    f"Fluxio provider route reliability check {index}/{attempt_count}. "
+                    "Reply with exactly: FLUXIO_ROUTE_OK"
+                )
+                try:
+                    result = self._run_agent_chat(
+                        {
+                            "runtime": runtime_name,
+                            "message": prompt,
+                            "route": route,
+                            "workspacePath": str(root),
+                            "workspaceId": root.name,
+                            "sessionId": f"{request_id}-{runtime_name}-{index}",
+                            "timeoutSeconds": timeout_seconds,
+                        }
+                    )
+                    reply = str(result.get("reply") or "").strip()
+                    attempt.update(
+                        {
+                            "status": "ok" if "FLUXIO_ROUTE_OK" in reply else ("unexpected_reply" if reply else "empty_reply"),
+                            "elapsedMs": int(result.get("elapsedMs") or 0),
+                            "replyPreview": reply[:220],
+                            "command": str(result.get("command") or ""),
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - proof must record exact route failure.
+                    attempt.update({"status": "failed", "error": str(exc)})
+            attempts.append(attempt)
+        ok_attempts = [item for item in attempts if item["status"] == "ok"]
+        runtime_summary = {
+            runtime_id: {
+                "attempted": sum(1 for item in attempts if item["runtime"] == runtime_id),
+                "ok": sum(1 for item in attempts if item["runtime"] == runtime_id and item["status"] == "ok"),
+                "failed": sum(1 for item in attempts if item["runtime"] == runtime_id and item["status"] not in {"ok", "not_attempted"}),
+            }
+            for runtime_id in ("hermes", "opencode", "openclaw")
+        }
+        status = "complete" if len(ok_attempts) == attempt_count else ("partial" if ok_attempts else "blocked")
+        artifact_dir = root / ".agent_control" / "provider_chat_reliability"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{request_id}.json"
+        contract = {
+            "schema": "fluxio.provider_chat_reliability.v1",
+            "generatedAt": utc_now_iso(),
+            "requestId": request_id,
+            "status": status,
+            "primaryRuntimeLane": "hermes",
+            "fallbackRuntimeLanes": ["opencode", "openclaw"],
+            "attemptCount": attempt_count,
+            "okCount": len(ok_attempts),
+            "failedCount": attempt_count - len(ok_attempts),
+            "provider": preferred_provider,
+            "model": preferred_model,
+            "runtimeRows": runtime_rows,
+            "runtimeSummary": runtime_summary,
+            "providerPresence": provider_presence,
+            "attempts": attempts,
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "provider-runtime-chat-reliability",
+                "status": status,
+                "items": [
+                    {
+                        "id": "runtime-discovery",
+                        "label": "Hermes plus fallback runtime discovered",
+                        "status": "done" if runtime_available.get("hermes") and (runtime_available.get("opencode") or runtime_available.get("openclaw")) else "blocked",
+                        "proof": ", ".join(f"{item['id']}={item['source'] or 'missing'}" for item in runtime_rows),
+                    },
+                    {
+                        "id": "chat-probe",
+                        "label": "Ten route chats executed through app backend",
+                        "status": "done" if len(ok_attempts) == attempt_count else "blocked",
+                        "proof": f"{len(ok_attempts)}/{attempt_count} chat attempts returned output.",
+                    },
+                    {
+                        "id": "artifact-written",
+                        "label": "Reliability artifact written",
+                        "status": "done",
+                        "proof": str(artifact_path),
+                    },
+                ],
+            },
+            "proof": {
+                "command": command,
+                "artifactPath": str(artifact_path),
+                "purpose": "provider_runtime_chat_reliability",
+            },
+            "nextAction": (
+                "Use this route for chat."
+                if status == "complete"
+                else "Open the artifact, fix the failed runtime/provider route, then rerun the ten chat checks."
+            ),
+        }
+        tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
+        tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+        tmp.replace(artifact_path)
+        return contract
+
     def _fusion_readiness_artifact(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         root = Path(payload.get("root") or self.root).resolve()
         homes = _fusion_home_candidates(root)
@@ -9899,7 +10059,7 @@ class FluxioWebBackend:
         if not prompt:
             prompt = _chat_prompt(payload)
         prompt = (
-            "You are running inside the Fluxio app runtime. Do not ask clarifying questions. "
+            "This request is dispatched by the Fluxio app backend. Do not ask clarifying questions. "
             "Use the provided screenshot path and DOM facts when available, and return the requested result directly.\n\n"
             + prompt
         )
@@ -10393,6 +10553,8 @@ class FluxioWebBackend:
             return self._run_skill_runtime_artifact(command, payload)
         if command in {"provider_orchestration_command", "get_provider_orchestration_command"}:
             return self._provider_orchestration_artifact(command, payload)
+        if command in {"provider_chat_reliability_command", "get_provider_chat_reliability_command"}:
+            return self._provider_chat_reliability_artifact(command, payload)
         if command in {"runtime_route_unification_command", "get_runtime_route_unification_command"}:
             return self._runtime_route_unification_artifact(command, payload)
         if command in {"fusion_readiness_command", "get_fusion_readiness_command"}:

@@ -5188,6 +5188,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
   const [providerSecretSaving, setProviderSecretSaving] = useState({});
   const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
+  const [providerChatReliabilityContract, setProviderChatReliabilityContract] = useState(null);
   const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
   const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
   const [harnessBenchmarkBoardContract, setHarnessBenchmarkBoardContract] = useState(null);
@@ -15449,6 +15450,60 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "providers:run-chat-reliability") {
+        setSurface("settings");
+        setReferenceSettingsTab("providers");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        if (previewMode !== "live" || !hasCommandBackend()) {
+          pushToast("Live backend is required to run provider chat checks.", "warn");
+          return;
+        }
+        const selectedProvider =
+          payload?.provider ||
+          activeEffectiveRoute?.provider ||
+          selectedAgentRoute?.provider ||
+          missionForm.modelProvider ||
+          "openrouter";
+        const selectedModel =
+          payload?.model ||
+          activeEffectiveRoute?.model ||
+          selectedAgentRoute?.model ||
+          missionForm.model ||
+          "z-ai/glm-5.2";
+        try {
+          const response = await callBackend(
+            "get_provider_chat_reliability_command",
+            {
+              payload: {
+                root: null,
+                requestId: `provider-chat-${Date.now()}`,
+                provider: selectedProvider,
+                model: selectedModel,
+                attemptCount: 10,
+                timeoutSeconds: 45,
+                allowProviderChatProbe: true,
+              },
+            },
+            { throwOnError: true },
+          );
+          setProviderChatReliabilityContract(response && typeof response === "object" ? response : null);
+          const artifactPath = String(response?.proof?.artifactPath || "").trim();
+          const okCount = Number(response?.okCount || 0);
+          const attemptCount = Number(response?.attemptCount || 10);
+          pushToast(
+            artifactPath
+              ? `Provider chat checks: ${okCount}/${attemptCount}. ${pathLeaf(artifactPath)}`
+              : `Provider chat checks: ${okCount}/${attemptCount}.`,
+            okCount === attemptCount ? "info" : "warn",
+          );
+          await refreshAll("provider-chat-reliability");
+        } catch (error) {
+          pushToast(`Provider chat reliability failed: ${error}`, "error");
+        }
+        return;
+      }
+
       if (normalizedAction === "harness:capture-benchmark-board") {
         setSurface("settings");
         setReferenceSettingsTab("runtimes");
@@ -19768,6 +19823,25 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ],
       proof: null,
       nextAction: "Capture live route proof before claiming provider orchestration executed.",
+    },
+    providerChatReliability: providerChatReliabilityContract || snapshot?.providerChatReliability || {
+      schema: "fluxio.provider_chat_reliability.v1",
+      status: "pending_live_capture",
+      primaryRuntimeLane: "hermes",
+      fallbackRuntimeLanes: ["opencode", "openclaw"],
+      attemptCount: 10,
+      okCount: 0,
+      failedCount: 0,
+      provider: activeEffectiveRoute.provider || selectedAgentRoute.provider || launchRecommendation.modelProvider || missionForm.modelProvider || "openrouter",
+      model: activeEffectiveRoute.model || selectedAgentRoute.model || launchRecommendation.model || missionForm.model || "z-ai/glm-5.2",
+      runtimeSummary: {
+        hermes: { attempted: 0, ok: 0, failed: 0 },
+        opencode: { attempted: 0, ok: 0, failed: 0 },
+        openclaw: { attempted: 0, ok: 0, failed: 0 },
+      },
+      attempts: [],
+      proof: null,
+      nextAction: "Run ten chat checks before claiming this route is reliable.",
     },
     updateManagementReadiness: updateManagementReadinessContract || snapshot?.updateManagementReadiness || {
       schema: "fluxio.update_management_readiness.v1",

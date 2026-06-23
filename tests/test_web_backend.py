@@ -1139,6 +1139,67 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(contract["missionGate"]["status"], "complete")
             self.assertIn("fallback", contract["nextAction"].lower())
 
+    def test_provider_chat_reliability_runs_ten_runtime_chat_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            def fake_which(command, path=None):  # noqa: ANN001
+                if command in {"hermes", "opencode", "openclaw"}:
+                    return command
+                return None
+
+            def fake_chat(payload):  # noqa: ANN001
+                runtime = payload["runtime"]
+                return {
+                    "reply": "FLUXIO_ROUTE_OK",
+                    "runtime": runtime,
+                    "route": payload["route"],
+                    "elapsedMs": 12,
+                    "command": f"{runtime} <prompt>",
+                    "compartment": {"id": payload["sessionId"]},
+                }
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENROUTER_API_KEY": "",
+                    "OPENCODE_API_KEY": "",
+                    "HOME": str(root / "home"),
+                },
+            ), mock.patch("shutil.which", side_effect=fake_which), mock.patch.object(
+                backend,
+                "_run_agent_chat",
+                side_effect=fake_chat,
+            ) as run_chat:
+                contract = backend.dispatch(
+                    "get_provider_chat_reliability_command",
+                    {
+                        "root": str(root),
+                        "requestId": "provider-chat-reliability",
+                        "provider": "openrouter",
+                        "model": "z-ai/glm-5.2",
+                        "attemptCount": 10,
+                        "allowProviderChatProbe": True,
+                    },
+                )
+
+            self.assertEqual(contract["schema"], "fluxio.provider_chat_reliability.v1")
+            self.assertEqual(contract["status"], "complete")
+            self.assertEqual(contract["attemptCount"], 10)
+            self.assertEqual(contract["okCount"], 10)
+            self.assertEqual(run_chat.call_count, 10)
+            self.assertEqual(contract["runtimeSummary"]["hermes"]["attempted"], 5)
+            self.assertEqual(contract["runtimeSummary"]["opencode"]["attempted"], 5)
+            self.assertEqual(contract["runtimeSummary"]["hermes"]["ok"], 5)
+            self.assertEqual(contract["runtimeSummary"]["opencode"]["ok"], 5)
+            self.assertEqual(contract["missionGate"]["status"], "complete")
+            proof_path = pathlib.Path(contract["proof"]["artifactPath"])
+            self.assertTrue(proof_path.is_file())
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertEqual(proof["proof"]["purpose"], "provider_runtime_chat_reliability")
+            self.assertEqual(len(proof["attempts"]), 10)
+
     def test_provider_orchestration_task_profile_does_not_treat_fluxio_as_ux(self) -> None:
         profile = web_backend._provider_orchestration_task_profile(
             "Audit provider routes and choose a model switch fallback through OpenCode for Fluxio Mission 6."

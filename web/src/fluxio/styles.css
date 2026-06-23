@@ -6443,6 +6443,132 @@ button.fluxos-context-root:hover {
   overflow-wrap: anywhere;
 }
 
+.fluxos-provider-reliability {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 16px 0;
+}
+
+.fluxos-provider-reliability.ready {
+  border-color: rgba(180, 255, 214, 0.32);
+}
+
+.fluxos-provider-reliability.blocked {
+  border-color: rgba(255, 180, 140, 0.36);
+}
+
+.fluxos-provider-reliability-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fluxos-provider-reliability-head > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-provider-reliability-head span,
+.fluxos-provider-reliability-grid span,
+.fluxos-provider-attempt-strip strong {
+  color: var(--fluxos-cyan);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-provider-reliability-head strong {
+  color: var(--fluxos-text);
+  font-size: clamp(20px, 2.4vw, 30px);
+  line-height: 1.05;
+}
+
+.fluxos-provider-reliability-head p,
+.fluxos-provider-reliability-grid p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-provider-chat-proof-button {
+  border: 1px solid rgba(245, 245, 245, 0.22) !important;
+  border-radius: 999px !important;
+  background: rgba(245, 245, 245, 0.94) !important;
+  color: #050505 !important;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fluxos-provider-chat-proof-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.fluxos-provider-reliability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0;
+}
+
+.fluxos-provider-reliability-grid article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 14px 12px 0;
+}
+
+.fluxos-provider-reliability-grid article + article {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 14px;
+}
+
+.fluxos-provider-reliability-grid strong {
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.24;
+}
+
+.fluxos-provider-attempt-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fluxos-provider-attempt-strip span {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 0 10px;
+}
+
+.fluxos-provider-attempt-strip span.ok {
+  border-color: rgba(180, 255, 214, 0.26);
+}
+
+.fluxos-provider-attempt-strip span.failed {
+  border-color: rgba(255, 180, 140, 0.26);
+}
+
+.fluxos-provider-attempt-strip em {
+  color: var(--fluxos-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
 .fluxos-voice-access-readiness {
   display: grid;
   gap: 14px;
@@ -6689,24 +6815,6 @@ button.fluxos-context-root:hover {
   font-style: normal;
 }
 
-.fluxos-release-overview {
-  display: grid;
-  grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.4fr) auto;
-  gap: 18px;
-  align-items: start;
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 20px 0 18px;
-}
-
-.fluxos-release-overview-copy {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.fluxos-release-overview-copy span,
-.fluxos-release-overview-facts span,
 .fluxos-update-idle-note span {
   color: var(--fluxos-cyan);
   font-size: 11px;
@@ -6715,54 +6823,12 @@ button.fluxos-context-root:hover {
   text-transform: uppercase;
 }
 
-.fluxos-release-overview-copy strong {
-  color: var(--fluxos-text);
-  font-size: clamp(28px, 4vw, 44px);
-  line-height: 0.98;
-}
-
-.fluxos-release-overview-copy p,
-.fluxos-release-overview-facts p,
 .fluxos-update-idle-note p {
   margin: 0;
   color: var(--fluxos-muted);
   font-size: 12px;
   line-height: 1.46;
   overflow-wrap: anywhere;
-}
-
-.fluxos-release-overview-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  min-width: 0;
-}
-
-.fluxos-release-overview-facts article {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 12px 14px 10px 0;
-}
-
-.fluxos-release-overview-facts article + article {
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  padding-left: 14px;
-}
-
-.fluxos-release-overview-facts strong {
-  color: var(--fluxos-text);
-  font-size: 13px;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-}
-
-.fluxos-release-overview-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: end;
-  flex-wrap: wrap;
 }
 
 .fluxos-update-readiness {
@@ -6964,131 +7030,6 @@ button.fluxos-context-root:hover {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0;
-}
-
-.fluxos-pr-stack-landing {
-  display: grid;
-  gap: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-  padding: 16px 0;
-}
-
-.fluxos-pr-stack-landing.ready {
-  border-color: rgba(180, 255, 214, 0.3);
-}
-
-.fluxos-pr-stack-landing.folded {
-  display: none;
-}
-
-.fluxos-pr-stack-landing.attention {
-  border-top-color: rgba(255, 188, 170, 0.34);
-}
-
-.fluxos-pr-stack-landing-head {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.fluxos-pr-stack-landing-head > div {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.fluxos-pr-stack-landing-head span,
-.fluxos-pr-stack-landing-grid span,
-.fluxos-pr-stack-landing-sequence span {
-  color: var(--fluxos-cyan);
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.fluxos-pr-stack-landing-head strong {
-  color: var(--fluxos-text);
-  font-size: clamp(18px, 2vw, 24px);
-  line-height: 1.12;
-}
-
-.fluxos-pr-stack-landing-head p,
-.fluxos-pr-stack-landing-grid p,
-.fluxos-pr-stack-landing-sequence p,
-.fluxos-pr-stack-landing-foot {
-  margin: 0;
-  color: var(--fluxos-muted);
-  font-size: 12px;
-  line-height: 1.42;
-  overflow-wrap: anywhere;
-}
-
-.fluxos-pr-stack-landing-proof-button {
-  display: inline-flex !important;
-  min-height: 36px !important;
-  align-items: center !important;
-  justify-content: center !important;
-  border: 1px solid rgba(245, 245, 245, 0.22) !important;
-  border-radius: 999px !important;
-  background: rgba(245, 245, 245, 0.94) !important;
-  color: #050505 !important;
-  cursor: pointer;
-  flex: 0 0 auto;
-  padding: 0 16px !important;
-  font-size: 12px;
-  font-weight: 780;
-}
-
-.fluxos-pr-stack-landing-proof-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
-}
-
-.fluxos-pr-stack-landing-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-}
-
-.fluxos-pr-stack-landing-grid article,
-.fluxos-pr-stack-landing-sequence article {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 12px 14px 12px 0;
-}
-
-.fluxos-pr-stack-landing-grid article + article,
-.fluxos-pr-stack-landing-sequence article + article {
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  padding-left: 14px;
-}
-
-.fluxos-pr-stack-landing-grid strong,
-.fluxos-pr-stack-landing-sequence strong {
-  min-width: 0;
-  color: var(--fluxos-text);
-  font-size: 13px;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.fluxos-pr-stack-landing-sequence {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0;
-}
-
-.fluxos-pr-stack-landing-sequence article.ready span {
-  color: rgba(180, 255, 214, 0.86);
-}
-
-.fluxos-pr-stack-landing-sequence article.blocked span {
-  color: rgba(255, 188, 170, 0.9);
 }
 
 .fluxos-harness-benchmark-board {
@@ -7379,11 +7320,11 @@ button.fluxos-context-root:hover {
 
 .fluxos-shell.surface-settings .fluxos-fusion-readiness .fluxos-fusion-proof-button,
 .fluxos-shell.surface-settings .fluxos-provider-orchestration .fluxos-provider-proof-button,
+.fluxos-shell.surface-settings .fluxos-provider-reliability .fluxos-provider-chat-proof-button,
 .fluxos-shell.surface-settings .fluxos-harness-benchmark-board .fluxos-harness-benchmark-proof-button,
 .fluxos-shell.surface-settings .fluxos-update-readiness .fluxos-update-proof-button,
 .fluxos-shell.surface-settings .fluxos-voice-access-readiness .fluxos-voice-access-proof-button,
 .fluxos-shell.surface-settings .fluxos-subagent-monitoring-readiness .fluxos-subagent-proof-button,
-.fluxos-shell.surface-settings .fluxos-pr-stack-landing .fluxos-pr-stack-landing-proof-button,
 .fluxos-shell.surface-settings .fluxos-automation-overlap .fluxos-automation-overlap-proof-button,
 .fluxos-shell.surface-settings .fluxos-jbh-readiness .fluxos-jbh-proof-button {
   display: inline-flex !important;
@@ -8355,15 +8296,12 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary,
   .fluxos-settings-fact-grid,
-  .fluxos-release-overview,
-  .fluxos-release-overview-facts,
+  .fluxos-provider-reliability-grid,
   .fluxos-update-decision-strip,
   .fluxos-update-component-grid,
   .fluxos-update-warning-rail,
   .fluxos-update-family-plan,
   .fluxos-update-proof-grid,
-  .fluxos-pr-stack-landing-grid,
-  .fluxos-pr-stack-landing-sequence,
   .fluxos-harness-decision-strip,
   .fluxos-harness-benchmark-matrix,
   .fluxos-harness-recommendations,
@@ -8383,14 +8321,12 @@ button.fluxos-context-root:hover {
 
   .fluxos-settings-route-summary article + article,
   .fluxos-settings-fact-grid article + article,
-  .fluxos-release-overview-facts article + article,
+  .fluxos-provider-reliability-grid article + article,
   .fluxos-update-decision-strip article + article,
   .fluxos-update-component-grid article + article,
   .fluxos-update-warning-rail article + article,
   .fluxos-update-family-plan article + article,
   .fluxos-update-proof-grid article + article,
-  .fluxos-pr-stack-landing-grid article + article,
-  .fluxos-pr-stack-landing-sequence article + article,
   .fluxos-harness-decision-strip article + article,
   .fluxos-harness-benchmark-matrix article + article,
   .fluxos-harness-recommendations article + article,
