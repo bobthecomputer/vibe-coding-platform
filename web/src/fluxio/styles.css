@@ -7227,6 +7227,10 @@ button.fluxos-context-root:hover {
 
 .fluxos-fusion-readiness-head span,
 .fluxos-fusion-project-grid span,
+.fluxos-fusion-decision-strip span,
+.fluxos-fusion-decision-list span,
+.fluxos-fusion-overlap-map span,
+.fluxos-fusion-migration-plan span,
 .fluxos-fusion-next-step span {
   color: var(--fluxos-cyan);
   font-size: 11px;
@@ -7244,6 +7248,12 @@ button.fluxos-context-root:hover {
 .fluxos-fusion-readiness-head p,
 .fluxos-fusion-project-grid p,
 .fluxos-fusion-project-grid small,
+.fluxos-fusion-decision-strip p,
+.fluxos-fusion-decision-list p,
+.fluxos-fusion-decision-list small,
+.fluxos-fusion-overlap-map p,
+.fluxos-fusion-migration-plan p,
+.fluxos-fusion-migration-plan small,
 .fluxos-fusion-next-step p {
   margin: 0;
   color: var(--fluxos-muted);
@@ -7514,14 +7524,39 @@ button.fluxos-context-root:hover {
   line-height: 1.25;
 }
 
+.fluxos-fusion-decision-strip,
 .fluxos-fusion-project-grid,
+.fluxos-fusion-decision-list,
+.fluxos-fusion-overlap-map,
+.fluxos-fusion-migration-plan,
 .fluxos-fusion-next-step {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0;
 }
 
+.fluxos-fusion-decision-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fluxos-fusion-project-grid,
+.fluxos-fusion-next-step {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fluxos-fusion-decision-list,
+.fluxos-fusion-overlap-map {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fluxos-fusion-migration-plan {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .fluxos-fusion-project-grid article,
+.fluxos-fusion-decision-strip article,
+.fluxos-fusion-decision-list article,
+.fluxos-fusion-overlap-map article,
+.fluxos-fusion-migration-plan article,
 .fluxos-fusion-next-step article {
   min-width: 0;
   display: grid;
@@ -7531,21 +7566,45 @@ button.fluxos-context-root:hover {
 }
 
 .fluxos-fusion-project-grid article + article,
+.fluxos-fusion-decision-strip article + article,
+.fluxos-fusion-decision-list article + article,
+.fluxos-fusion-overlap-map article + article,
+.fluxos-fusion-migration-plan article + article,
 .fluxos-fusion-next-step article + article {
   border-left: 1px solid rgba(255, 255, 255, 0.08);
   padding-left: 14px;
 }
 
-.fluxos-fusion-project-grid article.ready span {
+.fluxos-fusion-project-grid article.ready span,
+.fluxos-fusion-migration-plan article.ready span {
   color: rgba(180, 255, 214, 0.86);
 }
 
+.fluxos-fusion-migration-plan article.blocked span {
+  color: rgba(255, 168, 168, 0.86);
+}
+
+.fluxos-fusion-migration-plan article.next span {
+  color: rgba(245, 245, 240, 0.86);
+}
+
 .fluxos-fusion-project-grid strong,
+.fluxos-fusion-decision-strip strong,
+.fluxos-fusion-decision-list strong,
+.fluxos-fusion-overlap-map strong,
+.fluxos-fusion-migration-plan strong,
 .fluxos-fusion-next-step strong {
   min-width: 0;
   color: var(--fluxos-text);
   font-size: 13px;
   line-height: 1.25;
+}
+
+.fluxos-fusion-project-grid em {
+  color: rgba(245, 245, 240, 0.82);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
 }
 
 .fluxos-settings-list article,
@@ -8134,7 +8193,11 @@ button.fluxos-context-root:hover {
   .fluxos-harness-benchmark-matrix,
   .fluxos-harness-recommendations,
   .fluxos-harness-benchmark-proof,
+  .fluxos-fusion-decision-strip,
   .fluxos-fusion-project-grid,
+  .fluxos-fusion-decision-list,
+  .fluxos-fusion-overlap-map,
+  .fluxos-fusion-migration-plan,
   .fluxos-fusion-next-step,
   .fluxos-automation-overlap-grid,
   .fluxos-jbh-readiness-grid {
@@ -8154,7 +8217,11 @@ button.fluxos-context-root:hover {
   .fluxos-harness-benchmark-matrix article + article,
   .fluxos-harness-recommendations article + article,
   .fluxos-harness-benchmark-proof article + article,
+  .fluxos-fusion-decision-strip article + article,
   .fluxos-fusion-project-grid article + article,
+  .fluxos-fusion-decision-list article + article,
+  .fluxos-fusion-overlap-map article + article,
+  .fluxos-fusion-migration-plan article + article,
   .fluxos-fusion-next-step article + article,
   .fluxos-automation-overlap-grid article + article,
   .fluxos-jbh-readiness-grid article + article {

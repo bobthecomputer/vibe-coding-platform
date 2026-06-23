@@ -1462,13 +1462,98 @@ def _fusion_child_dirs(path: Path, name: str, *, limit: int = 8) -> list[str]:
 def _fusion_file_count(path: Path, patterns: tuple[str, ...]) -> int:
     if not path.exists():
         return 0
+    import fnmatch
+
+    excluded_dirs = {
+        ".git",
+        ".next",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "target",
+        "tmp",
+    }
     count = 0
-    for pattern in patterns:
-        try:
-            count += sum(1 for item in path.rglob(pattern) if item.is_file())
-        except OSError:
-            continue
+    try:
+        for current_root, dirnames, filenames in os.walk(path):
+            dirnames[:] = [dirname for dirname in dirnames if dirname not in excluded_dirs]
+            for filename in filenames:
+                if any(fnmatch.fnmatch(filename, pattern) for pattern in patterns):
+                    count += 1
+    except OSError:
+        return count
     return count
+
+
+def _fusion_file_exists(path: Path, relative: str) -> bool:
+    try:
+        return (path / relative).exists()
+    except OSError:
+        return False
+
+
+def _fusion_read_text_excerpt(path: Path, *, limit: int = 360) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        return ""
+    return re.sub(r"\s+", " ", text)[:limit]
+
+
+def _fusion_package_manager(package_payload: dict[str, Any], root: Path | None) -> str:
+    if package_payload.get("packageManager"):
+        return str(package_payload.get("packageManager"))
+    if not root:
+        return "unknown"
+    if (root / "pnpm-lock.yaml").exists():
+        return "pnpm"
+    if (root / "package-lock.json").exists():
+        return "npm"
+    if (root / "yarn.lock").exists():
+        return "yarn"
+    return "unknown"
+
+
+def _fusion_capability_inventory(root: Path | None, project_id: str) -> list[dict[str, Any]]:
+    if not root:
+        return []
+    if project_id == "mind-tower":
+        specs = [
+            ("admin-console", "Admin console", "apps/admin", "operator_ui"),
+            ("public-site", "Public site", "apps/public-site", "public_web"),
+            ("shared-contracts", "Shared contracts", "packages/shared/src/models.ts", "contracts"),
+            ("monitor-worker", "Monitor worker", "services/monitor-worker/src/mindtower_worker", "ingestion"),
+            ("hermes-runtime", "Hermes runtime container", "services/hermes-runtime", "runtime"),
+            ("skills", "Codex skills", "skills", "skills"),
+            ("sqlite-store", "SQLite operational store", "data/mindtower.sqlite", "storage"),
+        ]
+    else:
+        specs = [
+            ("terminal-shell", "Terminal shell", "apps/terminal", "operator_ui"),
+            ("canonical-contracts", "Canonical contracts", "packages/contracts/src/solantir.ts", "contracts"),
+            ("service-boundaries", "Service boundaries", "services", "services"),
+            ("legacy-osint-lab", "Legacy OSINT lab", "legacy/osint-platform", "migration_source"),
+            ("prediction-service", "Prediction service", "services/prediction", "prediction"),
+            ("research-service", "Research service", "services/research", "research"),
+            ("warehouse", "Warehouse storage", "storage/warehouse", "storage"),
+        ]
+    output = []
+    for capability_id, label, relative_path, family in specs:
+        present = _fusion_file_exists(root, relative_path)
+        output.append(
+            {
+                "id": capability_id,
+                "label": label,
+                "family": family,
+                "relativePath": relative_path,
+                "status": "present" if present else "missing",
+            }
+        )
+    return output
 
 
 def _jbh_eaven_candidate_roots(root: Path) -> list[Path]:
@@ -5709,10 +5794,8 @@ class FluxioWebBackend:
         )
         solantir_app_candidates = _fusion_existing_paths(
             [
-                *(projects / "solantir" for projects in projects_roots),
-                *(projects / "Solantir" for projects in projects_roots),
-                *(synology / "solantir" for synology in synology_roots),
-                *(synology / "Solantir" for synology in synology_roots),
+                *(projects / name for projects in projects_roots for name in ("solantir", "Solantir", "Solantír")),
+                *(synology / name for synology in synology_roots for name in ("solantir", "Solantir", "Solantír")),
             ]
         )
         solantir_fusion_candidates = _fusion_existing_paths(
@@ -5738,6 +5821,7 @@ class FluxioWebBackend:
 
         mind_root = mind_candidates[0] if mind_candidates else None
         mind_package = _fusion_read_json(mind_root / "package.json") if mind_root else {}
+        mind_capabilities = _fusion_capability_inventory(mind_root, "mind-tower")
         mind_project = {
             "id": "mind-tower",
             "label": "Mind Tower",
@@ -5746,22 +5830,28 @@ class FluxioWebBackend:
             "candidateRoots": [str(path) for path in mind_candidates],
             "packageName": str(mind_package.get("name") or ""),
             "packageVersion": str(mind_package.get("version") or ""),
+            "packageManager": _fusion_package_manager(mind_package, mind_root),
             "skills": _fusion_child_dirs(mind_root, "skills") if mind_root else [],
             "apps": _fusion_child_dirs(mind_root, "apps") if mind_root else [],
             "services": _fusion_child_dirs(mind_root, "services") if mind_root else [],
+            "docs": _fusion_child_dirs(mind_root, "docs") if mind_root else [],
+            "capabilities": mind_capabilities,
             "fileCounts": {
                 "skillFiles": _fusion_file_count(mind_root / "skills", ("SKILL.md",)) if mind_root else 0,
                 "typescript": _fusion_file_count(mind_root, ("*.ts", "*.tsx")) if mind_root else 0,
                 "python": _fusion_file_count(mind_root, ("*.py",)) if mind_root else 0,
+                "docs": _fusion_file_count(mind_root / "docs", ("*.md",)) if mind_root else 0,
             },
+            "readmeExcerpt": _fusion_read_text_excerpt(mind_root / "README.md") if mind_root else "",
             "survivesAs": [
-                "timebox and focus-planning bridge",
+                "Synology-first monitoring and signal ingestion",
+                "Hermes runtime container and operations lane",
                 "reusable Mind Tower skills",
-                "operator approval workflow for timebox/skill proposals",
+                "operator approval workflow for source and digest proposals",
             ],
             "migrationRisk": "medium" if mind_root else "blocked",
             "nextAction": (
-                "Keep Mind Tower read-only first; route timebox and skill proposals through approval receipts."
+                "Keep Mind Tower read-only first; map monitor-worker sources and skills into Fluxio/Solantir contracts before UI migration."
                 if mind_root
                 else "Locate or restore the Mind Tower workspace before queuing fusion actions."
             ),
@@ -5771,6 +5861,8 @@ class FluxioWebBackend:
         solantir_surfaces = solantir_manifest.get("context_surfaces")
         solantir_surface_rows = solantir_surfaces if isinstance(solantir_surfaces, list) else []
         solantir_root = solantir_app_candidates[0] if solantir_app_candidates else None
+        solantir_package = _fusion_read_json(solantir_root / "package.json") if solantir_root else {}
+        solantir_capabilities = _fusion_capability_inventory(solantir_root, "solantir-terminal")
         solantir_project = {
             "id": "solantir-terminal",
             "label": "Solantir Terminal",
@@ -5785,17 +5877,26 @@ class FluxioWebBackend:
             ),
             "selectedRoot": str(solantir_root or (solantir_fusion_candidates[0] if solantir_fusion_candidates else "") or (solantir_archive_candidates[0] if solantir_archive_candidates else "")),
             "candidateRoots": [str(path) for path in [*solantir_app_candidates, *solantir_fusion_candidates, *solantir_archive_candidates]],
+            "packageName": str(solantir_package.get("name") or ""),
+            "packageVersion": str(solantir_package.get("version") or ""),
+            "packageManager": _fusion_package_manager(solantir_package, solantir_root),
             "bridgeEndpoint": str((solantir_manifest.get("bridge") or {}).get("endpoint") or "pipe://fluxio-solantir"),
             "surface": str((solantir_surface_rows[0] if solantir_surface_rows else {}).get("label") or "Watchlist"),
+            "apps": _fusion_child_dirs(solantir_root, "apps") if solantir_root else [],
+            "packages": _fusion_child_dirs(solantir_root, "packages") if solantir_root else [],
+            "services": _fusion_child_dirs(solantir_root, "services") if solantir_root else [],
+            "capabilities": solantir_capabilities,
             "fileCounts": {
                 "typescript": _fusion_file_count(solantir_root, ("*.ts", "*.tsx")) if solantir_root else 0,
                 "python": _fusion_file_count(solantir_root, ("*.py",)) if solantir_root else 0,
+                "docs": _fusion_file_count(solantir_root / "docs", ("*.md",)) if solantir_root else 0,
                 "fusionWorkspaceFiles": _fusion_file_count(solantir_fusion_candidates[0], ("*.md", "*.json", "*.py", "*.ts", "*.tsx")) if solantir_fusion_candidates else 0,
             },
+            "readmeExcerpt": _fusion_read_text_excerpt(solantir_root / "README.md") if solantir_root else "",
             "survivesAs": [
-                "operator dashboard/watchlist bridge",
-                "Solantir terminal capability manifest",
-                "historical fusion workspace evidence",
+                "permanent analyst terminal shell",
+                "canonical entity/event/forecast contracts",
+                "prediction/research service boundaries",
             ],
             "migrationRisk": "high" if not solantir_root else "medium",
             "nextAction": (
@@ -5806,63 +5907,171 @@ class FluxioWebBackend:
         }
         projects = [mind_project, solantir_project]
         detected_count = sum(1 for project in projects if project["status"] not in {"missing", "manifest_only"})
+        both_live_roots_detected = bool(mind_root and solantir_root)
+        overlap_map = [
+            {
+                "id": "operator-surfaces",
+                "label": "Operator surfaces",
+                "mindTower": "apps/admin control center and user console",
+                "solantir": "apps/terminal analyst workstation",
+                "decision": "Keep Solantir as the primary terminal shell; migrate Mind Tower source/digest controls as settings or workbench panels.",
+                "risk": "high",
+            },
+            {
+                "id": "signal-ingestion",
+                "label": "Signal ingestion",
+                "mindTower": "monitor-worker X, Telegram, web source, digest, and runtime modules",
+                "solantir": "services/ingestion and legacy source registry",
+                "decision": "Move Mind Tower collectors behind Solantir/Fluxio observation contracts before UI fusion.",
+                "risk": "medium",
+            },
+            {
+                "id": "contracts",
+                "label": "Contracts and state",
+                "mindTower": "packages/shared models plus SQLite operational records",
+                "solantir": "packages/contracts canonical entities, observations, forecasts, and services",
+                "decision": "Use Solantir canonical contracts as the destination; map Mind Tower records into observations and source-health rows.",
+                "risk": "medium",
+            },
+            {
+                "id": "runtime-skills",
+                "label": "Runtime and skills",
+                "mindTower": "Hermes runtime container and Mind Tower skills",
+                "solantir": "terminal services and prediction/research workflows",
+                "decision": "Preserve Hermes/Synology operations as a runtime lane; expose reusable skills through Fluxio's skill runtime contracts.",
+                "risk": "low",
+            },
+        ]
+        fusion_decisions = [
+            {
+                "id": "primary-shell",
+                "decision": "solantir_terminal_is_primary_shell",
+                "keep": "Solantir apps/terminal and packages/contracts stay the product center of gravity.",
+                "merge": "Mind Tower admin controls become source, digest, runtime, and skill panels inside the terminal/Fluxio operator workflow.",
+                "deprecate": "Two separate primary dashboards for the same operator.",
+                "proof": solantir_project["selectedRoot"],
+            },
+            {
+                "id": "monitoring-ingestion",
+                "decision": "mindtower_monitor_worker_survives_as_ingestion_service",
+                "keep": "Mind Tower monitor-worker collectors, digest jobs, source validation, and Synology deployment knowledge.",
+                "merge": "Normalize output into Solantir observation/event/source-health contracts.",
+                "deprecate": "Direct UI dependence on worker-specific SQLite row shapes.",
+                "proof": str(mind_root / "services" / "monitor-worker") if mind_root else "",
+            },
+            {
+                "id": "runtime-operations",
+                "decision": "hermes_synology_lane_is_shared_runtime_asset",
+                "keep": "Mind Tower Hermes runtime container and skills as operational assets.",
+                "merge": "Route through Fluxio/Hermes proof receipts before any cross-app action.",
+                "deprecate": "Unproven bridge labels that imply write access or production readiness.",
+                "proof": str(mind_root / "services" / "hermes-runtime") if mind_root else "",
+            },
+            {
+                "id": "prediction-workflow",
+                "decision": "solantir_forecasting_keeps_ownership",
+                "keep": "Solantir prediction, research, evaluation, and canonical forecast lifecycle.",
+                "merge": "Mind Tower social/economic signals feed the evidence layer, not the forecasting owner.",
+                "deprecate": "Separate prediction loops without shared provenance or calibration artifacts.",
+                "proof": str(solantir_root / "services" / "prediction") if solantir_root else "",
+            },
+        ]
+        migration_slices = [
+            {
+                "id": "read-only-inventory",
+                "label": "Read-only fusion inventory",
+                "status": "done" if both_live_roots_detected else "blocked",
+                "owner": "Fluxio",
+                "deliverable": "This contract and Settings proof surface.",
+                "acceptance": "Both roots detected, project inventories written, and no external project files modified.",
+            },
+            {
+                "id": "shared-signal-contract",
+                "label": "Shared signal contract",
+                "status": "next",
+                "owner": "Solantir contracts",
+                "deliverable": "Map Mind Tower source health, events, and digest jobs into Solantir observations/source-health rows.",
+                "acceptance": "Fixture and live SQLite rows produce contract-valid observations with masked credentials.",
+            },
+            {
+                "id": "read-only-bridge",
+                "label": "Read-only bridge",
+                "status": "planned",
+                "owner": "Hermes / Fluxio runtime",
+                "deliverable": "Hermes route reads Mind Tower source/digest status and writes Fluxio proof only.",
+                "acceptance": "Bridge health proof exists; no write actions exposed.",
+            },
+            {
+                "id": "operator-ui-fusion",
+                "label": "Operator UI fusion",
+                "status": "planned",
+                "owner": "Product UI",
+                "deliverable": "One terminal/workbench surface replaces duplicate admin/dashboard entry points.",
+                "acceptance": "Before/after screenshots show one dominant operator object and reviewable migration controls.",
+            },
+        ]
+        mission_gate_items = [
+            {"id": "mind-root", "label": "Mind Tower root", "status": "done" if mind_root else "blocked", "proof": str(mind_root or "")},
+            {"id": "solantir-root", "label": "Solantir root", "status": "done" if solantir_root else "blocked", "proof": str(solantir_root or "")},
+            {"id": "inventory", "label": "Capability inventory", "status": "done" if mind_capabilities and solantir_capabilities else "blocked", "proof": f"{len(mind_capabilities)} Mind Tower capabilities / {len(solantir_capabilities)} Solantir capabilities"},
+            {"id": "decisions", "label": "Survivor/deprecation decisions", "status": "done" if fusion_decisions else "blocked", "proof": f"{len(fusion_decisions)} decisions"},
+            {"id": "migration-slices", "label": "Ordered migration slices", "status": "done" if migration_slices else "blocked", "proof": f"{len(migration_slices)} slices"},
+            {"id": "proof-artifact", "label": "Proof artifact", "status": "done", "proof": "artifact pending write"},
+        ]
+        mission_gate_status = "complete" if all(item["status"] == "done" for item in mission_gate_items[:-1]) else "blocked"
         contract = {
             "schema": "fluxio.fusion_readiness.v1",
             "generatedAt": utc_now_iso(),
+            "mission": "mission13-solantir-mind-tower-fusion",
             "primaryRuntimeLane": "hermes",
             "fallbackRuntimeLanes": ["openclaw", "opencode"],
-            "status": "ready_for_read_only_bridge" if mind_root else "blocked_missing_mind_tower",
+            "status": "ready_for_fusion_plan" if mission_gate_status == "complete" else ("blocked_missing_project_root" if not both_live_roots_detected else "review_required"),
             "projects": projects,
             "detectedCount": detected_count,
-            "overlap": [
-                "skills and reusable workflows",
-                "operator dashboard/context surfaces",
-                "approval-gated actions",
-                "proof receipts and bridge health",
-            ],
+            "overlap": [item["label"] for item in overlap_map],
+            "overlapMap": overlap_map,
             "keep": [
-                "Mind Tower skills and timebox planning",
-                "Solantir terminal/watchlist manifest",
-                "existing Fluxio app capability standard",
-                "read-only bridge proof before write actions",
+                "Solantir terminal shell and canonical contracts",
+                "Mind Tower monitor worker, Hermes/Synology operations, and skills",
+                "Fluxio proof receipts, route gates, and bridge health",
+                "read-only bridge proof before write actions or UI deletion",
             ],
             "deprecate": [
-                "duplicate standalone launcher claims without bridge health",
+                "duplicate standalone operator dashboards as primary product surfaces",
                 "fusion status copied from historical missions as current proof",
-                "write actions before approval receipts exist",
+                "worker-specific row shapes leaking directly into the terminal UI",
+                "write actions before approval receipts and bridge health exist",
             ],
             "firstMergeTarget": {
-                "title": "Read-only fusion inventory",
-                "summary": "Expose Mind Tower file inventory and Solantir terminal manifest state in Fluxio before moving UI/runtime modules.",
+                "title": "Shared signal contract",
+                "summary": "Use Solantir contracts as the destination and feed Mind Tower monitoring rows into read-only observation/source-health evidence.",
                 "acceptance": [
-                    "Mind Tower root is detected or reported missing with exact path candidates.",
-                    "Solantir live app root is distinguished from archived/fusion workspace evidence.",
-                    "No write action is enabled until bridge health and approval receipts exist.",
+                    "Mind Tower root and Solantir root are detected with exact paths.",
+                    "Capability inventories identify what survives, merges, and deprecates.",
+                    "No external project file is changed by the readiness command.",
+                    "The next bridge remains read-only until approval receipts exist.",
                 ],
             },
-            "migrationPlan": [
+            "fusionDecisions": fusion_decisions,
+            "migrationPlan": migration_slices,
+            "deadCodeCandidates": [
                 {
-                    "step": 1,
-                    "title": "Read-only inventory and bridge health",
-                    "owner": "Fluxio",
-                    "risk": "low",
-                    "doneWhen": "The app shows detected roots, bridge endpoint, and missing Solantir live-root state.",
+                    "path": str(solantir_root / "legacy" / "osint-platform") if solantir_root else "",
+                    "status": "migration_source_not_delete_yet",
+                    "reason": "Solantir README marks this as temporary lab infrastructure, but it still owns forecasting/research behavior to extract.",
                 },
                 {
-                    "step": 2,
-                    "title": "Shared runtime contract",
-                    "owner": "Hermes with OpenClaw fallback",
-                    "risk": "medium",
-                    "doneWhen": "Mind Tower timebox and Solantir watchlist actions share proof/approval receipts.",
-                },
-                {
-                    "step": 3,
-                    "title": "UI fusion",
-                    "owner": "Product UI",
-                    "risk": "high",
-                    "doneWhen": "One operator surface replaces duplicate dashboards after screenshots and tests.",
+                    "path": str(mind_root / "tmp") if mind_root else "",
+                    "status": "local_temp_review",
+                    "reason": "Mind Tower temp state should not become a Fluxio product dependency.",
                 },
             ],
+            "missionGate": {
+                "schema": "fluxio.mission_completion_gate.v1",
+                "mission": "mission13-solantir-mind-tower-fusion",
+                "status": mission_gate_status,
+                "items": mission_gate_items,
+            },
             "blockers": [
                 blocker
                 for blocker in [
@@ -5875,8 +6084,15 @@ class FluxioWebBackend:
                 str(connected_apps_path),
                 "scripts/mind_tower_bridge.py",
                 "src/grant_agent/app_capability_standard.py",
+                str((mind_root / "README.md") if mind_root else ""),
+                str((solantir_root / "ARCHITECTURE_UNIFICATION_BRIEF.md") if solantir_root else ""),
+                str((solantir_root / "packages" / "contracts" / "src" / "solantir.ts") if solantir_root else ""),
             ],
-            "nextAction": "Build the read-only fusion inventory bridge; do not delete or merge app code until live roots and bridge health are proven.",
+            "nextAction": (
+                "Mission 13 gate is complete; next mission slice should implement the shared signal contract bridge."
+                if mission_gate_status == "complete"
+                else "Resolve missing project roots before writing shared contracts or moving UI modules."
+            ),
         }
         request_id = _sanitize_artifact_id(
             str(payload.get("requestId") or payload.get("request_id") or f"fusion-readiness-{int(time.time())}")
@@ -5890,6 +6106,7 @@ class FluxioWebBackend:
             "purpose": "solantir_mind_tower_fusion_readiness",
             "connectedAppsPath": str(connected_apps_path),
         }
+        contract["missionGate"]["items"][-1]["proof"] = str(artifact_path)
         tmp = artifact_path.with_name(f"{artifact_path.name}.{secrets.token_hex(6)}.tmp")
         tmp.write_text(json.dumps(contract, indent=2), encoding="utf-8")
         tmp.replace(artifact_path)

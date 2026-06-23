@@ -1254,6 +1254,7 @@ class FluxioWebBackendTests(unittest.TestCase):
             projects = user_root / "Projects"
             root = projects / "vibe-coding-platform"
             mind_tower = projects / "mind-tower"
+            solantir = projects / "Solantír"
             fusion_workspace = user_root / "SynologyDrive" / "solantir-mindtower-fusion"
             root.mkdir(parents=True)
             config_dir = root / "config"
@@ -1272,13 +1273,44 @@ class FluxioWebBackendTests(unittest.TestCase):
             )
             (mind_tower / "skills" / "mindtower-ui-craft").mkdir(parents=True)
             (mind_tower / "services" / "bridge").mkdir(parents=True)
+            (mind_tower / "services" / "monitor-worker" / "src" / "mindtower_worker").mkdir(parents=True)
+            (mind_tower / "services" / "hermes-runtime").mkdir(parents=True)
             (mind_tower / "apps" / "tower").mkdir(parents=True)
+            (mind_tower / "apps" / "admin").mkdir(parents=True)
+            (mind_tower / "packages" / "shared" / "src").mkdir(parents=True)
+            (mind_tower / "data").mkdir(parents=True)
             (mind_tower / "package.json").write_text(
-                json.dumps({"name": "mind-tower", "version": "1.2.3"}),
+                json.dumps({"name": "mind-tower", "version": "1.2.3", "packageManager": "pnpm@10.26.2"}),
                 encoding="utf-8",
             )
             (mind_tower / "skills" / "mindtower-ui-craft" / "SKILL.md").write_text(
                 "# Mind Tower UI Craft\n",
+                encoding="utf-8",
+            )
+            (mind_tower / "README.md").write_text("# Mind Tower\n\nSynology-first monitoring stack.\n", encoding="utf-8")
+            (mind_tower / "packages" / "shared" / "src" / "models.ts").write_text(
+                "export type SourceHealth = { id: string }\n",
+                encoding="utf-8",
+            )
+            (mind_tower / "data" / "mindtower.sqlite").write_text("", encoding="utf-8")
+            (solantir / "apps" / "terminal").mkdir(parents=True)
+            (solantir / "packages" / "contracts" / "src").mkdir(parents=True)
+            (solantir / "services" / "ingestion").mkdir(parents=True)
+            (solantir / "services" / "prediction").mkdir(parents=True)
+            (solantir / "services" / "research").mkdir(parents=True)
+            (solantir / "storage" / "warehouse").mkdir(parents=True)
+            (solantir / "legacy" / "osint-platform").mkdir(parents=True)
+            (solantir / "package.json").write_text(
+                json.dumps({"name": "solantir-terminal", "version": "1.0.0"}),
+                encoding="utf-8",
+            )
+            (solantir / "README.md").write_text("# Solantir Terminal\n\nUnified terminal shell.\n", encoding="utf-8")
+            (solantir / "ARCHITECTURE_UNIFICATION_BRIEF.md").write_text(
+                "# Brief\n\nUse one terminal and canonical contracts.\n",
+                encoding="utf-8",
+            )
+            (solantir / "packages" / "contracts" / "src" / "solantir.ts").write_text(
+                "export type Observation = { id: string }\n",
                 encoding="utf-8",
             )
             fusion_workspace.mkdir(parents=True)
@@ -1299,23 +1331,31 @@ class FluxioWebBackendTests(unittest.TestCase):
                 )
 
             self.assertEqual(contract["schema"], "fluxio.fusion_readiness.v1")
+            self.assertEqual(contract["mission"], "mission13-solantir-mind-tower-fusion")
             self.assertEqual(contract["primaryRuntimeLane"], "hermes")
             self.assertIn("openclaw", contract["fallbackRuntimeLanes"])
-            self.assertEqual(contract["status"], "ready_for_read_only_bridge")
+            self.assertEqual(contract["status"], "ready_for_fusion_plan")
             projects_by_id = {item["id"]: item for item in contract["projects"]}
             self.assertEqual(projects_by_id["mind-tower"]["status"], "detected")
             self.assertEqual(projects_by_id["mind-tower"]["packageVersion"], "1.2.3")
             self.assertIn("mindtower-ui-craft", projects_by_id["mind-tower"]["skills"])
-            self.assertEqual(projects_by_id["solantir-terminal"]["status"], "fusion_workspace_detected")
+            self.assertEqual(projects_by_id["solantir-terminal"]["status"], "app_detected")
+            self.assertEqual(projects_by_id["solantir-terminal"]["selectedRoot"], str(solantir.resolve()))
             self.assertIn(str(fusion_workspace), projects_by_id["solantir-terminal"]["candidateRoots"])
             self.assertEqual(projects_by_id["solantir-terminal"]["bridgeEndpoint"], "pipe://custom-solantir")
             self.assertEqual(projects_by_id["solantir-terminal"]["surface"], "Terminal watchlist")
-            self.assertIn("Read-only fusion inventory", contract["firstMergeTarget"]["title"])
-            self.assertTrue(contract["blockers"])
+            self.assertIn("Shared signal contract", contract["firstMergeTarget"]["title"])
+            self.assertFalse(contract["blockers"])
+            self.assertEqual(contract["missionGate"]["status"], "complete")
+            self.assertGreaterEqual(len(contract["overlapMap"]), 4)
+            self.assertEqual(contract["fusionDecisions"][0]["decision"], "solantir_terminal_is_primary_shell")
+            self.assertIn("mindtower_monitor_worker_survives_as_ingestion_service", {item["decision"] for item in contract["fusionDecisions"]})
+            self.assertEqual(contract["migrationPlan"][0]["id"], "read-only-inventory")
             proof_path = pathlib.Path(contract["proof"]["artifactPath"])
             self.assertTrue(proof_path.is_file())
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             self.assertEqual(proof["proof"]["purpose"], "solantir_mind_tower_fusion_readiness")
+            self.assertEqual(proof["missionGate"]["items"][-1]["proof"], str(proof_path))
 
     def test_jbh_eaven_redteam_readiness_command_writes_safe_lab_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
