@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
 import pathlib
 import io
 import json
@@ -18,10 +20,13 @@ from grant_agent.web_backend import (
     MISSION_START_TIMEOUT_SECONDS,
     OpenAICodexOAuthSession,
     MiniMaxOAuthSession,
+    _browser_click_probe_page,
     _platform_path_for_windows_drive,
+    _run_process_capture,
     add_or_reset_admin_user,
     make_handler,
 )
+from grant_agent.real_agent_proof import build_real_agent_proof_status, proof_receipt_cache_path, proof_report_index_path
 
 
 class FluxioWebBackendTests(unittest.TestCase):
@@ -31,6 +36,82 @@ class FluxioWebBackendTests(unittest.TestCase):
             handler = make_handler(FluxioWebBackend(root, root))
 
             self.assertEqual(handler.protocol_version, "HTTP/1.1")
+
+    def test_browser_click_probe_page_is_real_click_target(self) -> None:
+        markup = _browser_click_probe_page()
+
+        self.assertIn("Fluxio Click Probe", markup)
+        self.assertIn('data-fluxio-click-probe="true"', markup)
+        self.assertIn('data-bridge-click-button="true"', markup)
+        self.assertIn("Clicks received by program", markup)
+        self.assertIn("fluxio.browserClickProbe", markup)
+
+
+    def test_preview_bridge_proof_command_writes_artifact_and_receipt(self) -> None:
+        @dataclass
+        class Receipt:
+            status: str
+            evidencePath: str
+            screenshotPath: str
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            screenshots = {"agentPreviewAfterClick": str(root / "agent.png")}
+            with mock.patch(
+                "grant_agent.web_backend.record_delivery_receipt",
+                return_value=Receipt(status="delivered", evidencePath="", screenshotPath=screenshots["agentPreviewAfterClick"]),
+            ) as record_receipt:
+                result = backend.dispatch(
+                    "record_preview_bridge_proof_command",
+                    {
+                        "missionId": "bridge-smoke",
+                        "programUrl": "http://127.0.0.1:49152/",
+                        "baseUrl": "http://127.0.0.1:49153",
+                        "screenshots": screenshots,
+                        "checks": [
+                            {"checkId": "agent-preview-button-opens-local-program", "passed": True},
+                            {"checkId": "mouse-click-reaches-local-program", "passed": True},
+                        ],
+                        "clicks": 2,
+                        "folderBrowser": {"rootCount": 1, "entryCount": 0},
+                    },
+                )
+
+            proof_path = pathlib.Path(result["proofPath"])
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            self.assertTrue(result["attached"])
+            self.assertEqual(result["schema"], "fluxio.preview_bridge_attachment.v1")
+            self.assertEqual(proof["schema"], "fluxio.preview_bridge_proof.v1")
+            self.assertEqual(proof["status"], "passed")
+            self.assertEqual(proof["clickProof"]["clicks"], 2)
+            self.assertIn("/api/artifact?id=", result["proofUrl"])
+            self.assertEqual(result["proofArtifacts"][0]["kind"], "preview_bridge_proof")
+            record_receipt.assert_called_once()
+            self.assertEqual(record_receipt.call_args.kwargs["event_kind"], "preview.bridge.proof_attached")
+            self.assertEqual(record_receipt.call_args.kwargs["evidence_path"], str(proof_path))
+
+    def test_turn_receipts_keep_runtime_preview_proof_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend = FluxioWebBackend(pathlib.Path(temp_dir), pathlib.Path(temp_dir))
+            receipt = backend._turn_receipt_from_chat_result(
+                {"missionId": "mission-proof", "requestStartedAt": "2026-06-12T00:00:00+00:00"},
+                {
+                    "reply": "OpenRuntime returned a real result for this mission.",
+                    "previewUrl": "/api/artifact?id=abc123",
+                    "proofArtifacts": [{"kind": "screenshot", "path": "agent-preview-after-click.png"}],
+                },
+                session_id="session-proof",
+                route={"provider": "openai-codex", "model": "gpt-5.5", "effort": "high"},
+                changed_files=[],
+                timeline=[],
+                ended_at="2026-06-12T00:00:01+00:00",
+                elapsed_ms=1000,
+            )
+
+            self.assertEqual(receipt["missionId"], "mission-proof")
+            self.assertEqual(receipt["proofArtifacts"][0]["kind"], "screenshot")
+            self.assertIn({"kind": "preview", "url": "/api/artifact?id=abc123"}, receipt["proofArtifacts"])
 
     def test_image_playground_operation_writes_served_artifact_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -267,6 +348,60 @@ class FluxioWebBackendTests(unittest.TestCase):
                 "/mnt/c/volume1/Saclay/artifact.jsonl",
             )
 
+    def test_conversation_state_commands_persist_cross_device_chat_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            saved = backend.dispatch(
+                "save_conversation_state_command",
+                {
+                    "storageMode": "nas",
+                    "activeChatSessionId": "chat-main",
+                    "chatSessions": [
+                        {
+                            "id": "chat-main",
+                            "workspaceId": "workspace_primary",
+                            "title": "Continue the app build",
+                            "createdAt": "2026-06-12T10:00:00+00:00",
+                            "updatedAt": "2026-06-12T10:05:00+00:00",
+                            "lastPreview": "Backend sync",
+                        }
+                    ],
+                    "chatSessionTranscripts": {
+                        "chat-main": [
+                            {
+                                "id": "turn-1",
+                                "role": "user",
+                                "title": "Keep this conversation available on phone.",
+                                "createdAt": "2026-06-12T10:01:00+00:00",
+                            },
+                            {
+                                "id": "turn-2",
+                                "role": "assistant",
+                                "title": "Saved to shared conversation state.",
+                                "source": "backend-model-message",
+                                "conversationTurn": True,
+                                "createdAt": "2026-06-12T10:02:00+00:00",
+                            },
+                        ]
+                    },
+                },
+            )
+
+            state_path = root / ".agent_control" / "conversation_state.json"
+            self.assertTrue(state_path.exists())
+            self.assertEqual(saved["storageMode"], "nas")
+            self.assertEqual(saved["activeChatSessionId"], "chat-main")
+            self.assertEqual(saved["chatSessions"][0]["workspaceId"], "workspace_primary")
+            self.assertEqual(saved["chatSessionTranscripts"]["chat-main"][1]["role"], "assistant")
+
+            loaded = backend.dispatch("get_conversation_state_command", {})
+            self.assertTrue(loaded["exists"])
+            self.assertEqual(loaded["path"], str(state_path))
+            self.assertEqual(loaded["storageMode"], "nas")
+            self.assertEqual(loaded["chatSessions"][0]["title"], "Continue the app build")
+
     def test_chat_compartment_records_messages_and_runtime_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -333,6 +468,79 @@ class FluxioWebBackendTests(unittest.TestCase):
             timeline_kinds = [event.get("kind") for event in compartment["toolTimeline"] if isinstance(event, dict)]
             self.assertIn("runtime.roundtrip", timeline_kinds)
             self.assertIn("runtime.model_message", timeline_kinds)
+
+    def test_process_capture_timeout_returns_readable_runtime_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+
+            with self.assertRaisesRegex(RuntimeError, "timed out after 1 seconds"):
+                _run_process_capture(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(30)",
+                    ],
+                    cwd=root,
+                    timeout=1,
+                )
+
+    def test_explicit_openclaw_chat_uses_openclaw_for_openai_codex_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            openclaw_result = {
+                "sessionId": "openclaw-chat",
+                "reply": "OpenClaw routed the model reply.",
+                "runtime": "openclaw",
+                "route": {"provider": "openai-codex", "model": "gpt-5.5", "effort": "high"},
+            }
+
+            with mock.patch.object(backend, "_run_openclaw_chat", return_value=openclaw_result) as openclaw_mock:
+                with mock.patch.object(backend, "_run_codex_chat") as codex_mock:
+                    with mock.patch.object(backend, "_save_chat_compartment", return_value={"sessionId": "openclaw-chat"}):
+                        result = backend._run_agent_chat(
+                            {
+                                "runtime": "openclaw",
+                                "message": "Use OpenClaw.",
+                                "route": {
+                                    "provider": "openai-codex",
+                                    "model": "gpt-5.5",
+                                    "effort": "high",
+                                },
+                            }
+                        )
+
+            openclaw_mock.assert_called_once()
+            codex_mock.assert_not_called()
+            self.assertEqual(result["runtime"], "openclaw")
+
+    def test_explicit_openclaw_chat_uses_openclaw_for_minimax_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            openclaw_result = {
+                "sessionId": "openclaw-minimax-chat",
+                "reply": "OpenClaw routed the MiniMax reply.",
+                "runtime": "openclaw",
+                "route": {"provider": "minimax", "model": "MiniMax-M3", "effort": "high"},
+            }
+
+            with mock.patch.object(backend, "_run_openclaw_chat", return_value=openclaw_result) as openclaw_mock:
+                with mock.patch.object(backend, "_save_chat_compartment", return_value={"sessionId": "openclaw-minimax-chat"}):
+                    result = backend._run_agent_chat(
+                        {
+                            "runtime": "openclaw",
+                            "message": "Use OpenClaw with MiniMax.",
+                            "route": {
+                                "provider": "minimax",
+                                "model": "MiniMax-M3",
+                                "effort": "high",
+                            },
+                        }
+                    )
+
+            openclaw_mock.assert_called_once()
+            self.assertEqual(result["runtime"], "openclaw")
 
     def test_chat_compartment_records_executable_comment_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -931,48 +1139,54 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertTrue(status["authenticated"])
             self.assertEqual(status["source"], "hermes-auth-store")
 
-    def test_agent_chat_command_runs_openclaw_with_selected_non_codex_route(self) -> None:
+    def test_agent_chat_command_runs_openclaw_agent_with_selected_non_codex_route(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             workspace = root / "workspace"
             workspace.mkdir()
             backend = FluxioWebBackend(root, root)
-            calls: list[list[str]] = []
+            setup_calls: list[list[str]] = []
+            run_calls: list[list[str]] = []
 
-            def fake_run(args, **kwargs):
-                calls.append(list(args))
-                return mock.Mock(
-                    returncode=0,
-                    stdout='{"reply":"Hello from the selected model."}',
-                    stderr="",
-                )
+            def fake_setup(args, **kwargs):
+                setup_calls.append(list(args))
+                return {}
+
+            def fake_capture(args, **kwargs):
+                run_calls.append(list(args))
+                payload = {"reply": "Hello from the selected model."}
+                return payload, json.dumps(payload), "", 42
 
             with mock.patch("grant_agent.web_backend.shutil.which", return_value="openclaw"):
-                with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
-                    result = backend.dispatch(
-                        "send_agent_chat_command",
-                        {
-                            "payload": {
-                                "runtime": "openclaw",
-                                "message": "hello",
-                                "workspaceId": "workspace_primary",
-                                "workspacePath": str(workspace),
-                                "route": {
-                                    "role": "executor",
-                                    "provider": "openrouter",
-                                    "model": "openai/gpt-5.3-codex",
-                                    "effort": "medium",
-                                },
-                            }
-                        },
-                    )
+                with mock.patch("grant_agent.web_backend._run_process", side_effect=fake_setup):
+                    with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
+                        result = backend.dispatch(
+                            "send_agent_chat_command",
+                            {
+                                "payload": {
+                                    "runtime": "openclaw",
+                                    "message": "hello",
+                                    "workspaceId": "workspace_primary",
+                                    "workspacePath": str(workspace),
+                                    "route": {
+                                        "role": "executor",
+                                        "provider": "openrouter",
+                                        "model": "openai/gpt-5.3-codex",
+                                        "effort": "medium",
+                                    },
+                                }
+                            },
+                        )
 
             self.assertEqual(result["reply"], "Hello from the selected model.")
-            self.assertEqual(calls[-1][1:4], ["infer", "model", "run"])
-            self.assertIn("--prompt", calls[-1])
-            self.assertIn("openai/gpt-5.3-codex", calls[-1])
+            self.assertEqual(run_calls[-1][1], "agent")
+            self.assertIn("--agent", run_calls[-1])
+            self.assertIn("--message", run_calls[-1])
+            self.assertIn("--local", run_calls[-1])
+            self.assertEqual(setup_calls[-1][1:3], ["agents", "add"])
+            self.assertIn("openai/gpt-5.3-codex", setup_calls[-1])
 
-    def test_agent_chat_command_uses_codex_cli_for_openai_codex_route(self) -> None:
+    def test_agent_chat_command_uses_codex_cli_when_runtime_is_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             workspace = root / "workspace"
@@ -980,19 +1194,19 @@ class FluxioWebBackendTests(unittest.TestCase):
             backend = FluxioWebBackend(root, root)
             calls: list[list[str]] = []
 
-            def fake_run(args, **kwargs):
+            def fake_capture(args, **kwargs):
                 calls.append(list(args))
                 output_path = pathlib.Path(args[args.index("--output-last-message") + 1])
                 output_path.write_text("pong", encoding="utf-8")
-                return mock.Mock(returncode=0, stdout='{"type":"turn.completed"}', stderr="")
+                return {"type": "turn.completed"}, '{"type":"turn.completed"}', "", 35
 
             with mock.patch("grant_agent.web_backend.shutil.which", return_value="codex"):
-                with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
                     result = backend.dispatch(
                         "send_agent_chat_command",
                         {
                             "payload": {
-                                "runtime": "openclaw",
+                                "runtime": "codex",
                                 "message": "hello",
                                 "workspaceId": "workspace_primary",
                                 "workspacePath": str(workspace),
@@ -1053,13 +1267,10 @@ class FluxioWebBackendTests(unittest.TestCase):
             backend = FluxioWebBackend(root, root)
             calls: list[list[str]] = []
 
-            def fake_run(args, **kwargs):
+            def fake_capture(args, **kwargs):
                 calls.append(list(args))
-                return mock.Mock(
-                    returncode=0,
-                    stdout='{"reply":"M3 frontend route ready."}',
-                    stderr="",
-                )
+                payload = {"reply": "M3 frontend route ready."}
+                return payload, json.dumps(payload), "", 44
 
             with mock.patch.dict(
                 "os.environ",
@@ -1071,7 +1282,7 @@ class FluxioWebBackendTests(unittest.TestCase):
                 },
             ):
                 with mock.patch("grant_agent.web_backend.shutil.which", return_value="hermes"):
-                    with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                    with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
                         result = backend.dispatch(
                             "send_agent_chat_command",
                             {
@@ -1128,6 +1339,79 @@ class FluxioWebBackendTests(unittest.TestCase):
 
         self.assertEqual(reply, "This is the visible Hermes answer.")
 
+    def test_agent_chat_extracts_model_message_from_fluxio_event_output(self) -> None:
+        from grant_agent.web_backend import _extract_model_reply
+
+        reply = _extract_model_reply(
+            {
+                "output": "FLUXIO_EVENT:"
+                + json.dumps(
+                    {
+                        "kind": "runtime.model_message",
+                        "message": "OpenCode produced a real visible answer.",
+                        "status": "running",
+                    }
+                )
+            }
+        )
+
+        self.assertEqual(reply, "OpenCode produced a real visible answer.")
+
+    def test_chat_route_opencon_glm52_normalizes_to_openrouter_model_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            route = backend._chat_route({"route": {"provider": "opencon-pro", "model": "glm-5.2"}})
+
+            self.assertEqual(route["provider"], "openrouter")
+            self.assertEqual(route["model"], "z-ai/glm-5.2")
+            self.assertEqual(route["model_id"], "openrouter/z-ai/glm-5.2")
+
+    def test_agent_chat_command_runs_native_opencode_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            backend = FluxioWebBackend(root, root)
+            calls: list[list[str]] = []
+
+            def fake_capture(args, **kwargs):
+                calls.append(list(args))
+                stdout = "FLUXIO_EVENT:" + json.dumps(
+                    {
+                        "kind": "runtime.model_message",
+                        "message": "OpenCode chat works.",
+                        "status": "running",
+                    }
+                )
+                return {"output": stdout}, stdout, "", 55
+
+            with mock.patch("grant_agent.web_backend.shutil.which", return_value="opencode"):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
+                    result = backend.dispatch(
+                        "send_agent_chat_command",
+                        {
+                            "payload": {
+                                "runtime": "opencode",
+                                "message": "hello",
+                                "workspaceId": "workspace_primary",
+                                "workspacePath": str(workspace),
+                                "route": {
+                                    "role": "executor",
+                                    "provider": "openrouter",
+                                    "model": "deepseek/deepseek-v4-flash",
+                                    "effort": "medium",
+                                },
+                            }
+                        },
+                    )
+
+            self.assertEqual(result["runtime"], "opencode")
+            self.assertEqual(result["reply"], "OpenCode chat works.")
+            self.assertEqual(calls[-1][1:3], ["-m", "grant_agent.opencode_bridge"])
+            self.assertIn("openrouter/deepseek/deepseek-v4-flash", calls[-1])
+
     def test_agent_chat_uses_wsl_hermes_when_native_cli_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -1141,17 +1425,14 @@ class FluxioWebBackendTests(unittest.TestCase):
                     return "wsl"
                 return None
 
-            def fake_run(args, **kwargs):
+            def fake_capture(args, **kwargs):
                 calls.append(list(args))
-                return mock.Mock(
-                    returncode=0,
-                    stdout='{"reply":"Hermes via WSL."}',
-                    stderr="",
-                )
+                payload = {"reply": "Hermes via WSL."}
+                return payload, json.dumps(payload), "", 40
 
             with mock.patch("grant_agent.web_backend.shutil.which", side_effect=fake_which):
                 with mock.patch("grant_agent.web_backend._wsl_has_command", return_value=True):
-                    with mock.patch("grant_agent.web_backend.subprocess.run", side_effect=fake_run):
+                    with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
                         result = backend.dispatch(
                             "send_agent_chat_command",
                             {
@@ -1461,6 +1742,1529 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertIn(("README.md", False), names)
             self.assertIn(str(root.resolve()), result["roots"])
 
+    def test_real_agent_runtime_proof_status_reads_verifier_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "20260616-180638"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            agent_screenshot = out_dir / "agent-real-conversation-proof.png"
+            preview_screenshot = out_dir / "agent-produced-output-preview.png"
+            agent_screenshot.write_bytes(b"agent screenshot proof")
+            preview_screenshot.write_bytes(b"preview screenshot proof")
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-16T18:06:38+00:00",
+                "root": str(root),
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "runtimeSessionId": "hermes-session",
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                        "model": "openai-codex/gpt-5.5 via WSL",
+                    },
+                    "fresh_openclaw_round": {"status": "skipped"},
+                    "recovered_openclaw_session": {"status": "skipped"},
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "collected",
+                        "screenshot": str(agent_screenshot),
+                    },
+                    "produced_output_preview": {
+                        "label": "Produced output Preview screenshot",
+                        "status": "collected",
+                        "screenshot": str(preview_screenshot),
+                    },
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+                "screenshots": {
+                    "agentConversation": str(agent_screenshot),
+                    "producedOutputPreview": str(preview_screenshot),
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            self.assertEqual(result["schema"], "fluxio.real_agent_runtime_proof_status.v1")
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["runtime"], "hermes")
+            self.assertTrue(hermes["freshRuntimeOutput"])
+            self.assertEqual(hermes["runtimeSessionId"], "hermes-session")
+            transcript = hermes["proofTranscriptReceipt"]
+            self.assertEqual(transcript["schema"], "fluxio.real_agent_transcript_receipt.v1")
+            self.assertEqual(transcript["status"], "fresh")
+            self.assertEqual(transcript["source"], "fresh-runtime-command")
+            self.assertTrue(transcript["hasRealTranscript"])
+            self.assertEqual(transcript["dialogueCount"], 1)
+            self.assertIn("1 dialogue turn", transcript["summaryLine"])
+            self.assertEqual(hermes["transcriptSource"], "fresh-runtime-command")
+            self.assertEqual(hermes["proofBagSummary"]["total"], 5)
+            self.assertEqual(hermes["proofBagSummary"]["collectedCount"], 3)
+            self.assertEqual(hermes["proofBagSummary"]["skippedCount"], 2)
+            self.assertEqual(hermes["proofBagRows"][0]["bagId"], "fresh_hermes_round")
+            expected_sha = hashlib.sha256(report_path.read_bytes()).hexdigest()
+            self.assertEqual(hermes["proofEvidenceReceipt"]["schema"], "fluxio.real_agent_proof_evidence_receipt.v1")
+            self.assertEqual(hermes["proofEvidenceReceipt"]["status"], "attached")
+            self.assertEqual(hermes["proofEvidenceReceipt"]["reportPath"], str(report_path))
+            self.assertEqual(hermes["proofEvidenceReceipt"]["sha256"], expected_sha)
+            self.assertEqual(hermes["reportSha256"], expected_sha)
+            self.assertEqual(hermes["reportSizeBytes"], report_path.stat().st_size)
+            expected_agent_screenshot_sha = hashlib.sha256(agent_screenshot.read_bytes()).hexdigest()
+            expected_preview_screenshot_sha = hashlib.sha256(preview_screenshot.read_bytes()).hexdigest()
+            self.assertEqual(hermes["proofScreenshotReceiptCount"], 2)
+            self.assertEqual(hermes["missingProofScreenshotReceiptCount"], 0)
+            self.assertEqual(hermes["proofScreenshotReceipts"][0]["schema"], "fluxio.real_agent_proof_screenshot_receipt.v1")
+            self.assertEqual(hermes["proofScreenshotReceipts"][0]["screenshotPath"], str(agent_screenshot))
+            self.assertEqual(hermes["proofScreenshotReceipts"][0]["sha256"], expected_agent_screenshot_sha)
+            self.assertEqual(hermes["proofScreenshotReceipts"][1]["sha256"], expected_preview_screenshot_sha)
+            self.assertEqual(hermes["proofEvidenceHealth"]["schema"], "fluxio.real_agent_proof_evidence_health.v1")
+            self.assertEqual(hermes["proofEvidenceHealth"]["status"], "complete")
+            self.assertEqual(hermes["proofEvidenceHealth"]["reportAttachedCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["screenshotAttachedCount"], 2)
+            self.assertTrue(hermes["proofEvidenceHealth"]["allEvidenceAttached"])
+            checklist = hermes["proofEvidenceChecklist"]
+            self.assertEqual(checklist["schema"], "fluxio.real_agent_proof_evidence_checklist.v1")
+            self.assertEqual(checklist["status"], "complete")
+            self.assertEqual(checklist["attachedCount"], 3)
+            self.assertEqual(checklist["missingCount"], 0)
+            self.assertTrue(checklist["allRequiredAttached"])
+            self.assertEqual(
+                [item["id"] for item in checklist["items"]],
+                ["verifier_report", "agent_ui_screenshot", "produced_output_preview"],
+            )
+            self.assertEqual(result["proofEvidenceChecklist"]["attachedCount"], 3)
+            self.assertEqual(result["latestProofEvidenceReceipt"]["sha256"], expected_sha)
+            self.assertEqual(result["proofEvidenceReceipts"][0]["sha256"], expected_sha)
+            self.assertEqual(result["missingProofEvidenceReceiptCount"], 0)
+            self.assertEqual(result["latestScreenshotProof"]["runtime"], "hermes")
+            self.assertEqual(result["latestScreenshotProof"]["proofScreenshotReceiptCount"], 2)
+            self.assertEqual(result["proofScreenshotReceiptCount"], 2)
+            self.assertEqual(result["missingProofScreenshotReceiptCount"], 0)
+            self.assertEqual(result["proofEvidenceHealth"]["status"], "complete")
+            self.assertEqual(result["evidenceStatus"], "complete")
+            self.assertEqual(result["proofBundleStatus"]["status"], "complete")
+            self.assertEqual(result["proofBundleStatus"]["label"], "Complete evidence bundle")
+            self.assertTrue(result["proofBundleStatus"]["latestReportComplete"])
+            self.assertEqual(result["runtimes"]["openclaw"]["status"], "missing")
+            timeline = result["proofRunTimeline"]
+            self.assertEqual(timeline["schema"], "fluxio.real_agent_proof_run_timeline.v1")
+            self.assertEqual(timeline["total"], 1)
+            self.assertEqual(timeline["completeCount"], 1)
+            self.assertEqual(timeline["rows"][0]["runtime"], "hermes")
+            self.assertEqual(timeline["rows"][0]["evidenceStatus"], "complete")
+            self.assertEqual(timeline["rows"][0]["evidenceChecklistMissingCount"], 0)
+            self.assertEqual(timeline["rows"][0]["transcriptSource"], "fresh-runtime-command")
+            self.assertEqual(
+                timeline["rows"][0]["proofTranscriptReceipt"]["status"],
+                "fresh",
+            )
+            self.assertEqual(timeline["rows"][0]["reportPath"], str(report_path))
+            self.assertEqual(timeline["rows"][0]["reportSha256"], expected_sha)
+            self.assertEqual(result["latestProofTranscriptReceipt"]["source"], "fresh-runtime-command")
+            self.assertEqual(result["latestTranscriptProof"]["runtime"], "hermes")
+            self.assertEqual(result["proofTranscriptReceiptCount"], 1)
+            transcript_health = result["proofTranscriptHealth"]
+            self.assertEqual(transcript_health["schema"], "fluxio.real_agent_transcript_health.v1")
+            self.assertEqual(transcript_health["status"], "fresh")
+            self.assertEqual(transcript_health["freshCount"], 1)
+            self.assertEqual(transcript_health["realTranscriptCount"], 1)
+            self.assertTrue(transcript_health["hasFreshTranscript"])
+            self.assertTrue(result["hasFreshTranscriptProof"])
+            self.assertFalse(transcript_health["needsFreshTranscript"])
+            self.assertEqual(result["transcriptHealthStatus"], "fresh")
+            self.assertEqual(result["nextTranscriptAction"], "Fresh real runtime transcript proof is attached.")
+
+    def test_real_agent_runtime_proof_status_uses_short_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            proof_status = {
+                "schema": "fluxio.real_agent_runtime_proof_status.v1",
+                "checkedAt": "2026-06-18T00:00:00+00:00",
+                "latestCompleteProof": {
+                    "runtime": "hermes",
+                    "missionId": "mission_cached_complete",
+                    "reportPath": str(root / "proof.json"),
+                },
+                "hasCompleteEvidenceBundle": True,
+            }
+
+            with mock.patch(
+                "grant_agent.web_backend.build_real_agent_proof_status",
+                return_value=proof_status,
+            ) as build_status:
+                first = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+                second = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            self.assertEqual(build_status.call_count, 1)
+            self.assertEqual(first["runtimeProofStatusCache"]["status"], "miss")
+            self.assertEqual(second["runtimeProofStatusCache"]["status"], "hit")
+            self.assertEqual(
+                second["runtimeProofStatusCache"]["schema"],
+                "fluxio.real_agent_runtime_proof_status_cache.v1",
+            )
+            self.assertEqual(second["latestCompleteProof"]["missionId"], "mission_cached_complete")
+            cache_path = root / ".agent_control" / "real_agent_runtime_proof_status_cache.json"
+            self.assertTrue(cache_path.exists())
+
+            restarted_backend = FluxioWebBackend(root, root)
+            with mock.patch(
+                "grant_agent.web_backend.build_real_agent_proof_status",
+                side_effect=AssertionError("persisted proof-status cache should avoid an immediate rescan"),
+            ):
+                restarted = restarted_backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            self.assertEqual(restarted["runtimeProofStatusCache"]["status"], "disk-hit")
+            self.assertEqual(restarted["runtimeProofStatusCache"]["freshness"], "persisted-cache")
+            self.assertEqual(restarted["latestCompleteProof"]["missionId"], "mission_cached_complete")
+
+    def test_real_agent_runtime_proof_status_reports_missing_transcript_health_without_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            transcript_health = result["proofTranscriptHealth"]
+            self.assertEqual(transcript_health["schema"], "fluxio.real_agent_transcript_health.v1")
+            self.assertEqual(transcript_health["status"], "missing")
+            self.assertEqual(transcript_health["receiptCount"], 0)
+            self.assertEqual(transcript_health["realTranscriptCount"], 0)
+            self.assertFalse(transcript_health["hasRealTranscript"])
+            self.assertFalse(result["hasRealTranscriptProof"])
+            self.assertEqual(result["transcriptHealthStatus"], "missing")
+            self.assertIn("Run the real-agent verifier", result["nextTranscriptAction"])
+
+    def test_real_agent_runtime_proof_status_flags_missing_screenshot_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "missing-screenshot"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            missing_screenshot = out_dir / "missing-agent-proof.png"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-16T18:06:38+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                    },
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "collected",
+                        "screenshot": str(missing_screenshot),
+                    },
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["proofEvidenceHealth"]["status"], "missing_screenshot")
+            self.assertEqual(hermes["proofEvidenceHealth"]["reportAttachedCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["screenshotReceiptCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["missingScreenshotReceiptCount"], 1)
+            self.assertFalse(hermes["proofEvidenceHealth"]["allEvidenceAttached"])
+            self.assertIn("browser capture", hermes["nextEvidenceAction"])
+            self.assertEqual(hermes["nextProofCommand"]["schema"], "fluxio.real_agent_proof_action_command.v1")
+            self.assertTrue(hermes["nextProofCommand"]["available"])
+            self.assertEqual(hermes["nextProofCommand"]["runtime"], "hermes")
+            self.assertTrue(hermes["nextProofCommand"]["withBrowser"])
+            self.assertEqual(hermes["nextProofCommand"]["backendPayload"]["runtime"], "hermes")
+            self.assertIn("real-agent-proof-run", hermes["nextProofCommand"]["argv"])
+            self.assertIn("--with-browser", hermes["nextProofCommand"]["argv"])
+            self.assertEqual(result["proofEvidenceHealth"]["status"], "missing_screenshot")
+            self.assertEqual(result["missingProofScreenshotReceiptCount"], 1)
+
+    def test_real_agent_runtime_proof_status_emits_authenticated_agent_ui_capture_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            mission_id = "real-agent-mission-command"
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "agent-ui-command"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T03:20:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "mission": {"missionId": mission_id},
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                    },
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "skipped",
+                        "detail": "Authenticated Agent UI capture has not run yet.",
+                    },
+                    "produced_output_preview": {
+                        "label": "Produced output Preview screenshot",
+                        "status": "skipped",
+                        "detail": "Preview capture has not run yet.",
+                    },
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            command = result["nextProofCommand"]
+            self.assertEqual(result["proofEvidenceChecklist"]["nextMissing"]["id"], "agent_ui_screenshot")
+            self.assertEqual(command["schema"], "fluxio.real_agent_proof_action_command.v1")
+            self.assertTrue(command["available"])
+            self.assertEqual(command["runtime"], "agent-ui")
+            self.assertEqual(command["backendCommand"], "run_authenticated_live_agent_proof_command")
+            self.assertEqual(command["backendPayload"]["backendCommand"], "run_authenticated_live_agent_proof_command")
+            self.assertEqual(command["backendPayload"]["missionId"], mission_id)
+            self.assertIn("verify_authenticated_live_agent.py", command["commandLine"])
+            self.assertIn("--mission-id", command["argv"])
+            self.assertIn(mission_id, command["argv"])
+            self.assertEqual(
+                result["proofRunTimelineRows"][0]["nextProofCommand"]["backendCommand"],
+                "run_authenticated_live_agent_proof_command",
+            )
+
+    def test_real_agent_runtime_proof_status_promotes_row_agent_ui_capture_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_root = root / "tmp-ui-checks" / "real-agent-conversation-proof"
+            hermes_dir = proof_root / "hermes"
+            mixed_dir = proof_root / "mixed"
+            hermes_dir.mkdir(parents=True)
+            mixed_dir.mkdir(parents=True)
+            mission_id = "real-agent-mission-row-command"
+            hermes_path = hermes_dir / "real-agent-conversation-check.json"
+            mixed_path = mixed_dir / "mixed-real-agent-runtime-proof.json"
+            hermes_report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T03:20:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(hermes_path),
+                "mission": {"missionId": mission_id},
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                    "agent_ui_screenshot": {"status": "skipped", "label": "Agent UI screenshot"},
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            mixed_report = {
+                "schema": "fluxio.real_agent_mixed_runtime_proof.v1",
+                "createdAt": "2026-06-17T03:25:00+00:00",
+                "root": str(root),
+                "runtime": "mixed",
+                "status": "partial",
+                "passed": True,
+                "reportPath": str(mixed_path),
+                "runs": [hermes_report],
+            }
+            hermes_path.write_text(json.dumps(hermes_report), encoding="utf-8")
+            mixed_path.write_text(json.dumps(mixed_report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            self.assertEqual(result["latest"]["runtime"], "mixed")
+            self.assertEqual(result["nextProofCommand"]["backendCommand"], "run_authenticated_live_agent_proof_command")
+            self.assertEqual(result["nextProofCommand"]["missionId"], mission_id)
+            self.assertEqual(result["nextProofCommand"]["runtime"], "agent-ui")
+            self.assertEqual(
+                result["runtimes"]["hermes"]["nextProofCommand"]["backendCommand"],
+                "run_authenticated_live_agent_proof_command",
+            )
+
+    def test_real_agent_runtime_proof_status_flags_partial_screenshot_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "partial-screenshot"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            agent_screenshot = out_dir / "agent-real-conversation-proof.png"
+            agent_screenshot.write_bytes(b"agent screenshot proof")
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-16T18:06:38+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                    },
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "collected",
+                        "screenshot": str(agent_screenshot),
+                    },
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["proofEvidenceHealth"]["status"], "partial_screenshot")
+            self.assertEqual(hermes["proofEvidenceHealth"]["reportAttachedCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["screenshotReceiptCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["screenshotAttachedCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["missingScreenshotReceiptCount"], 0)
+            self.assertEqual(hermes["proofEvidenceHealth"]["missingRequiredScreenshotCount"], 1)
+            self.assertIn(
+                "produced_output_preview",
+                hermes["proofEvidenceHealth"]["missingRequiredScreenshotKeys"],
+            )
+            checklist = hermes["proofEvidenceChecklist"]
+            self.assertEqual(checklist["status"], "partial_screenshot")
+            self.assertEqual(checklist["attachedCount"], 2)
+            self.assertEqual(checklist["missingCount"], 1)
+            self.assertFalse(checklist["allRequiredAttached"])
+            self.assertEqual(checklist["nextMissing"]["id"], "produced_output_preview")
+            self.assertEqual(checklist["items"][2]["status"], "missing_required_screenshot")
+            self.assertEqual(result["proofEvidenceChecklist"]["nextMissing"]["id"], "produced_output_preview")
+            self.assertIn("Produced output Preview screenshot", hermes["nextEvidenceAction"])
+            self.assertEqual(hermes["nextProofTarget"]["schema"], "fluxio.real_agent_proof_next_target.v1")
+            self.assertEqual(hermes["nextProofTarget"]["kind"], "evidence")
+            self.assertEqual(hermes["nextProofTarget"]["status"], "partial_screenshot")
+            self.assertEqual(hermes["nextProofTarget"]["label"], "Produced output Preview screenshot")
+            self.assertEqual(result["nextProofTarget"]["label"], "Produced output Preview screenshot")
+            self.assertEqual(hermes["nextProofCommand"]["runtime"], "hermes")
+            self.assertTrue(hermes["nextProofCommand"]["withBrowser"])
+            self.assertIn("--runtime hermes", hermes["nextProofCommand"]["commandLine"])
+            self.assertIn("--with-browser", hermes["nextProofCommand"]["commandLine"])
+            self.assertEqual(result["nextProofCommand"]["runtime"], "hermes")
+            self.assertTrue(result["nextProofCommand"]["withBrowser"])
+            self.assertTrue(result["proofRunTimelineRows"][0]["nextProofCommand"]["withBrowser"])
+            self.assertEqual(
+                result["proofRunTimelineRows"][0]["evidenceChecklistNextMissingId"],
+                "produced_output_preview",
+            )
+            self.assertFalse(hermes["proofEvidenceHealth"]["allEvidenceAttached"])
+            self.assertEqual(result["proofEvidenceHealth"]["status"], "partial_screenshot")
+            self.assertEqual(result["missingProofScreenshotReceiptCount"], 0)
+
+    def test_real_agent_runtime_proof_status_reconciles_preview_bridge_screenshot_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            mission_id = "real-agent-mission-bridge"
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "bridge-screenshot"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            bridge_dir = root / ".agent_control" / "mission_artifacts" / mission_id / "preview_bridge_proof"
+            bridge_dir.mkdir(parents=True)
+            preview_screenshot = bridge_dir / "agent-preview-after-click.png"
+            preview_screenshot.write_bytes(b"preview bridge screenshot proof")
+            bridge_proof_path = bridge_dir / "20260617030000_preview_bridge_proof.json"
+            bridge_proof = {
+                "schema": "fluxio.preview_bridge_proof.v1",
+                "missionId": mission_id,
+                "checkedAt": "2026-06-17T03:00:00+00:00",
+                "status": "passed",
+                "reportPath": str(report_path),
+                "screenshots": {
+                    "agentPreviewAfterClick": str(preview_screenshot),
+                    "folderBrowser": str(bridge_dir / "folder-browser.png"),
+                },
+            }
+            bridge_proof_path.write_text(json.dumps(bridge_proof), encoding="utf-8")
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T03:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "mission": {"missionId": mission_id},
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                    },
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "skipped",
+                        "detail": "Browser conversation capture was not requested.",
+                    },
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["proofEvidenceHealth"]["status"], "partial_screenshot")
+            self.assertEqual(hermes["proofEvidenceHealth"]["screenshotAttachedCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["missingRequiredScreenshotKeys"], ["agent_ui_screenshot"])
+            self.assertIn(
+                "produced_output_preview",
+                hermes["proofEvidenceHealth"]["attachedRequiredScreenshotKeys"],
+            )
+            preview_item = next(
+                item
+                for item in hermes["proofEvidenceChecklist"]["items"]
+                if item["id"] == "produced_output_preview"
+            )
+            self.assertTrue(preview_item["passed"])
+            self.assertEqual(preview_item["source"], "preview-bridge-proof")
+            self.assertEqual(preview_item["originalScreenshotKey"], "agentPreviewAfterClick")
+            self.assertEqual(preview_item["bridgeProofPath"], str(bridge_proof_path))
+            self.assertEqual(hermes["proofEvidenceChecklist"]["nextMissing"]["id"], "agent_ui_screenshot")
+            self.assertEqual(result["proofEvidenceChecklist"]["nextMissing"]["id"], "agent_ui_screenshot")
+            self.assertEqual(result["latestScreenshotProof"]["reportPath"], str(report_path))
+            self.assertEqual(result["proofScreenshotReceipts"][0]["source"], "preview-bridge-proof")
+
+    def test_real_agent_runtime_proof_status_reconciles_authenticated_agent_ui_screenshot_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            mission_id = "real-agent-mission-authenticated-ui"
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "agent-ui-screenshot"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            agent_report_dir = root / "tmp-ui-checks" / "authenticated-live-agent"
+            agent_report_dir.mkdir(parents=True)
+            agent_screenshot = agent_report_dir / "authenticated-live-agent.png"
+            agent_screenshot.write_bytes(b"authenticated live agent screenshot proof")
+            relative_agent_screenshot = str(agent_screenshot.relative_to(root))
+            agent_report_path = agent_report_dir / "authenticated-live-agent-check.json"
+            agent_report = {
+                "schema": "fluxio.authenticated_live_agent.v1",
+                "checkedAt": "2026-06-17T03:10:00+00:00",
+                "url": "https://fluxio.example/control?mode=agent",
+                "ok": True,
+                "checks": [
+                    {"checkId": "not-login-screen", "passed": True},
+                    {
+                        "checkId": "selected-live-mission",
+                        "passed": True,
+                        "missionId": mission_id,
+                    },
+                    {
+                        "checkId": "selected-mission-visible-in-agent",
+                        "passed": True,
+                        "missionId": mission_id,
+                    },
+                    {
+                        "checkId": "screenshot-nonblank",
+                        "passed": True,
+                        "screenshotPath": relative_agent_screenshot,
+                    },
+                ],
+                "summary": {
+                    "selectedMission": {
+                        "mission_id": mission_id,
+                        "title": "Real Agent proof mission",
+                    },
+                },
+                "artifacts": {
+                    "screenshotPath": relative_agent_screenshot,
+                    "reportPath": str(agent_report_path),
+                },
+            }
+            agent_report_path.write_text(json.dumps(agent_report), encoding="utf-8")
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T03:10:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "mission": {"missionId": mission_id},
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                    },
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "skipped",
+                        "detail": "Authenticated Agent UI verifier ran separately.",
+                    },
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["proofEvidenceHealth"]["status"], "partial_screenshot")
+            self.assertEqual(hermes["proofEvidenceHealth"]["screenshotAttachedCount"], 1)
+            self.assertEqual(hermes["proofEvidenceHealth"]["missingRequiredScreenshotKeys"], ["produced_output_preview"])
+            self.assertIn(
+                "agent_ui_screenshot",
+                hermes["proofEvidenceHealth"]["attachedRequiredScreenshotKeys"],
+            )
+            agent_item = next(
+                item
+                for item in hermes["proofEvidenceChecklist"]["items"]
+                if item["id"] == "agent_ui_screenshot"
+            )
+            self.assertTrue(agent_item["passed"])
+            self.assertEqual(agent_item["source"], "authenticated-live-agent")
+            self.assertEqual(agent_item["authenticatedAgentReportPath"], str(agent_report_path))
+            self.assertEqual(agent_item["screenshotPath"], str(agent_screenshot))
+            self.assertEqual(agent_item["missionId"], mission_id)
+            self.assertEqual(hermes["proofEvidenceChecklist"]["nextMissing"]["id"], "produced_output_preview")
+            self.assertEqual(result["proofEvidenceChecklist"]["nextMissing"]["id"], "produced_output_preview")
+            self.assertEqual(result["latestScreenshotProof"]["reportPath"], str(report_path))
+            self.assertEqual(result["proofScreenshotReceipts"][0]["source"], "authenticated-live-agent")
+
+    def test_real_agent_runtime_proof_status_keeps_complete_evidence_bundles_together(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_root = root / "tmp-ui-checks" / "real-agent-conversation-proof"
+            old_dir = proof_root / "20260616-180638"
+            new_dir = proof_root / "20260617-020000"
+            old_dir.mkdir(parents=True)
+            new_dir.mkdir(parents=True)
+            old_report_path = old_dir / "real-agent-conversation-check.json"
+            new_report_path = new_dir / "real-agent-conversation-check.json"
+            agent_screenshot = old_dir / "agent-real-conversation-proof.png"
+            preview_screenshot = old_dir / "agent-produced-output-preview.png"
+            agent_screenshot.write_bytes(b"older complete agent screenshot")
+            preview_screenshot.write_bytes(b"older complete preview screenshot")
+            old_report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-16T18:06:38+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "passed",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(old_report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "collected",
+                        "screenshot": str(agent_screenshot),
+                    },
+                    "produced_output_preview": {
+                        "label": "Produced output Preview screenshot",
+                        "status": "collected",
+                        "screenshot": str(preview_screenshot),
+                    },
+                },
+                "screenshots": {
+                    "agentConversation": str(agent_screenshot),
+                    "producedOutputPreview": str(preview_screenshot),
+                },
+            }
+            new_report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T02:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(new_report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "skipped",
+                        "detail": "Browser capture was not requested.",
+                    },
+                },
+            }
+            old_report_path.write_text(json.dumps(old_report), encoding="utf-8")
+            new_report_path.write_text(json.dumps(new_report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["reportPath"], str(new_report_path))
+            self.assertEqual(hermes["proofEvidenceHealth"]["status"], "report_only")
+            self.assertEqual(result["proofEvidenceHealth"]["status"], "report_only")
+            self.assertEqual(result["proofScreenshotReceiptCount"], 0)
+            self.assertEqual(result["latestScreenshotProof"]["reportPath"], str(old_report_path))
+            self.assertTrue(result["hasCompleteEvidenceBundle"])
+            self.assertEqual(result["proofBundleStatus"]["status"], "complete_available")
+            self.assertEqual(result["proofBundleStatus"]["latestCompleteReportPath"], str(old_report_path))
+            self.assertFalse(result["proofBundleStatus"]["latestReportComplete"])
+            self.assertEqual(result["latestCompleteProof"]["reportPath"], str(old_report_path))
+            timeline = result["proofRunTimeline"]
+            self.assertEqual(timeline["total"], 2)
+            self.assertEqual(timeline["completeCount"], 1)
+            self.assertEqual(timeline["latestCompleteReportPath"], str(old_report_path))
+            self.assertEqual(timeline["rows"][0]["reportPath"], str(new_report_path))
+            self.assertEqual(timeline["rows"][0]["evidenceStatus"], "report_only")
+            self.assertTrue(timeline["rows"][0]["nextProofCommand"]["withBrowser"])
+            self.assertEqual(timeline["rows"][1]["reportPath"], str(old_report_path))
+            self.assertTrue(timeline["rows"][1]["allEvidenceAttached"])
+
+    def test_real_agent_runtime_proof_status_dedupes_latest_report_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_root = root / "tmp-ui-checks" / "real-agent-conversation-proof"
+            out_dir = proof_root / "20260617-020000"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            latest_path = proof_root / "latest.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T02:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            latest_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            self.assertEqual(result["reportCount"], 1)
+            self.assertEqual(result["latest"]["reportPath"], str(report_path))
+            self.assertEqual(result["latestProofEvidenceReceipt"]["reportPath"], str(report_path))
+            self.assertEqual(result["proofRunTimeline"]["total"], 1)
+            self.assertEqual(len(result["proofRunTimelineRows"]), 1)
+            self.assertEqual(result["proofRunTimelineRows"][0]["reportPath"], str(report_path))
+
+    def test_real_agent_runtime_proof_status_uses_report_index_after_full_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_root = root / "tmp-ui-checks" / "real-agent-conversation-proof"
+            old_dir = proof_root / "20260617-010000"
+            new_dir = proof_root / "20260617-020000"
+            ignored_dir = proof_root / "20260617-030000"
+            old_dir.mkdir(parents=True)
+            new_dir.mkdir(parents=True)
+            ignored_dir.mkdir(parents=True)
+            old_report_path = old_dir / "real-agent-conversation-check.json"
+            new_report_path = new_dir / "real-agent-conversation-check.json"
+            ignored_report_path = ignored_dir / "real-agent-conversation-check.json"
+            old_agent_screenshot = old_dir / "agent.png"
+            old_preview_screenshot = old_dir / "preview.png"
+            old_agent_screenshot.write_bytes(b"agent screenshot")
+            old_preview_screenshot.write_bytes(b"preview screenshot")
+            old_report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T01:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "passed",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(old_report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                    "agent_ui_screenshot": {"status": "collected", "screenshot": str(old_agent_screenshot)},
+                    "produced_output_preview": {"status": "collected", "screenshot": str(old_preview_screenshot)},
+                },
+                "screenshots": {
+                    "agentConversation": str(old_agent_screenshot),
+                    "producedOutputPreview": str(old_preview_screenshot),
+                },
+            }
+            new_report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T02:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(new_report_path),
+                "proofBags": {"fresh_hermes_round": {"status": "collected"}},
+            }
+            ignored_report = {
+                **new_report,
+                "createdAt": "2026-06-17T03:00:00+00:00",
+                "reportPath": str(ignored_report_path),
+            }
+            old_report_path.write_text(json.dumps(old_report), encoding="utf-8")
+            new_report_path.write_text(json.dumps(new_report), encoding="utf-8")
+
+            first = build_real_agent_proof_status(root)
+
+            self.assertEqual(first["proofReportIndex"]["scanMode"], "full")
+            self.assertEqual(first["proofReportIndex"]["status"], "miss")
+            self.assertEqual(first["reportCount"], 2)
+            self.assertTrue(proof_report_index_path(root).exists())
+
+            ignored_report_path.write_text(json.dumps(ignored_report), encoding="utf-8")
+            second = build_real_agent_proof_status(root)
+
+            self.assertEqual(second["proofReportIndex"]["scanMode"], "indexed")
+            self.assertEqual(second["proofReportIndex"]["status"], "hit")
+            self.assertEqual(second["reportCount"], 2)
+            self.assertEqual(second["latest"]["reportPath"], str(new_report_path))
+            self.assertEqual(second["latestCompleteProof"]["reportPath"], str(old_report_path))
+
+    def test_real_agent_runtime_proof_status_reads_workspace_proof_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = pathlib.Path(temp_dir)
+            release_root = base / "syntelos" / "releases" / "20260618-010000"
+            project_root = base / "vibe-coding-platform"
+            release_control = release_root / ".agent_control"
+            proof_dir = project_root / "tmp-ui-checks" / "real-agent-conversation-proof" / "complete"
+            release_control.mkdir(parents=True)
+            proof_dir.mkdir(parents=True)
+            (release_control / "workspaces.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "workspace_id": "workspace_project",
+                            "name": "vibe-coding-platform",
+                            "nas_project_path": str(project_root),
+                            "enabled": True,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            report_path = proof_dir / "real-agent-conversation-check.json"
+            agent_screenshot = proof_dir / "agent.png"
+            preview_screenshot = proof_dir / "preview.png"
+            agent_screenshot.write_bytes(b"agent screenshot")
+            preview_screenshot.write_bytes(b"preview screenshot")
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T01:00:00+00:00",
+                "root": str(project_root),
+                "runtime": "hermes",
+                "status": "passed",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "mission": {"missionId": "mission_cross_root_complete"},
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                    "agent_ui_screenshot": {"status": "collected", "screenshot": str(agent_screenshot)},
+                    "produced_output_preview": {"status": "collected", "screenshot": str(preview_screenshot)},
+                },
+                "screenshots": {
+                    "agentConversation": str(agent_screenshot),
+                    "producedOutputPreview": str(preview_screenshot),
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            first = build_real_agent_proof_status(release_root)
+            second = build_real_agent_proof_status(release_root)
+
+            self.assertEqual(first["root"], str(release_root.resolve()))
+            self.assertEqual(first["proofSourceRootCount"], 2)
+            self.assertIn(str(project_root.resolve()), [item["root"] for item in first["proofSourceRoots"]])
+            self.assertEqual(first["reportCount"], 1)
+            self.assertTrue(first["hasCompleteEvidenceBundle"])
+            self.assertEqual(first["latestCompleteProof"]["missionId"], "mission_cross_root_complete")
+            self.assertEqual(first["latestCompleteProof"]["reportPath"], str(report_path))
+            self.assertTrue(proof_report_index_path(release_root).exists())
+            self.assertEqual(second["proofReportIndex"]["scanMode"], "indexed")
+            self.assertEqual(second["reportCount"], 1)
+            self.assertEqual(second["latestCompleteProof"]["reportPath"], str(report_path))
+
+    def test_real_agent_runtime_proof_status_reuses_receipt_hash_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "20260617-010000"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            agent_screenshot = out_dir / "agent.png"
+            preview_screenshot = out_dir / "preview.png"
+            agent_screenshot.write_bytes(b"agent screenshot")
+            preview_screenshot.write_bytes(b"preview screenshot")
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T01:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "passed",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected"},
+                    "agent_ui_screenshot": {"status": "collected", "screenshot": str(agent_screenshot)},
+                    "produced_output_preview": {"status": "collected", "screenshot": str(preview_screenshot)},
+                },
+                "screenshots": {
+                    "agentConversation": str(agent_screenshot),
+                    "producedOutputPreview": str(preview_screenshot),
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            first = build_real_agent_proof_status(root)
+
+            self.assertEqual(first["proofReceiptCache"]["status"], "miss")
+            self.assertGreater(first["proofReceiptCache"]["missCount"], 0)
+            self.assertGreater(first["proofReceiptCache"]["writeCount"], 0)
+            self.assertTrue(proof_receipt_cache_path(root).exists())
+            first_sha = first["latestProofEvidenceReceipt"]["sha256"]
+
+            second = build_real_agent_proof_status(root)
+
+            self.assertEqual(second["proofReceiptCache"]["status"], "hit")
+            self.assertGreater(second["proofReceiptCache"]["hitCount"], 0)
+            self.assertEqual(second["proofReceiptCache"]["missCount"], 0)
+            self.assertEqual(second["proofReceiptCache"]["writeCount"], 0)
+            self.assertEqual(second["latestProofEvidenceReceipt"]["sha256"], first_sha)
+            self.assertEqual(second["latestCompleteProof"]["reportPath"], str(report_path))
+
+    def test_real_agent_runtime_proof_status_indexes_authenticated_reports_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            proof_root = root / "tmp-ui-checks" / "real-agent-conversation-proof"
+            first_dir = proof_root / "20260617-010000"
+            second_dir = proof_root / "20260617-020000"
+            first_dir.mkdir(parents=True)
+            second_dir.mkdir(parents=True)
+            first_report_path = first_dir / "real-agent-conversation-check.json"
+            second_report_path = second_dir / "real-agent-conversation-check.json"
+            base_report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "proofBags": {"fresh_hermes_round": {"status": "collected"}},
+            }
+            first_report_path.write_text(
+                json.dumps(
+                    {
+                        **base_report,
+                        "createdAt": "2026-06-17T01:00:00+00:00",
+                        "reportPath": str(first_report_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            second_report_path.write_text(
+                json.dumps(
+                    {
+                        **base_report,
+                        "createdAt": "2026-06-17T02:00:00+00:00",
+                        "reportPath": str(second_report_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "grant_agent.real_agent_proof._authenticated_live_agent_report_candidates",
+                return_value=[],
+            ) as authenticated_candidates:
+                result = build_real_agent_proof_status(root)
+
+            self.assertEqual(authenticated_candidates.call_count, 1)
+            self.assertEqual(result["reportCount"], 2)
+            self.assertEqual(result["latest"]["reportPath"], str(second_report_path))
+
+    def test_real_agent_runtime_proof_status_accepts_explicit_runtime_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "legacy-runtime"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T02:15:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["reportPath"], str(report_path))
+            self.assertEqual(hermes["status"], "partial")
+            self.assertTrue(hermes["realRuntimeOutput"])
+            self.assertEqual(result["proofEvidenceHealth"]["reportReceiptCount"], 1)
+            self.assertEqual(len(result["proofEvidenceReceipts"]), 1)
+            self.assertEqual(result["proofEvidenceReceipts"][0]["reportPath"], str(report_path))
+            self.assertEqual(result["proofRunTimelineRows"][0]["runtime"], "hermes")
+
+    def test_real_agent_runtime_proof_status_marks_old_reports_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "old-hermes"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2000-01-01T00:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "runtimeSessionId": "old-hermes-session",
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "status": "collected",
+                        "detail": "Fresh hermes round produced a substantive real assistant reply.",
+                    },
+                    "fresh_openclaw_round": {"status": "skipped"},
+                    "recovered_openclaw_session": {"status": "skipped"},
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            hermes = result["runtimes"]["hermes"]
+            self.assertEqual(hermes["proofFreshness"], "stale")
+            self.assertTrue(hermes["stale"])
+            self.assertGreater(hermes["proofAgeSeconds"], hermes["staleAfterSeconds"])
+            self.assertTrue(result["hasStaleProof"])
+            self.assertEqual(result["staleRuntimeCount"], 1)
+            self.assertEqual(result["runtimes"]["openclaw"]["proofFreshness"], "missing")
+
+    def test_real_agent_runtime_proof_status_surfaces_openclaw_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "20260617-003500"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T00:35:00+00:00",
+                "root": str(root),
+                "runtime": "openclaw",
+                "status": "blocked",
+                "passed": False,
+                "corePassed": False,
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "skipped"},
+                    "fresh_openclaw_round": {
+                        "status": "blocked",
+                        "detail": "Runtime command timed out and did not produce an assistant reply.",
+                    },
+                    "recovered_openclaw_session": {"status": "skipped"},
+                },
+                "openclawRuntimeDiagnostics": {
+                    "schema": "fluxio.openclaw_runtime_diagnostics.v1",
+                    "status": "blocked",
+                    "summary": (
+                        "OpenClaw gateway probe failed: connect ECONNREFUSED 127.0.0.1:18789.; "
+                        "MiniMax Portal OAuth token is rejected by the MiniMax API with HTTP 401."
+                    ),
+                    "problems": [
+                        "OpenClaw gateway probe failed: connect ECONNREFUSED 127.0.0.1:18789.",
+                        "MiniMax Portal OAuth token is rejected by the MiniMax API with HTTP 401.",
+                    ],
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            openclaw = result["runtimes"]["openclaw"]
+            self.assertEqual(openclaw["status"], "blocked")
+            self.assertIn("MiniMax Portal OAuth token is rejected", openclaw["headline"])
+            self.assertIn("connect ECONNREFUSED", openclaw["diagnosticSummary"])
+            self.assertEqual(openclaw["runtimeDiagnostics"]["status"], "blocked")
+            self.assertEqual(openclaw["proofBagSummary"]["blockedCount"], 1)
+            self.assertEqual(openclaw["proofBagSummary"]["nextBag"]["bagId"], "fresh_openclaw_round")
+
+    def test_real_agent_runtime_proof_status_marks_recovered_transcript_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "recovered-openclaw"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            session_path = root / ".openclaw" / "agents" / "main" / "sessions" / "fluxio-night-school-proof.jsonl"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T02:35:00+00:00",
+                "root": str(root),
+                "runtime": "openclaw",
+                "status": "partial",
+                "passed": False,
+                "corePassed": True,
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_openclaw_round": {
+                        "status": "blocked",
+                        "detail": "Fresh OpenClaw command timed out before returning output.",
+                    },
+                    "recovered_openclaw_session": {
+                        "status": "collected",
+                        "sourcePath": str(session_path),
+                    },
+                },
+                "recoveredRuntimeReply": {
+                    "sessionId": "fluxio-night-school-proof",
+                    "sourcePath": str(session_path),
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["recovered-persisted-session"],
+                    "dialogueCaptureLabels": ["recovered persisted session"],
+                    "artifactGatePassed": False,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            openclaw = result["runtimes"]["openclaw"]
+            receipt = openclaw["proofTranscriptReceipt"]
+            self.assertEqual(receipt["status"], "recovered")
+            self.assertEqual(receipt["source"], "recovered-persisted-session")
+            self.assertEqual(receipt["sourceLabel"], "recovered persisted session")
+            self.assertEqual(receipt["sourcePath"], str(session_path))
+            self.assertEqual(receipt["recoveredSessionId"], "fluxio-night-school-proof")
+            self.assertTrue(openclaw["recoveredRuntimeOutput"])
+            self.assertEqual(result["latestProofTranscriptReceipt"]["source"], "recovered-persisted-session")
+            self.assertEqual(result["proofRunTimelineRows"][0]["transcriptStatus"], "recovered")
+            transcript_health = result["proofTranscriptHealth"]
+            self.assertEqual(transcript_health["status"], "recovered")
+            self.assertEqual(transcript_health["recoveredCount"], 1)
+            self.assertEqual(transcript_health["latestSource"], "recovered-persisted-session")
+            self.assertTrue(transcript_health["hasRealTranscript"])
+            self.assertFalse(transcript_health["hasFreshTranscript"])
+            self.assertTrue(transcript_health["needsFreshTranscript"])
+            self.assertEqual(result["transcriptHealthStatus"], "recovered")
+            self.assertIn("replace recovered transcript proof", result["nextTranscriptAction"])
+
+    def test_real_agent_runtime_proof_status_marks_mixed_transcript_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "mixed-20260617-031500"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "mixed-real-agent-runtime-proof.json"
+            report = {
+                "schema": "fluxio.real_agent_mixed_runtime_proof.v1",
+                "createdAt": "2026-06-17T03:15:00+00:00",
+                "root": str(root),
+                "runtime": "mixed",
+                "status": "partial",
+                "passed": False,
+                "headline": "Hermes produced fresh output; OpenClaw is blocked.",
+                "nextAction": "Fix OpenClaw fresh runtime output.",
+                "reportPath": str(report_path),
+                "runs": [
+                    {
+                        "runtime": "hermes",
+                        "status": "partial",
+                        "freshRuntimeOutput": True,
+                        "realRuntimeOutput": True,
+                        "proofTranscriptReceipt": {
+                            "schema": "fluxio.real_agent_transcript_receipt.v1",
+                            "runtime": "hermes",
+                            "status": "fresh",
+                            "source": "fresh-runtime-command",
+                            "freshRuntimeOutput": True,
+                            "realRuntimeOutput": True,
+                            "hasRealTranscript": True,
+                            "summaryLine": "fresh runtime command; 1 dialogue turn",
+                        },
+                    },
+                    {
+                        "runtime": "openclaw",
+                        "status": "blocked",
+                        "freshRuntimeOutput": False,
+                        "realRuntimeOutput": False,
+                        "blocker": "OpenClaw gateway probe failed.",
+                        "proofTranscriptReceipt": {
+                            "schema": "fluxio.real_agent_transcript_receipt.v1",
+                            "runtime": "openclaw",
+                            "status": "blocked",
+                            "source": "stored-runtime-blocker",
+                            "freshRuntimeOutput": False,
+                            "realRuntimeOutput": False,
+                            "hasRealTranscript": False,
+                            "hasStoredBlocker": True,
+                            "summaryLine": "OpenClaw gateway probe failed.",
+                            "blocker": "OpenClaw gateway probe failed.",
+                        },
+                    },
+                ],
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            mixed = result["runtimes"]["mixed"]
+            coverage = mixed["transcriptRuntimeCoverage"]
+            self.assertTrue(mixed["anyRuntimeTranscriptOutput"])
+            self.assertFalse(mixed["allRuntimeTranscriptOutput"])
+            self.assertFalse(mixed["realRuntimeOutput"])
+            self.assertEqual(coverage["requiredRuntimeCount"], 2)
+            self.assertEqual(coverage["realRuntimeCount"], 1)
+            self.assertEqual(coverage["freshRuntimeCount"], 1)
+            self.assertEqual(coverage["realRuntimeIds"], ["hermes"])
+            self.assertEqual(coverage["blockedRuntimeIds"], ["openclaw"])
+            self.assertFalse(coverage["allRuntimeTranscriptsReal"])
+            self.assertFalse(coverage["allRuntimeTranscriptsFresh"])
+            receipt = mixed["proofTranscriptReceipt"]
+            self.assertEqual(receipt["status"], "partial")
+            self.assertTrue(receipt["hasRealTranscript"])
+            self.assertFalse(receipt["allRuntimeTranscriptsReal"])
+            self.assertIn("1/2 runtime transcripts real", receipt["summaryLine"])
+            self.assertIn("blocked: OpenClaw", receipt["summaryLine"])
+            self.assertEqual(receipt["runtimeCoverage"]["blockedRuntimeIds"], ["openclaw"])
+            self.assertEqual(result["proofTranscriptHealth"]["status"], "partial")
+            self.assertTrue(result["hasRealTranscriptProof"])
+            self.assertFalse(result["hasFreshTranscriptProof"])
+            self.assertEqual(result["proofRunTimelineRows"][0]["transcriptRuntimeCoverage"]["realRuntimeCount"], 1)
+
+    def test_real_agent_runtime_proof_status_summarizes_proof_bag_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            out_dir = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "20260617-011500"
+            out_dir.mkdir(parents=True)
+            report_path = out_dir / "real-agent-conversation-check.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T01:15:00+00:00",
+                "root": str(root),
+                "runtime": "openclaw",
+                "status": "blocked",
+                "passed": False,
+                "corePassed": False,
+                "reportPath": str(report_path),
+                "nextAction": "Fix OpenClaw gateway, then rerun with browser capture.",
+                "proofBags": {
+                    "fresh_hermes_round": {
+                        "label": "Fresh Hermes runtime round",
+                        "status": "collected",
+                        "detail": "Hermes produced a substantive real assistant reply.",
+                    },
+                    "fresh_openclaw_round": {
+                        "label": "Fresh OpenClaw runtime round",
+                        "status": "blocked",
+                        "detail": "OpenClaw gateway probe failed before an assistant reply was produced.",
+                    },
+                    "agent_ui_screenshot": {
+                        "label": "Agent UI screenshot",
+                        "status": "missing",
+                        "detail": "Run with --with-browser to capture the Agent UI thread.",
+                    },
+                    "produced_output_preview": {
+                        "label": "Produced output Preview screenshot",
+                        "status": "skipped",
+                        "detail": "Browser capture was not requested.",
+                    },
+                },
+                "proofBagSummary": {
+                    "missingOrSkipped": ["Agent UI screenshot", "Produced output Preview screenshot"],
+                    "blocked": ["Fresh OpenClaw runtime round"],
+                    "allBagsCollected": False,
+                    "allBagsClosed": False,
+                },
+            }
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            result = backend.dispatch("get_real_agent_runtime_proof_status_command", {})
+
+            openclaw = result["runtimes"]["openclaw"]
+            summary = openclaw["proofBagSummary"]
+            self.assertEqual(summary["schema"], "fluxio.real_agent_proof_bag_status.v1")
+            self.assertEqual(summary["total"], 4)
+            self.assertEqual(summary["counts"]["collected"], 1)
+            self.assertEqual(summary["collectedCount"], 1)
+            self.assertEqual(summary["blockedCount"], 1)
+            self.assertEqual(summary["missingCount"], 1)
+            self.assertEqual(summary["skippedCount"], 1)
+            self.assertEqual(summary["incompleteCount"], 3)
+            self.assertEqual(summary["openCount"], 2)
+            self.assertFalse(summary["allCollected"])
+            self.assertFalse(summary["allClosed"])
+            self.assertEqual(summary["nextBag"]["bagId"], "fresh_openclaw_round")
+            self.assertIn("Fresh OpenClaw runtime round", summary["blocked"])
+            self.assertIn("Agent UI screenshot", summary["missingOrSkipped"])
+            self.assertEqual(openclaw["nextProofAction"], "Fix OpenClaw gateway, then rerun with browser capture.")
+            self.assertEqual(openclaw["nextProofTarget"]["schema"], "fluxio.real_agent_proof_next_target.v1")
+            self.assertEqual(openclaw["nextProofTarget"]["kind"], "proof_bag")
+            self.assertEqual(openclaw["nextProofTarget"]["bagId"], "fresh_openclaw_round")
+            self.assertEqual(openclaw["nextProofTarget"]["label"], "Fresh OpenClaw runtime round")
+            self.assertEqual(openclaw["nextProofTarget"]["status"], "blocked")
+            self.assertEqual(
+                openclaw["nextProofTarget"]["action"],
+                "Fix OpenClaw gateway, then rerun with browser capture.",
+            )
+            self.assertEqual(result["nextProofTarget"]["bagId"], "fresh_openclaw_round")
+            self.assertEqual(result["proofRunTimelineRows"][0]["nextProofTarget"]["bagId"], "fresh_openclaw_round")
+            self.assertEqual(result["proofBagSummary"]["total"], 4)
+            self.assertEqual(result["proofEvidenceHealth"]["reportReceiptCount"], 1)
+            self.assertEqual(len(result["proofEvidenceReceipts"]), 1)
+
+    def test_run_real_agent_runtime_proof_command_invokes_verifier_without_faking_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            script = root / "scripts" / "verify_real_agent_conversation_proof.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("# verifier placeholder\n", encoding="utf-8")
+            report_path = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "run" / "real-agent-conversation-check.json"
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-16T18:06:38+00:00",
+                "root": str(root),
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "runtimeSessionId": "hermes-session",
+                "reportPath": str(report_path),
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected", "detail": "Fresh hermes round produced output."},
+                    "fresh_openclaw_round": {"status": "skipped"},
+                    "recovered_openclaw_session": {"status": "skipped"},
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            completed = mock.Mock(returncode=0, stdout=json.dumps(report), stderr="")
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch("grant_agent.real_agent_proof.subprocess.run", return_value=completed) as run_mock:
+                result = backend.dispatch(
+                    "run_real_agent_runtime_proof_command",
+                    {"runtime": "hermes", "runtimeTimeout": 30},
+                )
+
+            self.assertEqual(result["schema"], "fluxio.real_agent_runtime_proof_run.v1")
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertTrue(result["summary"]["freshRuntimeOutput"])
+            called_args = run_mock.call_args.args[0]
+            self.assertIn("--runtime", called_args)
+            self.assertIn("hermes", called_args)
+            self.assertIn("--fresh-runtime", called_args)
+
+    def test_run_real_agent_runtime_proof_command_blocks_overlapping_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            lock_path = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "real-agent-proof-run.lock.json"
+            lock_path.parent.mkdir(parents=True)
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.real_agent_proof_run_lock.v1",
+                        "status": "running",
+                        "runtime": "mixed",
+                        "pid": 12345,
+                        "createdAt": "2999-01-01T00:00:00+00:00",
+                        "staleAfterSeconds": 1800,
+                        "token": "active-lock",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch("grant_agent.real_agent_proof.subprocess.run") as run_mock:
+                result = backend.dispatch(
+                    "run_real_agent_runtime_proof_command",
+                    {"runtime": "hermes", "runtimeTimeout": 30},
+                )
+
+            self.assertEqual(result["schema"], "fluxio.real_agent_runtime_proof_run.v1")
+            self.assertEqual(result["status"], "running")
+            self.assertTrue(result["alreadyRunning"])
+            self.assertEqual(result["lock"]["runtime"], "mixed")
+            self.assertTrue(result["proofStatus"]["proofRunInProgress"])
+            run_mock.assert_not_called()
+
+    def test_run_real_agent_runtime_proof_command_clears_stale_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            script = root / "scripts" / "verify_real_agent_conversation_proof.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("# verifier placeholder\n", encoding="utf-8")
+            lock_path = root / "tmp-ui-checks" / "real-agent-conversation-proof" / "real-agent-proof-run.lock.json"
+            lock_path.parent.mkdir(parents=True)
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "fluxio.real_agent_proof_run_lock.v1",
+                        "status": "running",
+                        "runtime": "mixed",
+                        "pid": 12345,
+                        "createdAt": "2000-01-01T00:00:00+00:00",
+                        "staleAfterSeconds": 60,
+                        "token": "stale-lock",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = {
+                "schema": "fluxio.real_agent_conversation_proof.v1",
+                "createdAt": "2026-06-17T04:00:00+00:00",
+                "root": str(root),
+                "runtime": "hermes",
+                "status": "partial",
+                "passed": True,
+                "corePassed": True,
+                "proofBags": {
+                    "fresh_hermes_round": {"status": "collected", "detail": "Fresh hermes round produced output."},
+                },
+                "missionDetailSummary": {
+                    "dialogueCount": 1,
+                    "dialogueCaptureModes": ["fresh-runtime-command"],
+                    "artifactGatePassed": True,
+                },
+            }
+            completed = mock.Mock(returncode=0, stdout=json.dumps(report), stderr="")
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch("grant_agent.real_agent_proof.subprocess.run", return_value=completed) as run_mock:
+                result = backend.dispatch(
+                    "run_real_agent_runtime_proof_command",
+                    {"runtime": "hermes", "runtimeTimeout": 30},
+                )
+
+            self.assertFalse(result["alreadyRunning"])
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertFalse(lock_path.exists())
+            run_mock.assert_called_once()
+
+    def test_run_authenticated_live_agent_proof_command_invokes_verifier_and_refreshes_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            script = root / "scripts" / "verify_authenticated_live_agent.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("# authenticated verifier placeholder\n", encoding="utf-8")
+            report = {
+                "schema": "fluxio.authenticated_live_agent.v1",
+                "checkedAt": "2026-06-17T03:25:00+00:00",
+                "ok": True,
+                "summary": {"selectedMission": {"mission_id": "mission_agent_ui"}},
+                "artifacts": {
+                    "screenshotPath": str(root / "tmp-ui-checks" / "authenticated-live-agent" / "agent-ui.png"),
+                },
+                "checks": [
+                    {"checkId": "not-login-screen", "passed": True},
+                    {"checkId": "selected-mission-visible-in-agent", "passed": True},
+                    {"checkId": "screenshot-nonblank", "passed": True},
+                ],
+            }
+            completed = mock.Mock(returncode=0, stdout=json.dumps(report), stderr="")
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch("grant_agent.web_backend.subprocess.run", return_value=completed) as run_mock:
+                result = backend.dispatch(
+                    "run_authenticated_live_agent_proof_command",
+                    {"missionId": "mission_agent_ui", "name": "agent-ui-proof", "timeoutMs": 45000},
+                )
+
+            self.assertEqual(result["schema"], "fluxio.authenticated_live_agent_proof_run.v1")
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["missionId"], "mission_agent_ui")
+            self.assertEqual(result["report"]["schema"], "fluxio.authenticated_live_agent.v1")
+            self.assertEqual(result["proofStatus"]["schema"], "fluxio.real_agent_runtime_proof_status.v1")
+            called_args = run_mock.call_args.args[0]
+            self.assertIn(str(script), called_args)
+            self.assertIn("--mission-id", called_args)
+            self.assertIn("mission_agent_ui", called_args)
+            self.assertIn("--global-timeout-ms", called_args)
+            self.assertIn("45000", called_args)
+
     def test_run_cli_sets_pythonpath_to_workspace_src(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -1478,6 +3282,20 @@ class FluxioWebBackendTests(unittest.TestCase):
             called_env = run_mock.call_args.kwargs["env"]
             self.assertIn("PYTHONPATH", called_env)
             self.assertTrue(str(root / "src") in called_env["PYTHONPATH"])
+
+    def test_runtime_route_status_decodes_hermes_version_as_utf8(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            completed = mock.Mock(returncode=0, stdout="Hermès 1.0\n", stderr="")
+
+            with mock.patch("grant_agent.web_backend.shutil.which", return_value="C:/bin/hermes.exe"):
+                with mock.patch("grant_agent.web_backend.subprocess.run", return_value=completed) as run_mock:
+                    status = backend._runtime_route_proof_status(root)
+
+            self.assertEqual(status["hermesVersion"], "Hermès 1.0")
+            self.assertEqual(run_mock.call_args.kwargs["encoding"], "utf-8")
+            self.assertEqual(run_mock.call_args.kwargs["errors"], "replace")
 
     def test_control_room_summary_command_uses_in_process_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1503,28 +3321,71 @@ class FluxioWebBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             backend = FluxioWebBackend(root, root)
-            with mock.patch.object(
-                backend,
-                "_build_control_room_summary",
-                return_value={
-                    "schema": "fluxio.control_room.summary.v1",
-                    "missions": [{"mission_id": "mission_live", "status": "running"}],
-                },
-            ) as build_summary:
-                with mock.patch.object(backend, "_start_mission_detail_prewarm_timer"):
-                    result = backend.dispatch(
-                        "get_control_room_summary_command",
-                        {"root": str(root)},
-                    )
-                    cached_result = backend.dispatch(
-                        "get_control_room_summary_command",
-                        {"root": str(root)},
-                    )
+            with (
+                mock.patch("grant_agent.web_backend.FULL_SUMMARY_CACHE_TTL_SECONDS", 60.0),
+                mock.patch.object(
+                    backend,
+                    "_build_control_room_summary",
+                    return_value={
+                        "schema": "fluxio.control_room.summary.v1",
+                        "missions": [{"mission_id": "mission_live", "status": "running"}],
+                    },
+                ) as build_summary,
+                mock.patch.object(backend, "_start_mission_detail_prewarm_timer"),
+            ):
+                result = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+                cached_result = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
 
             self.assertEqual(result["summaryCache"]["status"], "miss")
             self.assertEqual(cached_result["summaryCache"]["status"], "hit")
             self.assertEqual(cached_result["summaryCache"]["mode"], "full")
             self.assertEqual(build_summary.call_count, 1)
+
+    def test_skills_surface_full_summary_bypasses_stale_full_snapshot_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+            with mock.patch.object(
+                backend,
+                "_build_control_room_summary",
+                side_effect=[
+                    {
+                        "schema": "fluxio.control_room.summary.v1",
+                        "skillLibrary": {"userInstalledSkills": []},
+                    },
+                    {
+                        "schema": "fluxio.control_room.summary.v1",
+                        "skillLibrary": {
+                            "userInstalledSkills": [
+                                {
+                                    "skillId": "operator-skill",
+                                    "source": {"kind": "codex_home_skill", "path": "C:/Users/paul/.codex/skills/operator-skill/SKILL.md"},
+                                }
+                            ]
+                        },
+                    },
+                ],
+            ) as build_summary:
+                cached = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root)},
+                )
+                refreshed = backend.dispatch(
+                    "get_control_room_summary_command",
+                    {"root": str(root), "reason": "skills_surface_full_summary"},
+                )
+
+            self.assertEqual(cached["summaryCache"]["status"], "miss")
+            self.assertEqual(refreshed["summaryCache"]["status"], "forced-refresh")
+            self.assertEqual(refreshed["summaryCache"]["freshness"], "skills-surface-request")
+            self.assertEqual(refreshed["skillLibrary"]["userInstalledSkills"][0]["skillId"], "operator-skill")
+            self.assertEqual(build_summary.call_count, 2)
 
     def test_control_room_summary_command_loads_matching_persisted_full_snapshot_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2438,6 +4299,95 @@ class FluxioWebBackendTests(unittest.TestCase):
                 MISSION_START_TIMEOUT_SECONDS,
             )
 
+    def test_serve_artifact_requires_login_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            artifact_dir = root / ".agent_control" / "mission_artifacts" / "mission_proof"
+            artifact_dir.mkdir(parents=True)
+            artifact = artifact_dir / "index.html"
+            artifact.write_text("<!doctype html><title>artifact proof</title>", encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            class FakeHandler:
+                def __init__(self, path: str, cookie: str = "") -> None:
+                    self.path = path
+                    self.headers = {"Cookie": cookie} if cookie else {}
+                    self.wfile = io.BytesIO()
+                    self.status: int | None = None
+                    self.response_headers: dict[str, str] = {}
+
+                def send_response(self, code: int) -> None:
+                    self.status = code
+
+                def send_header(self, key: str, value: str) -> None:
+                    self.response_headers[key] = value
+
+                def end_headers(self) -> None:
+                    pass
+
+            from urllib.parse import quote
+
+            url = f"/api/artifact?path={quote(str(artifact), safe='')}"
+
+            anonymous = FakeHandler(url)
+            self.assertTrue(backend.serve_artifact(anonymous))
+            self.assertEqual(anonymous.status, 401)
+            payload = json.loads(anonymous.wfile.getvalue())
+            self.assertFalse(payload["ok"])
+            self.assertTrue(payload["loginRequired"])
+
+            backend.sessions["session-token"] = {
+                "username": "admin",
+                "displayName": "Admin",
+                "role": "admin",
+                "createdAt": "2026-06-12T00:00:00+00:00",
+            }
+            authed = FakeHandler(
+                url, cookie=f"{web_backend.SESSION_COOKIE_NAME}=session-token"
+            )
+            self.assertTrue(backend.serve_artifact(authed))
+            self.assertEqual(authed.status, 200)
+            self.assertIn(b"artifact proof", authed.wfile.getvalue())
+            # SAMEORIGIN so the in-app Preview window can iframe artifacts.
+            self.assertEqual(authed.response_headers.get("X-Frame-Options"), "SAMEORIGIN")
+
+            stale = FakeHandler(
+                url, cookie=f"{web_backend.SESSION_COOKIE_NAME}=expired-token"
+            )
+            self.assertTrue(backend.serve_artifact(stale))
+            self.assertEqual(stale.status, 401)
+
+    def test_quickstart_mission_command_forwards_turn_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                backend.dispatch(
+                    "quickstart_control_room_mission_command",
+                    {"objective": "Build a landing page.", "turnMode": "plan"},
+                )
+            command_args = run_cli.call_args.args[2]
+            self.assertEqual(run_cli.call_args.args[1], "mission-quickstart")
+            self.assertIn("--turn-mode", command_args)
+            self.assertEqual(command_args[command_args.index("--turn-mode") + 1], "plan")
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                backend.dispatch(
+                    "quickstart_control_room_mission_command",
+                    {"objective": "Build a landing page.", "turnMode": "1m"},
+                )
+            command_args = run_cli.call_args.args[2]
+            self.assertEqual(command_args[command_args.index("--turn-mode") + 1], "max-context")
+
+            with mock.patch.object(backend, "_run_cli", return_value={"ok": True}) as run_cli:
+                backend.dispatch(
+                    "quickstart_control_room_mission_command",
+                    {"objective": "Build a landing page."},
+                )
+            command_args = run_cli.call_args.args[2]
+            self.assertNotIn("--turn-mode", command_args)
+
     def test_apply_control_room_mission_action_resume_uses_async_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -2699,6 +4649,47 @@ class FluxioWebBackendTests(unittest.TestCase):
                 )
 
             self.assertEqual(result, 98)
+
+    def test_backend_refreshes_live_storage_pressure_and_writes_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            report = backend.dispatch(
+                "get_nas_storage_pressure_command",
+                {"path": str(root), "writeLatest": True},
+            )
+
+            self.assertEqual(report["schema"], "fluxio.nas_storage_pressure.v1")
+            self.assertTrue(report["measuredUsageAvailable"])
+            self.assertTrue((root / ".agent_control" / "nas_storage_pressure_latest.json").exists())
+
+    def test_backend_attaches_verifier_proof_with_preview_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            run_dir = root / "tmp-ui-checks" / "bridge"
+            run_dir.mkdir(parents=True)
+            screenshot = run_dir / "agent-preview.png"
+            screenshot.write_bytes(b"png-by-extension")
+            report_path = run_dir / "workbench-program-bridge-check.json"
+            report_path.write_text(json.dumps({"passed": True}), encoding="utf-8")
+            backend = FluxioWebBackend(root, root)
+
+            manifest = backend.dispatch(
+                "attach_verifier_proof_command",
+                {
+                    "missionId": "mission_ui",
+                    "flowId": "bridge-flow",
+                    "reportPath": str(report_path),
+                    "artifacts": [{"kind": "screenshot", "label": "Agent Preview", "path": str(screenshot)}],
+                    "checks": [{"checkId": "agent-preview", "passed": True}],
+                },
+            )
+
+            self.assertEqual(manifest["schema"], "fluxio.ui_verifier_proof_attachment.v1")
+            self.assertEqual(manifest["artifactCount"], 2)
+            self.assertTrue(manifest["manifestPreviewUrl"].startswith("/api/artifact?id="))
+            self.assertTrue(all(item["previewUrl"].startswith("/api/artifact?id=") for item in manifest["artifacts"]))
 
 
 if __name__ == "__main__":

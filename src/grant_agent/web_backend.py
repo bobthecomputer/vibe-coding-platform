@@ -49,11 +49,15 @@ from .mission_control import (
     CONTROL_ROOM_SUMMARY_DURATION_BUDGET_MS,
     CONTROL_ROOM_SUMMARY_PAYLOAD_BUDGET_BYTES,
     ControlRoomStore,
+    attach_verifier_proof_bundle,
+    build_live_nas_storage_pressure_report,
     hermes_auth_store_candidates,
+    normalize_agent_turn_mode,
 )
 from .models import MissionEvent
 from .mission_watchdog import ensure_watchdog_supervisor_loop
 from .port_safety import tcp_port_accepts_connection
+from .real_agent_proof import build_real_agent_proof_status, run_real_agent_proof
 from .subprocess_utils import hidden_windows_subprocess_kwargs
 
 
@@ -73,8 +77,16 @@ ADMIN_PASSWORD_RELATIVE_PATH = ".agent_control/grand_agent_admin_password.txt"
 BOOTSTRAP_SUMMARY_CACHE_TTL_SECONDS = 5.0
 FULL_SUMMARY_CACHE_TTL_SECONDS = 8.0
 FULL_SUMMARY_STALE_WHILE_REVALIDATE_SECONDS = 20.0
+RUNTIME_PROOF_STATUS_CACHE_TTL_SECONDS = 45.0
+RUNTIME_PROOF_STATUS_STALE_WHILE_REVALIDATE_SECONDS = 240.0
 PERSISTED_FULL_SUMMARY_CACHE_VERSION = "2026-06-01.proof_safe_progress.v2"
-PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION = "2026-06-09.bridge_lab_bootstrap.v1"
+PERSISTED_BOOTSTRAP_SUMMARY_CACHE_VERSION = "2026-06-18.bounded_bootstrap_summary.v1"
+PERSISTED_RUNTIME_PROOF_STATUS_CACHE_VERSION = "2026-06-18.real_agent_runtime_proof_status.v1"
+CONVERSATION_STATE_VERSION = "2026-06-12.cross_device_conversation_state.v1"
+CONVERSATION_STATE_RELATIVE_PATH = ".agent_control/conversation_state.json"
+CONVERSATION_STATE_MAX_SESSIONS = 80
+CONVERSATION_STATE_MAX_TURNS_PER_SESSION = 160
+CONVERSATION_STATE_MAX_TEXT_CHARS = 12000
 MISSION_DETAIL_CACHE_MAX_ITEMS = 12
 MISSION_DETAIL_PREWARM_DELAY_SECONDS = _env_float(
     "FLUXIO_MISSION_DETAIL_PREWARM_DELAY_SECONDS",
@@ -92,6 +104,24 @@ MISSION_DETAIL_PREWARM_ENABLED = str(
 ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 MISSION_START_TIMEOUT_SECONDS = 1200
 MISSION_ACTION_TIMEOUT_SECONDS = 1200
+AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS = max(
+    int(os.environ.get("FLUXIO_AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS", "120")),
+    15,
+)
+AGENT_CHAT_SETUP_TIMEOUT_SECONDS = max(
+    int(os.environ.get("FLUXIO_AGENT_CHAT_SETUP_TIMEOUT_SECONDS", "30")),
+    5,
+)
+STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
+OPENROUTER_NESTED_MODEL_PREFIXES = (
+    "z-ai/",
+    "deepseek/",
+    "qwen/",
+    "google/",
+    "anthropic/",
+    "meta-llama/",
+    "moonshotai/",
+)
 SESSION_COOKIE_NAME = "grand_agent_session"
 ACCOUNT_ROLES = {"account", "operator", "admin"}
 PASSWORD_ITERATIONS = 240_000
@@ -216,11 +246,20 @@ def _apply_security_headers(
     handler: BaseHTTPRequestHandler,
     *,
     cache_control: str = "no-store",
+    frame_options: str = "DENY",
 ) -> None:
+    handler.close_connection = True
+    handler.send_header("Connection", "close")
     handler.send_header("X-Content-Type-Options", "nosniff")
-    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("X-Frame-Options", frame_options)
     handler.send_header("Referrer-Policy", "no-referrer")
     handler.send_header("Cache-Control", cache_control)
+
+
+def _write_response_body(handler: BaseHTTPRequestHandler, body: bytes, *, chunk_size: int = 16 * 1024) -> None:
+    for offset in range(0, len(body), chunk_size):
+        handler.wfile.write(body[offset : offset + chunk_size])
+        handler.wfile.flush()
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object) -> None:
@@ -231,18 +270,24 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: object
     _apply_security_headers(handler)
     _send_cors_headers(handler)
     handler.end_headers()
-    handler.wfile.write(body)
+    _write_response_body(handler, body)
 
 
-def _html_response(handler: BaseHTTPRequestHandler, status: int, markup: str) -> None:
+def _html_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    markup: str,
+    *,
+    frame_options: str = "DENY",
+) -> None:
     body = markup.encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    _apply_security_headers(handler)
+    _apply_security_headers(handler, frame_options=frame_options)
     _send_cors_headers(handler)
     handler.end_headers()
-    handler.wfile.write(body)
+    _write_response_body(handler, body)
 
 
 def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -261,6 +306,167 @@ def _as_payload(value: object) -> dict[str, Any]:
     if isinstance(nested, dict):
         return nested
     return value
+
+
+def _clamp_conversation_text(value: object, limit: int = CONVERSATION_STATE_MAX_TEXT_CHARS) -> str:
+    text = str(value or "").replace("\x00", "").strip()
+    return text[:limit]
+
+
+def _conversation_state_path(root: Path) -> Path:
+    return root.resolve() / CONVERSATION_STATE_RELATIVE_PATH
+
+
+def _normalize_conversation_storage_mode(value: object) -> str:
+    mode = str(value or "auto").strip().lower().replace("_", "-")
+    if mode in {"local", "this-device", "device"}:
+        return "local"
+    if mode in {"nas", "web", "shared", "remote"}:
+        return "nas"
+    return "auto"
+
+
+def _normalize_conversation_sessions(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        session_id = _clamp_conversation_text(item.get("id"), 160)
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        created_at = _clamp_conversation_text(item.get("createdAt") or item.get("created_at") or _utc_now(), 80)
+        rows.append(
+            {
+                "id": session_id,
+                "workspaceId": _clamp_conversation_text(item.get("workspaceId") or item.get("workspace_id"), 180),
+                "title": _clamp_conversation_text(item.get("title") or "New conversation", 240),
+                "createdAt": created_at,
+                "updatedAt": _clamp_conversation_text(
+                    item.get("updatedAt") or item.get("updated_at") or created_at,
+                    80,
+                ),
+                "lastPreview": _clamp_conversation_text(item.get("lastPreview") or item.get("last_preview"), 280),
+            }
+        )
+    return sorted(rows, key=lambda row: str(row.get("updatedAt") or ""), reverse=True)[:CONVERSATION_STATE_MAX_SESSIONS]
+
+
+def _normalize_conversation_turn(item: object) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    title = _clamp_conversation_text(item.get("title") or item.get("text") or item.get("message"))
+    detail = _clamp_conversation_text(item.get("detail"))
+    if not title and not detail:
+        return None
+    role = str(item.get("role") or "user").strip().lower()
+    if role not in {"assistant", "user"}:
+        role = "user"
+    turn_id = _clamp_conversation_text(item.get("id"), 180) or _safe_identifier(f"turn_{time.time_ns()}", "turn")
+    receipt = item.get("turnReceipt") or item.get("turn_receipt")
+    return {
+        "id": turn_id,
+        "role": role,
+        "title": title or detail,
+        "detail": detail if title and detail != title else "",
+        "meta": _clamp_conversation_text(item.get("meta"), 240),
+        "tone": _clamp_conversation_text(item.get("tone") or "neutral", 40),
+        "pending": bool(item.get("pending")),
+        "conversationTurn": bool(item.get("conversationTurn") or item.get("conversation_turn")),
+        "messageKind": _clamp_conversation_text(item.get("messageKind") or item.get("message_kind"), 80),
+        "source": _clamp_conversation_text(item.get("source"), 120),
+        "technicalDetail": _clamp_conversation_text(item.get("technicalDetail") or item.get("technical_detail")),
+        "turnReceipt": receipt if isinstance(receipt, dict) else None,
+        "chips": [
+            _clamp_conversation_text(value, 80)
+            for value in (item.get("chips") if isinstance(item.get("chips"), list) else [])
+        ][:6],
+        "createdAt": _clamp_conversation_text(item.get("createdAt") or item.get("created_at") or _utc_now(), 80),
+    }
+
+
+def _normalize_conversation_transcripts(payload: object) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    for raw_session_id, turns in payload.items():
+        session_id = _clamp_conversation_text(raw_session_id, 160)
+        if not session_id or not isinstance(turns, list):
+            continue
+        session_turns: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in turns:
+            turn = _normalize_conversation_turn(item)
+            if not turn:
+                continue
+            dedupe_key = str(turn.get("id") or f"{turn.get('role')}:{turn.get('title')}:{turn.get('createdAt')}")
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            session_turns.append(turn)
+        session_turns.sort(key=lambda row: str(row.get("createdAt") or ""))
+        if session_turns:
+            normalized[session_id] = session_turns[-CONVERSATION_STATE_MAX_TURNS_PER_SESSION:]
+    return normalized
+
+
+def _normalize_conversation_state_payload(payload: object, *, root: Path) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    state = source.get("state") if isinstance(source.get("state"), dict) else source
+    saved_at = _utc_now()
+    return {
+        "schema": "fluxio.conversation_state.v1",
+        "version": CONVERSATION_STATE_VERSION,
+        "storageMode": _normalize_conversation_storage_mode(
+            state.get("storageMode") or state.get("storage_mode") or source.get("storageMode") or source.get("storage_mode")
+        ),
+        "activeChatSessionId": _clamp_conversation_text(
+            state.get("activeChatSessionId") or state.get("active_chat_session_id"),
+            160,
+        ),
+        "chatSessions": _normalize_conversation_sessions(state.get("chatSessions") or state.get("chat_sessions") or []),
+        "chatSessionTranscripts": _normalize_conversation_transcripts(
+            state.get("chatSessionTranscripts") or state.get("chat_session_transcripts") or {}
+        ),
+        "workspaceRoot": str(root.resolve()),
+        "savedAt": saved_at,
+        "updatedAt": saved_at,
+    }
+
+
+def _load_conversation_state(root: Path) -> dict[str, Any]:
+    path = _conversation_state_path(root)
+    if not path.exists():
+        state = _normalize_conversation_state_payload({}, root=root)
+        state.update({"exists": False, "path": str(path)})
+        return state
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    state = _normalize_conversation_state_payload(payload, root=root)
+    state.update(
+        {
+            "exists": True,
+            "path": str(path),
+            "savedAt": _clamp_conversation_text(payload.get("savedAt") if isinstance(payload, dict) else "", 80)
+            or state["savedAt"],
+            "updatedAt": _clamp_conversation_text(payload.get("updatedAt") if isinstance(payload, dict) else "", 80)
+            or state["updatedAt"],
+        }
+    )
+    return state
+
+
+def _save_conversation_state(root: Path, payload: object) -> dict[str, Any]:
+    state = _normalize_conversation_state_payload(payload, root=root)
+    path = _conversation_state_path(root)
+    state.update({"exists": True, "path": str(path)})
+    _write_private_json(path, state)
+    return state
 
 
 def _utc_now() -> str:
@@ -616,19 +822,29 @@ def _run_process(
 ) -> dict[str, Any]:
     env = os.environ.copy()
     env.update(extra_env or {})
-    completed = subprocess.run(  # noqa: S603
-        args,
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-        stdin=subprocess.DEVNULL,
-        **hidden_windows_subprocess_kwargs(),
-    )
+    try:
+        completed = subprocess.run(  # noqa: S603
+            args,
+            cwd=str(cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            **hidden_windows_subprocess_kwargs(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = _clean_terminal_text(exc.stdout or "")
+        stderr = _clean_terminal_text(exc.stderr or "")
+        detail = stderr.strip() or stdout.strip()
+        command_name = Path(str(args[0] or "runtime")).name
+        message = f"{command_name} timed out after {timeout} seconds without returning a readable model reply."
+        if detail:
+            message = f"{message} Last output: {detail[:500]}"
+        raise RuntimeError(message) from exc
     payload = _parse_process_payload(completed.stdout, completed.stderr)
     if completed.returncode != 0:
         message = ""
@@ -648,35 +864,74 @@ def _run_process_capture(
     env = os.environ.copy()
     env.update(extra_env or {})
     started = time.perf_counter()
-    completed = subprocess.run(  # noqa: S603
+    process = subprocess.Popen(  # noqa: S603
         args,
         cwd=str(cwd),
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout,
-        check=False,
         stdin=subprocess.DEVNULL,
         **hidden_windows_subprocess_kwargs(),
     )
+    try:
+        raw_stdout, raw_stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        stdout = _clean_terminal_text(exc.stdout or "")
+        stderr = _clean_terminal_text(exc.stderr or "")
+        _terminate_process_tree(process)
+        try:
+            tail_stdout, tail_stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            tail_stdout, tail_stderr = "", ""
+        stdout = _clean_terminal_text(stdout or tail_stdout or "")
+        stderr = _clean_terminal_text(stderr or tail_stderr or "")
+        detail = stderr.strip() or stdout.strip()
+        command_name = Path(str(args[0] or "runtime")).name
+        message = f"{command_name} timed out after {timeout} seconds without returning a readable model reply."
+        if detail:
+            message = f"{message} Last output: {detail[:500]}"
+        raise RuntimeError(message) from exc
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    stdout = _clean_terminal_text(completed.stdout or "")
-    stderr = _clean_terminal_text(completed.stderr or "")
+    stdout = _clean_terminal_text(raw_stdout or "")
+    stderr = _clean_terminal_text(raw_stderr or "")
     payload = _parse_process_payload(stdout, stderr)
-    if completed.returncode != 0:
+    if process.returncode != 0:
         message = ""
         if isinstance(payload, dict):
             message = str(payload.get("error") or payload.get("message") or payload.get("output") or "")
-        raise RuntimeError(message or stderr.strip() or stdout.strip() or f"{args[0]} failed with exit code {completed.returncode}")
+        raise RuntimeError(message or stderr.strip() or stdout.strip() or f"{args[0]} failed with exit code {process.returncode}")
     return payload, stdout, stderr, elapsed_ms
+
+
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt" and process.pid:
+        subprocess.run(  # noqa: S603
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+            **hidden_windows_subprocess_kwargs(),
+        )
+        return
+    process.kill()
 
 
 def _parse_json_objects_from_text(raw: str) -> list[dict[str, Any]]:
     objects: list[dict[str, Any]] = []
     for line in str(raw or "").splitlines():
-        candidate = line.strip()
+        candidate = _clean_terminal_text(line).strip()
+        if not candidate:
+            continue
+        if STRUCTURED_EVENT_PREFIX in candidate:
+            candidate = candidate.split(STRUCTURED_EVENT_PREFIX, 1)[1].strip()
         if not candidate.startswith("{"):
             continue
         try:
@@ -686,6 +941,44 @@ def _parse_json_objects_from_text(raw: str) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             objects.append(payload)
     return objects
+
+
+def _extract_fluxio_event_reply(raw: str) -> str:
+    for event in reversed(_parse_json_objects_from_text(raw)):
+        kind = str(event.get("kind") or event.get("type") or "").strip().lower()
+        message = str(event.get("message") or event.get("summary") or "").strip()
+        if message and kind in {"runtime.model_message", "model.message", "assistant.message"}:
+            return message
+    return ""
+
+
+def _chat_model_id(provider: str, model: str) -> str:
+    provider = str(provider or "").strip()
+    value = str(model or "").strip()
+    if not value:
+        return ""
+    if not provider:
+        return value
+    if value.startswith(f"{provider}/"):
+        return value
+    if provider == "openrouter" and value.startswith(OPENROUTER_NESTED_MODEL_PREFIXES):
+        return f"openrouter/{value}"
+    if "/" in value:
+        return value
+    return f"{provider}/{value}"
+
+
+def _normalize_chat_model(provider: str, model: str) -> str:
+    value = str(model or "").strip()
+    normalized = value.lower()
+    if provider == "openrouter":
+        if normalized in {"glm-5.2", "glm5.2", "glm_5.2"}:
+            return "z-ai/glm-5.2"
+        if normalized in {"glm-5", "glm5", "glm_5"}:
+            return "z-ai/glm-5"
+        if normalized.startswith("openrouter/"):
+            return value.split("/", 1)[1]
+    return value
 
 
 def _push_tool_timeline_event(
@@ -762,8 +1055,24 @@ def _chat_runtime_evidence_from_process(
         item = event.get("item") if isinstance(event.get("item"), dict) else {}
         item_type = str(item.get("item_type") or item.get("type") or "").strip().lower()
         command = str(item.get("command") or "").strip()
-        status = str(item.get("status") or "").strip().lower() or "recorded"
-        if command and item_type in {"command_execution", "command"}:
+        status = str(event.get("status") or item.get("status") or "").strip().lower() or "recorded"
+        if event_type == "runtime.model_message":
+            _push_tool_timeline_event(
+                timeline,
+                kind="runtime.model_message",
+                summary=str(event.get("message") or event.get("summary") or ""),
+                at=now,
+                status=status,
+            )
+        elif event_type.startswith("runtime.") or event_type.startswith("approval."):
+            _push_tool_timeline_event(
+                timeline,
+                kind=event_type,
+                summary=str(event.get("message") or event.get("summary") or event_type),
+                at=now,
+                status=status,
+            )
+        elif command and item_type in {"command_execution", "command"}:
             _push_tool_timeline_event(
                 timeline,
                 kind="command.execution",
@@ -913,6 +1222,11 @@ def _extract_model_reply(payload: dict[str, Any]) -> str:
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
             stripped = candidate.strip()
+            fluxio_reply = _extract_fluxio_event_reply(stripped)
+            if fluxio_reply:
+                return fluxio_reply
+            if STRUCTURED_EVENT_PREFIX in stripped:
+                continue
             if stripped[:1] in {"{", "["}:
                 try:
                     parsed = json.loads(stripped)
@@ -2576,6 +2890,50 @@ def _minimax_openclaw_connect_page(region: object = None) -> str:
 </html>"""
 
 
+def _browser_click_probe_page() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fluxio Click Probe</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #070b0c; color: #f6f7f8; }
+    main { width: min(680px, calc(100vw - 40px)); display: grid; gap: 18px; }
+    h1 { margin: 0; font-size: clamp(34px, 7vw, 64px); line-height: .96; letter-spacing: 0; }
+    p { margin: 0; max-width: 54ch; color: rgba(238, 243, 245, .74); font-size: 17px; line-height: 1.45; }
+    button { width: fit-content; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: #093d37; color: #fff; padding: 16px 24px; font-size: 17px; font-weight: 800; cursor: pointer; }
+    button:hover, button:focus-visible { border-color: rgba(45, 255, 222, .72); outline: none; background: #0a5349; }
+    output { color: #2dffde; font-size: 18px; font-weight: 850; }
+    .proof { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  </style>
+</head>
+<body>
+  <main data-fluxio-click-probe="true">
+    <h1>Fluxio Click Probe</h1>
+    <p>This is a real local program served by the Fluxio backend. If the button increments, Preview can render a program and pass mouse clicks into it.</p>
+    <div class="proof">
+      <button id="bridge-click" type="button" data-bridge-click-button="true">Send bridge click</button>
+      <output id="click-count" data-click-count="0">Clicks received by program: 0</output>
+    </div>
+  </main>
+  <script>
+    const button = document.getElementById('bridge-click');
+    const count = document.getElementById('click-count');
+    let clicks = 0;
+    button.addEventListener('click', () => {
+      clicks += 1;
+      count.dataset.clickCount = String(clicks);
+      count.textContent = `Clicks received by program: ${clicks}`;
+      window.parent?.postMessage({ type: 'fluxio.browserClickProbe', clicks }, window.location.origin);
+    });
+  </script>
+</body>
+</html>"""
+
+
 def _codex_import_snapshot() -> dict[str, Any]:
     candidates = [
         Path.home() / ".codex",
@@ -2592,6 +2950,49 @@ def _codex_import_snapshot() -> dict[str, Any]:
             if existing
             else ["Codex local data is not visible to the web backend process."]
         ),
+    }
+
+
+def _save_codex_skill_file(payload: dict[str, Any]) -> dict[str, Any]:
+    path_value = str(
+        payload.get("path")
+        or payload.get("sourcePath")
+        or payload.get("source_path")
+        or ""
+    ).strip()
+    content = str(
+        payload.get("content")
+        or payload.get("instructions")
+        or payload.get("body")
+        or ""
+    )
+    if not path_value:
+        raise RuntimeError("Skill source path is required.")
+    if not content.strip():
+        raise RuntimeError("Skill content is empty.")
+    skills_root = (Path.home() / ".codex" / "skills").resolve()
+    target = Path(path_value).expanduser().resolve()
+    if target.name != "SKILL.md":
+        raise RuntimeError("Only SKILL.md skill files can be saved from the Skills page.")
+    try:
+        target.relative_to(skills_root)
+    except ValueError as exc:
+        raise RuntimeError("Skill file must live under the local Codex skills directory.") from exc
+    if not target.exists():
+        raise RuntimeError(f"Skill file does not exist: {target}")
+    original = target.read_text(encoding="utf-8")
+    backup = target.with_suffix(f".md.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
+    backup.write_text(original, encoding="utf-8")
+    target.write_text(content.rstrip() + "\n", encoding="utf-8")
+    saved_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "schema": "fluxio.codex_skill_save_receipt.v1",
+        "ok": True,
+        "skillId": str(payload.get("skillId") or payload.get("skill_id") or target.parent.name),
+        "path": str(target),
+        "fileName": target.name,
+        "backupPath": str(backup),
+        "savedAt": saved_at,
     }
 
 
@@ -2628,6 +3029,9 @@ class FluxioWebBackend:
         self._mission_detail_cache_lock = threading.Lock()
         self._mission_detail_cache: dict[str, tuple[tuple[tuple[str, int, int], ...], float, dict[str, Any]]] = {}
         self._mission_detail_prewarm_keys: set[str] = set()
+        self._runtime_proof_status_cache_lock = threading.Lock()
+        self._runtime_proof_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._runtime_proof_status_revalidation_keys: set[str] = set()
 
     @property
     def username(self) -> str:
@@ -2868,6 +3272,8 @@ class FluxioWebBackend:
                     cwd=str(root),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=8,
                     check=False,
                     env={**os.environ, **env},
@@ -2937,6 +3343,88 @@ class FluxioWebBackend:
         if fast_control_room:
             env["FLUXIO_CONTROL_ROOM_FAST"] = "1"
         return _run_cli(root, command, args, timeout=timeout, extra_env=env)
+
+    def _run_authenticated_live_agent_proof(self, payload: dict[str, Any]) -> dict[str, Any]:
+        root = Path(payload.get("root") or self.root).resolve()
+        mission_id = str(payload.get("missionId") or payload.get("mission_id") or "").strip()
+        if not mission_id:
+            raise RuntimeError("missionId is required for authenticated Agent UI proof capture.")
+        script = root / "scripts" / "verify_authenticated_live_agent.py"
+        if not script.exists():
+            raise RuntimeError(f"Authenticated live-Agent verifier is missing: {script}")
+        out_dir = Path(
+            str(
+                payload.get("outDir")
+                or payload.get("out_dir")
+                or root / "tmp-ui-checks" / "authenticated-live-agent"
+            )
+        )
+        if not out_dir.is_absolute():
+            out_dir = root / out_dir
+        name = _safe_identifier(
+            payload.get("name") or f"real-agent-agent-ui-{mission_id}",
+            "real-agent-agent-ui",
+        )
+        timeout_ms = max(30000, min(600000, int(payload.get("timeoutMs") or payload.get("timeout_ms") or 120000)))
+        args = [
+            sys.executable,
+            str(script),
+            "--mission-id",
+            mission_id,
+            "--out-dir",
+            str(out_dir),
+            "--name",
+            name,
+            "--global-timeout-ms",
+            str(timeout_ms),
+        ]
+        url = str(payload.get("url") or "").strip()
+        if url:
+            args.extend(["--url", url])
+        browser = str(payload.get("browser") or "").strip()
+        if browser:
+            args.extend(["--browser", browser])
+        env = os.environ.copy()
+        src_path = root / "src"
+        if src_path.exists():
+            existing_pythonpath = str(env.get("PYTHONPATH", "")).strip()
+            env["PYTHONPATH"] = (
+                f"{src_path}{os.pathsep}{existing_pythonpath}"
+                if existing_pythonpath
+                else str(src_path)
+            )
+        env.update(self._provider_env())
+        completed = subprocess.run(  # noqa: S603
+            args,
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(60, int(timeout_ms / 1000) + 30),
+            check=False,
+            **hidden_windows_subprocess_kwargs(),
+        )
+        report = _parse_process_payload(completed.stdout, completed.stderr)
+        report_path = out_dir / f"{name}-check.json"
+        if not report and report_path.exists():
+            try:
+                loaded = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                loaded = {}
+            report = loaded if isinstance(loaded, dict) else {}
+        return {
+            "schema": "fluxio.authenticated_live_agent_proof_run.v1",
+            "ok": completed.returncode == 0 and bool(report.get("ok")),
+            "returnCode": completed.returncode,
+            "missionId": mission_id,
+            "report": report,
+            "reportPath": str(report_path),
+            "stdoutPreview": _clamp_conversation_text(completed.stdout, 800),
+            "stderrPreview": _clamp_conversation_text(completed.stderr, 800),
+            "proofStatus": build_real_agent_proof_status(root),
+        }
 
     def _build_control_room_summary(self, root: Path) -> dict[str, Any]:
         return self._with_provider_env(lambda: ControlRoomStore(root).build_summary_snapshot())
@@ -3627,6 +4115,189 @@ class FluxioWebBackend:
             freshness="rebuilt",
         )
 
+    def _annotate_runtime_proof_status_cache(
+        self,
+        payload: dict[str, Any],
+        *,
+        status: str,
+        cached_at: float | None,
+        freshness: str,
+        age_ms: float | None = None,
+    ) -> dict[str, Any]:
+        annotated = copy.deepcopy(payload)
+        annotated["runtimeProofStatusCache"] = {
+            "schema": "fluxio.real_agent_runtime_proof_status_cache.v1",
+            "status": status,
+            "freshness": freshness,
+            "ttlSeconds": RUNTIME_PROOF_STATUS_CACHE_TTL_SECONDS,
+            "staleWhileRevalidateSeconds": RUNTIME_PROOF_STATUS_STALE_WHILE_REVALIDATE_SECONDS,
+            "ageMs": round(age_ms, 2)
+            if age_ms is not None
+            else round((time.monotonic() - cached_at) * 1000, 2) if cached_at else 0,
+        }
+        return annotated
+
+    @staticmethod
+    def _persisted_runtime_proof_status_cache_path(root: Path) -> Path:
+        return root / ".agent_control" / "real_agent_runtime_proof_status_cache.json"
+
+    @classmethod
+    def _runtime_proof_status_cache_paths(cls, root: Path) -> list[Path]:
+        return [
+            cls._persisted_runtime_proof_status_cache_path(root),
+            cls._temporary_control_room_cache_path(root, "real_agent_runtime_proof_status_cache.json"),
+        ]
+
+    @staticmethod
+    def _runtime_proof_cache_age_seconds(written_at: object) -> float | None:
+        text = str(written_at or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
+
+    def _load_persisted_runtime_proof_status_cache(self, root: Path) -> tuple[dict[str, Any], float] | None:
+        for path in self._runtime_proof_status_cache_paths(root):
+            try:
+                cache_payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(cache_payload, dict):
+                continue
+            if cache_payload.get("cacheVersion") != PERSISTED_RUNTIME_PROOF_STATUS_CACHE_VERSION:
+                continue
+            status_payload = cache_payload.get("status")
+            if not isinstance(status_payload, dict):
+                continue
+            if status_payload.get("schema") != "fluxio.real_agent_runtime_proof_status.v1":
+                continue
+            age_seconds = self._runtime_proof_cache_age_seconds(cache_payload.get("writtenAt"))
+            if age_seconds is None or age_seconds > RUNTIME_PROOF_STATUS_STALE_WHILE_REVALIDATE_SECONDS:
+                continue
+            status_payload = copy.deepcopy(status_payload)
+            status_payload.pop("runtimeProofStatusCache", None)
+            return status_payload, age_seconds
+        return None
+
+    def _write_persisted_runtime_proof_status_cache(self, root: Path, payload: dict[str, Any]) -> None:
+        primary_path, temporary_path = self._runtime_proof_status_cache_paths(root)
+        path = primary_path
+        try:
+            if shutil.disk_usage(path.parent).free < 2_000_000:
+                path = temporary_path
+        except OSError:
+            path = temporary_path
+        cache_status = copy.deepcopy(payload)
+        cache_status.pop("runtimeProofStatusCache", None)
+        cache_payload = {
+            "schema": "fluxio.real_agent_runtime_proof_status_persisted_cache.v1",
+            "cacheVersion": PERSISTED_RUNTIME_PROOF_STATUS_CACHE_VERSION,
+            "writtenAt": _utc_now(),
+            "status": cache_status,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+        try:
+            tmp_path.write_text(json.dumps(cache_payload, separators=(",", ":"), default=str), encoding="utf-8")
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            tmp_path.replace(path)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _cached_real_agent_runtime_proof_status(self, root: Path) -> dict[str, Any]:
+        cache_key = str(root.resolve())
+        now = time.monotonic()
+        with self._runtime_proof_status_cache_lock:
+            cached = self._runtime_proof_status_cache.get(cache_key)
+            cached_age = now - cached[0] if cached else 0.0
+            if cached and cached_age <= RUNTIME_PROOF_STATUS_CACHE_TTL_SECONDS:
+                return self._annotate_runtime_proof_status_cache(
+                    cached[1],
+                    status="hit",
+                    cached_at=cached[0],
+                    freshness="fresh-cache",
+                )
+            if (
+                cached
+                and cached_age <= RUNTIME_PROOF_STATUS_STALE_WHILE_REVALIDATE_SECONDS
+            ):
+                if cache_key not in self._runtime_proof_status_revalidation_keys:
+                    self._runtime_proof_status_revalidation_keys.add(cache_key)
+                    self._start_runtime_proof_status_revalidate(root, cache_key)
+                return self._annotate_runtime_proof_status_cache(
+                    cached[1],
+                    status="stale-hit",
+                    cached_at=cached[0],
+                    freshness="stale-while-revalidate",
+                )
+
+        persisted = self._load_persisted_runtime_proof_status_cache(root)
+        if persisted is not None:
+            persisted_payload, persisted_age_seconds = persisted
+            cached_at = time.monotonic() - min(
+                persisted_age_seconds,
+                RUNTIME_PROOF_STATUS_STALE_WHILE_REVALIDATE_SECONDS,
+            )
+            with self._runtime_proof_status_cache_lock:
+                self._runtime_proof_status_cache[cache_key] = (cached_at, copy.deepcopy(persisted_payload))
+                if (
+                    persisted_age_seconds > RUNTIME_PROOF_STATUS_CACHE_TTL_SECONDS
+                    and cache_key not in self._runtime_proof_status_revalidation_keys
+                ):
+                    self._runtime_proof_status_revalidation_keys.add(cache_key)
+                    self._start_runtime_proof_status_revalidate(root, cache_key)
+            return self._annotate_runtime_proof_status_cache(
+                persisted_payload,
+                status="disk-hit" if persisted_age_seconds <= RUNTIME_PROOF_STATUS_CACHE_TTL_SECONDS else "disk-stale-hit",
+                cached_at=cached_at,
+                freshness="persisted-cache"
+                if persisted_age_seconds <= RUNTIME_PROOF_STATUS_CACHE_TTL_SECONDS
+                else "persisted-stale-while-revalidate",
+                age_ms=persisted_age_seconds * 1000,
+            )
+
+        payload = build_real_agent_proof_status(root)
+        with self._runtime_proof_status_cache_lock:
+            self._runtime_proof_status_cache[cache_key] = (time.monotonic(), copy.deepcopy(payload))
+        self._write_persisted_runtime_proof_status_cache(root, payload)
+        return self._annotate_runtime_proof_status_cache(
+            payload,
+            status="miss",
+            cached_at=None,
+            freshness="rebuilt",
+        )
+
+    def _start_runtime_proof_status_revalidate(self, root: Path, cache_key: str) -> None:
+        worker = threading.Thread(
+            target=self._run_runtime_proof_status_revalidate,
+            args=(root, cache_key),
+            daemon=True,
+        )
+        worker.start()
+
+    def _run_runtime_proof_status_revalidate(self, root: Path, cache_key: str) -> None:
+        try:
+            payload = build_real_agent_proof_status(root)
+            with self._runtime_proof_status_cache_lock:
+                self._runtime_proof_status_cache[cache_key] = (time.monotonic(), copy.deepcopy(payload))
+            self._write_persisted_runtime_proof_status_cache(root, payload)
+        except Exception:
+            pass
+        finally:
+            with self._runtime_proof_status_cache_lock:
+                self._runtime_proof_status_revalidation_keys.discard(cache_key)
+
     def _annotate_control_room_bootstrap_cache(
         self,
         payload: dict[str, Any],
@@ -3867,6 +4538,111 @@ class FluxioWebBackend:
 
     def _artifact_url(self, path: Path) -> str:
         return f"/api/artifact?id={self._artifact_id(path)}"
+
+    def _write_preview_bridge_proof(self, payload: dict[str, Any]) -> dict[str, Any]:
+        mission_id = _safe_identifier(
+            payload.get("missionId") or payload.get("mission_id") or "preview_program_bridge",
+            "preview_program_bridge",
+        )
+        checked_at = _utc_now()
+        stamp = re.sub(r"[^0-9]", "", checked_at)[:14] or str(int(time.time()))
+        proof_dir = self.root / ".agent_control" / "mission_artifacts" / mission_id / "preview_bridge_proof"
+        proof_dir.mkdir(parents=True, exist_ok=True)
+
+        screenshots = payload.get("screenshots") if isinstance(payload.get("screenshots"), dict) else {}
+        checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+        folder_browser = payload.get("folderBrowser") if isinstance(payload.get("folderBrowser"), dict) else {}
+        all_checks_passed = bool(checks) and all(
+            isinstance(item, dict) and bool(item.get("passed"))
+            for item in checks
+        )
+        clicked_count = int(payload.get("clicks") or payload.get("clickCount") or 0)
+        proof = {
+            "schema": "fluxio.preview_bridge_proof.v1",
+            "missionId": mission_id,
+            "checkedAt": checked_at,
+            "status": "passed" if all_checks_passed else "incomplete",
+            "source": str(payload.get("source") or "scripts/verify_workbench_program_bridge.py"),
+            "baseUrl": str(payload.get("baseUrl") or ""),
+            "backendUrl": str(payload.get("backendUrl") or ""),
+            "programUrl": str(payload.get("programUrl") or ""),
+            "previewUrl": str(payload.get("previewUrl") or payload.get("programUrl") or ""),
+            "reportPath": str(payload.get("reportPath") or ""),
+            "screenshots": screenshots,
+            "checks": checks,
+            "clickProof": {
+                "clicks": clicked_count,
+                "passed": clicked_count > 0,
+            },
+            "folderBrowser": folder_browser,
+            "proofArtifacts": [],
+        }
+        proof_path = proof_dir / f"{stamp}_preview_bridge_proof.json"
+        tmp_path = proof_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+        tmp_path.replace(proof_path)
+        proof_artifact = {
+            "kind": "preview_bridge_proof",
+            "path": str(proof_path),
+            "previewUrl": self._artifact_url(proof_path),
+            "status": proof["status"],
+        }
+        proof["proofArtifacts"] = [proof_artifact]
+        proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+
+        screenshot_path = str(
+            screenshots.get("agentPreviewAfterClick")
+            or screenshots.get("previewAfterClick")
+            or screenshots.get("agentPreviewWindow")
+            or screenshots.get("folderBrowser")
+            or ""
+        )
+        receipt_payload: dict[str, Any]
+        try:
+            receipt = record_delivery_receipt(
+                self.root,
+                mission_id=mission_id,
+                channel="preview_bridge_verifier",
+                destination="control_room",
+                event_kind="preview.bridge.proof_attached",
+                event_message=(
+                    "Preview bridge proof attached: Agent exposed Preview, rendered the local "
+                    "program, delivered a mouse click, and opened the folder browser."
+                    if all_checks_passed
+                    else "Preview bridge proof was recorded but at least one verifier check is incomplete."
+                ),
+                status="delivered" if all_checks_passed else "error",
+                error_message="" if all_checks_passed else "One or more preview bridge checks did not pass.",
+                delivery_url=proof_artifact["previewUrl"],
+                origin_runtime=str(payload.get("runtime") or "bridge-verifier"),
+                origin_provider=str(payload.get("provider") or "local"),
+                origin_model=str(payload.get("model") or "cdp"),
+                transport_provider="local_http_cdp",
+                producer="scripts/verify_workbench_program_bridge.py",
+                mission_title=str(payload.get("missionTitle") or "Preview program bridge proof"),
+                source_session_id=str(payload.get("sessionId") or mission_id),
+                evidence_path=str(proof_path),
+                screenshot_path=screenshot_path,
+            )
+            receipt_payload = asdict(receipt)
+        except Exception as exc:  # pragma: no cover - receipt backend can be absent in focused harnesses
+            receipt_payload = {
+                "status": "error",
+                "errorMessage": str(exc),
+                "evidencePath": str(proof_path),
+                "screenshotPath": screenshot_path,
+            }
+
+        return {
+            "schema": "fluxio.preview_bridge_attachment.v1",
+            "attached": True,
+            "missionId": mission_id,
+            "proofPath": str(proof_path),
+            "proofUrl": proof_artifact["previewUrl"],
+            "proofArtifacts": [proof_artifact],
+            "receipt": receipt_payload,
+            "checksPassed": all_checks_passed,
+        }
 
     def _image_provider_id(self, payload: dict[str, Any]) -> str:
         provider_raw = payload.get("provider")
@@ -4334,7 +5110,7 @@ class FluxioWebBackend:
                 if str(item.get("kind") or "").lower() in {"command.execution", "command"}:
                     command = str(item.get("summary") or "")
                     break
-        status = receipt.get("status") or ("completed" if str(result.get("reply") or "").strip() else "completed_no_reply")
+        status = receipt.get("status") or result.get("status") or ("completed" if str(result.get("reply") or "").strip() else "completed_no_reply")
         source_type = str(payload.get("sourceType") or payload.get("source_type") or "chat").strip() or "chat"
         assistant_message = self._normalize_receipt_assistant_message(
             [
@@ -4360,6 +5136,40 @@ class FluxioWebBackend:
             or result.get("resultSummary")
             or ""
         ).strip()
+        proof_artifacts: list[dict[str, Any]] = []
+        for candidate in (
+            receipt.get("proofArtifacts"),
+            result.get("proofArtifacts"),
+            payload.get("proofArtifacts"),
+        ):
+            if not isinstance(candidate, list):
+                continue
+            for item in candidate:
+                if isinstance(item, dict):
+                    proof_artifacts.append(dict(item))
+        for key, kind in (
+            ("previewUrl", "preview"),
+            ("artifactUrl", "artifact"),
+            ("outputArtifactPath", "output_artifact"),
+            ("manifestPath", "manifest"),
+            ("reportPath", "report"),
+            ("proofPath", "proof"),
+        ):
+            value = str(result.get(key) or payload.get(key) or "").strip()
+            if value:
+                proof_artifacts.append({"kind": kind, "path" if not value.startswith(("http://", "https://", "/api/")) else "url": value})
+        deduped_proof_artifacts: list[dict[str, Any]] = []
+        seen_proof_artifacts: set[tuple[str, str, str]] = set()
+        for item in proof_artifacts:
+            key = (
+                str(item.get("kind") or ""),
+                str(item.get("path") or ""),
+                str(item.get("url") or item.get("previewUrl") or ""),
+            )
+            if key in seen_proof_artifacts:
+                continue
+            seen_proof_artifacts.add(key)
+            deduped_proof_artifacts.append(item)
         return {
             "schema": "fluxio.turn_receipt.v1",
             "sessionId": receipt.get("sessionId") or session_id,
@@ -4370,9 +5180,9 @@ class FluxioWebBackend:
             "commentText": receipt.get("commentText") or str(payload.get("commentText") or ""),
             "command": command or "Not reported",
             "runtime": receipt.get("runtime") or str(result.get("runtime") or payload.get("runtime") or "Not reported"),
-            "provider": receipt.get("provider") or str(route.get("provider") or "Not reported"),
-            "model": receipt.get("model") or str(route.get("model_id") or route.get("model") or "Not reported"),
-            "effort": receipt.get("effort") or str(route.get("effort") or "Not reported"),
+            "provider": receipt.get("provider") or str(result.get("provider") or payload.get("provider") or route.get("provider") or "Not reported"),
+            "model": receipt.get("model") or str(result.get("model") or result.get("model_id") or payload.get("model") or route.get("model_id") or route.get("model") or "Not reported"),
+            "effort": receipt.get("effort") or str(result.get("effort") or payload.get("effort") or route.get("effort") or "Not reported"),
             "status": str(status),
             "exitCode": receipt.get("exitCode", result.get("exitCode", result.get("exit_code", ""))),
             "startedAt": receipt.get("startedAt") or str(payload.get("requestStartedAt") or ""),
@@ -4388,7 +5198,7 @@ class FluxioWebBackend:
             "modelMessageSourceId": receipt.get("modelMessageSourceId") or str(result.get("modelMessageSourceId") or ""),
             "transcriptSessionId": receipt.get("transcriptSessionId") or str(result.get("transcriptSessionId") or ""),
             "runSummary": run_summary,
-            "proofArtifacts": receipt.get("proofArtifacts") if isinstance(receipt.get("proofArtifacts"), list) else [],
+            "proofArtifacts": deduped_proof_artifacts[:30],
         }
 
     def _save_chat_compartment(self, payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -4500,6 +5310,19 @@ class FluxioWebBackend:
                 }
             )
         turn_receipt["toolTimeline"] = timeline[-30:]
+        proof_artifacts = turn_receipt.get("proofArtifacts") if isinstance(turn_receipt.get("proofArtifacts"), list) else []
+        result_status = str(result.get("status") or turn_receipt.get("status") or "completed").strip().lower()
+        result_error = str(result.get("error") or result.get("errorMessage") or "").strip()
+        if proof_artifacts:
+            timeline.append(
+                {
+                    "kind": "proof.artifact_attached",
+                    "at": now,
+                    "summary": f"Attached {len(proof_artifacts)} proof artifact(s) to this turn receipt.",
+                    "status": "recorded",
+                }
+            )
+            turn_receipt["toolTimeline"] = timeline[-30:]
         messages = previous.get("messages") if isinstance(previous.get("messages"), list) else []
         operator_message = str(payload.get("message") or "").strip()
         if operator_message:
@@ -4514,16 +5337,18 @@ class FluxioWebBackend:
             "cwd": workspace_path,
             "route": route,
             "host": os.environ.get("COMPUTERNAME") or (os.uname().nodename if hasattr(os, "uname") else ""),
-            "state": "ready",
-            "streaming": "recorded",
+            "state": "failed" if result_status in {"failed", "error", "timeout"} else "ready",
+            "streaming": "failed" if result_status in {"failed", "error", "timeout"} else "recorded",
             "messages": messages[-40:],
             "toolTimeline": timeline[-30:],
             "lanes": lanes,
             "filesChanged": changed_files[:30],
+            "proofArtifacts": proof_artifacts[:30],
             "turnReceipt": turn_receipt,
             "turnReceipts": [*previous_receipts, turn_receipt][-20:],
             "approvals": [],
-            "blockers": [],
+            "blockers": [result_error] if result_error else [],
+            "errors": [result_error] if result_error else [],
             "actions": ["resume-chat", "open-proof", "restart"],
             "restartControls": {
                 "canRestart": True,
@@ -4609,6 +5434,12 @@ class FluxioWebBackend:
             "minimax-cn": "minimax",
             "anthropic": "anthropic",
             "openrouter": "openrouter",
+            "opencon": "openrouter",
+            "opencon-pro": "openrouter",
+            "openconpro": "openrouter",
+            "deepseek": "openrouter",
+            "opencode-go": "opencode-go",
+            "opencodego": "opencode-go",
             "gemini": "gemini",
             "huggingface": "huggingface",
             "zai": "zai",
@@ -4620,7 +5451,10 @@ class FluxioWebBackend:
     def _chat_route(self, payload: dict[str, Any]) -> dict[str, str]:
         route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
         provider = self._openclaw_provider_for_route(route.get("provider") or payload.get("provider") or "openai-codex")
-        model = str(route.get("model") or payload.get("model") or OPENAI_CODEX_DEFAULT_MODEL).strip()
+        model = _normalize_chat_model(
+            provider,
+            str(route.get("model") or payload.get("model") or OPENAI_CODEX_DEFAULT_MODEL).strip(),
+        )
         if provider in {"minimax", "minimax-cn", "minimax-portal"} and model.lower() in {
             "minimax-m2.7",
             "minimax-m2.7-highspeed",
@@ -4631,7 +5465,7 @@ class FluxioWebBackend:
             model = "MiniMax-M3"
         effort = str(route.get("effort") or payload.get("effort") or "high").strip().lower()
         role = str(route.get("role") or payload.get("role") or "executor").strip().lower()
-        model_id = model if "/" in model else f"{provider}/{model}" if provider and model else model
+        model_id = _chat_model_id(provider, model)
         return {
             "provider": provider,
             "model": model,
@@ -4640,18 +5474,94 @@ class FluxioWebBackend:
             "role": role,
         }
 
-    def _run_openclaw_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = _chat_prompt(payload)
-        env = self._provider_env()
-        command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
-        if not command:
-            raise RuntimeError("OpenClaw CLI was not found on PATH.")
-        route = self._chat_route(payload)
-        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
-        if not workspace_path.exists():
-            workspace_path = self.root
-        workspace_id = _safe_identifier(payload.get("workspaceId") or workspace_path.name, "workspace")
-        session_id = _safe_identifier(payload.get("sessionId") or f"syntelos_chat_{workspace_id}", "syntelos_chat")
+    def _openclaw_agent_id(self, session_id: str, model_id: str) -> str:
+        digest = hashlib.sha1((model_id or session_id).encode("utf-8")).hexdigest()[:8]
+        return _safe_identifier(f"fluxio_chat_{session_id}_{digest}", "fluxio_chat_agent")[:64]
+
+    def _prepare_openclaw_agent(
+        self,
+        *,
+        command: str,
+        workspace_path: Path,
+        session_id: str,
+        model_id: str,
+        env: dict[str, str],
+    ) -> tuple[str, list[dict[str, str]]]:
+        if not model_id:
+            return "", []
+        agent_id = self._openclaw_agent_id(session_id, model_id)
+        setup_events: list[dict[str, str]] = []
+        add_args = [
+            command,
+            "agents",
+            "add",
+            agent_id,
+            "--workspace",
+            str(workspace_path),
+            "--model",
+            model_id,
+            "--non-interactive",
+            "--json",
+        ]
+        set_args = [command, "models", "--agent", agent_id, "set", model_id]
+        try:
+            _run_process(
+                add_args,
+                cwd=workspace_path,
+                timeout=AGENT_CHAT_SETUP_TIMEOUT_SECONDS,
+                extra_env=env,
+            )
+            setup_events.append(
+                {
+                    "kind": "runtime.agent_config",
+                    "summary": f"OpenClaw agent {agent_id} configured for {model_id}.",
+                    "status": "completed",
+                }
+            )
+            return agent_id, setup_events
+        except Exception as add_exc:  # noqa: BLE001 - fallback to existing agent model set
+            setup_events.append(
+                {
+                    "kind": "runtime.agent_config",
+                    "summary": f"OpenClaw agent add did not complete: {str(add_exc)[:180]}",
+                    "status": "fallback",
+                }
+            )
+        try:
+            _run_process(
+                set_args,
+                cwd=workspace_path,
+                timeout=AGENT_CHAT_SETUP_TIMEOUT_SECONDS,
+                extra_env=env,
+            )
+            setup_events.append(
+                {
+                    "kind": "runtime.agent_config",
+                    "summary": f"OpenClaw existing agent {agent_id} set to {model_id}.",
+                    "status": "completed",
+                }
+            )
+            return agent_id, setup_events
+        except Exception as set_exc:  # noqa: BLE001
+            setup_events.append(
+                {
+                    "kind": "runtime.agent_config",
+                    "summary": f"OpenClaw model setup failed: {str(set_exc)[:180]}",
+                    "status": "failed",
+                }
+            )
+            return "", setup_events
+
+    def _run_openclaw_infer_chat(
+        self,
+        *,
+        command: str,
+        prompt: str,
+        route: dict[str, str],
+        workspace_path: Path,
+        session_id: str,
+        env: dict[str, str],
+    ) -> dict[str, Any]:
         model_id = route["model_id"]
         args = [
             command,
@@ -4669,7 +5579,7 @@ class FluxioWebBackend:
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
-            timeout=720,
+            timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
             extra_env=env,
         )
         reply = _extract_model_reply(result)
@@ -4686,13 +5596,125 @@ class FluxioWebBackend:
             "reply": reply,
             "runtime": "openclaw",
             "sessionId": session_id,
-            "route": route,
+            "route": {**route, "openclawMode": "infer"},
             "raw": result,
             "elapsedMs": elapsed_ms,
             "command": display_command,
             "toolTimeline": tool_timeline,
             "filesChanged": files_changed,
         }
+
+    def _run_openclaw_agent_chat(
+        self,
+        *,
+        command: str,
+        prompt: str,
+        route: dict[str, str],
+        workspace_path: Path,
+        session_id: str,
+        env: dict[str, str],
+    ) -> dict[str, Any]:
+        model_id = route["model_id"]
+        agent_id, setup_events = self._prepare_openclaw_agent(
+            command=command,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            model_id=model_id,
+            env=env,
+        )
+        thinking = route.get("effort") or "high"
+        args = [
+            command,
+            "agent",
+            "--session-id",
+            session_id,
+            "--message",
+            prompt,
+            "--thinking",
+            thinking,
+            "--json",
+            "--local",
+        ]
+        if agent_id:
+            args[2:2] = ["--agent", agent_id]
+        elif model_id:
+            setup_summary = "; ".join(item["summary"] for item in setup_events[-2:])
+            raise RuntimeError(
+                f"OpenClaw model setup failed before chat execution for {model_id}. {setup_summary}"
+            )
+        display_command = self._display_command(args)
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
+            extra_env=env,
+        )
+        reply = _extract_model_reply(result)
+        if not reply:
+            raise RuntimeError("OpenClaw finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
+        setup_timeline = [
+            {
+                "kind": item["kind"],
+                "at": now,
+                "summary": item["summary"],
+                "status": item["status"],
+            }
+            for item in setup_events
+        ]
+        return {
+            "reply": reply,
+            "runtime": "openclaw",
+            "sessionId": session_id,
+            "route": {**route, "openclawMode": "agent", "agentId": agent_id},
+            "raw": result,
+            "elapsedMs": elapsed_ms,
+            "command": display_command,
+            "toolTimeline": [*setup_timeline, *tool_timeline][-24:],
+            "filesChanged": files_changed,
+        }
+
+    def _run_openclaw_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = _chat_prompt(payload)
+        env = self._provider_env()
+        command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
+        if not command:
+            raise RuntimeError("OpenClaw CLI was not found on PATH.")
+        route = self._chat_route(payload)
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+        workspace_id = _safe_identifier(payload.get("workspaceId") or workspace_path.name, "workspace")
+        session_id = _safe_identifier(payload.get("sessionId") or f"syntelos_chat_{workspace_id}", "syntelos_chat")
+        mode = str(
+            payload.get("openclawMode")
+            or payload.get("openclaw_mode")
+            or os.environ.get("FLUXIO_OPENCLAW_CHAT_MODE")
+            or "agent"
+        ).strip().lower()
+        if mode in {"infer", "model", "model-run"}:
+            return self._run_openclaw_infer_chat(
+                command=command,
+                prompt=prompt,
+                route=route,
+                workspace_path=workspace_path,
+                session_id=session_id,
+                env=env,
+            )
+        return self._run_openclaw_agent_chat(
+            command=command,
+            prompt=prompt,
+            route=route,
+            workspace_path=workspace_path,
+            session_id=session_id,
+            env=env,
+        )
 
     def _run_codex_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         prompt = _chat_prompt(payload)
@@ -4728,7 +5750,7 @@ class FluxioWebBackend:
             result, stdout, _stderr, elapsed_ms = _run_process_capture(
                 args,
                 cwd=workspace_path,
-                timeout=720,
+                timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
                 extra_env=env,
             )
             reply = ""
@@ -4801,7 +5823,7 @@ class FluxioWebBackend:
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
-            timeout=720,
+            timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
             extra_env=env,
         )
         reply = _extract_model_reply(result)
@@ -4833,25 +5855,101 @@ class FluxioWebBackend:
         self._record_runtime_route_proof(payload, result_payload, root=self.root)
         return result_payload
 
+    def _run_opencode_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        prompt = _chat_prompt(payload)
+        env = self._provider_env()
+        command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
+        if not command:
+            raise RuntimeError("OpenCode CLI was not found on PATH.")
+        route = self._chat_route(payload)
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+        workspace_id = _safe_identifier(payload.get("workspaceId") or workspace_path.name, "workspace")
+        session_id = _safe_identifier(payload.get("sessionId") or f"syntelos_chat_{workspace_id}", "syntelos_chat")
+        args = [
+            sys.executable,
+            "-m",
+            "grant_agent.opencode_bridge",
+            "--opencode-command",
+            command,
+            "--prompt",
+            prompt,
+        ]
+        if route.get("model_id"):
+            args.extend(["--model", route["model_id"]])
+        if session_id:
+            args.extend(["--title", session_id[:80]])
+        variant = route.get("effort") or ""
+        if variant == "xhigh":
+            variant = "max"
+        if variant in {"minimal", "low", "medium", "high", "max"}:
+            args.extend(["--variant", variant])
+        display_command = self._display_command(args)
+        result, stdout, _stderr, elapsed_ms = _run_process_capture(
+            args,
+            cwd=workspace_path,
+            timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
+            extra_env=env,
+        )
+        reply = _extract_model_reply(result)
+        if not reply:
+            reply = _extract_fluxio_event_reply(stdout)
+        if not reply:
+            raise RuntimeError("OpenCode finished without a readable model reply.")
+        now = _utc_now()
+        tool_timeline, files_changed = _chat_runtime_evidence_from_process(
+            result,
+            stdout=stdout,
+            now=now,
+            elapsed_ms=elapsed_ms,
+        )
+        return {
+            "reply": reply,
+            "runtime": "opencode",
+            "sessionId": session_id,
+            "route": route,
+            "raw": result,
+            "elapsedMs": elapsed_ms,
+            "command": display_command,
+            "toolTimeline": tool_timeline,
+            "filesChanged": files_changed,
+        }
+
     def _run_agent_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         runtime = str(payload.get("runtime") or payload.get("runtimeId") or "codex").strip().lower()
-        if runtime == "hermes":
-            result = self._run_hermes_chat(payload)
-        elif runtime in {"openclaw", "openclaw-local", ""}:
-            route = self._chat_route(payload)
-            if route.get("provider") == "openai-codex":
-                result = self._run_codex_chat(payload)
-            elif route.get("provider") in {"minimax", "minimax-cn", "minimax-portal"}:
-                raise RuntimeError(
-                    "MiniMax/OpenClaw portal routing is disabled for the web control workbench. "
-                    "Use the OpenAI Codex OAuth route or record a Codex blocker before falling back."
-                )
-            else:
+        try:
+            if runtime == "hermes":
+                result = self._run_hermes_chat(payload)
+            elif runtime in {"openclaw", "openclaw-local"}:
                 result = self._run_openclaw_chat(payload)
-        elif runtime == "codex":
-            result = self._run_codex_chat(payload)
-        else:
-            raise RuntimeError(f"Unsupported chat runtime: {runtime}")
+            elif runtime in {"opencode", "open-code", "opencode-native"}:
+                result = self._run_opencode_chat(payload)
+            elif runtime == "codex":
+                result = self._run_codex_chat(payload)
+            else:
+                raise RuntimeError(f"Unsupported chat runtime: {runtime}")
+        except RuntimeError as exc:
+            route = self._chat_route(payload)
+            result = {
+                "reply": "",
+                "runtime": runtime or "unknown",
+                "sessionId": _safe_identifier(payload.get("sessionId") or "syntelos_chat"),
+                "route": route,
+                "status": "failed",
+                "error": str(exc),
+                "elapsedMs": 0,
+                "command": "Not launched" if "not found" in str(exc).lower() else "Runtime failed before a readable reply",
+                "toolTimeline": [
+                    {
+                        "kind": "runtime.error",
+                        "at": _utc_now(),
+                        "summary": str(exc)[:240],
+                        "status": "failed",
+                    }
+                ],
+                "filesChanged": [],
+            }
         result["compartment"] = self._save_chat_compartment(payload, result)
         return result
 
@@ -4876,8 +5974,27 @@ class FluxioWebBackend:
             root = Path(payload.get("root") or self.root).resolve()
             bootstrap = bool(payload.get("bootstrap") or payload.get("summaryBootstrap"))
             summary_mode = str(payload.get("summaryMode") or "").strip().lower()
+            reason = str(payload.get("reason") or "").strip().lower()
+            force_fresh_full_summary = reason == "skills_surface_full_summary"
             if bootstrap or summary_mode == "bootstrap":
                 summary = self._cached_control_room_bootstrap_summary(root)
+            elif force_fresh_full_summary:
+                summary = self._build_control_room_summary(root)
+                refreshed_signature = self._control_room_freshness_signature(root)
+                with self._summary_cache_lock:
+                    self._full_summary_cache[str(root.resolve())] = (
+                        refreshed_signature,
+                        time.monotonic(),
+                        copy.deepcopy(summary),
+                    )
+                self._write_persisted_control_room_summary(root, refreshed_signature, summary)
+                summary = self._annotate_control_room_summary_cache(
+                    summary,
+                    status="forced-refresh",
+                    cached_at=None,
+                    freshness="skills-surface-request",
+                    ttl_seconds=FULL_SUMMARY_CACHE_TTL_SECONDS,
+                )
             else:
                 summary = self._cached_control_room_summary(root)
             summary["providerSecretPresence"] = _provider_presence(
@@ -4923,6 +6040,67 @@ class FluxioWebBackend:
             if output:
                 args.extend(["--output", output])
             return self._run_cli(root, "mission-proof-digest", args, timeout=120)
+        if command == "record_preview_bridge_proof_command":
+            return self._write_preview_bridge_proof(payload)
+        if command == "get_nas_storage_pressure_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            raw_path = payload.get("path") or payload.get("workspacePath") or payload.get("workspace_path")
+            write_latest = not bool(payload.get("noWriteLatest") or payload.get("no_write_latest"))
+            if "writeLatest" in payload:
+                write_latest = bool(payload.get("writeLatest"))
+            if "write_latest" in payload:
+                write_latest = bool(payload.get("write_latest"))
+            return build_live_nas_storage_pressure_report(
+                root,
+                raw_path,
+                write_latest=write_latest,
+            )
+        if command == "attach_verifier_proof_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            mission_id = payload.get("missionId") or payload.get("mission_id") or "ui_bridge_verifier"
+            flow_id = payload.get("flowId") or payload.get("flow_id") or payload.get("runId") or payload.get("run_id")
+            manifest = attach_verifier_proof_bundle(
+                root,
+                mission_id=mission_id,
+                flow_id=flow_id,
+                artifacts=payload.get("artifacts") if isinstance(payload.get("artifacts"), list) else [],
+                report_path=payload.get("reportPath") or payload.get("report_path"),
+                checks=payload.get("checks") if isinstance(payload.get("checks"), list) else [],
+            )
+            for artifact in manifest.get("artifacts", []):
+                if not isinstance(artifact, dict):
+                    continue
+                try:
+                    artifact["previewUrl"] = self._artifact_url(Path(str(artifact.get("path") or "")))
+                except Exception:
+                    artifact["previewUrl"] = ""
+            try:
+                manifest["manifestPreviewUrl"] = self._artifact_url(Path(str(manifest.get("manifestPath") or "")))
+            except Exception:
+                manifest["manifestPreviewUrl"] = ""
+            return manifest
+        if command == "get_real_agent_runtime_proof_status_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return self._cached_real_agent_runtime_proof_status(root)
+        if command == "run_real_agent_runtime_proof_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            runtime = str(payload.get("runtime") or "hermes").strip().lower()
+            runtime_timeout = int(payload.get("runtimeTimeout") or payload.get("runtime_timeout") or 90)
+            return run_real_agent_proof(
+                root,
+                runtime,
+                runtime_timeout=runtime_timeout,
+                with_browser=bool(payload.get("withBrowser") or payload.get("with_browser")),
+                extra_env=self._provider_env(),
+            )
+        if command == "run_authenticated_live_agent_proof_command":
+            return self._run_authenticated_live_agent_proof(payload)
+        if command == "get_conversation_state_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return _load_conversation_state(root)
+        if command == "save_conversation_state_command":
+            root = Path(payload.get("root") or self.root).resolve()
+            return _save_conversation_state(root, payload)
         if command == "record_delivery_receipt_command":
             root = Path(payload.get("root") or self.root).resolve()
             receipt = record_delivery_receipt(
@@ -5068,6 +6246,8 @@ class FluxioWebBackend:
             return self._list_workspace_directory(payload.get("path") or payload.get("directoryPath"))
         if command == "image_playground_operation_command":
             return self._write_image_playground_artifact(payload)
+        if command == "save_codex_skill_command":
+            return _save_codex_skill_file(payload)
         if command == "apply_skill_repair_command":
             args = []
             for key, flag in (
@@ -5110,6 +6290,13 @@ class FluxioWebBackend:
                 "--execution-target-preference",
                 str(payload.get("executionTargetPreference") or payload.get("execution_target_preference") or "profile_default"),
             ]
+            optional_workspace_defaults = {
+                "localProjectPath": "",
+                "nasProjectPath": "",
+                "syncMode": "manual",
+                "syncDirection": "bidirectional",
+                "syncConflictPolicy": "keep_newer_and_log",
+            }
             for key, flag in (
                 ("localProjectPath", "--local-project-path"),
                 ("nasProjectPath", "--nas-project-path"),
@@ -5118,7 +6305,7 @@ class FluxioWebBackend:
                 ("syncConflictPolicy", "--sync-conflict-policy"),
             ):
                 value = payload.get(key) or payload.get(_camel_to_snake(key))
-                args.extend([flag, str(value or "")])
+                args.extend([flag, str(value or optional_workspace_defaults[key])])
             if payload.get("autoSyncToNas") or payload.get("auto_sync_to_nas"):
                 args.extend(["--auto-sync-to-nas", "true"])
             return self._run_cli(self.root, "workspace-save", args, timeout=180)
@@ -5217,6 +6404,11 @@ class FluxioWebBackend:
             workspace_id = str(payload.get("workspaceId") or payload.get("workspace_id") or "").strip()
             if workspace_id:
                 args.extend(["--workspace-id", workspace_id])
+            turn_mode = normalize_agent_turn_mode(
+                payload.get("turnMode") or payload.get("turn_mode") or "standard"
+            )
+            if turn_mode != "standard":
+                args.extend(["--turn-mode", turn_mode])
             for check in payload.get("successChecks") or payload.get("success_checks") or []:
                 args.extend(["--success-check", str(check)])
             if payload.get("foreground"):
@@ -5373,6 +6565,7 @@ class FluxioWebBackend:
 
     def serve_file(self, handler: BaseHTTPRequestHandler) -> bool:
         parsed = urlparse(handler.path)
+        query = parse_qs(parsed.query)
         raw_path = unquote(parsed.path.lstrip("/"))
         candidate_paths = [raw_path or "index.html"]
         if raw_path == "control" or raw_path.startswith("control/"):
@@ -5418,12 +6611,30 @@ class FluxioWebBackend:
         cache_control = "public, max-age=300"
         if target.name in {"index.html", "service-worker.js"} or target.suffix in {".html", ".js", ".css"}:
             cache_control = "no-store"
-        _apply_security_headers(handler, cache_control=cache_control)
+        frame_options = "DENY"
+        if target.name == "index.html":
+            embedded_target = (query.get("embedded") or [""])[0]
+            if embedded_target in {"browser-proof", "fluxio-browser"}:
+                frame_options = "SAMEORIGIN"
+        _apply_security_headers(handler, cache_control=cache_control, frame_options=frame_options)
         handler.end_headers()
-        handler.wfile.write(body)
+        _write_response_body(handler, body)
         return True
 
     def serve_artifact(self, handler: BaseHTTPRequestHandler) -> bool:
+        # Artifacts can contain sensitive build output; same-origin iframes
+        # still send the session cookie, so the in-app preview keeps working.
+        if not self.is_authenticated(handler):
+            _json_response(
+                handler,
+                401,
+                {
+                    "ok": False,
+                    "error": f"{PRODUCT_NAME} login is required.",
+                    "loginRequired": True,
+                },
+            )
+            return True
         parsed = urlparse(handler.path)
         query = parse_qs(parsed.query)
         raw_id = (query.get("id") or [""])[0]
@@ -5442,10 +6653,13 @@ class FluxioWebBackend:
         handler.send_header("Content-Type", content_type)
         handler.send_header("Content-Length", str(len(body)))
         handler.send_header("X-Syntelos-Artifact-Id", self._artifact_id(target))
-        _apply_security_headers(handler, cache_control="private, max-age=60")
+        # SAMEORIGIN so the in-app Preview window can iframe the artifact.
+        _apply_security_headers(
+            handler, cache_control="private, max-age=60", frame_options="SAMEORIGIN"
+        )
         _send_cors_headers(handler)
         handler.end_headers()
-        handler.wfile.write(body)
+        _write_response_body(handler, body)
         return True
 
     def serve_delivery_receipts(self, handler: BaseHTTPRequestHandler) -> bool:
@@ -5509,6 +6723,9 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/auth/status":
                 _json_response(self, 200, {"ok": True, "data": backend.session_status(self)})
+                return
+            if parsed.path == "/api/browser-click-probe":
+                _html_response(self, 200, _browser_click_probe_page(), frame_options="SAMEORIGIN")
                 return
             if parsed.path == "/api/artifact":
                 backend.serve_artifact(self)
@@ -5576,7 +6793,7 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                     _apply_security_headers(self)
                     _send_cors_headers(self)
                     self.end_headers()
-                    self.wfile.write(body)
+                    _write_response_body(self, body)
                 except Exception as exc:
                     _json_response(self, 500, {"ok": False, "error": str(exc)})
                 return
@@ -5597,7 +6814,7 @@ def make_handler(backend: FluxioWebBackend) -> type[BaseHTTPRequestHandler]:
                 _apply_security_headers(self)
                 _send_cors_headers(self)
                 self.end_headers()
-                self.wfile.write(body)
+                _write_response_body(self, body)
                 return
             if path != "/api/backend":
                 _json_response(self, 404, {"ok": False, "error": "Unknown API route"})

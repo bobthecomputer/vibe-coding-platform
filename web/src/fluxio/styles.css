@@ -508,6 +508,180 @@
   background: rgba(255, 255, 255, 0.035);
 }
 
+.fluxos-rail-service-stack {
+  align-self: end;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fluxos-app-update,
+.fluxos-settings-update-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--fluxos-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.032);
+  color: var(--fluxos-text);
+  overflow: hidden;
+}
+
+.fluxos-app-update {
+  padding: 10px;
+}
+
+.fluxos-settings-update-card {
+  padding: 16px;
+}
+
+.fluxos-app-update::before,
+.fluxos-settings-update-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--state-text, rgba(255, 255, 255, 0.4));
+  opacity: 0.82;
+}
+
+.fluxos-app-update > div,
+.fluxos-settings-update-card > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fluxos-app-update span,
+.fluxos-settings-update-card span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--state-text, var(--fluxos-muted));
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.fluxos-app-update strong,
+.fluxos-settings-update-card strong {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-settings-update-card strong {
+  font-size: 20px;
+}
+
+.fluxos-app-update small,
+.fluxos-settings-update-card small,
+.fluxos-settings-update-card p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.fluxos-app-update small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.fluxos-app-update button,
+.fluxos-settings-update-card button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--fluxos-text);
+  font-size: 11px;
+  font-weight: 820;
+  padding: 5px 10px;
+}
+
+.fluxos-settings-update-card button {
+  min-height: 38px;
+  padding: 8px 14px;
+}
+
+.fluxos-app-update button:not(:disabled):hover,
+.fluxos-settings-update-card button:not(:disabled):hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.09);
+  transform: translateY(-1px);
+}
+
+.fluxos-app-update button:disabled,
+.fluxos-settings-update-card button:disabled {
+  cursor: wait;
+}
+
+.fluxos-settings-update-card + .fluxos-settings-fact-grid {
+  margin-top: 12px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fluxos-app-update[data-app-update-status="checking"]::before,
+  .fluxos-app-update[data-app-update-status="registering"]::before,
+  .fluxos-settings-update-card[data-app-update-status="checking"]::before,
+  .fluxos-settings-update-card[data-app-update-status="registering"]::before {
+    animation: fluxos-update-breathe 1.45s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  }
+
+  .fluxos-app-update[data-app-update-status="updated"] button,
+  .fluxos-settings-update-card[data-app-update-status="updated"] button {
+    animation: fluxos-update-action-pulse 2.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  }
+}
+
+@keyframes fluxos-update-breathe {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleY(0.52);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes fluxos-update-action-pulse {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluxos-app-update::before,
+  .fluxos-settings-update-card::before,
+  .fluxos-app-update button,
+  .fluxos-settings-update-card button {
+    animation: none !important;
+  }
+}
+
 .fluxos-status-dot {
   width: 8px;
   height: 8px;
@@ -740,8 +914,10 @@
 }
 
 .fluxos-agent-notification-actions {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
   gap: 6px;
 }
 
@@ -755,6 +931,14 @@
   font-weight: 750;
 }
 
+.fluxos-agent-notification-actions button {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
 .fluxos-agent-notification-actions button:disabled,
 .fluxos-agent-notification-list button:disabled {
   cursor: not-allowed;
@@ -764,6 +948,12 @@
 .fluxos-agent-notification-list {
   display: grid;
   gap: 7px;
+}
+
+.fluxos-agent-notification-rail .fluxos-thread-head span,
+.fluxos-agent-notification-rail .fluxos-thread-head strong {
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .fluxos-agent-notification-list article {
@@ -783,9 +973,18 @@
 }
 
 .fluxos-agent-notification-list article > div:last-child {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 5px;
-  min-width: 84px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.fluxos-agent-notification-list article > div:last-child button {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0 10px;
+  border-radius: 999px;
 }
 
 .fluxos-agent-notification-list span,
@@ -794,7 +993,7 @@
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .fluxos-agent-notification-list strong,
@@ -1374,6 +1573,16 @@
   text-transform: uppercase;
 }
 
+.fluxos-live-brief-main > span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-live-brief-metrics span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .fluxos-live-brief-main strong {
   color: var(--control-text);
   font-size: 15px;
@@ -1425,26 +1634,36 @@
 }
 
 .fluxos-live-brief-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
   align-content: center;
+  justify-self: end;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 3px;
 }
 
 .fluxos-live-brief-actions button {
+  flex: 0 0 auto;
   min-width: 0;
-  min-height: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.05);
+  min-height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: var(--control-text);
   font-size: 11px;
   font-weight: 700;
+  padding: 0 12px;
 }
 
 .fluxos-live-brief-actions button:hover:not(:disabled) {
-  border-color: rgba(114, 211, 111, 0.32);
-  background: rgba(114, 211, 111, 0.11);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .fluxos-first-blocker {
@@ -1532,6 +1751,121 @@
     linear-gradient(135deg, rgba(114, 211, 111, 0.09), rgba(83, 156, 255, 0.045) 64%, transparent),
     rgba(7, 11, 14, 0.64);
   padding: 12px;
+}
+
+.fluxos-builder-next-safe-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.32fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(91, 140, 255, 0.24);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(91, 140, 255, 0.11), rgba(74, 222, 128, 0.045) 68%, transparent),
+    rgba(10, 12, 14, 0.76);
+  padding: 10px;
+}
+
+.fluxos-builder-next-safe-action.state-blocked {
+  border-color: rgba(248, 113, 113, 0.34);
+  background:
+    linear-gradient(135deg, rgba(248, 113, 113, 0.12), rgba(245, 158, 11, 0.055) 68%, transparent),
+    rgba(10, 12, 14, 0.78);
+}
+
+.fluxos-builder-next-safe-action.state-ready {
+  border-color: rgba(74, 222, 128, 0.28);
+}
+
+.fluxos-builder-next-safe-action > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.fluxos-builder-next-safe-action span,
+.fluxos-builder-next-safe-metrics span,
+.fluxos-builder-next-safe-metrics p {
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  font-weight: 790;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.fluxos-builder-next-safe-action strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 16px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-builder-next-safe-action p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fluxos-builder-next-safe-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fluxos-builder-next-safe-metrics article {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  padding-left: 8px;
+}
+
+.fluxos-builder-next-safe-metrics strong {
+  color: var(--fluxos-text);
+  font-family: var(--mono);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.fluxos-builder-next-safe-metrics p {
+  margin: 0;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-builder-next-safe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.fluxos-builder-next-safe-actions button {
+  min-height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--fluxos-text);
+  padding: 0 11px;
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.fluxos-builder-next-safe-actions button:first-child {
+  border-color: rgba(91, 140, 255, 0.45);
+  background: rgba(91, 140, 255, 0.16);
+}
+
+.fluxos-builder-next-safe-actions button:hover:not(:disabled) {
+  border-color: rgba(74, 222, 128, 0.34);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.fluxos-builder-next-safe-actions button:disabled {
+  color: rgba(247, 247, 247, 0.38);
+  cursor: not-allowed;
 }
 
 .fluxos-queue-first-copy {
@@ -2064,6 +2398,11 @@
   text-transform: uppercase;
 }
 
+.fluxos-agent-thread-first-copy > span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .fluxos-agent-thread-first-copy strong {
   overflow: hidden;
   color: var(--fluxos-text);
@@ -2100,34 +2439,92 @@
   line-height: 1;
 }
 
-.fluxos-agent-thread-first-actions {
+.fluxos-agent-first-view-path {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  align-content: center;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
   min-width: 0;
+  align-self: stretch;
+}
+
+.fluxos-agent-first-view-path article {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 3px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0 10px;
+}
+
+.fluxos-agent-first-view-path article:first-child {
+  border-left: 0;
+}
+
+.fluxos-agent-first-view-path span {
+  overflow: hidden;
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.fluxos-agent-first-view-path strong {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-family: var(--fluxos-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 14px;
+  line-height: 1.08;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-first-view-path small {
+  overflow: hidden;
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-thread-first-actions {
+  width: max-content;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-content: center;
+  align-items: center;
+  justify-content: flex-end;
+  justify-self: end;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.032);
+  padding: 3px;
 }
 
 .fluxos-agent-thread-first-actions button {
-  min-height: 31px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: var(--fluxos-text);
   font-size: 12px;
   font-weight: 760;
-  padding: 6px 9px;
-  text-align: left;
+  padding: 0 12px;
+  text-align: center;
 }
 
 .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"] {
   grid-column: 1 / -1;
-  border-color: rgba(51, 199, 239, 0.42);
-  background: rgba(51, 199, 239, 0.14);
 }
 
 .fluxos-agent-thread-first-actions button[data-live-agent-action="launch"] {
-  border-color: rgba(103, 215, 128, 0.38);
   background: rgba(103, 215, 128, 0.12);
 }
 
@@ -2144,6 +2541,291 @@
 .fluxos-agent-thread-first-actions button:hover:not(:disabled) {
   border-color: rgba(51, 199, 239, 0.45);
   background: rgba(51, 199, 239, 0.11);
+}
+
+.fluxos-agent-runtime-proof-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(360px, 1.25fr);
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 8px;
+}
+
+.fluxos-agent-runtime-proof-actions.tone-good {
+  border-color: rgba(103, 215, 128, 0.3);
+}
+
+.fluxos-agent-runtime-proof-actions.tone-warn {
+  border-color: rgba(234, 183, 92, 0.32);
+}
+
+.fluxos-agent-runtime-proof-actions.tone-bad {
+  border-color: rgba(255, 107, 107, 0.32);
+}
+
+.fluxos-agent-runtime-proof-copy {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fluxos-agent-runtime-proof-copy span,
+.fluxos-agent-runtime-proof-copy small,
+.fluxos-agent-runtime-proof-button small {
+  overflow: hidden;
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fluxos-agent-runtime-proof-copy span,
+.fluxos-agent-runtime-proof-copy small {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-agent-runtime-proof-copy strong {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-runtime-proof-refresh-receipt {
+  display: inline-flex;
+  max-width: 100%;
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--fluxos-text) !important;
+  padding: 4px 8px;
+}
+
+.fluxos-agent-runtime-proof-refresh-receipt[data-runtime-proof-refresh-state="complete"] {
+  border-color: rgba(103, 215, 128, 0.3);
+  background: rgba(103, 215, 128, 0.08);
+}
+
+.fluxos-agent-runtime-proof-refresh-receipt[data-runtime-proof-refresh-state="missing"],
+.fluxos-agent-runtime-proof-refresh-receipt[data-runtime-proof-refresh-state="running"] {
+  border-color: rgba(234, 183, 92, 0.28);
+  background: rgba(234, 183, 92, 0.075);
+}
+
+.fluxos-agent-runtime-proof-checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 5px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.fluxos-agent-runtime-proof-checklist article {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 5px 6px;
+}
+
+.fluxos-agent-runtime-proof-checklist article.passed {
+  border-color: rgba(103, 215, 128, 0.24);
+  background: rgba(103, 215, 128, 0.06);
+}
+
+.fluxos-agent-runtime-proof-checklist article.missing {
+  border-color: rgba(234, 183, 92, 0.24);
+  background: rgba(234, 183, 92, 0.06);
+}
+
+.fluxos-agent-runtime-proof-checklist b,
+.fluxos-agent-runtime-proof-checklist em,
+.fluxos-agent-runtime-proof-checklist-separator,
+.fluxos-agent-runtime-proof-checklist small {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-runtime-proof-checklist-separator {
+  color: var(--fluxos-muted);
+  font-weight: 650;
+}
+
+.fluxos-agent-runtime-proof-checklist b {
+  color: var(--fluxos-muted);
+  font-weight: 720;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-agent-runtime-proof-checklist small {
+  color: rgba(103, 215, 128, 0.84);
+  font-weight: 680;
+}
+
+.fluxos-agent-runtime-proof-coverage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 5px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.fluxos-agent-runtime-proof-coverage article {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 5px 6px;
+}
+
+.fluxos-agent-runtime-proof-coverage article.fresh,
+.fluxos-agent-runtime-proof-coverage article.covered {
+  border-color: rgba(103, 215, 128, 0.24);
+  background: rgba(103, 215, 128, 0.06);
+}
+
+.fluxos-agent-runtime-proof-coverage article.blocked {
+  border-color: rgba(234, 183, 92, 0.24);
+  background: rgba(234, 183, 92, 0.06);
+}
+
+.fluxos-agent-runtime-proof-coverage article.missing {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.fluxos-agent-runtime-proof-coverage b,
+.fluxos-agent-runtime-proof-coverage em {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-runtime-proof-coverage b {
+  color: var(--fluxos-muted);
+  font-weight: 720;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-agent-runtime-proof-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-agent-runtime-proof-button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--fluxos-text);
+  cursor: pointer;
+  gap: 2px 6px;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.fluxos-agent-runtime-proof-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.fluxos-agent-runtime-proof-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.fluxos-agent-runtime-proof-button svg {
+  grid-row: 1 / 3;
+  color: var(--fluxos-muted);
+}
+
+.fluxos-agent-runtime-proof-button span {
+  overflow: hidden;
+  color: var(--fluxos-text);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-runtime-proof-button small {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-agent-runtime-proof-button small::before {
+  content: "·";
+  margin-right: 4px;
+  color: var(--fluxos-muted);
+  font-weight: 650;
+}
+
+.fluxos-agent-runtime-proof-button.tone-good {
+  border-color: rgba(103, 215, 128, 0.26);
+}
+
+.fluxos-agent-runtime-proof-button.tone-warn {
+  border-color: rgba(234, 183, 92, 0.28);
+}
+
+.fluxos-agent-runtime-proof-button.tone-bad {
+  border-color: rgba(255, 107, 107, 0.28);
+}
+
+.fluxos-agent-runtime-proof-button.next-target {
+  border-color: rgba(51, 199, 239, 0.28);
+  background: rgba(51, 199, 239, 0.07);
+}
+
+.fluxos-agent-runtime-proof-button.complete-proof {
+  border-color: rgba(103, 215, 128, 0.3);
+  background: rgba(103, 215, 128, 0.08);
+}
+
+.fluxos-agent-runtime-proof-button.complete-proof svg {
+  color: rgba(103, 215, 128, 0.9);
+}
+
+.fluxos-agent-runtime-proof-button.running svg,
+.fluxos-agent-runtime-proof-button.refresh:active svg {
+  animation: runtime-proof-spin 0.9s linear infinite;
 }
 
 .fluxos-agent-live-thread-proof {
@@ -2738,6 +3420,20 @@
   font-size: 11px;
 }
 
+.fluxos-message-provenance {
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid rgba(142, 203, 111, 0.24);
+  border-radius: 999px;
+  background: rgba(142, 203, 111, 0.08);
+  color: var(--fluxos-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  padding: 4px 8px;
+}
+
 .fluxos-message-trace {
   grid-column: 1 / -1;
   border-top: 1px solid var(--fluxos-line);
@@ -3121,9 +3817,20 @@
   box-shadow: 0 20px 52px rgba(0, 0, 0, 0.2);
 }
 
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-timeline[data-builder-timeline-empty="true"] {
+  grid-template-rows: auto auto;
+  min-height: 248px;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-timeline-rows {
   grid-auto-rows: minmax(84px, 1fr);
   gap: 0;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-timeline[data-builder-timeline-empty="true"] .fluxos-builder-timeline-rows {
+  grid-auto-rows: auto;
 }
 
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-timeline-rows button {
@@ -3359,6 +4066,14 @@
   grid-template-rows: auto minmax(0, 1fr);
   gap: 6px;
   min-width: 0;
+}
+
+.fluxos-builder-timeline[data-builder-timeline-empty="true"] .fluxos-builder-timeline-body {
+  grid-template-rows: auto;
+}
+
+.fluxos-builder-timeline[data-builder-timeline-empty="true"] .fluxos-builder-timeline-scale {
+  display: none;
 }
 
 .fluxos-builder-timeline-scale {
@@ -3664,6 +4379,15 @@
   padding: 7px;
 }
 
+.fluxos-builder-timeline[data-builder-timeline-empty="true"] .fluxos-builder-timeline-empty {
+  min-height: 58px;
+  align-content: center;
+  border-style: dashed;
+  background:
+    linear-gradient(90deg, rgba(91, 140, 255, 0.04), transparent 58%),
+    rgba(255, 255, 255, 0.014);
+}
+
 .fluxos-builder-timeline-proof article.tone-good {
   border-color: rgba(103, 215, 128, 0.24);
 }
@@ -3806,6 +4530,14 @@
   .fluxos-builder-timeline-head,
   .fluxos-builder-timeline-proof {
     grid-template-columns: 1fr;
+  }
+
+  .fluxos-agent-proof-bundle-chip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fluxos-agent-proof-bundle-chip button {
+    justify-self: start;
   }
 
   .fluxos-builder-timeline-actions {
@@ -4557,6 +5289,16 @@ button.fluxos-context-root:hover {
 
 .fluxos-mission-advancement-grid > button.tone-warn {
   border-color: rgba(234, 183, 92, 0.34);
+}
+
+.fluxos-system-advancement-grid article.tone-good {
+  border-color: rgba(114, 211, 111, 0.28);
+  background: rgba(114, 211, 111, 0.055);
+}
+
+.fluxos-system-advancement-grid article.tone-warn {
+  border-color: rgba(234, 183, 92, 0.34);
+  background: rgba(234, 183, 92, 0.06);
 }
 
 .fluxos-mission-advancement-grid > button.proof-repair {
@@ -5782,6 +6524,120 @@ button.fluxos-context-root:hover {
   gap: 18px;
 }
 
+.fluxos-settings-repair-path {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018)),
+    rgba(13, 15, 16, 0.74);
+  padding: 12px;
+}
+
+.fluxos-settings-repair-path.has-blockers {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.fluxos-settings-repair-path.is-ready {
+  border-color: rgba(74, 222, 128, 0.24);
+}
+
+.fluxos-settings-repair-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fluxos-settings-repair-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.fluxos-settings-repair-head span,
+.fluxos-settings-repair-grid span {
+  color: var(--fluxos-muted);
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fluxos-settings-repair-head strong {
+  color: var(--fluxos-text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.fluxos-settings-repair-head p {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fluxos-settings-repair-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.fluxos-settings-repair-grid article {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
+.fluxos-settings-repair-grid article.needs-action {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+.fluxos-settings-repair-grid article.is-ready {
+  border-color: rgba(74, 222, 128, 0.18);
+}
+
+.fluxos-settings-repair-grid strong {
+  min-width: 0;
+  color: var(--fluxos-text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-settings-repair-grid p {
+  min-height: 44px;
+  margin: 0;
+  color: var(--fluxos-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fluxos-settings-repair-grid button {
+  justify-self: start;
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fluxos-text);
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.fluxos-settings-repair-grid button:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
+}
+
 .fluxos-settings-route-summary,
 .fluxos-settings-fact-grid {
   display: grid;
@@ -6191,6 +7047,141 @@ button.fluxos-context-root:hover {
   box-shadow: none;
 }
 
+.fluxos-browser-workspace {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 100vh;
+  padding: clamp(22px, 3vw, 42px);
+  gap: 18px;
+}
+
+.fluxos-browser-workspace-head,
+.fluxos-browser-location {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding-bottom: 14px;
+}
+
+.fluxos-browser-workspace-head span,
+.fluxos-browser-location span,
+.fluxos-browser-empty span {
+  color: var(--fluxos-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-browser-workspace-head h1 {
+  margin: 8px 0 0;
+  color: var(--fluxos-text);
+  font-size: clamp(32px, 5vw, 64px);
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.fluxos-browser-workspace-actions,
+.fluxos-browser-location {
+  flex-wrap: wrap;
+}
+
+.fluxos-browser-workspace button,
+.fluxos-browser-location button {
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
+  background: transparent;
+  color: var(--fluxos-text);
+  font-weight: 800;
+  padding: 0 14px;
+}
+
+.fluxos-browser-workspace button:hover,
+.fluxos-browser-location button:hover {
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.fluxos-browser-workspace button:disabled {
+  color: var(--fluxos-faint);
+  cursor: not-allowed;
+}
+
+.fluxos-browser-location {
+  align-items: center;
+  justify-content: flex-start;
+  padding-bottom: 16px;
+}
+
+.fluxos-browser-location label {
+  display: grid;
+  flex: 1 1 420px;
+  gap: 7px;
+}
+
+.fluxos-browser-location input {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0;
+  background: transparent;
+  color: var(--fluxos-text);
+  font: inherit;
+  font-weight: 700;
+  outline: none;
+}
+
+.fluxos-browser-location input:focus {
+  border-bottom-color: rgba(255, 255, 255, 0.72);
+}
+
+.fluxos-browser-canvas {
+  display: grid;
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: #050607;
+  overflow: hidden;
+}
+
+.fluxos-browser-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 620px;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.fluxos-browser-empty {
+  place-self: center;
+  width: min(620px, calc(100% - 48px));
+  display: grid;
+  gap: 12px;
+  color: var(--fluxos-text);
+}
+
+.fluxos-browser-empty strong {
+  font-size: clamp(24px, 3vw, 42px);
+  line-height: 1;
+}
+
+.fluxos-browser-empty p {
+  margin: 0;
+  color: var(--fluxos-muted);
+  line-height: 1.5;
+}
+
+.fluxos-browser-empty div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .fluxos-shell[data-theme="glass"] .fluxos-left-rail,
 .fluxos-shell[data-theme="glass"] .fluxos-top-strip,
 .fluxos-shell[data-theme="glass"] .fluxos-hero-panel,
@@ -6253,13 +7244,19 @@ button.fluxos-context-root:hover {
   .fluxos-brand strong,
   .fluxos-left-rail nav button span,
   .fluxos-rail-footer small,
-  .fluxos-rail-footer strong {
+  .fluxos-rail-footer strong,
+  .fluxos-app-update small,
+  .fluxos-app-update strong {
     display: none;
   }
 
   .fluxos-left-rail nav button {
     grid-template-columns: 1fr;
     justify-items: center;
+  }
+
+  .fluxos-rail-service-stack {
+    display: none;
   }
 
   .fluxos-agent-grid,
@@ -6274,6 +7271,14 @@ button.fluxos-context-root:hover {
 
   .fluxos-agent-live-thread-proof {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fluxos-agent-runtime-proof-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fluxos-agent-runtime-proof-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .fluxos-agent-live-thread-proof-grid {
@@ -6399,6 +7404,10 @@ button.fluxos-context-root:hover {
     display: none;
   }
 
+  .fluxos-rail-service-stack {
+    display: none;
+  }
+
   .fluxos-top-strip,
   .fluxos-hero-panel,
   .fluxos-agent-grid,
@@ -6410,6 +7419,7 @@ button.fluxos-context-root:hover {
   .fluxos-settings,
   .fluxos-live-operations-brief,
   .fluxos-first-blocker,
+  .fluxos-builder-next-safe-action,
   .fluxos-queue-first-band,
   .fluxos-agent-thread-first-band,
   .fluxos-skill-command-band,
@@ -6419,6 +7429,10 @@ button.fluxos-context-root:hover {
   }
 
   .fluxos-queue-first-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fluxos-builder-next-safe-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -6481,8 +7495,8 @@ button.fluxos-context-root:hover {
   }
 
   .fluxos-live-brief-actions {
-    grid-auto-flow: row;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .fluxos-workbench-proof-band {
@@ -13003,7 +14017,7 @@ button.builder-review-target:hover {
 
 .agent-run-topbar {
   display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) minmax(320px, 1.35fr) minmax(240px, auto);
+  grid-template-columns: minmax(190px, 0.68fr) minmax(320px, 1fr) minmax(360px, 1.2fr);
   align-items: start;
   gap: 14px;
   width: min(100%, 1120px);
@@ -13087,13 +14101,502 @@ button.builder-review-target:hover {
   white-space: normal;
 }
 
-.agent-run-topbar-actions {
+.agent-goal-progress {
+  grid-column: 2 / 4;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
+    rgba(8, 9, 12, 0.62);
+}
+
+.agent-goal-progress > summary {
   display: grid;
-  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-goal-progress > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-goal-progress-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-goal-progress-title span,
+.agent-goal-progress-metrics em,
+.agent-goal-progress-cues span {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.agent-goal-progress-title > span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-goal-progress-title strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-goal-progress-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.agent-goal-progress-metrics em {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  letter-spacing: 0;
+  padding: 4px 7px;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.agent-goal-progress small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-goal-progress-panel {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px;
+}
+
+.agent-goal-progress-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-goal-progress-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 7px 8px;
+}
+
+.agent-goal-progress-step > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.agent-goal-progress-step div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-goal-progress-step strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-goal-progress-step p {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-goal-progress-step[data-goal-step-status="done"] > span {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+.agent-goal-progress-step[data-goal-step-status="running"] {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.agent-goal-progress-step[data-goal-step-status="running"] > span {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: var(--text);
+}
+
+.agent-goal-progress-step[data-goal-step-status="blocked"] {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(248, 113, 113, 0.07);
+}
+
+.agent-goal-progress-cues {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+  padding: 7px;
+}
+
+.agent-goal-progress-cues > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-goal-progress-cues > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.agent-goal-progress.tone-blocked {
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.agent-run-topbar-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+}
+
+.agent-runtime-proof-actions {
+  grid-column: 2 / 4;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(360px, 1.3fr);
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+}
+
+.agent-runtime-proof-actions.tone-good {
+  border-color: rgba(103, 215, 128, 0.26);
+}
+
+.agent-runtime-proof-actions.tone-warn {
+  border-color: rgba(234, 183, 92, 0.28);
+}
+
+.agent-runtime-proof-actions.tone-bad {
+  border-color: rgba(255, 107, 107, 0.28);
+}
+
+.agent-runtime-proof-copy {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-runtime-proof-copy span,
+.agent-runtime-proof-copy em,
+.agent-runtime-proof-button small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-runtime-proof-copy span,
+.agent-runtime-proof-copy em {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-runtime-proof-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-runtime-proof-refresh-receipt {
+  display: inline-flex;
+  max-width: 100%;
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text) !important;
+  padding: 4px 8px;
+}
+
+.agent-runtime-proof-refresh-receipt[data-runtime-proof-refresh-state="complete"] {
+  border-color: rgba(103, 215, 128, 0.28);
+  background: rgba(103, 215, 128, 0.075);
+}
+
+.agent-runtime-proof-refresh-receipt[data-runtime-proof-refresh-state="missing"],
+.agent-runtime-proof-refresh-receipt[data-runtime-proof-refresh-state="running"] {
+  border-color: rgba(234, 183, 92, 0.26);
+  background: rgba(234, 183, 92, 0.07);
+}
+
+.agent-runtime-proof-checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 5px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.agent-runtime-proof-checklist article {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 5px 6px;
+}
+
+.agent-runtime-proof-checklist article.passed {
+  border-color: rgba(103, 215, 128, 0.22);
+  background: rgba(103, 215, 128, 0.055);
+}
+
+.agent-runtime-proof-checklist article.missing {
+  border-color: rgba(234, 183, 92, 0.22);
+  background: rgba(234, 183, 92, 0.055);
+}
+
+.agent-runtime-proof-checklist b,
+.agent-runtime-proof-checklist em,
+.agent-runtime-proof-checklist-separator,
+.agent-runtime-proof-checklist small {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.agent-runtime-proof-checklist-separator {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.agent-runtime-proof-checklist b {
+  color: var(--muted);
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-runtime-proof-checklist small {
+  color: rgba(103, 215, 128, 0.82);
+  font-weight: 650;
+}
+
+.agent-runtime-proof-coverage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 5px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.agent-runtime-proof-coverage article {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 5px 6px;
+}
+
+.agent-runtime-proof-coverage article.fresh,
+.agent-runtime-proof-coverage article.covered {
+  border-color: rgba(103, 215, 128, 0.22);
+  background: rgba(103, 215, 128, 0.055);
+}
+
+.agent-runtime-proof-coverage article.blocked {
+  border-color: rgba(234, 183, 92, 0.22);
+  background: rgba(234, 183, 92, 0.055);
+}
+
+.agent-runtime-proof-coverage article.missing {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.agent-runtime-proof-coverage b,
+.agent-runtime-proof-coverage em {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.agent-runtime-proof-coverage b {
+  color: var(--muted);
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-runtime-proof-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-runtime-proof-button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  min-width: 0;
+  min-height: 50px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  cursor: pointer;
+  gap: 2px 6px;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.agent-runtime-proof-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.agent-runtime-proof-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.agent-runtime-proof-button svg {
+  grid-row: 1 / 3;
+  color: var(--muted);
+}
+
+.agent-runtime-proof-button span {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-runtime-proof-button small {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-runtime-proof-button small::before {
+  content: "·";
+  margin-right: 4px;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.agent-runtime-proof-button.tone-good {
+  border-color: rgba(103, 215, 128, 0.24);
+}
+
+.agent-runtime-proof-button.tone-warn {
+  border-color: rgba(234, 183, 92, 0.26);
+}
+
+.agent-runtime-proof-button.tone-bad {
+  border-color: rgba(255, 107, 107, 0.26);
+}
+
+.agent-runtime-proof-button.next-target {
+  border-color: rgba(51, 199, 239, 0.26);
+  background: rgba(51, 199, 239, 0.065);
+}
+
+.agent-runtime-proof-button.complete-proof {
+  border-color: rgba(103, 215, 128, 0.28);
+  background: rgba(103, 215, 128, 0.075);
+}
+
+.agent-runtime-proof-button.complete-proof svg {
+  color: rgba(103, 215, 128, 0.88);
+}
+
+.agent-runtime-proof-button.running svg,
+.agent-runtime-proof-button.refresh:active svg {
+  animation: runtime-proof-spin 0.9s linear infinite;
+}
+
+@keyframes runtime-proof-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .agent-chat-stage {
@@ -13706,6 +15209,20 @@ button.builder-review-target:hover {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.agent-chat-provenance {
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid rgba(142, 203, 111, 0.24);
+  border-radius: 999px;
+  background: rgba(142, 203, 111, 0.08);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  padding: 5px 8px;
 }
 
 .agent-chat-primary,
@@ -16174,20 +17691,82 @@ button.builder-review-target:hover {
 .mission-quickstart-panel {
   display: grid;
   gap: 10px;
-  border: 1px solid rgba(114, 173, 152, 0.28);
-  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
   background:
-    linear-gradient(180deg, rgba(114, 173, 152, 0.08), rgba(114, 173, 152, 0.045)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.022)),
     rgba(8, 12, 16, 0.22);
   padding: 12px;
 }
 
 .mission-quickstart-panel textarea {
   min-height: 128px;
-  border-color: rgba(114, 173, 152, 0.28);
+  border-color: rgba(255, 255, 255, 0.14);
   background: rgba(8, 12, 16, 0.48);
   font-size: 14px;
   line-height: 1.45;
+}
+
+.mission-launch-lane-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+}
+
+.mission-launch-lane-status > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mission-launch-lane-status span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.mission-launch-lane-status strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.mission-launch-lane-status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.mission-launch-lane-status.is-clear {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.mission-launch-lane-status.is-stale {
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(248, 113, 113, 0.055);
+}
+
+.mission-launch-lane-status.is-blocked {
+  border-color: rgba(255, 126, 126, 0.36);
+  background: rgba(255, 126, 126, 0.065);
+}
+
+.mission-launch-lane-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mission-launch-lane-actions .action-btn {
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 .mission-route-selector-row {
@@ -16195,8 +17774,8 @@ button.builder-review-target:hover {
   grid-template-columns: minmax(96px, 0.75fr) minmax(132px, 1fr) minmax(180px, 1.3fr) minmax(108px, 0.75fr) auto;
   gap: 8px;
   align-items: end;
-  border: 1px solid rgba(114, 173, 152, 0.2);
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.025);
   padding: 8px;
 }
@@ -16268,14 +17847,14 @@ button.builder-review-target:hover {
   display: grid;
   gap: 5px;
   align-content: start;
-  border: 1px solid rgba(114, 173, 152, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.035);
   padding: 8px;
 }
 
 .mission-launch-route-decision > div {
-  border-color: rgba(214, 168, 79, 0.3);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 .mission-launch-route-decision span {
@@ -16305,11 +17884,11 @@ button.builder-review-target:hover {
 }
 
 .mission-launch-readiness article.is-ready {
-  border-color: rgba(74, 222, 128, 0.25);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
 .mission-launch-readiness article.is-warn {
-  border-color: rgba(214, 168, 79, 0.34);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .mission-launch-readiness article.is-blocked {
@@ -16391,14 +17970,14 @@ button.builder-review-target:hover {
   display: grid;
   gap: 5px;
   min-width: 0;
-  border: 1px solid rgba(114, 173, 152, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.035);
   padding: 9px;
 }
 
 .fluxos-provider-route-decision > div {
-  border-color: rgba(214, 168, 79, 0.3);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 .fluxos-provider-route-decision span {
@@ -16423,10 +18002,10 @@ button.builder-review-target:hover {
 
 .mission-starter-templates {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-  border-top: 1px solid rgba(114, 173, 152, 0.2);
-  padding-top: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  padding-top: 10px;
 }
 
 .mission-starter-templates > span {
@@ -16439,13 +18018,13 @@ button.builder-review-target:hover {
 
 .mission-starter-templates button {
   display: grid;
-  gap: 3px;
+  gap: 5px;
   min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  background: rgba(8, 12, 16, 0.24);
+  border-radius: 12px;
+  background: rgba(8, 12, 16, 0.34);
   color: inherit;
-  padding: 8px;
+  padding: 10px;
   text-align: left;
   cursor: pointer;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
@@ -16453,8 +18032,8 @@ button.builder-review-target:hover {
 
 .mission-starter-templates button:hover,
 .mission-starter-templates button:focus-visible {
-  border-color: rgba(114, 173, 152, 0.44);
-  background: rgba(114, 173, 152, 0.11);
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.07);
   transform: translateY(-1px);
 }
 
@@ -16483,10 +18062,10 @@ button.builder-review-target:hover {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid rgba(214, 168, 79, 0.26);
-  border-radius: 9px;
-  background: rgba(214, 168, 79, 0.075);
-  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 10px;
 }
 
 .mission-quickstart-actions span {
@@ -16496,8 +18075,17 @@ button.builder-review-target:hover {
 }
 
 .mission-quickstart-actions .action-btn.primary {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
   min-width: 132px;
   min-height: 42px;
+}
+
+.mission-launch-lane-actions .action-btn.primary {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(248, 113, 113, 0.09);
+  color: #fee2e2;
 }
 
 .mission-launch-blocked-note {
@@ -16527,7 +18115,7 @@ button.builder-review-target:hover {
 .mission-launch-shortcuts {
   display: grid;
   gap: 8px;
-  border-top: 1px solid rgba(114, 173, 152, 0.2);
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
   padding-top: 8px;
 }
 
@@ -16563,9 +18151,9 @@ button.builder-review-target:hover {
 .mission-launch-recommendation {
   display: grid;
   gap: 5px;
-  border: 1px solid rgba(114, 173, 152, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  background: rgba(114, 173, 152, 0.08);
+  background: rgba(255, 255, 255, 0.04);
   padding: 10px;
 }
 
@@ -16614,12 +18202,12 @@ button.builder-review-target:hover {
 
 .mission-launch-route-trust.good,
 .mission-launch-route-trust.tone-good {
-  border-color: rgba(74, 222, 128, 0.24);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 .mission-launch-route-trust.warn,
 .mission-launch-route-trust.tone-warn {
-  border-color: rgba(214, 168, 79, 0.32);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .mission-launch-route-trust-actions {
@@ -16672,6 +18260,7 @@ button.builder-review-target:hover {
 
 @media (max-width: 720px) {
   .mission-guided-launch-path,
+  .mission-launch-lane-status,
   .mission-route-selector-row,
   .mission-launch-route-decision,
   .fluxos-provider-route-decision,
@@ -16935,7 +18524,10 @@ button.builder-review-target:hover {
   width: 100%;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
-  background: #232327;
+  background: rgba(26, 27, 31, 0.94);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px);
+  color: var(--text);
   padding: 10px 12px;
   pointer-events: auto;
 }
@@ -17713,8 +19305,24 @@ button.builder-review-target:hover {
     grid-template-columns: 1fr;
   }
 
+  .agent-goal-progress,
   .agent-run-proof-strip,
+  .agent-runtime-proof-actions,
   .agent-run-topbar-actions {
+    grid-column: 1 / -1;
+  }
+
+  .agent-run-proof-strip,
+  .agent-runtime-proof-actions,
+  .agent-run-topbar-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-runtime-proof-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-runtime-proof-buttons {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -20545,6 +22153,65 @@ body::-webkit-scrollbar-thumb {
   margin-top: 0;
 }
 
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"] {
+  gap: 0;
+  margin-top: 2px;
+  border: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 2px 0;
+  box-shadow: none;
+}
+
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"] > summary {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--ref-muted, rgba(148, 163, 184, 0.88));
+  font-size: 12px;
+}
+
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"] > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"] > summary span {
+  color: var(--ref-muted, rgba(148, 163, 184, 0.88));
+  font-size: 12px;
+}
+
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"] > summary strong {
+  min-width: 0;
+  color: rgba(229, 231, 235, 0.92);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"][open] {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.016);
+  padding: 8px;
+}
+
+.fluxos-turn-receipt-strip[data-chat-receipt-collapsed="true"][open] > summary {
+  margin-bottom: 8px;
+}
+
+.fluxos-turn-receipt-body {
+  display: grid;
+  gap: 7px;
+}
+
 .agent-turn-receipt.compact {
   margin: 8px 12px 0;
 }
@@ -20560,6 +22227,30 @@ body::-webkit-scrollbar-thumb {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.agent-turn-receipt-grid[data-agent-turn-receipt-route-row="true"],
+.fluxos-turn-receipt-grid[data-agent-turn-receipt-route-row="true"] {
+  gap: 4px 12px;
+}
+
+.agent-turn-receipt.compact .agent-turn-receipt-grid[data-agent-turn-receipt-route-row="true"],
+.fluxos-turn-receipt-strip.compact .fluxos-turn-receipt-grid[data-agent-turn-receipt-route-row="true"] {
+  gap: 4px 12px;
+}
+
+.agent-turn-receipt-grid[data-agent-turn-receipt-route-row="true"] > span,
+.fluxos-turn-receipt-grid[data-agent-turn-receipt-route-row="true"] > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  white-space: nowrap;
+}
+
+.agent-turn-receipt-grid[data-agent-turn-receipt-route-row="true"] > span:not(:first-of-type),
+.fluxos-turn-receipt-grid[data-agent-turn-receipt-route-row="true"] > span:not(:first-of-type) {
+  border-left: 1px solid rgba(148, 163, 184, 0.2);
+  padding-left: 12px;
 }
 
 .agent-turn-receipt-head {
@@ -20660,6 +22351,21 @@ body::-webkit-scrollbar-thumb {
   font-size: 12px;
 }
 
+.agent-turn-receipt-details summary,
+.fluxos-turn-receipt-strip .fluxos-message-trace summary {
+  width: fit-content;
+  border-radius: 999px;
+  color: var(--ref-muted, rgba(148, 163, 184, 0.82));
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: none;
+}
+
+.agent-turn-receipt-details summary:hover,
+.fluxos-turn-receipt-strip .fluxos-message-trace summary:hover {
+  color: var(--ref-text, #f8fafc);
+}
+
 .agent-turn-receipt-details pre,
 .fluxos-turn-receipt-strip pre {
   max-height: 180px;
@@ -20689,6 +22395,8 @@ body::-webkit-scrollbar-thumb {
   z-index: 25;
   display: grid;
   width: min(320px, calc(100vw - 32px));
+  max-height: min(430px, calc(100dvh - 140px));
+  overflow: auto;
   gap: 4px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
@@ -26776,6 +28484,74 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.45;
 }
 
+.fluxos-agent-proof-bundle-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(8, 12, 16, 0.34);
+  padding: 10px;
+}
+
+.fluxos-agent-proof-bundle-chip.good {
+  border-color: rgba(74, 222, 128, 0.28);
+  background: rgba(74, 222, 128, 0.06);
+}
+
+.fluxos-agent-proof-bundle-chip.warn {
+  border-color: rgba(214, 168, 79, 0.34);
+  background: rgba(214, 168, 79, 0.07);
+}
+
+.fluxos-agent-proof-bundle-chip > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fluxos-agent-proof-bundle-chip span {
+  color: var(--control-muted);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.fluxos-agent-proof-bundle-chip strong {
+  color: var(--control-text);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.fluxos-agent-proof-bundle-chip p {
+  margin: 0;
+  color: var(--control-muted);
+  font-size: 11px;
+  line-height: 1.38;
+}
+
+.fluxos-agent-proof-bundle-chip button {
+  min-height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--control-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.fluxos-agent-proof-bundle-chip button:hover,
+.fluxos-agent-proof-bundle-chip button:focus-visible {
+  border-color: rgba(91, 140, 255, 0.42);
+  background: rgba(91, 140, 255, 0.12);
+  outline: 0;
+}
+
 .fluxos-t3-repair-plan {
   display: grid;
   gap: 10px;
@@ -27529,6 +29305,40 @@ body::-webkit-scrollbar-thumb {
   text-align: center;
 }
 
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-band,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-band,
+.fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-band {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path,
+.fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path {
+  grid-column: 1 / -1;
+  grid-template-columns:
+    minmax(72px, 0.55fr)
+    minmax(96px, 0.7fr)
+    minmax(132px, 0.9fr)
+    minmax(320px, 1.85fr);
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions,
+.fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-self: center;
+  min-width: min(520px, 48vw);
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"],
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"],
+.fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"] {
+  grid-column: auto;
+}
+
 .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-thread {
   min-height: clamp(430px, 58dvh, 760px);
   max-height: min(66dvh, 820px);
@@ -27758,6 +29568,7 @@ body::-webkit-scrollbar-thumb {
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-operations-brief,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-command-rail,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-first-blocker,
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-beginner-guide,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-focus-drawer {
   border-radius: 8px;
@@ -27807,7 +29618,7 @@ body::-webkit-scrollbar-thumb {
 
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-brief-actions button {
   min-height: 26px;
-  border-radius: 6px;
+  border-radius: 999px;
 }
 
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-command-rail {
@@ -27968,6 +29779,55 @@ body::-webkit-scrollbar-thumb {
   display: none;
 }
 
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action {
+  grid-template-columns: minmax(210px, 0.42fr) minmax(150px, 0.22fr) auto;
+  gap: 7px;
+  align-items: center;
+  border-color: rgba(91, 140, 255, 0.14);
+  background: rgba(91, 140, 255, 0.026);
+  padding: 6px 8px;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-metrics {
+  gap: 4px;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-metrics article {
+  border-left-color: rgba(255, 255, 255, 0.075);
+  padding-left: 7px;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-metrics strong {
+  font-size: 14px;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-actions {
+  gap: 4px;
+}
+
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-actions button {
+  min-height: 24px;
+  border-radius: 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-beginner-guide {
   grid-template-columns: minmax(190px, 0.32fr) minmax(0, 1fr) minmax(330px, 0.44fr);
   gap: 7px;
@@ -28101,6 +29961,7 @@ body::-webkit-scrollbar-thumb {
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-operations-brief,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-command-rail,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-first-blocker,
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-beginner-guide,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-focus-drawer {
   min-height: 0;
@@ -28162,6 +30023,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-first-blocker,
+.fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action,
 .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-beginner-guide {
   padding: 5px 7px;
 }
@@ -28260,6 +30122,7 @@ body::-webkit-scrollbar-thumb {
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-operations-brief,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-command-rail,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-first-blocker,
+  .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-action,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-beginner-guide,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-focus-drawer {
     grid-template-columns: 1fr;
@@ -28270,6 +30133,7 @@ body::-webkit-scrollbar-thumb {
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-brief-metrics,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-live-command-rail-grid,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-first-blocker-metrics,
+  .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-next-safe-metrics,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-beginner-guide-grid,
   .fluxos-builder[data-builder-clarity-mode="focus"] .fluxos-builder-focus-drawer-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -28347,6 +30211,47 @@ body::-webkit-scrollbar-thumb {
   font-size: 11px;
   font-weight: 760;
   padding: 0 10px;
+}
+
+.fluxos-critical-blockers-grid button[data-builder-blocker-action="watchdog:refresh"] {
+  border-color: rgba(214, 168, 79, 0.4);
+  background: rgba(214, 168, 79, 0.12);
+}
+
+.fluxos-builder-blocker-receipt {
+  justify-self: start;
+  max-width: min(100%, 760px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--control-muted);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  padding: 5px 8px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fluxos-builder-blocker-receipt[data-builder-blocker-receipt-state="clear"] {
+  border-color: rgba(103, 215, 128, 0.24);
+  background: rgba(103, 215, 128, 0.06);
+  color: rgba(206, 255, 217, 0.86);
+}
+
+.fluxos-builder-blocker-receipt[data-builder-blocker-receipt-state="blocked"],
+.fluxos-builder-blocker-receipt[data-builder-blocker-receipt-state="waiting"] {
+  border-color: rgba(214, 168, 79, 0.28);
+  background: rgba(214, 168, 79, 0.08);
+  color: rgba(255, 230, 178, 0.86);
+}
+
+.fluxos-critical-blockers-grid button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .fluxos-operator-priority-grid {
@@ -31108,6 +33013,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .notification-stack[data-notification-surface="builder"],
+.notification-stack[data-notification-surface="browser"],
 .notification-stack[data-notification-surface="workbench"] {
   top: auto;
   right: max(14px, env(safe-area-inset-right));
@@ -31117,11 +33023,13 @@ body::-webkit-scrollbar-thumb {
 }
 
 .notification-stack[data-notification-surface="builder"].notification-stack-compact,
+.notification-stack[data-notification-surface="browser"].notification-stack-compact,
 .notification-stack[data-notification-surface="workbench"].notification-stack-compact {
   width: min(286px, calc(100vw - 28px));
 }
 
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode {
   left: max(14px, env(safe-area-inset-left));
   right: auto;
@@ -31131,6 +33039,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode .notification-stack-collapsed,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode .notification-stack-collapsed,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode .notification-stack-collapsed {
   display: grid;
   grid-template-columns: 1fr;
@@ -31144,6 +33053,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode .notification-stack-collapsed::before,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode .notification-stack-collapsed::before,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode .notification-stack-collapsed::before {
   content: "";
   width: 7px;
@@ -31155,6 +33065,9 @@ body::-webkit-scrollbar-thumb {
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode .notification-stack-collapsed span,
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode .notification-stack-collapsed strong,
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode .notification-stack-collapsed small,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode .notification-stack-collapsed span,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode .notification-stack-collapsed strong,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode .notification-stack-collapsed small,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode .notification-stack-collapsed span,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode .notification-stack-collapsed strong,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode .notification-stack-collapsed small {
@@ -31168,6 +33081,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .notification-stack[data-notification-surface="builder"].notification-stack-collapsed-mode .notification-stack-collapsed em,
+.notification-stack[data-notification-surface="browser"].notification-stack-collapsed-mode .notification-stack-collapsed em,
 .notification-stack[data-notification-surface="workbench"].notification-stack-collapsed-mode .notification-stack-collapsed em {
   position: absolute;
   overflow: hidden;
@@ -31609,7 +33523,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-operator,
-.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-operator {
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-user,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-operator,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-user {
   justify-self: end;
   width: min(70ch, 82%);
   border-color: rgba(255, 255, 255, 0.075);
@@ -31632,7 +33548,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-operator .fluxos-message-head,
-.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-operator .fluxos-message-head {
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-user .fluxos-message-head,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-operator .fluxos-message-head,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-message.dialogue-turn.role-user .fluxos-message-head {
   align-items: flex-end;
 }
 
@@ -31659,7 +33577,7 @@ body::-webkit-scrollbar-thumb {
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-band {
   order: 3;
   display: grid;
-  grid-template-columns: minmax(160px, 0.55fr) minmax(500px, 1fr);
+  grid-template-columns: minmax(260px, 0.62fr) minmax(0, 1fr) minmax(430px, 0.82fr);
   gap: 8px;
   align-items: center;
   margin: 0;
@@ -31684,6 +33602,7 @@ body::-webkit-scrollbar-thumb {
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy {
+  align-self: center;
   display: grid;
   gap: 2px;
   min-width: 0;
@@ -31694,18 +33613,20 @@ body::-webkit-scrollbar-thumb {
   display: block;
   color: var(--fluxos-muted);
   font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy strong,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy strong {
-  overflow: hidden;
+  display: block;
+  overflow: visible;
+  overflow-wrap: anywhere;
   color: var(--fluxos-text);
   font-size: 12px;
   line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy p,
@@ -31715,19 +33636,1109 @@ body::-webkit-scrollbar-thumb {
   display: none;
 }
 
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns:
+    minmax(72px, 0.55fr)
+    minmax(96px, 0.7fr)
+    minmax(132px, 0.9fr)
+    minmax(320px, 1.85fr);
+  width: 100%;
+  min-width: 0;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path article,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path article {
+  min-height: 40px;
+  padding: 6px 10px;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path span,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path span,
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path strong,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path strong {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path strong,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path strong {
+  font-size: 12px;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path small,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path small {
+  display: none;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal {
+  position: relative;
+  order: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 14px 20px;
+  align-items: stretch;
+  min-height: clamp(300px, 38dvh, 460px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.105), transparent 21%),
+    radial-gradient(circle at 50% 46%, rgba(120, 120, 125, 0.13), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.014));
+  padding: clamp(18px, 3vw, 34px);
+  overflow: hidden;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam {
+  position: absolute;
+  inset: 12% 33%;
+  pointer-events: none;
+  opacity: 0.72;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i {
+  position: absolute;
+  inset: calc(var(--portal-ring, 0) * 13px);
+  border: 1px solid rgba(255, 255, 255, calc(0.26 - var(--portal-ring, 0) * 0.05));
+  border-radius: 999px;
+  transform: rotateX(62deg) rotateZ(calc(var(--portal-ring, 0) * 16deg));
+  animation: fluxos-portal-ring 7s linear infinite;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i:nth-child(2),
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i:nth-child(2) {
+  --portal-ring: 1;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i:nth-child(3),
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i:nth-child(3) {
+  --portal-ring: 2;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  gap: 10px;
+  max-width: 58ch;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy span,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy span {
+  color: rgba(247, 247, 247, 0.62);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy strong,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy strong {
+  color: #fff;
+  font-size: clamp(26px, 3.2vw, 48px);
+  font-weight: 620;
+  line-height: 1.02;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy p,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-copy p {
+  display: block;
+  max-width: 62ch;
+  color: rgba(247, 247, 247, 0.68);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fluxos-agent-portal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fluxos-agent-portal-meta em {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(247, 247, 247, 0.82);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 760;
+  padding: 5px 9px;
+}
+
+.fluxos-agent-coop-slots {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-self: center;
+}
+
+.fluxos-agent-coop-slots article {
+  display: grid;
+  gap: 5px;
+  min-height: 92px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.24);
+  padding: 12px;
+}
+
+.fluxos-agent-coop-slots article.connected {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.fluxos-agent-coop-slots article span,
+.fluxos-agent-coop-slots article small {
+  overflow: hidden;
+  color: rgba(247, 247, 247, 0.56);
+  font-size: 10px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-coop-slots article strong {
+  overflow: hidden;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal .fluxos-agent-first-view-path,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal .fluxos-agent-first-view-path {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal .fluxos-agent-thread-first-actions,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal .fluxos-agent-thread-first-actions {
+  grid-column: 1 / -1;
+  justify-self: start;
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal + .fluxos-agent-live-thread-proof,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-mission-portal + .fluxos-agent-live-thread-proof {
+  display: none;
+}
+
+@keyframes fluxos-portal-ring {
+  from {
+    transform: rotateX(62deg) rotateZ(0deg);
+  }
+  to {
+    transform: rotateX(62deg) rotateZ(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i,
+  .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-portal-beam i {
+    animation: none;
+  }
+}
+
+/* Agent Live portal correction: the selected mission is a co-op chamber, not a proof dashboard. */
+.reference-shell.surface-agent .fluxos-agent-mission-portal,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal {
+  position: relative !important;
+  order: -10 !important;
+  display: grid !important;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr) !important;
+  gap: 14px 20px !important;
+  align-items: stretch !important;
+  min-height: clamp(300px, 38dvh, 460px) !important;
+  margin: 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 0 !important;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.105), transparent 21%),
+    radial-gradient(circle at 50% 46%, rgba(120, 120, 125, 0.13), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.014)) !important;
+  padding: clamp(18px, 3vw, 34px) !important;
+  overflow: hidden !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-live-thread-proof,
+.fluxos-shell.surface-agent .fluxos-agent-live-thread-proof {
+  display: none !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-live-operations-brief,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-live-operations-brief {
+  order: 8 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-portal-copy p,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-portal-copy p {
+  display: block !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-thread-first-actions,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-thread-first-actions,
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-first-view-path,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-first-view-path {
+  grid-column: 1 / -1 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-runtime-proof-actions,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-runtime-proof-actions,
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-thread-first-metrics,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-thread-first-metrics {
+  display: none !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-first-view-path article,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-first-view-path article {
+  min-height: 48px !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-first-view-path small,
+.fluxos-shell.surface-agent .fluxos-agent-mission-portal .fluxos-agent-first-view-path small {
+  display: none !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"],
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 100dvh;
+  padding: clamp(18px, 4vw, 56px);
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] .fluxos-agent-main,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] .fluxos-agent-main {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: calc(100dvh - 96px);
+  padding: 0;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] .fluxos-agent-main > .fluxos-section-head,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] .fluxos-agent-main > .fluxos-section-head {
+  display: none;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"][data-agent-preview-open="false"] .fluxos-preview-panel,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"][data-agent-preview-open="false"] .fluxos-preview-panel {
+  display: none !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"][data-agent-preview-open="true"] .fluxos-preview-panel,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"][data-agent-preview-open="true"] .fluxos-preview-panel {
+  display: grid !important;
+  justify-self: center;
+  width: min(100%, 1120px);
+  min-height: min(74dvh, 760px);
+  opacity: 1;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"][data-agent-preview-open="true"] .fluxos-agent-main,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"][data-agent-preview-open="true"] .fluxos-agent-main {
+  min-height: auto;
+}
+
+.fluxos-agent-start-surface {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  width: min(100%, 820px);
+  gap: 18px;
+}
+
+.fluxos-agent-start-title {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  text-align: center;
+}
+
+.fluxos-agent-start-title span {
+  color: rgba(247, 247, 247, 0.58);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.fluxos-agent-start-title h1 {
+  max-width: 100%;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(34px, 5vw, 58px);
+  font-weight: 560;
+  line-height: 1.04;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.fluxos-agent-start-title p {
+  margin: 0;
+  color: rgba(247, 247, 247, 0.58);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.fluxos-agent-start-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.fluxos-agent-start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: min(100%, 780px);
+}
+
+.fluxos-agent-start-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #fff;
+  padding: 0 13px;
+  text-align: left;
+}
+
+.fluxos-agent-start-actions button:hover:not(:disabled),
+.fluxos-agent-start-actions button:focus-visible {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.095);
+}
+
+.fluxos-agent-start-actions button:disabled {
+  color: rgba(247, 247, 247, 0.38);
+  cursor: not-allowed;
+}
+
+.fluxos-agent-start-actions svg {
+  flex: 0 0 auto;
+}
+
+.fluxos-agent-start-actions span {
+  display: inline-grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.fluxos-agent-start-actions strong {
+  min-width: 0;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.fluxos-agent-start-actions small {
+  max-width: 150px;
+  overflow: hidden;
+  color: rgba(247, 247, 247, 0.55);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-start-preview-action {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  max-width: min(100%, 520px);
+  min-height: 40px;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 999px;
+  background: rgba(125, 211, 252, 0.075);
+  color: #fff;
+  padding: 0 16px;
+  text-align: left;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+}
+
+.fluxos-agent-start-preview-action:hover {
+  border-color: rgba(125, 211, 252, 0.5);
+  background: rgba(125, 211, 252, 0.12);
+}
+
+.fluxos-agent-start-preview-action span {
+  color: rgba(247, 247, 247, 0.72);
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fluxos-agent-start-preview-action strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-agent-start-model-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #fff;
+  padding: 0 13px;
+}
+
+.fluxos-agent-start-model-row button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fluxos-agent-start-model-row span {
+  color: rgba(247, 247, 247, 0.58);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.fluxos-agent-start-model-row strong {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.fluxos-agent-start-surface .fluxos-composer {
+  width: min(100%, 760px);
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+.fluxos-agent-start-surface .fluxos-composer textarea {
+  min-height: 92px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  padding: 12px;
+  font-size: 17px;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-status {
+  display: none;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-actions {
+  align-items: center;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-left-actions button,
+.fluxos-agent-start-surface .fluxos-composer-right-actions button {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  padding: 0;
+  justify-content: center;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-right-actions .primary span {
+  display: none;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-right-actions {
+  gap: 6px;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-inline-route-control,
+.fluxos-shell.surface-agent .fluxos-agent-start-surface .fluxos-composer-inline-route-control {
+  width: auto !important;
+  min-width: 82px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  border-radius: 999px !important;
+  padding: 0 12px !important;
+  justify-content: center !important;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-inline-route-control span {
+  color: rgba(247, 247, 247, 0.56);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-inline-route-control strong {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fluxos-agent-start-surface .fluxos-composer-plus-menu {
+  left: -296px;
+  width: 296px;
+}
+
+@media (max-width: 760px) {
+  .reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"],
+  .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] {
+    max-width: 100vw;
+    overflow-x: hidden;
+    padding: 16px 12px;
+  }
+
+  .reference-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] .fluxos-agent-main,
+  .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-start-surface="true"] .fluxos-agent-main {
+    justify-items: center;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .fluxos-agent-start-surface,
+  .fluxos-agent-start-actions,
+  .fluxos-agent-start-surface .fluxos-composer {
+    width: min(100%, calc(100vw - 52px));
+    max-width: calc(100vw - 52px);
+    box-sizing: border-box;
+  }
+
+  .fluxos-agent-start-surface .fluxos-composer {
+    overflow: hidden;
+  }
+
+  .fluxos-agent-start-surface .fluxos-composer-actions {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+  }
+
+  .fluxos-agent-start-surface .fluxos-composer-right-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .fluxos-agent-start-surface .fluxos-composer-inline-route-control,
+  .fluxos-shell.surface-agent .fluxos-agent-start-surface .fluxos-composer-inline-route-control {
+    max-width: 126px;
+    min-width: 78px !important;
+    padding-inline: 10px !important;
+  }
+
+  .fluxos-agent-start-surface .fluxos-composer-inline-route-control strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .fluxos-agent-start-title h1 {
+    width: min(100%, calc(100vw - 80px));
+    max-width: 11ch;
+    font-size: clamp(28px, 9vw, 36px);
+  }
+
+  .fluxos-agent-start-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* Operator correction pass: Agent start, Browser, Skills, and Phone are full
+   work surfaces, not square-card demos. */
+.modal-panel:has([data-agent-live-start="true"]) {
+  width: min(980px, calc(100vw - 32px)) !important;
+  max-height: min(94dvh, 980px) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: rgba(10, 11, 13, 0.985) !important;
+  box-shadow: none !important;
+  padding: clamp(20px, 3vw, 34px) !important;
+}
+
+.modal-panel:has([data-agent-live-start="true"]) .modal-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  padding-bottom: 14px !important;
+}
+
+.modal-panel:has([data-agent-live-start="true"]) .modal-header strong,
+.modal-panel:has([data-agent-live-start="true"]) .modal-title {
+  font-size: clamp(26px, 4vw, 46px) !important;
+  line-height: 0.98 !important;
+  letter-spacing: 0 !important;
+}
+
+.modal-panel:has([data-agent-live-start="true"]) .modal-summary {
+  max-width: 62ch !important;
+  color: rgba(246, 247, 243, 0.72) !important;
+}
+
+[data-agent-live-start="true"] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+}
+
+[data-agent-live-start="true"] .mission-guided-launch-path,
+[data-agent-live-start="true"] .mission-launch-lane-status,
+[data-agent-live-start="true"] .mission-route-selector-row,
+[data-agent-live-start="true"] .mission-launch-route-decision,
+[data-agent-live-start="true"] .mission-launch-readiness,
+[data-agent-live-start="true"] .mission-launch-shortcuts,
+[data-agent-live-start="true"] .mission-launch-recommendation,
+[data-agent-live-start="true"] .mission-launch-route-trust {
+  display: none !important;
+}
+
+[data-agent-live-start="true"] textarea[data-mission-launch-objective="quickstart"] {
+  min-height: clamp(168px, 24dvh, 260px) !important;
+  border: 0 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #fafaf7 !important;
+  font-size: clamp(20px, 2.2vw, 30px) !important;
+  font-weight: 760 !important;
+  line-height: 1.15 !important;
+  padding: 16px 0 !important;
+}
+
+[data-agent-live-start="true"] textarea[data-mission-launch-objective="quickstart"]::placeholder {
+  color: rgba(250, 250, 247, 0.35) !important;
+}
+
+[data-agent-live-start="true"] .mission-quickstart-actions {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 18px !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+  padding: 14px 0 !important;
+}
+
+[data-agent-live-start="true"] .mission-quickstart-actions span {
+  max-width: 68ch;
+  color: rgba(246, 247, 243, 0.7) !important;
+  font-size: 13px !important;
+  line-height: 1.42 !important;
+}
+
+[data-agent-live-start="true"] .mission-quickstart-actions button,
+.modal-panel:has([data-agent-live-start="true"]) .modal-actions button.primary,
+.modal-panel:has([data-agent-live-start="true"]) .modal-actions .action-btn.primary {
+  min-height: 44px !important;
+  border: 1px solid rgba(255, 255, 255, 0.84) !important;
+  border-radius: 999px !important;
+  background: #f6f6f1 !important;
+  color: #090a0c !important;
+  padding: 0 22px !important;
+}
+
+[data-agent-live-start="true"] .mission-starter-templates {
+  order: 3;
+  display: grid !important;
+  grid-template-columns: minmax(140px, 0.6fr) repeat(5, minmax(0, 1fr)) !important;
+  align-items: stretch !important;
+  gap: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  padding: 0 !important;
+}
+
+[data-agent-live-start="true"] .mission-starter-templates > span {
+  align-self: center;
+  color: rgba(246, 247, 243, 0.58) !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+[data-agent-live-start="true"] .mission-starter-templates button {
+  min-height: 72px !important;
+  border: 0 !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 12px 12px !important;
+}
+
+[data-agent-live-start="true"] .mission-starter-templates button:hover,
+[data-agent-live-start="true"] .mission-starter-templates button:focus-visible {
+  background: rgba(255, 255, 255, 0.055) !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-workspace,
+.fluxos-shell.surface-browser .fluxos-browser-workspace,
+.reference-shell.surface-workbench .fluxos-browser-workspace,
+.fluxos-shell.surface-workbench .fluxos-browser-workspace {
+  width: min(100%, calc(100vw - 76px)) !important;
+  min-height: calc(100dvh - 24px) !important;
+  padding: clamp(18px, 3vw, 34px) clamp(18px, 4vw, 46px) !important;
+  background: #090a0c !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-workspace-head,
+.fluxos-shell.surface-browser .fluxos-browser-workspace-head,
+.reference-shell.surface-workbench .fluxos-browser-workspace-head,
+.fluxos-shell.surface-workbench .fluxos-browser-workspace-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 20px !important;
+  align-items: end !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  padding-bottom: 18px !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-workspace h1,
+.fluxos-shell.surface-browser .fluxos-browser-workspace h1,
+.reference-shell.surface-workbench .fluxos-browser-workspace h1,
+.fluxos-shell.surface-workbench .fluxos-browser-workspace h1 {
+  max-width: 12ch !important;
+  margin: 0 !important;
+  color: #f8f8f3 !important;
+  font-size: clamp(42px, 7vw, 92px) !important;
+  line-height: 0.92 !important;
+  letter-spacing: 0 !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-location,
+.fluxos-shell.surface-browser .fluxos-browser-location,
+.reference-shell.surface-workbench .fluxos-browser-location,
+.fluxos-shell.surface-workbench .fluxos-browser-location {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto auto !important;
+  gap: 10px !important;
+  border: 0 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  padding: 16px 0 !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-location input,
+.fluxos-shell.surface-browser .fluxos-browser-location input,
+.reference-shell.surface-workbench .fluxos-browser-location input,
+.fluxos-shell.surface-workbench .fluxos-browser-location input {
+  border: 0 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #fff !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-canvas,
+.fluxos-shell.surface-browser .fluxos-browser-canvas,
+.reference-shell.surface-workbench .fluxos-browser-canvas,
+.fluxos-shell.surface-workbench .fluxos-browser-canvas {
+  min-height: clamp(520px, 66dvh, 920px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.13) !important;
+  border-radius: 0 !important;
+  background: #0f1115 !important;
+  overflow: hidden !important;
+}
+
+.reference-shell.surface-browser .fluxos-browser-frame,
+.fluxos-shell.surface-browser .fluxos-browser-frame,
+.reference-shell.surface-workbench .fluxos-browser-frame,
+.fluxos-shell.surface-workbench .fluxos-browser-frame {
+  width: 100% !important;
+  min-height: clamp(520px, 66dvh, 920px) !important;
+  border: 0 !important;
+  background: #fff !important;
+}
+
+.reference-shell.surface-skills .fluxos-skills,
+.fluxos-shell.surface-skills .fluxos-skills {
+  width: min(1180px, calc(100vw - 112px)) !important;
+  margin: 0 auto !important;
+  padding: clamp(22px, 4vw, 48px) 0 !important;
+}
+
+.reference-shell.surface-skills .fluxos-skill-library-workspace,
+.fluxos-shell.surface-skills .fluxos-skill-library-workspace {
+  display: grid !important;
+  grid-template-columns: minmax(260px, 0.32fr) minmax(0, 1fr) !important;
+  gap: clamp(24px, 4vw, 54px) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.14) !important;
+  padding-top: 24px !important;
+}
+
+.reference-shell.surface-skills .fluxos-skill-library-row,
+.fluxos-shell.surface-skills .fluxos-skill-library-row,
+.reference-shell.surface-skills .fluxos-skill-editor-panel,
+.fluxos-shell.surface-skills .fluxos-skill-editor-panel {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-skills .fluxos-skill-library-row,
+.fluxos-shell.surface-skills .fluxos-skill-library-row {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: transparent !important;
+  padding-left: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-progress,
+.fluxos-shell.surface-phone .fluxos-phone-progress {
+  width: min(520px, calc(100vw - 40px)) !important;
+  margin: 20px auto !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #090a0c !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-hero,
+.fluxos-shell.surface-phone .fluxos-phone-hero,
+.reference-shell.surface-phone .fluxos-phone-metrics,
+.fluxos-shell.surface-phone .fluxos-phone-metrics,
+.reference-shell.surface-phone .fluxos-phone-push-proof,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof,
+.reference-shell.surface-phone .fluxos-phone-mission-list,
+.fluxos-shell.surface-phone .fluxos-phone-mission-list,
+.reference-shell.surface-phone .fluxos-phone-notifications,
+.fluxos-shell.surface-phone .fluxos-phone-notifications {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.13) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 18px 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-hero,
+.fluxos-shell.surface-phone .fluxos-phone-hero {
+  min-height: 42dvh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-end !important;
+  border-top: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-hero > strong,
+.fluxos-shell.surface-phone .fluxos-phone-hero > strong {
+  max-width: 11ch !important;
+  color: #fafaf7 !important;
+  font-size: clamp(34px, 10vw, 54px) !important;
+  line-height: 0.96 !important;
+  letter-spacing: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-status-row,
+.fluxos-shell.surface-phone .fluxos-phone-status-row,
+.reference-shell.surface-phone .fluxos-phone-metrics,
+.fluxos-shell.surface-phone .fluxos-phone-metrics,
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-status-row article,
+.fluxos-shell.surface-phone .fluxos-phone-status-row article,
+.reference-shell.surface-phone .fluxos-phone-metrics article,
+.fluxos-shell.surface-phone .fluxos-phone-metrics article,
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid article,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article {
+  min-height: auto !important;
+  border: 0 !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0 10px !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-status-row article:first-child,
+.fluxos-shell.surface-phone .fluxos-phone-status-row article:first-child,
+.reference-shell.surface-phone .fluxos-phone-metrics article:first-child,
+.fluxos-shell.surface-phone .fluxos-phone-metrics article:first-child,
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid article:first-child,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article:first-child {
+  border-left: 0 !important;
+  padding-left: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-actions,
+.fluxos-shell.surface-phone .fluxos-phone-actions {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto !important;
+  gap: 8px !important;
+  margin-top: 18px !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-actions button,
+.fluxos-shell.surface-phone .fluxos-phone-actions button,
+.reference-shell.surface-phone .fluxos-phone-push-proof button,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof button,
+.reference-shell.surface-phone [data-phone-mission-card="true"],
+.fluxos-shell.surface-phone [data-phone-mission-card="true"],
+.reference-shell.surface-phone [data-phone-notification-card="true"],
+.fluxos-shell.surface-phone [data-phone-notification-card="true"] {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.11) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-phone [data-phone-primary-action="true"],
+.fluxos-shell.surface-phone [data-phone-primary-action="true"] {
+  min-height: 44px !important;
+}
+
+.reference-shell.surface-phone [data-phone-web-push-action="true"],
+.fluxos-shell.surface-phone [data-phone-web-push-action="true"] {
+  min-height: 44px !important;
+}
+
+.reference-shell.surface-phone [data-phone-segment-action],
+.fluxos-shell.surface-phone [data-phone-segment-action] {
+  min-height: 44px !important;
+}
+
+.reference-shell.surface-phone [data-phone-segment-current="true"],
+.fluxos-shell.surface-phone [data-phone-segment-current="true"] {
+  background: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: inset 0 -2px 0 rgba(244, 242, 234, 0.72) !important;
+  color: #fff !important;
+}
+
+.reference-shell.surface-phone [data-phone-segment-action]:focus-visible,
+.fluxos-shell.surface-phone [data-phone-segment-action]:focus-visible {
+  outline: 2px solid rgba(244, 242, 234, 0.82) !important;
+  outline-offset: 2px !important;
+}
+
+.reference-shell.surface-phone [data-phone-notification-focus-target="true"],
+.fluxos-shell.surface-phone [data-phone-notification-focus-target="true"] {
+  scroll-margin-top: 12px !important;
+}
+
+.reference-shell.surface-phone [data-phone-notification-focus-target="true"]:focus,
+.fluxos-shell.surface-phone [data-phone-notification-focus-target="true"]:focus {
+  border-color: rgba(244, 242, 234, 0.34) !important;
+  box-shadow: inset 3px 0 0 rgba(244, 242, 234, 0.72) !important;
+  outline: none !important;
+  outline-width: 0 !important;
+}
+
+.reference-shell.surface-phone [data-phone-notification-card="true"][data-phone-notification-target="false"],
+.fluxos-shell.surface-phone [data-phone-notification-card="true"][data-phone-notification-target="false"] {
+  cursor: default !important;
+  opacity: 1 !important;
+}
+
+.reference-shell.surface-phone [data-phone-mission-card="true"][data-phone-mission-target="false"],
+.fluxos-shell.surface-phone [data-phone-mission-card="true"][data-phone-mission-target="false"] {
+  cursor: default !important;
+  opacity: 1 !important;
+}
+
+@media (max-width: 760px) {
+  .modal-panel:has([data-agent-live-start="true"]) {
+    inset: 0 !important;
+    width: 100vw !important;
+    max-height: 100dvh !important;
+    padding: 18px !important;
+  }
+
+  [data-agent-live-start="true"] .mission-quickstart-actions,
+  [data-agent-live-start="true"] .mission-starter-templates,
+  .reference-shell.surface-browser .fluxos-browser-workspace-head,
+  .fluxos-shell.surface-browser .fluxos-browser-workspace-head,
+  .reference-shell.surface-browser .fluxos-browser-location,
+  .fluxos-shell.surface-browser .fluxos-browser-location,
+  .reference-shell.surface-skills .fluxos-skill-library-workspace,
+  .fluxos-shell.surface-skills .fluxos-skill-library-workspace,
+  .reference-shell.surface-phone .fluxos-phone-actions,
+  .fluxos-shell.surface-phone .fluxos-phone-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  [data-agent-live-start="true"] .mission-starter-templates button {
+    border-left: 0 !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.11) !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row,
+  .reference-shell.surface-phone .fluxos-phone-metrics,
+  .fluxos-shell.surface-phone .fluxos-phone-metrics,
+  .reference-shell.surface-phone .fluxos-phone-push-proof-grid,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row article,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row article,
+  .reference-shell.surface-phone .fluxos-phone-metrics article,
+  .fluxos-shell.surface-phone .fluxos-phone-metrics article,
+  .reference-shell.surface-phone .fluxos-phone-push-proof-grid article,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article {
+    border-left: 0 !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.11) !important;
+    padding: 8px 0 !important;
+  }
+}
+
+@media (max-width: 460px) {
+  .fluxos-agent-start-actions button {
+    flex: 1 1 100%;
+  }
+}
+
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 5px;
+  width: max-content;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  grid-template-columns: none;
+  gap: 4px;
+  justify-content: flex-start;
+  justify-self: start;
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button {
-  min-height: 32px;
+  flex: 0 0 auto;
+  min-height: 30px;
   min-width: 0;
-  border-radius: 7px;
-  padding: 0 8px;
+  border-radius: 999px;
+  padding: 0 12px;
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -31737,6 +34748,14 @@ body::-webkit-scrollbar-thumb {
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"],
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"] {
   grid-column: auto;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-proof-repair-action="true"],
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-proof-repair-action="true"],
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-agent-proof-repair-action="true"] {
+  min-width: 96px;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer,
@@ -31775,18 +34794,59 @@ body::-webkit-scrollbar-thumb {
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-left-actions button,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-left-actions button,
-.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button,
-.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button {
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button:not(.fluxos-composer-inline-route-control),
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button:not(.fluxos-composer-inline-route-control) {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
   min-height: 38px;
   border-color: rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.035);
+  padding: 0;
+  justify-content: center;
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button.primary,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button.primary {
   background: #f4f4f5;
   color: #09090b;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button[data-agent-composer-submit="true"] svg,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-composer-right-actions button[data-agent-composer-submit="true"] svg {
+  color: #050505 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid .fluxos-composer-right-actions .fluxos-composer-inline-route-control,
+.fluxos-shell.surface-agent .fluxos-agent-grid .fluxos-composer-right-actions .fluxos-composer-inline-route-control {
+  width: auto;
+  min-width: 82px;
+  height: 38px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-color: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid .fluxos-composer-inline-route-control span,
+.fluxos-shell.surface-agent .fluxos-agent-grid .fluxos-composer-inline-route-control span {
+  color: rgba(247, 247, 247, 0.56);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid .fluxos-composer-inline-route-control strong,
+.fluxos-shell.surface-agent .fluxos-agent-grid .fluxos-composer-inline-route-control strong {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-bottom-route-summary,
@@ -31856,6 +34916,61 @@ body::-webkit-scrollbar-thumb {
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-advanced-drawer,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-preview-panel,
 .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-evidence-rail {
+  display: none;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-live-operations-brief,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-live-operations-brief {
+  order: -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.62fr) auto;
+  align-items: center;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 12px;
+  opacity: 1;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"][data-agent-notifications-open="true"] .fluxos-agent-notification-rail,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"][data-agent-notifications-open="true"] .fluxos-agent-notification-rail {
+  order: 1;
+  display: grid;
+  max-height: min(42vh, 360px);
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0 0 12px;
+  opacity: 1;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"][data-agent-notifications-open="true"] .fluxos-agent-notification-list,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"][data-agent-notifications-open="true"] .fluxos-agent-notification-list {
+  max-height: min(28vh, 230px);
+  overflow: auto;
+}
+
+.reference-shell.surface-agent [data-notification-actions-toolbar="true"] button,
+.fluxos-shell.surface-agent [data-notification-actions-toolbar="true"] button {
+  flex: 0 0 auto;
+  border-radius: 999px !important;
+}
+
+.reference-shell.surface-agent [data-notification-card-actions="true"],
+.fluxos-shell.surface-agent [data-notification-card-actions="true"] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.reference-shell.surface-agent [data-notification-card-actions="true"] button,
+.fluxos-shell.surface-agent [data-notification-card-actions="true"] button {
+  flex: 0 0 auto;
+  border-radius: 999px !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-live-brief-main p,
+.fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-live-brief-main p {
   display: none;
 }
 
@@ -31938,23 +35053,39 @@ body::-webkit-scrollbar-thumb {
     padding: 7px;
   }
 
+  .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path,
+  .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 6px;
+  }
+
+  .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path article,
+  .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-first-view-path article {
+    border-left: 0;
+    padding: 4px 6px;
+  }
+
   .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy strong,
   .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-copy strong {
-    display: none;
+    display: block;
+    font-size: 12px;
   }
 
   .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions,
   .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    display: flex;
+    grid-template-columns: none;
     gap: 6px;
+    justify-content: flex-start;
     overflow: visible;
     padding-bottom: 0;
   }
 
   .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button,
   .fluxos-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button {
-    width: 100%;
+    width: auto;
   }
 
   .reference-shell.surface-agent .fluxos-agent-grid[data-agent-clarity-mode="focus"] .fluxos-agent-thread-first-actions button[data-live-agent-action="continue"],
@@ -32038,6 +35169,44 @@ body::-webkit-scrollbar-thumb {
   border-color: rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.075);
   color: var(--fluxos-text);
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-left-rail :where(.fluxos-brand, nav button),
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"][data-rail-tooltip] {
+  position: relative;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-left-rail :where(.fluxos-brand, nav button)[data-rail-tooltip]::after,
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"][data-rail-tooltip]::after {
+  content: attr(data-rail-tooltip);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  z-index: 60;
+  min-width: max-content;
+  max-width: 220px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(16, 16, 16, 0.96);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.25;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-4px, -50%, 0);
+  transition:
+    opacity 130ms ease,
+    transform 130ms ease;
+  white-space: nowrap;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-left-rail :where(.fluxos-brand, nav button)[data-rail-tooltip]:is(:hover, :focus-visible)::after,
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"][data-rail-tooltip]:is(:hover, :focus-within)::after {
+  opacity: 1;
+  transform: translate3d(0, -50%, 0);
 }
 
 .fluxos-shell:not(.surface-home) .fluxos-main {
@@ -32749,6 +35918,7 @@ body::-webkit-scrollbar-thumb {
   .fluxos-agent-diagnostics-metrics article,
   .fluxos-live-brief-metrics div,
   .fluxos-first-blocker-metrics article,
+  .fluxos-builder-next-safe-metrics article,
   .fluxos-queue-first-metrics article,
   .fluxos-metric,
   .fluxos-tool-event,
@@ -32815,6 +35985,7 @@ body::-webkit-scrollbar-thumb {
   .fluxos-agent-diagnostics-metrics,
   .fluxos-live-brief-metrics,
   .fluxos-first-blocker-metrics,
+  .fluxos-builder-next-safe-metrics,
   .fluxos-queue-first-metrics,
   .fluxos-tool-grid,
   .fluxos-settings-provider-grid,
@@ -33317,6 +36488,35 @@ body::-webkit-scrollbar-thumb {
 ) {
   border-radius: 0 !important;
   box-shadow: none !important;
+}
+
+.reference-shell.surface-agent [data-live-operations-actions="true"],
+.fluxos-shell.surface-agent [data-live-operations-actions="true"] {
+  display: flex !important;
+  flex-wrap: wrap;
+  grid-template-columns: none !important;
+  justify-content: flex-end;
+  justify-self: end;
+}
+
+.reference-shell.surface-agent [data-live-operations-actions="true"] button,
+.fluxos-shell.surface-agent [data-live-operations-actions="true"] button {
+  flex: 0 0 auto;
+  border-radius: 999px !important;
+}
+
+.reference-shell.surface-agent [data-live-agent-command-actions="true"],
+.fluxos-shell.surface-agent [data-live-agent-command-actions="true"] {
+  display: flex !important;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  grid-template-columns: none !important;
+}
+
+.reference-shell.surface-agent [data-live-agent-command-actions="true"] button,
+.fluxos-shell.surface-agent [data-live-agent-command-actions="true"] button {
+  flex: 0 0 auto;
+  border-radius: 999px !important;
 }
 
 .fluxos-shell.surface-agent .fluxos-preview-panel[data-agent-preview-window="true"] {
@@ -34092,8 +37292,40 @@ body::-webkit-scrollbar-thumb {
 .fluxos-shell.surface-skills .fluxos-skill-library-workspace {
   display: grid;
   grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
-  gap: 34px;
+  gap: 18px 34px;
   padding: 24px 0 10px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-source-strip {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 12px;
+  min-width: 0;
+  border-block: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 10px 0;
+  color: rgba(214, 225, 238, 0.72);
+  font-size: 12px;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-source-strip span {
+  color: rgba(214, 225, 238, 0.62);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-source-strip strong {
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.fluxos-shell.surface-skills .fluxos-skill-source-strip small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fluxos-shell.surface-skills .fluxos-skill-library-list {
@@ -34139,10 +37371,10 @@ body::-webkit-scrollbar-thumb {
   align-items: center;
   border: 0 !important;
   border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 0 !important;
+  border-radius: 10px !important;
   background: transparent !important;
   color: rgba(239, 246, 255, 0.86);
-  padding: 10px 2px;
+  padding: 10px 8px;
   text-align: left;
 }
 
@@ -34302,6 +37534,15 @@ body::-webkit-scrollbar-thumb {
     gap: 22px;
   }
 
+  .fluxos-shell.surface-skills .fluxos-skill-source-strip {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
+  }
+
+  .fluxos-shell.surface-skills .fluxos-skill-source-strip small {
+    white-space: normal;
+  }
+
   .fluxos-shell.surface-skills .fluxos-skill-library-list {
     border-right: 0;
     padding-right: 0;
@@ -34309,5 +37550,2348 @@ body::-webkit-scrollbar-thumb {
 
   .fluxos-shell.surface-skills .fluxos-skill-editor-panel {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.reference-shell.surface-agent .fluxos-agent-grid .fluxos-composer-left-actions > .fluxos-composer-plus-trigger,
+.fluxos-shell.surface-agent .fluxos-agent-grid .fluxos-composer-left-actions > .fluxos-composer-plus-trigger,
+.reference-shell.surface-agent .fluxos-agent-grid .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control),
+.fluxos-shell.surface-agent .fluxos-agent-grid .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control),
+.reference-shell.surface-agent .fluxos-agent-start-surface .fluxos-composer-left-actions > .fluxos-composer-plus-trigger,
+.fluxos-shell.surface-agent .fluxos-agent-start-surface .fluxos-composer-left-actions > .fluxos-composer-plus-trigger,
+.reference-shell.surface-agent .fluxos-agent-start-surface .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control),
+.fluxos-shell.surface-agent .fluxos-agent-start-surface .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control) {
+  width: 38px !important;
+  min-width: 38px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  border-radius: 999px !important;
+  padding: 0 !important;
+  justify-content: center !important;
+}
+
+.reference-shell.surface-agent .fluxos-composer-plus-menu button,
+.fluxos-shell.surface-agent .fluxos-composer-plus-menu button {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 44px !important;
+  border-radius: 10px !important;
+  padding: 8px 10px !important;
+  justify-content: start !important;
+}
+
+.fluxos-shell:not(.surface-home) :where(
+  button,
+  [role="button"],
+  .fluxos-builder-timeline-rows button,
+  .fluxos-settings-list button,
+  .fluxos-skill-library-row,
+  .workspace-browser-root-button,
+  .workspace-browser-entry
+) {
+  border-radius: 10px !important;
+}
+
+.fluxos-shell:not(.surface-home) :where(
+  .fluxos-left-rail nav button,
+  .fluxos-brand,
+  .fluxos-rail-footer
+) {
+  border-radius: 12px !important;
+}
+
+.fluxos-shell:not(.surface-home) :where(
+  .fluxos-composer-plus-trigger,
+  .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control),
+  .fluxos-agent-start-surface .fluxos-composer-left-actions > .fluxos-composer-plus-trigger,
+  .fluxos-agent-start-surface .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control)
+) {
+  border-radius: 999px !important;
+}
+
+.fluxos-shell:not(.surface-home) :where(.fluxos-composer-plus-menu button) {
+  border-radius: 10px !important;
+}
+
+.workspace-browser-dialog {
+  gap: 14px;
+  min-width: min(720px, calc(100vw - 48px));
+}
+
+.modal-panel:has(.workspace-browser-dialog) {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(17, 18, 22, 0.98);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+}
+
+.modal-panel:has(.workspace-browser-dialog) .modal-actions .action-btn.primary {
+  border-color: rgba(255, 255, 255, 0.82);
+  background: #fff;
+  color: #05070a;
+}
+
+.modal-panel:has(.workspace-browser-dialog) .modal-actions .action-btn.primary:not(:disabled):hover {
+  border-color: rgba(94, 234, 212, 0.72);
+  background: rgba(235, 255, 252, 0.92);
+}
+
+.modal-panel:has(.workspace-browser-dialog) .section-actions .action-btn.ghost {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px !important;
+}
+
+.modal-panel:has(.workspace-browser-dialog) .modal-actions .action-btn.ghost:not(:disabled):hover,
+.modal-panel:has(.workspace-browser-dialog) .section-actions .action-btn.ghost:not(:disabled):hover {
+  border-color: rgba(94, 234, 212, 0.44);
+  background: rgba(94, 234, 212, 0.08);
+}
+
+.modal-panel:has(.workspace-browser-dialog) .modal-actions .action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.modal-panel:has(.project-dialog-form) {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(17, 18, 22, 0.98);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+}
+
+.modal-panel:has(.project-dialog-form) .project-dialog-note {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: rgba(245, 248, 252, 0.72) !important;
+}
+
+.modal-panel:has(.project-dialog-form) .project-dialog-note.is-warn {
+  border-color: rgba(248, 113, 113, 0.34) !important;
+  background: rgba(248, 113, 113, 0.06) !important;
+  color: rgba(254, 226, 226, 0.88) !important;
+}
+
+.modal-panel:has(.project-dialog-form) .modal-actions .action-btn.primary {
+  border-color: rgba(255, 255, 255, 0.82) !important;
+  background: #fff !important;
+  color: #05070a !important;
+}
+
+.modal-panel:has(.project-dialog-form) .modal-actions .action-btn.primary:not(:disabled):hover {
+  border-color: rgba(255, 255, 255, 0.42) !important;
+  background: rgba(255, 255, 255, 0.88) !important;
+}
+
+.workspace-browser-path-shell {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(5, 8, 12, 0.82);
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-rail-service-stack {
+  justify-items: center;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"] {
+  width: 44px;
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  justify-items: center;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px !important;
+  background: transparent;
+  overflow: visible;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"]::before {
+  display: none;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"] [data-app-update-summary="rail"] {
+  display: none;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"] button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.055);
+  border-radius: 999px !important;
+}
+
+.fluxos-shell:not(.surface-home) .fluxos-app-update[data-app-update-surface="rail"] button span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 920px) {
+  .fluxos-shell.surface-settings .fluxos-settings {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 16px;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-detail-panel {
+    order: 2;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav {
+    order: 1;
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.105);
+    padding: 0 0 12px;
+    scroll-snap-type: x mandatory;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav > div {
+    display: none;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button {
+    flex: 0 0 min(62vw, 220px);
+    min-height: 74px;
+    border: 0 !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    padding: 8px 2px 10px !important;
+    scroll-snap-align: start;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button.active {
+    border-left-color: transparent !important;
+    border-bottom-color: rgba(255, 255, 255, 0.78) !important;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-update-card {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-update-card button {
+    justify-self: start;
+  }
+}
+
+.workspace-browser-path-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(245, 248, 252, 0.92);
+}
+
+.workspace-browser-path-shell .field {
+  min-width: 0;
+  gap: 6px;
+}
+
+.workspace-browser-path-shell .field span {
+  color: rgba(214, 225, 238, 0.66);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.workspace-browser-path-shell input {
+  height: 38px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0;
+  background: transparent;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  padding: 0;
+}
+
+.workspace-browser-path-shell input:focus {
+  outline: 0;
+  border-color: rgba(94, 234, 212, 0.75);
+  box-shadow: none;
+}
+
+.workspace-browser-path-shell .action-btn {
+  height: 38px;
+  min-width: 96px;
+  border-color: rgba(255, 255, 255, 0.16);
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-weight: 700;
+}
+
+.workspace-browser-path-shell .action-btn:not(:disabled):hover {
+  border-color: rgba(94, 234, 212, 0.54);
+  background: rgba(94, 234, 212, 0.1);
+}
+
+.workspace-browser-roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.workspace-browser-root-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.035) !important;
+  color: rgba(238, 244, 252, 0.9);
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  padding: 7px 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-browser-root-button svg {
+  flex: 0 0 auto;
+  color: rgba(245, 248, 252, 0.88);
+}
+
+.workspace-browser-root-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-browser-root-button:not(:disabled):hover {
+  border-color: rgba(94, 234, 212, 0.44) !important;
+  background: rgba(94, 234, 212, 0.08) !important;
+  color: #fff;
+}
+
+.workspace-browser-list-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  gap: 14px;
+  padding: 0 12px 2px;
+  color: rgba(214, 225, 238, 0.54);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.workspace-browser-list {
+  display: grid;
+  gap: 0;
+  max-height: min(360px, 46vh);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(3, 6, 10, 0.72);
+  padding: 0;
+}
+
+.workspace-browser-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 14px;
+  min-height: 42px;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.075) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #fff;
+  cursor: pointer;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.workspace-browser-entry:first-child {
+  border-top: 0 !important;
+}
+
+.workspace-browser-entry:hover:not(:disabled) {
+  background: rgba(94, 234, 212, 0.075) !important;
+}
+
+.workspace-browser-entry:focus-visible {
+  outline: 1px solid rgba(94, 234, 212, 0.75);
+  outline-offset: -2px;
+}
+
+.workspace-browser-entry.is-file {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.workspace-browser-entry-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  color: rgba(245, 248, 252, 0.94);
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-browser-entry-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  color: rgba(245, 248, 252, 0.88);
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.workspace-browser-entry:hover:not(:disabled) .workspace-browser-entry-icon,
+.workspace-browser-entry:focus-visible .workspace-browser-entry-icon {
+  color: rgba(94, 234, 212, 0.86);
+  transform: translateY(-1px);
+}
+
+.workspace-browser-entry.is-file .workspace-browser-entry-icon {
+  color: rgba(226, 232, 240, 0.74);
+}
+
+.workspace-browser-entry-icon[data-entry-icon="parent"] {
+  color: rgba(245, 248, 252, 0.88);
+}
+
+.workspace-browser-entry-kind {
+  color: rgba(214, 225, 238, 0.58);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.workspace-browser-empty {
+  color: rgba(214, 225, 238, 0.64);
+  font-size: 13px;
+  margin: 0;
+  padding: 18px 12px;
+}
+
+@media (max-width: 720px) {
+  .workspace-browser-dialog {
+    min-width: 0;
+  }
+
+  .workspace-browser-path-shell {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .workspace-browser-path-shell .action-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .workspace-browser-list-head,
+  .workspace-browser-entry {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+}
+
+/* Icon asset integration pass: keep line icons neutral by default, avoid boxed
+   square patches, and reserve accent color for active/hover states. */
+.reference-shell :where(
+  .reference-rail-item svg,
+  .reference-topbar-pill svg,
+  .reference-icon-button svg,
+  .reference-outline-button svg,
+  .reference-select-button svg,
+  .reference-reset-button svg,
+  .reference-settings-tabs svg,
+  .reference-page-buttons button svg,
+  .fluxos-composer-actions button svg,
+  .fluxos-composer-plus-trigger svg,
+  .fluxos-composer-plus-menu button svg
+),
+.fluxos-shell :where(
+  .fluxos-composer-actions button svg,
+  .fluxos-composer-plus-trigger svg,
+  .fluxos-composer-plus-menu button svg,
+  .action-btn svg,
+  .reference-icon-button svg
+) {
+  color: rgba(245, 248, 252, 0.84);
+  flex: 0 0 auto;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: translateZ(0);
+  transition: color 160ms ease, opacity 160ms ease, transform 160ms ease;
+}
+
+.reference-shell :where(
+  .reference-rail-item:hover svg,
+  .reference-rail-item.active svg,
+  .reference-topbar-pill:hover svg,
+  .reference-topbar-pill.active svg,
+  .reference-icon-button:hover svg,
+  .reference-outline-button:hover svg,
+  .reference-settings-tabs button:hover svg,
+  .reference-settings-tabs button.active svg,
+  .fluxos-composer-actions button:hover svg,
+  .fluxos-composer-plus-menu button:hover svg
+),
+.fluxos-shell :where(
+  .fluxos-composer-actions button:hover svg,
+  .fluxos-composer-plus-trigger:hover svg,
+  .fluxos-composer-plus-menu button:hover svg,
+  .action-btn:hover:not(:disabled) svg
+) {
+  color: #fff;
+  opacity: 1;
+}
+
+.reference-shell :where(
+  .reference-icon-button,
+  .reference-topbar-pill,
+  .reference-outline-button,
+  .reference-select-button,
+  .reference-reset-button,
+  .reference-settings-tabs button,
+  .reference-page-buttons button
+) {
+  border-radius: 999px !important;
+}
+
+.reference-shell :where(.reference-rail-item) {
+  border-radius: 12px !important;
+}
+
+.reference-shell :where(.reference-icon-button),
+.fluxos-shell :where(
+  .fluxos-composer-left-actions > button,
+  .fluxos-composer-right-actions > button:not(.fluxos-composer-inline-route-control):not([data-conversation-storage-control]):not([data-agent-turn-mode-control])
+) {
+  aspect-ratio: 1;
+  display: inline-grid;
+  place-items: center;
+}
+
+.fluxos-shell .fluxos-composer-right-actions > .fluxos-composer-inline-route-control,
+.fluxos-shell .fluxos-composer-right-actions > [data-conversation-storage-control],
+.fluxos-shell .fluxos-composer-right-actions > [data-agent-turn-mode-control] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.reference-shell :where(
+  .reference-icon-button,
+  .reference-topbar-pill,
+  .reference-outline-button,
+  .reference-select-button,
+  .reference-reset-button,
+  .reference-rail-item
+) {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.reference-shell :where(
+  .reference-icon-button:hover,
+  .reference-topbar-pill:hover,
+  .reference-outline-button:hover,
+  .reference-select-button:hover,
+  .reference-reset-button:hover,
+  .reference-rail-item:hover,
+  .reference-rail-item.active
+) {
+  border-color: rgba(245, 248, 252, 0.16) !important;
+  background: rgba(245, 248, 252, 0.045) !important;
+}
+
+/* First-run feature tour */
+.fluxio-tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 5, 5, 0.62);
+  backdrop-filter: blur(6px);
+  animation: fluxio-tutorial-fade 220ms ease-out;
+}
+
+.fluxio-tutorial-panel {
+  width: min(440px, calc(100vw - 32px));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: var(--space-9);
+  display: grid;
+  gap: var(--space-5);
+  animation: fluxio-tutorial-rise 260ms ease-out;
+}
+
+.fluxio-tutorial-progress {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.fluxio-tutorial-panel h2 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--text);
+}
+
+.fluxio-tutorial-panel p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+
+.fluxio-tutorial-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+
+.fluxio-tutorial-actions > div {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.fluxio-tutorial-actions button {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.fluxio-tutorial-actions button:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.fluxio-tutorial-actions button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #141210;
+  font-weight: 600;
+}
+
+.fluxio-tutorial-actions button.primary:hover {
+  filter: brightness(1.08);
+  color: #141210;
+}
+
+@keyframes fluxio-tutorial-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fluxio-tutorial-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluxio-tutorial-overlay,
+  .fluxio-tutorial-panel {
+    animation: none;
+  }
+}
+
+/* Agent goal progress inspector: late neutral rules so live mode does not inherit older gold launch treatments. */
+.reference-shell.surface-agent .fluxos-goal-progress,
+.fluxos-shell.surface-agent .fluxos-goal-progress,
+.fluxos-goal-progress {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.026) !important;
+  color: var(--fluxos-text, #f7f7f7);
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress > summary,
+.fluxos-shell.surface-agent .fluxos-goal-progress > summary,
+.fluxos-goal-progress > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.fluxos-goal-progress > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fluxos-goal-progress-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fluxos-goal-progress-title span,
+.fluxos-goal-progress-metrics em,
+.fluxos-goal-progress-cues span {
+  overflow: hidden;
+  color: var(--fluxos-muted, rgba(247, 247, 247, 0.66));
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fluxos-goal-progress-title > span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fluxos-goal-progress-title strong {
+  overflow: hidden;
+  color: var(--fluxos-text, #f7f7f7);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.22;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-goal-progress-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fluxos-goal-progress-metrics em {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  letter-spacing: 0;
+  padding: 4px 7px;
+  text-transform: none;
+}
+
+.fluxos-goal-progress small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--fluxos-muted, rgba(247, 247, 247, 0.66));
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-goal-progress-panel {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px;
+}
+
+.fluxos-goal-progress-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: 6px;
+}
+
+.fluxos-goal-progress-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
+  padding: 7px;
+}
+
+.fluxos-goal-progress-step > span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: var(--fluxos-muted, rgba(247, 247, 247, 0.66));
+  font-family: var(--fluxos-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10px;
+}
+
+.fluxos-goal-progress-step div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fluxos-goal-progress-step strong {
+  overflow: hidden;
+  color: var(--fluxos-text, #f7f7f7);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-goal-progress-step p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--fluxos-muted, rgba(247, 247, 247, 0.66));
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-goal-progress-step[data-goal-step-status="done"] > span {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fluxos-text, #f7f7f7);
+}
+
+.fluxos-goal-progress-step[data-goal-step-status="running"] {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.042);
+}
+
+.fluxos-goal-progress-step[data-goal-step-status="blocked"],
+.fluxos-goal-progress.tone-blocked {
+  border-color: rgba(248, 113, 113, 0.34) !important;
+  background: rgba(248, 113, 113, 0.06) !important;
+}
+
+.fluxos-goal-progress-cues {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
+  padding: 7px;
+}
+
+.fluxos-goal-progress-cues > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress-cues button,
+.fluxos-shell.surface-agent .fluxos-goal-progress-cues button,
+.fluxos-goal-progress-cues button {
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 7px !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: rgba(250, 250, 246, 0.92) !important;
+  font-size: 11px;
+  font-weight: 740;
+  padding: 5px 9px;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress-cues button:hover,
+.fluxos-shell.surface-agent .fluxos-goal-progress-cues button:hover,
+.fluxos-goal-progress-cues button:hover {
+  border-color: rgba(255, 255, 255, 0.23) !important;
+  background: rgba(255, 255, 255, 0.09) !important;
+  color: #fff !important;
+}
+
+@media (max-width: 760px) {
+  .reference-shell.surface-agent .fluxos-goal-progress > summary,
+  .fluxos-shell.surface-agent .fluxos-goal-progress > summary,
+  .fluxos-goal-progress > summary,
+  .fluxos-goal-progress-cues {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fluxos-goal-progress-metrics,
+  .fluxos-goal-progress-cues > div {
+    justify-content: flex-start;
+  }
+}
+
+/* Integrated Agent goal and launcher treatment: remove square card piles while preserving verifier hooks. */
+.agent-run-topbar {
+  width: min(100%, 1240px) !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.115) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 10px 0 12px !important;
+}
+
+.agent-run-proof-strip span {
+  border: 0 !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 4px 10px !important;
+}
+
+.agent-run-proof-strip span:first-child {
+  border-left: 0 !important;
+  padding-left: 0 !important;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress,
+.fluxos-shell.surface-agent .fluxos-goal-progress,
+.fluxos-goal-progress,
+.agent-goal-progress {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress > summary,
+.fluxos-shell.surface-agent .fluxos-goal-progress > summary,
+.fluxos-goal-progress > summary,
+.agent-goal-progress > summary {
+  padding: 10px 0 !important;
+}
+
+.fluxos-goal-progress-panel,
+.agent-goal-progress-panel {
+  gap: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+  padding: 0 !important;
+}
+
+.fluxos-goal-progress-steps,
+.agent-goal-progress-steps {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+}
+
+.fluxos-goal-progress-step,
+.agent-goal-progress-step {
+  display: grid !important;
+  grid-template-columns: 18px minmax(0, 1fr) !important;
+  gap: 10px !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.075) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 8px 0 !important;
+}
+
+.fluxos-goal-progress-step:first-child,
+.agent-goal-progress-step:first-child {
+  border-top: 0 !important;
+}
+
+.fluxos-goal-progress-step > span,
+.agent-goal-progress-step > span {
+  width: 8px !important;
+  height: 8px !important;
+  margin-top: 5px;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.34) !important;
+  color: transparent !important;
+  font-size: 0 !important;
+}
+
+.fluxos-goal-progress-step[data-goal-step-status="done"] > span,
+.agent-goal-progress-step[data-goal-step-status="done"] > span {
+  background: rgba(255, 255, 255, 0.78) !important;
+}
+
+.fluxos-goal-progress-step[data-goal-step-status="running"] > span,
+.agent-goal-progress-step[data-goal-step-status="running"] > span {
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.fluxos-goal-progress-step[data-goal-step-status="running"],
+.agent-goal-progress-step[data-goal-step-status="running"],
+.fluxos-goal-progress-step[data-goal-step-status="blocked"],
+.agent-goal-progress-step[data-goal-step-status="blocked"] {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: transparent !important;
+}
+
+.fluxos-goal-progress-step p,
+.agent-goal-progress-step p {
+  white-space: normal !important;
+}
+
+.fluxos-goal-progress-skill-layer,
+.agent-goal-progress-skill-layer,
+.fluxos-goal-progress-cues,
+.agent-goal-progress-cues {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+  align-items: center !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.085) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 9px 0 !important;
+}
+
+.fluxos-goal-progress-skill-layer > span,
+.agent-goal-progress-skill-layer > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--fluxos-muted, var(--muted));
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.fluxos-goal-progress-skill-layer > span strong,
+.agent-goal-progress-skill-layer > span strong {
+  overflow: hidden;
+  color: var(--fluxos-text, var(--text));
+  font-size: 12px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.fluxos-goal-progress-skill-layer > div,
+.agent-goal-progress-skill-layer > div,
+.fluxos-goal-progress-cues > div,
+.agent-goal-progress-cues > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress-skill-layer button,
+.fluxos-shell.surface-agent .fluxos-goal-progress-skill-layer button,
+.agent-goal-progress-skill-layer button,
+.reference-shell.surface-agent .fluxos-goal-progress-cues button,
+.fluxos-shell.surface-agent .fluxos-goal-progress-cues button,
+.agent-goal-progress-cues button {
+  min-height: 30px !important;
+  border: 1px solid rgba(255, 255, 255, 0.13) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.035) !important;
+  color: rgba(250, 250, 246, 0.92) !important;
+  padding: 5px 10px !important;
+}
+
+.reference-shell.surface-agent .fluxos-goal-progress-skill-layer button:hover,
+.fluxos-shell.surface-agent .fluxos-goal-progress-skill-layer button:hover,
+.agent-goal-progress-skill-layer button:hover,
+.reference-shell.surface-agent .fluxos-goal-progress-cues button:hover,
+.fluxos-shell.surface-agent .fluxos-goal-progress-cues button:hover,
+.agent-goal-progress-cues button:hover {
+  background: rgba(255, 255, 255, 0.085) !important;
+}
+
+.modal-panel:has(.mission-quickstart-panel) {
+  width: min(820px, 100%) !important;
+  border-radius: 10px !important;
+  background: rgba(24, 25, 28, 0.985) !important;
+}
+
+.mission-quickstart-panel,
+.mission-launch-lane-status,
+.mission-route-selector-row,
+.mission-guided-launch-path article,
+.mission-launch-route-decision > div,
+.mission-launch-route-decision article,
+.mission-launch-readiness article,
+.mission-quickstart-actions,
+.mission-launch-shortcuts article,
+.mission-launch-recommendation,
+.mission-launch-route-trust {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.mission-quickstart-panel {
+  padding: 0 !important;
+}
+
+.modal-panel:has([data-agent-live-start="true"]) {
+  max-height: calc(100dvh - 24px) !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.modal-panel:has([data-agent-live-start="true"]) .modal-body,
+.modal-panel:has([data-agent-live-start="true"]) .dialog-form {
+  min-height: 0 !important;
+}
+
+.modal-panel:has([data-agent-live-start="true"]) .modal-actions {
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 2 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background:
+    linear-gradient(180deg, rgba(24, 25, 28, 0), rgba(24, 25, 28, 0.98) 28%),
+    rgba(24, 25, 28, 0.98) !important;
+  padding-top: 14px !important;
+}
+
+.mission-guided-launch-path,
+.mission-launch-route-decision,
+.mission-launch-readiness,
+.mission-starter-templates {
+  gap: 0 !important;
+}
+
+.mission-guided-launch-path article,
+.mission-launch-route-decision > div,
+.mission-launch-route-decision article,
+.mission-launch-readiness article,
+.mission-starter-templates button {
+  min-height: 58px;
+  padding: 10px 10px 10px 0 !important;
+}
+
+.mission-starter-templates {
+  border-top-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.mission-starter-templates button {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.mission-starter-templates button:hover,
+.mission-starter-templates button:focus-visible {
+  background: rgba(255, 255, 255, 0.045) !important;
+  transform: none !important;
+}
+
+.mission-quickstart-actions {
+  margin-top: 0;
+  padding: 10px 0 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-actions,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-actions,
+.fluxos-agent-runtime-proof-actions,
+.agent-runtime-proof-actions {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 9px 0 !important;
+}
+
+.fluxos-agent-runtime-proof-buttons,
+.agent-runtime-proof-buttons {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 0 !important;
+}
+
+.fluxos-agent-runtime-proof-button,
+.agent-runtime-proof-button {
+  min-height: 42px !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.095) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 8px 8px 0 !important;
+}
+
+.fluxos-agent-runtime-proof-button:nth-child(-n + 3),
+.agent-runtime-proof-button:nth-child(-n + 3) {
+  border-top: 0 !important;
+}
+
+.fluxos-agent-runtime-proof-button:hover:not(:disabled),
+.agent-runtime-proof-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+
+.fluxos-agent-runtime-proof-checklist,
+.fluxos-agent-runtime-proof-coverage,
+.agent-runtime-proof-checklist,
+.agent-runtime-proof-coverage {
+  gap: 0 !important;
+}
+
+.fluxos-agent-runtime-proof-checklist article,
+.fluxos-agent-runtime-proof-coverage article,
+.agent-runtime-proof-checklist article,
+.agent-runtime-proof-coverage article {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.085) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 5px 8px 5px 0 !important;
+}
+
+@media (max-width: 760px) {
+  .fluxos-goal-progress-skill-layer,
+  .agent-goal-progress-skill-layer,
+  .fluxos-goal-progress-cues,
+  .agent-goal-progress-cues {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .fluxos-goal-progress-skill-layer > div,
+  .agent-goal-progress-skill-layer > div,
+  .fluxos-goal-progress-cues > div,
+  .agent-goal-progress-cues > div {
+    justify-content: flex-start;
+  }
+
+  .fluxos-agent-runtime-proof-buttons,
+  .agent-runtime-proof-buttons {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .fluxos-agent-runtime-proof-button:nth-child(-n + 3),
+  .agent-runtime-proof-button:nth-child(-n + 3) {
+    border-top: 1px solid rgba(255, 255, 255, 0.095) !important;
+  }
+
+.fluxos-agent-runtime-proof-button:first-child,
+.agent-runtime-proof-button:first-child {
+  border-top: 0 !important;
+}
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-actions,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-actions,
+.fluxos-shell.surface-agent .agent-runtime-proof-actions {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 6px !important;
+  align-items: start !important;
+  padding: 8px 0 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-copy,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-copy,
+.fluxos-shell.surface-agent .agent-runtime-proof-copy {
+  align-content: start !important;
+  gap: 2px !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-refresh-receipt,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-refresh-receipt,
+.fluxos-shell.surface-agent .agent-runtime-proof-refresh-receipt {
+  min-height: 0 !important;
+  border-radius: 999px !important;
+  padding: 3px 7px !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-checklist,
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-coverage,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-checklist,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-coverage,
+.fluxos-shell.surface-agent .agent-runtime-proof-checklist,
+.fluxos-shell.surface-agent .agent-runtime-proof-coverage {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px 12px !important;
+  padding-top: 4px !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-checklist article,
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-coverage article,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-checklist article,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-coverage article,
+.fluxos-shell.surface-agent .agent-runtime-proof-checklist article,
+.fluxos-shell.surface-agent .agent-runtime-proof-coverage article {
+  display: inline-flex !important;
+  align-items: baseline !important;
+  gap: 5px !important;
+  width: auto !important;
+  min-height: 0 !important;
+  border-top: 0 !important;
+  padding: 2px 0 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-buttons,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-buttons,
+.fluxos-shell.surface-agent .agent-runtime-proof-buttons {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-content: start !important;
+  justify-content: flex-start !important;
+  justify-self: start !important;
+  gap: 6px !important;
+  max-width: min(100%, 860px) !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-button,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-button,
+.fluxos-shell.surface-agent .agent-runtime-proof-button {
+  display: grid !important;
+  grid-template-columns: 14px minmax(0, auto) minmax(0, auto) !important;
+  grid-template-rows: auto !important;
+  align-items: center !important;
+  width: auto !important;
+  min-height: 30px !important;
+  border: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.022) !important;
+  gap: 5px !important;
+  padding: 4px 9px !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-button:nth-child(-n + 3),
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-button:nth-child(-n + 3),
+.fluxos-shell.surface-agent .agent-runtime-proof-button:nth-child(-n + 3) {
+  border-top: 1px solid rgba(255, 255, 255, 0.105) !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-button svg,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-button svg,
+.fluxos-shell.surface-agent .agent-runtime-proof-button svg {
+  grid-row: 1 !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-button span,
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-button small,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-button span,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-button small,
+.fluxos-shell.surface-agent .agent-runtime-proof-button span,
+.fluxos-shell.surface-agent .agent-runtime-proof-button small {
+  font-size: 10px !important;
+  line-height: 1.1 !important;
+  white-space: nowrap !important;
+}
+
+.reference-shell.surface-agent .fluxos-agent-runtime-proof-button small,
+.fluxos-shell.surface-agent .fluxos-agent-runtime-proof-button small,
+.fluxos-shell.surface-agent .agent-runtime-proof-button small {
+  color: var(--fluxos-muted) !important;
+}
+
+@media (max-width: 760px) {
+  .reference-shell.surface-agent .fluxos-agent-runtime-proof-actions,
+  .fluxos-shell.surface-agent .fluxos-agent-runtime-proof-actions,
+  .fluxos-shell.surface-agent .agent-runtime-proof-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Browser proof workspace: real target first, local interaction probe only when no artifact URL exists. */
+.fluxos-shell.surface-browser .fluxos-browser-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(286px, 340px);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "head head"
+    "location location"
+    "canvas proof";
+  gap: 18px;
+  min-height: calc(100dvh - 32px);
+  height: calc(100dvh - 32px);
+  overflow: hidden;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace-head {
+  grid-area: head;
+  align-items: center;
+  min-height: 44px;
+  padding-bottom: 10px !important;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace-head h1 {
+  max-width: none !important;
+  font-size: clamp(22px, 2.2vw, 30px) !important;
+  line-height: 1.05 !important;
+  letter-spacing: 0;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace-actions,
+.fluxos-shell.surface-browser .fluxos-browser-location,
+.fluxos-shell.surface-browser .fluxos-browser-proof-actions {
+  gap: 10px;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace :where(button, input) {
+  border-radius: 8px !important;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    color 180ms ease;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace button:not(:disabled):hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace button:not(:disabled):active {
+  transform: translateY(0) scale(0.98);
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-workspace button:focus-visible,
+.fluxos-shell.surface-browser .fluxos-browser-workspace input:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.78);
+  outline-offset: 3px;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-location {
+  grid-area: location;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: end;
+  padding: 0 0 12px !important;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-location input {
+  min-height: 44px;
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-canvas {
+  grid-area: canvas;
+  position: relative;
+  min-height: 0 !important;
+  height: 100% !important;
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(255, 255, 255, 0.075), transparent 28%),
+    #090909 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-canvas.is-selecting {
+  cursor: crosshair;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-frame {
+  display: block;
+  width: 100%;
+  height: 100% !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: #f6f7f8;
+}
+
+.fluxos-shell.surface-browser .fluxos-browser-frame.local-probe {
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.24);
+}
+
+.fluxos-browser-selection-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.035)),
+    repeating-linear-gradient(90deg, transparent 0 22px, rgba(255, 255, 255, 0.04) 22px 23px);
+  touch-action: none;
+}
+
+.fluxos-browser-selection-rect {
+  position: absolute;
+  z-index: 4;
+  min-width: 32px;
+  min-height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.86);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 0 0 999px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.fluxos-browser-proof-strip {
+  grid-area: proof;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+  align-items: start;
+  min-height: 0;
+  overflow: auto;
+  border-top: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.11);
+  padding: 0 0 0 18px;
+}
+
+.fluxos-browser-proof-strip article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fluxos-browser-proof-strip span {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.fluxos-browser-proof-strip strong {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fluxos-browser-proof-strip p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fluxos-browser-proof-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  animation: fluxos-browser-proof-panel-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fluxos-browser-proof-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fluxos-browser-proof-panel header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fluxos-browser-proof-panel dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.fluxos-browser-proof-panel dl > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fluxos-browser-proof-panel dt {
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.fluxos-browser-proof-panel dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fluxos-browser-proof-progress {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  margin-top: 12px;
+}
+
+.fluxos-browser-proof-progress i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 36%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.72);
+  animation: fluxos-browser-proof-scan 1800ms cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.fluxos-browser-proof-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+@keyframes fluxos-browser-proof-scan {
+  0% {
+    transform: translateX(-105%);
+    opacity: 0.35;
+  }
+  45% {
+    opacity: 0.92;
+  }
+  100% {
+    transform: translateX(290%);
+    opacity: 0.35;
+  }
+}
+
+@keyframes fluxos-browser-proof-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluxos-shell.surface-browser .fluxos-browser-workspace :where(button, input),
+  .fluxos-browser-proof-panel,
+  .fluxos-browser-proof-progress i {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .fluxos-shell.surface-browser .fluxos-browser-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(360px, 1fr) auto;
+    grid-template-areas:
+      "head"
+      "location"
+      "canvas"
+      "proof";
+    height: auto;
+    overflow: visible;
+  }
+
+  .fluxos-shell.surface-browser .fluxos-browser-location,
+  .fluxos-browser-proof-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fluxos-browser-proof-strip {
+    border-top: 1px solid rgba(255, 255, 255, 0.11);
+    border-left: 0;
+    padding: 14px 0 0;
+  }
+
+  .fluxos-browser-proof-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .fluxos-shell.surface-browser .fluxos-browser-workspace {
+    grid-template-rows: auto auto minmax(300px, 1fr) auto;
+  }
+
+  .fluxos-shell.surface-browser .fluxos-browser-workspace-head {
+    align-items: start;
+  }
+
+  .fluxos-shell.surface-browser .fluxos-browser-workspace-head h1 {
+    font-size: 24px !important;
+  }
+
+  .fluxos-shell.surface-browser .fluxos-browser-workspace-actions {
+    justify-content: flex-start;
+  }
+
+  .fluxos-shell.surface-browser .fluxos-browser-frame,
+  .fluxos-shell.surface-browser .fluxos-browser-canvas {
+    min-height: 360px;
+  }
+}
+
+/* Overnight operator polish: keep proof surfaces readable without changing live data flow. */
+.reference-shell.surface-phone .fluxos-phone-progress,
+.fluxos-shell.surface-phone .fluxos-phone-progress {
+  width: min(560px, calc(100vw - 44px)) !important;
+  padding: 0 18px 28px !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-progress :where(strong, small, p, button),
+.fluxos-shell.surface-phone .fluxos-phone-progress :where(strong, small, p, button) {
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+  hyphens: none !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid article,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article {
+  border-left: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.11) !important;
+  min-width: 0 !important;
+  padding: 8px 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid article:first-child,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article:first-child {
+  border-top: 0 !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid strong,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid strong,
+.reference-shell.surface-phone .fluxos-phone-push-proof-grid small,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof-grid small {
+  display: block !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-hero > strong,
+.fluxos-shell.surface-phone .fluxos-phone-hero > strong {
+  max-width: 12ch !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline {
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-head {
+  padding-bottom: 12px !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-actions button,
+.fluxos-shell.surface-builder .fluxos-builder-timeline-display-controls button,
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-action,
+.reference-shell.surface-phone .fluxos-phone-actions button,
+.fluxos-shell.surface-phone .fluxos-phone-actions button,
+.reference-shell.surface-phone .fluxos-phone-push-proof button,
+.fluxos-shell.surface-phone .fluxos-phone-push-proof button {
+  border-radius: 8px !important;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-actions button:hover:not(:disabled),
+.fluxos-shell.surface-builder .fluxos-builder-timeline-display-controls button:hover:not(:disabled),
+.reference-shell.surface-phone .fluxos-phone-actions button:hover:not(:disabled),
+.fluxos-shell.surface-phone .fluxos-phone-actions button:hover:not(:disabled),
+.reference-shell.surface-phone .fluxos-phone-push-proof button:hover:not(:disabled),
+.fluxos-shell.surface-phone .fluxos-phone-push-proof button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-actions button:active:not(:disabled),
+.fluxos-shell.surface-builder .fluxos-builder-timeline-display-controls button:active:not(:disabled),
+.reference-shell.surface-phone .fluxos-phone-actions button:active:not(:disabled),
+.fluxos-shell.surface-phone .fluxos-phone-actions button:active:not(:disabled),
+.reference-shell.surface-phone .fluxos-phone-push-proof button:active:not(:disabled),
+.fluxos-shell.surface-phone .fluxos-phone-push-proof button:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-rows {
+  gap: 0 !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-rows button {
+  min-height: 66px !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.095) !important;
+  border-radius: 0 !important;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.024), rgba(255, 255, 255, 0) 48%) !important;
+  padding: 11px 0 !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-rows button[data-builder-timeline-selected-row="true"] {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0) 52%) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-rows button:hover {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 52%) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-lane {
+  border-left: 2px solid rgba(255, 255, 255, 0.2) !important;
+  color: rgba(247, 247, 247, 0.62) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-rows button[data-builder-timeline-selected-row="true"] .fluxos-builder-timeline-row-lane {
+  border-left-color: rgba(255, 255, 255, 0.82) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-state small,
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-meta,
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-action {
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.038) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-bar {
+  height: 10px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px) 0 0 / 25% 100%,
+    rgba(255, 255, 255, 0.07) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-bar::before {
+  top: 0 !important;
+  bottom: 0 !important;
+  background: rgba(255, 255, 255, 0.58) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-bar::after {
+  top: -3px !important;
+  bottom: -3px !important;
+  width: 1px !important;
+  background: rgba(255, 255, 255, 0.82) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-marker {
+  top: -2px !important;
+  bottom: -2px !important;
+  background: rgba(255, 255, 255, 0.28) !important;
+}
+
+.fluxos-shell.surface-builder .fluxos-builder-timeline-row-detail {
+  color: rgba(247, 247, 247, 0.64) !important;
+}
+
+@media (max-width: 900px) {
+  .reference-shell.surface-phone .fluxos-phone-progress,
+  .fluxos-shell.surface-phone .fluxos-phone-progress {
+    width: min(100%, calc(100vw - 24px)) !important;
+    padding-inline: 12px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-push-proof-grid article,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article {
+    padding: 8px 0 !important;
+  }
+}
+
+/* Phone first-viewport pass: current mission, state, actions, and push proof stay above the fold. */
+.reference-shell.surface-phone .fluxos-phone-hero[data-phone-first-viewport="true"],
+.fluxos-shell.surface-phone .fluxos-phone-hero[data-phone-first-viewport="true"] {
+  gap: 8px !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-hero [data-phone-hero-title="true"],
+.fluxos-shell.surface-phone .fluxos-phone-hero [data-phone-hero-title="true"] {
+  display: -webkit-box !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 3 !important;
+  text-overflow: ellipsis !important;
+}
+
+.reference-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] button[data-phone-primary-action="true"],
+.fluxos-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] button[data-phone-primary-action="true"] {
+  background: #f4f2ea !important;
+  border-color: #f4f2ea !important;
+  color: #050505 !important;
+}
+
+@media (max-width: 900px) {
+  .reference-shell.surface-phone .fluxos-phone-progress,
+  .fluxos-shell.surface-phone .fluxos-phone-progress {
+    gap: 8px !important;
+    padding: 0 10px 22px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-hero,
+  .fluxos-shell.surface-phone .fluxos-phone-hero,
+  .reference-shell.surface-phone .fluxos-phone-metrics,
+  .fluxos-shell.surface-phone .fluxos-phone-metrics,
+  .reference-shell.surface-phone .fluxos-phone-push-proof,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof,
+  .reference-shell.surface-phone .fluxos-phone-mission-list,
+  .fluxos-shell.surface-phone .fluxos-phone-mission-list,
+  .reference-shell.surface-phone .fluxos-phone-notifications,
+  .fluxos-shell.surface-phone .fluxos-phone-notifications {
+    padding: 10px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-hero > span,
+  .fluxos-shell.surface-phone .fluxos-phone-hero > span {
+    font-size: 9px !important;
+    letter-spacing: 0 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-hero [data-phone-hero-title="true"],
+  .fluxos-shell.surface-phone .fluxos-phone-hero [data-phone-hero-title="true"] {
+    font-size: 21px !important;
+    line-height: 1.08 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-hero p,
+  .fluxos-shell.surface-phone .fluxos-phone-hero p {
+    display: -webkit-box !important;
+    overflow: hidden !important;
+    -webkit-box-orient: vertical !important;
+    -webkit-line-clamp: 2 !important;
+    line-height: 1.35 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row article,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row article {
+    min-height: 54px !important;
+    padding: 7px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row span,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row span {
+    font-size: 8px !important;
+    letter-spacing: 0 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row strong,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row strong {
+    font-size: 12px !important;
+    line-height: 1.15 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"],
+  .fluxos-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    gap: 6px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] button,
+  .fluxos-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] button {
+    min-height: 44px !important;
+    padding: 9px 7px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] button[data-phone-primary-action="true"],
+  .fluxos-shell.surface-phone .fluxos-phone-actions[data-phone-primary-actions="true"] button[data-phone-primary-action="true"] {
+    grid-column: 1 / -1 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-metrics,
+  .fluxos-shell.surface-phone .fluxos-phone-metrics,
+  .reference-shell.surface-phone .fluxos-phone-push-proof-grid,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-metrics article,
+  .fluxos-shell.surface-phone .fluxos-phone-metrics article,
+  .reference-shell.surface-phone .fluxos-phone-push-proof-grid article,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article {
+    border: 1px solid rgba(255, 255, 255, 0.085) !important;
+    border-radius: 8px !important;
+    padding: 7px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-metrics strong,
+  .fluxos-shell.surface-phone .fluxos-phone-metrics strong,
+  .reference-shell.surface-phone .fluxos-phone-push-proof-grid article strong,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof-grid article strong {
+    font-size: 18px !important;
+    line-height: 1 !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-push-proof strong,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof strong {
+    font-size: 14px !important;
+  }
+}
+
+@media (max-width: 430px) {
+  .reference-shell.surface-phone .fluxos-phone-hero [data-phone-hero-title="true"],
+  .fluxos-shell.surface-phone .fluxos-phone-hero [data-phone-hero-title="true"] {
+    font-size: 20px !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+
+  .reference-shell.surface-phone .fluxos-phone-status-row article:last-child,
+  .fluxos-shell.surface-phone .fluxos-phone-status-row article:last-child {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluxos-shell.surface-builder .fluxos-builder-timeline-actions button,
+  .fluxos-shell.surface-builder .fluxos-builder-timeline-display-controls button,
+  .reference-shell.surface-phone .fluxos-phone-actions button,
+  .fluxos-shell.surface-phone .fluxos-phone-actions button,
+  .reference-shell.surface-phone .fluxos-phone-push-proof button,
+  .fluxos-shell.surface-phone .fluxos-phone-push-proof button {
+    transition: none !important;
+  }
+}
+
+/* Provider setup must stay usable even when the live notification stack is open. */
+.notification-stack[data-notification-surface="settings"] {
+  left: max(92px, env(safe-area-inset-left));
+  right: auto;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  width: min(258px, calc(100vw - 120px));
+  max-height: min(30dvh, 230px);
+}
+
+.notification-stack[data-notification-surface="settings"].notification-stack-compact,
+.notification-stack[data-notification-surface="settings"].notification-stack-collapsed-mode {
+  left: max(14px, env(safe-area-inset-left));
+  right: auto;
+  width: 44px;
+  max-height: 58px;
+  overflow: hidden;
+  border-radius: 999px !important;
+}
+
+.notification-stack[data-notification-surface="settings"].notification-stack-collapsed-mode .notification-stack-collapsed {
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  width: 44px;
+  min-height: 56px;
+  border-radius: 999px !important;
+  padding: 0;
+}
+
+.notification-stack[data-notification-surface="settings"].notification-stack-collapsed-mode .notification-stack-collapsed::before {
+  content: "";
+  width: 5px;
+  height: 30px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.notification-stack[data-notification-surface="settings"].notification-stack-collapsed-mode .notification-stack-collapsed :where(span, strong, small, em) {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  color: transparent;
+  font-size: 1px;
+  line-height: 1;
+}
+
+@media (min-width: 921px) {
+  .fluxos-shell.surface-settings .fluxos-settings-nav {
+    gap: 0 !important;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button {
+    min-height: 64px !important;
+    border: 0 !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-left: 2px solid transparent !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    padding: 11px 0 11px 12px !important;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button:first-of-type {
+    border-top-color: rgba(255, 255, 255, 0.12) !important;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button.active {
+    border-left-color: rgba(245, 245, 245, 0.78) !important;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.045), transparent 74%) !important;
+  }
+}
+
+.fluxos-shell.surface-settings [data-settings-models-accounts="true"] .fluxos-settings-route-summary {
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr) minmax(180px, 0.34fr) !important;
+  gap: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  padding-block: 14px !important;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-grid="true"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] {
+  display: grid !important;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.42fr) !important;
+  gap: 8px 18px !important;
+  align-items: start !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 15px 0 !important;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] > div:first-child,
+.fluxos-shell.surface-settings [data-settings-provider-row] > p,
+.fluxos-shell.surface-settings [data-settings-provider-row] > label {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] > em,
+.fluxos-shell.surface-settings [data-settings-provider-row] > .fluxos-settings-provider-actions {
+  grid-column: 2;
+  justify-self: stretch;
+  min-width: 0;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] > em {
+  justify-self: start;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.045) !important;
+  padding: 4px 8px !important;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] > p {
+  max-width: 66ch;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] label {
+  align-self: end;
+}
+
+.fluxos-shell.surface-settings [data-settings-provider-row] input {
+  min-height: 42px !important;
+  border-radius: 8px !important;
+}
+
+.fluxos-shell.surface-settings .fluxos-settings-provider-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+.fluxos-shell.surface-settings .fluxos-settings-provider-actions button {
+  min-height: 38px !important;
+  border-radius: 8px !important;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.fluxos-shell.surface-settings .fluxos-settings-provider-actions button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.fluxos-shell.surface-settings .fluxos-settings-provider-actions button:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
+}
+
+@media (max-width: 980px) {
+  .notification-stack[data-notification-surface="settings"] {
+    left: max(14px, env(safe-area-inset-left));
+    width: min(286px, calc(100vw - 28px));
+  }
+
+  .fluxos-shell.surface-settings [data-settings-models-accounts="true"] .fluxos-settings-route-summary,
+  .fluxos-shell.surface-settings [data-settings-provider-row] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .fluxos-shell.surface-settings [data-settings-provider-row] > em,
+  .fluxos-shell.surface-settings [data-settings-provider-row] > .fluxos-settings-provider-actions {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 620px) {
+  .fluxos-shell:not(.surface-home) {
+    display: block !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-left-rail {
+    position: sticky !important;
+    top: 0;
+    z-index: 30;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100vw !important;
+    min-height: 0 !important;
+    height: auto !important;
+    grid-template-columns: 36px minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+    align-items: center !important;
+    gap: 8px !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    padding: 8px max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left)) !important;
+    overflow: hidden !important;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-brand {
+    width: 36px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-left-rail nav {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    max-height: 40px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-left-rail nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-left-rail nav button {
+    flex: 0 0 38px !important;
+    width: 38px !important;
+    min-width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    max-height: 38px !important;
+    padding: 0 !important;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-left-rail nav button.active,
+  .fluxos-shell:not(.surface-home) .fluxos-left-rail nav button[aria-current="page"] {
+    border-left: 0 !important;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.72) !important;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-main {
+    min-height: calc(100dvh - 52px) !important;
+  }
+
+  .fluxos-shell:not(.surface-home) .fluxos-main > *:last-child {
+    min-height: calc(100dvh - 52px) !important;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav {
+    gap: 10px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    contain: paint;
+    scroll-padding-inline: 0 !important;
+    scroll-snap-type: x mandatory !important;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button {
+    flex: 0 0 min(46vw, 176px) !important;
+    min-height: 70px !important;
+    overflow: hidden !important;
+    contain: paint;
+    scroll-snap-align: start !important;
+    scroll-snap-stop: always;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button :where(span, strong, small) {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fluxos-shell.surface-settings .fluxos-settings-nav button small {
+    display: -webkit-box !important;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 }

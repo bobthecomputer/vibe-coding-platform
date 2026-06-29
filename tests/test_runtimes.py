@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -10,10 +11,12 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from grant_agent.runtime_worker import _runtime_env
+from grant_agent.runtime_worker import _popen_command, _runtime_env
+from grant_agent.runtimes import runtime_adapter_map
 from grant_agent.runtimes.base import runtime_bin_candidates, runtime_subprocess_env
 from grant_agent.runtimes.hermes import HermesRuntimeAdapter
 from grant_agent.runtimes.openclaw import OpenClawRuntimeAdapter
+from grant_agent.runtimes.opencode import OpenCodeRuntimeAdapter
 
 
 class RuntimeAdapterTests(unittest.TestCase):
@@ -60,6 +63,27 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertGreaterEqual(len(status.capabilities), 1)
         self.assertIn("opencode_go_provider", {item.key for item in status.capabilities})
 
+    @mock.patch("grant_agent.runtimes.openclaw.subprocess.run")
+    @mock.patch("grant_agent.runtimes.openclaw.read_openclaw_package_version")
+    @mock.patch("grant_agent.runtimes.openclaw.shutil.which")
+    def test_openclaw_adapter_does_not_report_missing_when_package_version_is_read(
+        self,
+        which_mock: mock.Mock,
+        package_version_mock: mock.Mock,
+        run_mock: mock.Mock,
+    ) -> None:
+        which_mock.return_value = r"C:\Users\paul\AppData\Roaming\npm\openclaw.CMD"
+        package_version_mock.return_value = "2026.4.22"
+
+        adapter = OpenClawRuntimeAdapter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status = adapter.doctor(pathlib.Path(temp_dir))
+
+        self.assertTrue(status.detected)
+        self.assertEqual(status.version, "2026.4.22")
+        self.assertFalse(any("not found on PATH" in issue for issue in status.issues))
+        run_mock.assert_not_called()
+
     @mock.patch("grant_agent.runtimes.hermes.shutil.which")
     def test_hermes_adapter_reports_missing_runtime(self, which_mock: mock.Mock) -> None:
         which_mock.return_value = None
@@ -96,6 +120,27 @@ class RuntimeAdapterTests(unittest.TestCase):
             self.assertEqual(worker_env["HOME"], str(runtime_home))
             self.assertEqual(worker_env["HERMES_HOME"], "/custom/hermes")
             self.assertEqual(worker_env["FLUXIO_TEST_PROVIDER"], "ready")
+
+    @unittest.skipUnless(os.name == "nt", "Windows command parsing is platform-specific")
+    def test_runtime_worker_preserves_windows_paths_and_quoted_prompt(self) -> None:
+        command = (
+            r"C:\Users\paul\AppData\Local\Programs\Python\Python313\python.exe "
+            r"-m grant_agent.opencode_bridge "
+            r"--opencode-command C:\Users\paul\AppData\Roaming\npm\opencode.CMD "
+            r'--prompt "hello world"'
+        )
+
+        args = _popen_command(command)
+
+        self.assertEqual(
+            args[0],
+            r"C:\Users\paul\AppData\Local\Programs\Python\Python313\python.exe",
+        )
+        self.assertEqual(
+            args[4],
+            r"C:\Users\paul\AppData\Roaming\npm\opencode.CMD",
+        )
+        self.assertEqual(args[-1], "hello world")
 
     def test_runtime_bin_candidates_include_sibling_syntelos_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -237,6 +282,86 @@ class RuntimeAdapterTests(unittest.TestCase):
             "opencode-go/kimi-k2.5",
         )
         self.assertIn("--model opencode-go/kimi-k2.5", str(launch["launch_command"]))
+
+    def test_openclaw_launch_supports_opencon_glm52_route(self) -> None:
+        adapter = OpenClawRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_opencon_glm52",
+            objective="Run GLM 5.2 through the OpenCon/OpenRouter route.",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "opencon-pro",
+                    "model": "glm-5.2",
+                    "effort": "high",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        launch = adapter.start_mission(mission, workspace)
+
+        self.assertEqual(launch["route_contract"]["provider"], "openrouter")
+        self.assertEqual(launch["route_contract"]["model"], "z-ai/glm-5.2")
+        self.assertEqual(
+            launch["route_contract"]["canonical_model_id"],
+            "openrouter/z-ai/glm-5.2",
+        )
+        self.assertIn("--model openrouter/z-ai/glm-5.2", str(launch["launch_command"]))
+
+    @mock.patch("grant_agent.runtimes.opencode.subprocess.run")
+    @mock.patch("grant_agent.runtimes.opencode.runtime_which")
+    def test_opencode_adapter_detects_runtime(
+        self, which_mock: mock.Mock, run_mock: mock.Mock
+    ) -> None:
+        which_mock.return_value = "opencode"
+        run_mock.return_value = mock.Mock(stdout="1.15.13\n", stderr="")
+
+        adapter = OpenCodeRuntimeAdapter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status = adapter.doctor(pathlib.Path(temp_dir))
+
+        self.assertTrue(status.detected)
+        self.assertEqual(status.version, "1.15.13")
+        self.assertIn("native_opencode_run", {item.key for item in status.capabilities})
+
+    @mock.patch("grant_agent.runtimes.opencode.runtime_which", return_value="opencode")
+    def test_opencode_launch_supports_openrouter_deepseek_route(
+        self, which_mock: mock.Mock
+    ) -> None:
+        adapter = OpenCodeRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_opencode_deepseek",
+            title="OpenCode DeepSeek visibility",
+            objective="Make the real OpenCode reply show in Agent Live.",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "openrouter",
+                    "model": "openrouter/deepseek/deepseek-v4-flash",
+                    "effort": "high",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        launch = adapter.start_mission(mission, workspace)
+
+        command = str(launch["launch_command"])
+        self.assertEqual(launch["runtime_id"], "opencode")
+        self.assertEqual(launch["route_contract"]["provider"], "openrouter")
+        self.assertEqual(
+            launch["route_contract"]["canonical_model_id"],
+            "openrouter/deepseek/deepseek-v4-flash",
+        )
+        self.assertIn("grant_agent.opencode_bridge", command)
+        self.assertIn("--opencode-command opencode", command)
+        self.assertIn("--model openrouter/deepseek/deepseek-v4-flash", command)
+        self.assertIn("--variant high", command)
+        self.assertIn("Make the real OpenCode reply show in Agent Live", command)
+
+    def test_runtime_adapter_map_includes_native_opencode(self) -> None:
+        self.assertIn("opencode", runtime_adapter_map())
 
     def test_hermes_launch_supports_opencodego_route(self) -> None:
         adapter = HermesRuntimeAdapter()

@@ -25,6 +25,9 @@ HERMES_PROVIDER_MAP = {
     "openai": "openai-codex",
     "openai-codex": "openai-codex",
     "openrouter": "openrouter",
+    "opencon": "openrouter",
+    "opencon-pro": "openrouter",
+    "openconpro": "openrouter",
     "nous": "nous",
     "copilot-acp": "copilot-acp",
     "copilot": "copilot",
@@ -100,6 +103,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                     cwd=str(workspace_root),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=8,
                     check=False,
                     env=runtime_subprocess_env(workspace_root),
@@ -298,6 +303,12 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
 
     def _normalize_model(self, provider: str, model: object) -> str:
         value = str(model or "").strip()
+        if provider == "openrouter":
+            normalized = value.lower()
+            if normalized in {"glm-5.2", "glm5.2", "glm_5.2", "openrouter/z-ai/glm-5.2"}:
+                return "z-ai/glm-5.2"
+            if normalized.startswith("openrouter/"):
+                return value.split("/", 1)[1]
         if provider == "openai-codex":
             normalized = value.lower()
             if normalized in {"gpt-5.5-codex", "gpt-5.5-codex-high"}:
@@ -348,6 +359,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 [wsl, "bash", "-lc", "command -v hermes >/dev/null 2>&1"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=8,
                 check=False,
                 **hidden_windows_subprocess_kwargs(),
@@ -372,6 +385,8 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
                 **hidden_windows_subprocess_kwargs(),

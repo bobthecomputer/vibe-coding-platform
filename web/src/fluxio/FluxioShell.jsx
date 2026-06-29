@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ArrowUp, CheckCircle2, FileText, Folder, FolderOpen, GitBranch, Home, RefreshCw, Star, Terminal, X } from "lucide-react";
 
 import { buildFixtureSnapshot, listFixtureOptions } from "../../../desktop-ui/fixtures.js";
 import {
@@ -39,6 +40,45 @@ function uniq(items) {
 
 const noopReportUiAction = () => {};
 
+function runtimeProofActionStatusLabel(value) {
+  const normalized = String(value || "missing").trim().toLowerCase();
+  if (normalized === "missing") return "Not attached";
+  return titleizeToken(normalized || "missing");
+}
+
+function runtimeProofChecklistItemLabel(item, itemId) {
+  const rawLabel = String(item?.label || "").trim();
+  const normalized = rawLabel.toLowerCase().replace(/[\s_-]+/g, " ");
+  if (normalized.includes("verifier json report")) return "Run report";
+  if (normalized.includes("produced output preview screenshot")) return "Output preview screenshot";
+  return rawLabel || titleizeToken(itemId || "proof item");
+}
+
+function runtimeProofHeadlineDisplayLine(value) {
+  const rawLine = String(value || "").trim();
+  const freshRuntimeOutput = rawLine.match(/^(.+?)\s+fresh runtime output captured\.?$/i);
+  if (freshRuntimeOutput?.[1]) {
+    return `Fresh ${titleizeToken(freshRuntimeOutput[1])} output captured.`;
+  }
+  return rawLine.replace(/\bfresh runtime output\b/gi, "fresh output").trim();
+}
+
+function runtimeProofTranscriptDisplayLine(value) {
+  const readableLine = String(value || "")
+    .replace(/\bfresh runtime command\b/gi, "fresh output")
+    .replace(/\bfresh runtime output\b/gi, "fresh output")
+    .replace(/\bdialogue turn(s?)\b/gi, "agent turn$1")
+    .replace(/\bproof artifacts included\b/gi, "evidence included")
+    .replace(/\bartifact gate passed\b/gi, "evidence included")
+    .replace(/\s*;\s*/g, " · ")
+    .trim();
+  return readableLine ? `Transcript ready · ${readableLine}` : "";
+}
+
+function firstViewNextActionDisplayLine(value) {
+  return String(value || "").trim().replace(/^Review proof\b/i, "Review evidence");
+}
+
 const STORAGE_KEYS = {
   uiMode: "fluxio.ui.mode",
   telegramChatId: "fluxio.telegram.chatId",
@@ -68,6 +108,9 @@ const STORAGE_KEYS = {
   chatSessions: "fluxio.chat.sessions",
   chatSessionTranscripts: "fluxio.chat.session_transcripts",
   activeChatSessionId: "fluxio.chat.active_session_id",
+  conversationStorageMode: "fluxio.chat.storage_mode",
+  agentTurnMode: "fluxio.agent.turn_mode",
+  tutorialSeen: "fluxio.tutorial.seen",
 };
 
 const FIXTURE_OPTIONS = [{ id: "live", name: "Live Backend" }, ...listFixtureOptions()];
@@ -82,6 +125,9 @@ const LIVE_SYNC_OPTIONS = [
 ];
 const CONTROL_ROOM_SUMMARY_TIMEOUT_MS = 12000;
 const CONTROL_ROOM_MISSION_DETAIL_TIMEOUT_MS = 20000;
+const RUNTIME_PROOF_STATUS_TIMEOUT_MS = 15000;
+const RUNTIME_PROOF_REFRESH_INTERVAL_MS = 15000;
+const RUNTIME_PROOF_RUN_TIMEOUT_MS = 420000;
 const MAX_BROWSER_NOTIFICATIONS_PER_BATCH = 6;
 const DEFAULT_OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:8765";
 const PROVIDER_AUTH_URLS = {
@@ -92,6 +138,32 @@ const PROVIDER_AUTH_URLS = {
   minimaxApiKeys: "https://platform.minimax.io/user-center/basic-information/interface-key",
   opencodeGoDocs: "https://open-claw.bot/docs/providers/opencode-go/",
 };
+
+function routeProviderDisplayLabel(value, fallback = "Not reported") {
+  const raw = String(value || "").trim();
+  const normalized = raw.toLowerCase().replace(/[\s_-]+/g, " ");
+  const brandLabels = {
+    "openai": "OpenAI",
+    "openai codex": "OpenAI Codex",
+    "minimax": "MiniMax",
+    "opencode go": "OpenCode Go",
+  };
+  return brandLabels[normalized] || (raw ? titleizeToken(raw) : fallback);
+}
+
+function routeModelDisplayLabel(value, fallback = "Not reported") {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  return raw.replace(/^gpt(?=[-_]|\d)/i, "GPT");
+}
+
+function turnReceiptProviderLabel(value) {
+  return routeProviderDisplayLabel(value);
+}
+
+function turnReceiptModelLabel(value) {
+  return routeModelDisplayLabel(value);
+}
 
 const DEFAULT_WORKSPACE_FORM = {
   name: "",
@@ -164,6 +236,23 @@ const MISSION_STARTER_TEMPLATES = [
       "Serve a dashboard or report artifact that can be opened from Workbench.",
       "Include at least one lap/sector comparison and one actionable engineering insight.",
       "Attach proof screenshots or browser check output to the mission.",
+    ].join("\n"),
+  },
+  {
+    id: "model-collection-harness",
+    label: "Model collection harness",
+    route: "Hermes harness",
+    runtime: "hermes",
+    modelProvider: "openai-codex",
+    model: "gpt-5.5",
+    modelEffort: "high",
+    budgetHours: 6,
+    objective:
+      "Use the Hermes harness to collect model outputs across a small prompt set, score the results, and publish a comparison report with proof artifacts.",
+    successChecks: [
+      "Collect outputs for at least three representative prompts or tasks.",
+      "Record model, provider, route, and scoring notes for each sample.",
+      "Attach a reviewable comparison report plus browser or artifact proof.",
     ].join("\n"),
   },
   {
@@ -296,6 +385,9 @@ const ROUTE_MODEL_OPTIONS = [
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "openrouter/deepseek/deepseek-v4-flash",
+  "openrouter/deepseek/deepseek-v4-pro",
+  "openrouter/deepseek/deepseek-chat",
   "MiniMax-M3",
   "MiniMax-M3-thinking",
   "opencode-go/kimi-k2.5",
@@ -442,11 +534,13 @@ const MAX_DEBUG_LOG = 240;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_ATTACHMENTS = 6;
 const WINDOWED_THRESHOLD = 60;
+const FLUXIO_PWA_STATUS_FALLBACK_MS = 7000;
+const FLUXIO_PWA_READY_TIMEOUT_MS = 6500;
 const GOAL_MODE_STORAGE_KEY = "fluxio.goal_mode.enabled";
 const BROWSER_TOOLBAR_STORAGE_KEY = "fluxio.browser_toolbar.state";
 const DEFAULT_REFERENCE_APPEARANCE = {
-  accent: "#d6a84f",
-  accentSoft: "#f3ead7",
+  accent: "#e7e7e7",
+  accentSoft: "#eeeeee",
   accentAlt: "#9aa3a0",
   surface: "#ffffff",
   surfaceSoft: "#f6f8fc",
@@ -454,10 +548,28 @@ const DEFAULT_REFERENCE_APPEARANCE = {
   text: "#121826",
   density: "comfortable",
   detailLevel: "balanced",
-  stylePreset: "graphite-gold",
+  stylePreset: "graphite-noir",
   theme: "dark",
   sidebarBehavior: "auto",
 };
+
+function normalizeReferenceAppearance(value = {}) {
+  const incoming = value && typeof value === "object" ? value : {};
+  const merged = {
+    ...DEFAULT_REFERENCE_APPEARANCE,
+    ...incoming,
+  };
+  if (merged.stylePreset === "graphite-gold") {
+    return {
+      ...merged,
+      accent: DEFAULT_REFERENCE_APPEARANCE.accent,
+      accentSoft: DEFAULT_REFERENCE_APPEARANCE.accentSoft,
+      accentAlt: DEFAULT_REFERENCE_APPEARANCE.accentAlt,
+      stylePreset: DEFAULT_REFERENCE_APPEARANCE.stylePreset,
+    };
+  }
+  return merged;
+}
 const SIDEBAR_BEHAVIOR_OPTIONS = [
   { value: "auto", label: "Auto collapse" },
   { value: "expanded", label: "Always expanded" },
@@ -1010,14 +1122,22 @@ function referenceSkillRowsFromCatalog(skillLibrary) {
     return [];
   }
   const sections = [
-    ["recommended", skillLibrary.recommendedPacks],
-    ["curated", skillLibrary.curatedPacks],
     ["installed", skillLibrary.userInstalledSkills],
-    ["learned", skillLibrary.learnedSkills],
   ];
   const seen = new Set();
   return sections.flatMap(([sourceType, rows]) =>
     asList(rows).flatMap((row, index) => {
+      const sourceKind = String(row?.source?.kind || row?.sourceKind || row?.source_kind || "").toLowerCase();
+      const sourcePath = String(row?.source?.path || row?.sourcePath || row?.source_path || "").toLowerCase();
+      const tags = asList(row?.tags).map(item => String(item || "").toLowerCase());
+      const isLocalCodexSkill =
+        sourceKind === "codex_home_skill" ||
+        (sourcePath.endsWith("\\skill.md") && sourcePath.includes("\\.codex\\skills\\")) ||
+        (sourcePath.endsWith("/skill.md") && sourcePath.includes("/.codex/skills/")) ||
+        (tags.includes("user-authored") && tags.includes("codex-skill"));
+      if (!isLocalCodexSkill) {
+        return [];
+      }
       const rawId =
         row?.skillId ||
         row?.skill_id ||
@@ -1032,6 +1152,12 @@ function referenceSkillRowsFromCatalog(skillLibrary) {
         return [];
       }
       seen.add(id);
+      const rawInstructions = row?.instructions || row?.body || row?.content || "";
+      const instructions = Array.isArray(rawInstructions)
+        ? rawInstructions
+        : String(rawInstructions || "").trim()
+          ? [String(rawInstructions)]
+          : [];
       const testStatus = titleizeToken(row?.testStatus || row?.test_status || "unverified");
       const promotionState = titleizeToken(row?.promotionState || row?.promotion_state || row?.status || sourceType);
       return [{
@@ -1040,15 +1166,17 @@ function referenceSkillRowsFromCatalog(skillLibrary) {
         status: promotionState,
         badge: titleizeToken(sourceType),
         name: row?.label || row?.name || id,
-        summary: row?.summary || row?.description || row?.promptHint || "Live skill returned by the NAS snapshot.",
+        summary: row?.summary || row?.description || row?.promptHint || "Local Codex skill loaded from your skill folder.",
         description: row?.description || row?.summary || row?.promptHint || "",
         triggerConditions: row?.triggerConditions || row?.trigger_conditions || row?.promptHint || "",
-        instructions: asList(row?.instructions),
+        instructions,
         outputStyle: asList(row?.outputStyle || row?.output_style),
         guardrails: asList(row?.guardrails),
         category: row?.category || sourceType,
         tags: asList(row?.tags),
         permissions: asList(row?.permissions),
+        source: row?.source && typeof row.source === "object" ? row.source : null,
+        sourcePath: row?.source?.path || row?.sourcePath || row?.source_path || "",
         sourceType,
         promotionState,
         testStatus,
@@ -1056,7 +1184,7 @@ function referenceSkillRowsFromCatalog(skillLibrary) {
         publishReadiness: row?.editableStatus ? titleizeToken(row.editableStatus) : promotionState,
         reviewRequired: !["reviewed", "active"].includes(String(row?.promotionState || row?.status || "").toLowerCase()),
         learnedPromotion: sourceType === "learned" ? promotionState : "",
-        lastValidationSummary: row?.lastValidationSummary || `NAS catalog status: ${testStatus}.`,
+        lastValidationSummary: row?.lastValidationSummary || `Local SKILL.md status: ${testStatus}.`,
         lastTestSummary: row?.lastTestSummary || `Usage ${row?.usageCount || 0} · helped ${row?.helpedCount || 0}.`,
         feedbackSummary: row?.feedbackSummary || {},
         assistant: {
@@ -1777,6 +1905,32 @@ function webPushSupported() {
   );
 }
 
+function initialFluxioPwaStatus() {
+  if (typeof window === "undefined") {
+    return {
+      status: "unsupported",
+      detail: "Fluxio app update status is available after the browser shell mounts.",
+      checkedAt: "",
+    };
+  }
+  const status = document.documentElement.dataset.fluxioPwa || "checking";
+  const normalized = String(status || "").toLowerCase();
+  return {
+    status,
+    detail:
+      normalized === "unsupported"
+        ? "Service worker updates are disabled or unavailable in this environment."
+        : normalized === "ready"
+          ? "Fluxio app shell is ready for installed use."
+          : normalized === "updated"
+            ? "Fluxio app shell update is ready; activate it when prompted."
+            : normalized === "failed"
+              ? "Fluxio app update status failed before details were available."
+        : "Checking Fluxio app shell update status.",
+    checkedAt: "",
+  };
+}
+
 function urlBase64ToUint8Array(value) {
   const padding = "=".repeat((4 - (value.length % 4)) % 4);
   const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
@@ -1807,7 +1961,10 @@ function sanitizeVisibleModelText(value) {
     .replace(/\bsystem-loss improvement mission\b/gi, "system improvement mission")
     .replace(/\bsystem loss improvement mission\b/gi, "system improvement mission")
     .replace(/\bsystem-loss\b/gi, "system improvement")
-    .replace(/\bsystem loss\b/gi, "system improvement");
+    .replace(/\bsystem loss\b/gi, "system improvement")
+    .replace(/\bMission resume was dispatched asynchronously\.?/gi, "Resume request sent to the mission lane.")
+    .replace(/\bMission resume dispatched asynchronously\.?/gi, "Resume request sent to the mission lane.")
+    .replace(/\bproof artifacts\b/gi, "evidence attached");
 }
 
 function sanitizeAgentMessageRow(row) {
@@ -1858,6 +2015,11 @@ function notificationHeadline(item) {
 
 function notificationTimestamp(item) {
   return String(item?.createdAt || item?.created_at || item?.timestamp || item?.at || "").trim();
+}
+
+function notificationTimestampDisplayLabel(value) {
+  const label = timestampLabel(value);
+  return label ? `Updated · ${label}` : "";
 }
 
 function notificationId(item) {
@@ -2038,6 +2200,302 @@ function deriveLiveMissionProgress(mission, missionDetailSnapshot = {}) {
       : "runtime_progress",
     displayAsCompletion: !(status === "failed" || status === "verification_failed" || verificationFailures.length > 0),
     entries: plannedScopeEntries,
+  };
+}
+
+function formatGoalDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  return `${remainingSeconds}s`;
+}
+
+function compactGoalText(value, maxLength = 128) {
+  const text = sanitizeVisibleModelText(value).replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function deriveSelectedMissionProofOverride(agentLiveThreadProof = {}) {
+  const missionId = String(agentLiveThreadProof?.missionId || "").trim();
+  if (!missionId) {
+    return null;
+  }
+  const transcriptStatus = String(agentLiveThreadProof?.transcriptStatus || "").trim().toLowerCase();
+  const artifactGateStatus = String(agentLiveThreadProof?.artifactGateStatus || "").trim().toLowerCase();
+  const transcriptMessageCount = Number(agentLiveThreadProof?.transcriptMessageCount || 0);
+  const runtimeOutputCount = Number(agentLiveThreadProof?.runtimeOutputCount || 0);
+  const artifactCount = Number(agentLiveThreadProof?.artifactCount || 0);
+  const liveEvidenceCount = Math.max(
+    0,
+    Number(agentLiveThreadProof?.runtimeReportCount || 0) +
+      Number(agentLiveThreadProof?.realMessageCount || 0) +
+      Number(agentLiveThreadProof?.agentMessageCount || 0),
+  );
+  const artifactGateKnown = Boolean(
+    artifactGateStatus ||
+      agentLiveThreadProof?.artifactGateFailure ||
+      agentLiveThreadProof?.artifactGateNextAction,
+  );
+  const gateExplicitlyFailed =
+    (artifactGateKnown && agentLiveThreadProof?.artifactGatePassed === false) ||
+    ["missing_required_output", "failed", "blocked", "verification_failed"].includes(artifactGateStatus);
+  const transcriptMissing =
+    ["missing_runtime_output", "missing", "not_attached"].includes(transcriptStatus) ||
+    (Boolean(transcriptStatus) && transcriptStatus !== "attached" && transcriptMessageCount === 0);
+  const transcriptActuallyMissing = transcriptMissing && runtimeOutputCount <= 0 && liveEvidenceCount <= 0;
+  if (!gateExplicitlyFailed && !transcriptActuallyMissing) {
+    return null;
+  }
+  const missingParts = [
+    transcriptActuallyMissing || runtimeOutputCount <= 0 && liveEvidenceCount <= 0 ? "runtime output" : "",
+    gateExplicitlyFailed || artifactCount <= 0 ? "artifact proof" : "",
+  ].filter(Boolean);
+  const missingLabel = missingParts.length > 0 ? missingParts.join(" and ") : "proof";
+  const nextAction =
+    agentLiveThreadProof?.artifactGateNextAction ||
+    agentLiveThreadProof?.artifactGateFailure ||
+    agentLiveThreadProof?.nextAction ||
+    "Resume the selected mission with a hard runtime-output and artifact gate.";
+  return {
+    headline: "Selected mission proof is missing.",
+    tone: "blocked",
+    status: artifactGateStatus || transcriptStatus || "missing_required_output",
+    receiptState: "missing_selected_mission_output",
+    receiptLine: `Selected mission needs ${missingLabel}.`,
+    evidenceStatus: "missing_required_output",
+    evidenceLine: `Missing selected-mission proof · ${runtimeOutputCount} output · ${artifactCount} artifacts`,
+    title: nextAction,
+  };
+}
+
+function deriveAgentGoalProgress(mission, missionDetailSnapshot = {}, agentLiveThreadProof = {}, latestAgentCompartment = null) {
+  if (!mission) {
+    return null;
+  }
+  const liveProgress = mission?.liveProgress || missionDetailSnapshot?.summary?.liveProgress || {};
+  const missionState = missionStatusValue(mission);
+  const plannerState = String(mission?.planner_loop_status || mission?.state?.planner_loop_status || "").trim().toLowerCase();
+  const completed = ["completed", "done", "closed"].includes(missionState);
+  const failed = ["blocked", "verification_failed", "failed"].includes(missionState);
+  const running = missionState === "running" || plannerState === "running";
+  const proof = asRecord(mission?.proof);
+  const detailProof = asRecord(missionDetailSnapshot?.proof);
+  const proofDigest = asRecord(missionDetailSnapshot?.proofDigest);
+  const artifactGate = asRecord(missionDetailSnapshot?.artifactGate || proofDigest?.artifactGate);
+  const planRevisions = asList(mission?.plan_revisions || missionDetailSnapshot?.plan_revisions);
+  const remainingSteps = asList(mission?.state?.remaining_steps || mission?.remainingSteps);
+  const verificationFailures = [
+    ...asList(mission?.state?.verification_failures),
+    ...asList(proof?.failed_checks),
+    ...asList(detailProof?.failed_checks),
+  ].filter(Boolean);
+  const pendingApprovals = [
+    ...asList(proof?.pending_approvals),
+    ...asList(detailProof?.pending_approvals),
+  ].filter(Boolean);
+  const passedCheckCount = Math.max(
+    asList(proof?.passed_checks).length,
+    asList(detailProof?.passed_checks).length,
+    Number(mission?.passedChecks || 0),
+    Number(proofDigest?.passedChecks || 0),
+  );
+  const failedCheckCount = Math.max(
+    verificationFailures.length,
+    Number(mission?.failedChecks || 0),
+    Number(proofDigest?.failedChecks || 0),
+  );
+  const delegatedLanes = [
+    ...asList(mission?.delegated_runtime_sessions),
+    ...asList(mission?.runtimeLanes),
+    ...asList(missionDetailSnapshot?.delegated_runtime_sessions),
+  ];
+  const activeDelegated = delegatedLanes.find(item =>
+    ["waiting_for_approval", "running", "launching"].includes(String(item?.status || "").trim().toLowerCase()),
+  ) || delegatedLanes[delegatedLanes.length - 1] || null;
+  const fileFromValue = value => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    return value.path || value.file || value.name || value.label || "";
+  };
+  const changedFiles = uniq([
+    ...asList(mission?.changed_files),
+    ...asList(mission?.proof?.changed_files),
+    ...asList(detailProof?.changed_files),
+    ...asList(proofDigest?.changedFiles),
+    ...asList(missionDetailSnapshot?.changedFiles),
+    ...asList(latestAgentCompartment?.filesChanged),
+  ].map(fileFromValue).map(item => String(item || "").trim()).filter(Boolean));
+  const artifactPassed =
+    artifactGate?.passed === true ||
+    String(artifactGate?.status || "").toLowerCase() === "passed" ||
+    String(proofDigest?.artifactStatus || "").toLowerCase() === "passed";
+  const proofArtifactCount = Math.max(
+    Number(agentLiveThreadProof?.artifactCount || 0),
+    Number(artifactGate?.artifactCount || 0),
+    artifactPassed ? 1 : 0,
+  );
+  const selectedMissionProofOverride = deriveSelectedMissionProofOverride(agentLiveThreadProof);
+  const displayedProofCount = selectedMissionProofOverride ? 0 : proofArtifactCount;
+  const proofFileLabel = `${displayedProofCount} included`;
+  const hardBlocked = failed || failedCheckCount > 0 || Boolean(selectedMissionProofOverride);
+  const activeRuntime = !hardBlocked && Boolean(
+    running ||
+      activeDelegated ||
+      Number(mission?.activeDelegatedLaneCount || 0) > 0 ||
+      Number(mission?.delegatedLaneCount || 0) > 0,
+  );
+  const planSeen =
+    planRevisions.length > 0 ||
+    Number(mission?.missionLoop?.cycleCount || 0) > 0 ||
+    Boolean(mission?.phase || mission?.state?.current_cycle_phase || liveProgress?.signalCounts);
+  const elapsedSeconds = Number(
+    liveProgress?.elapsedSeconds ||
+      mission?.elapsedRuntimeSeconds ||
+      mission?.state?.elapsed_runtime_seconds ||
+      mission?.missionLoop?.timeBudget?.elapsedSeconds ||
+      0,
+  );
+  const createdMs = Date.parse(String(mission?.created_at || mission?.createdAt || ""));
+  const updatedMs = Date.parse(String(mission?.updated_at || mission?.updatedAt || ""));
+  const derivedDurationSeconds =
+    elapsedSeconds > 0
+      ? elapsedSeconds
+      : Number.isFinite(createdMs) && Number.isFinite(updatedMs) && updatedMs > createdMs
+        ? Math.round((updatedMs - createdMs) / 1000)
+        : 0;
+  const runtimeName = runtimeLabel(
+    activeDelegated?.runtime_id ||
+      activeDelegated?.runtime ||
+      mission?.runtime_id ||
+      mission?.runtimeId ||
+      latestAgentCompartment?.runtime ||
+      "runtime",
+  );
+  const routeModel = [
+    activeDelegated?.target_provider || latestAgentCompartment?.route?.provider || "",
+    activeDelegated?.target_model || latestAgentCompartment?.route?.model || latestAgentCompartment?.route?.model_id || "",
+  ].filter(Boolean).join(" / ");
+  const rawGoal = mission?.slash_goal || mission?.title || mission?.objective || "Selected mission";
+  const goalBody = compactGoalText(rawGoal, 132);
+  const goalLabel = goalBody.startsWith("/") ? goalBody : `/goal ${goalBody}`;
+  const steps = [
+    {
+      id: "framed",
+      label: "Slash goal framed",
+      status: mission?.objective || mission?.title ? "done" : "pending",
+      detail: mission?.mission_id ? `Mission ${mission.mission_id}` : "Mission record is waiting for an id.",
+    },
+    {
+      id: "plan",
+      label: "Plan and scope",
+      status: planSeen || running || completed || hardBlocked ? "done" : "pending",
+      detail:
+        planRevisions.length > 0
+          ? `${planRevisions.length} plan revision${planRevisions.length === 1 ? "" : "s"} recorded`
+          : remainingSteps.length > 0
+            ? `${remainingSteps.length} remaining step${remainingSteps.length === 1 ? "" : "s"} visible`
+            : mission?.phase || mission?.state?.current_cycle_phase || "Scope loaded from live mission state",
+    },
+    {
+      id: "runtime",
+      label: `${runtimeName} runtime lane`,
+      status: hardBlocked ? "blocked" : completed ? "done" : activeRuntime ? "running" : "pending",
+      detail: selectedMissionProofOverride
+        ? "Runtime stopped at the hard proof gate; repair output and artifacts before continuing."
+        : routeModel || activeDelegated?.status || mission?.delegatedRuntime?.status || agentLiveThreadProof.runtime || "Runtime route not attached yet",
+    },
+    {
+      id: "files",
+      label: "Files and proof",
+      status:
+        selectedMissionProofOverride || hardBlocked
+          ? "blocked"
+          : changedFiles.length > 0 || artifactPassed
+            ? "done"
+            : activeRuntime
+              ? "running"
+              : "pending",
+      detail:
+        selectedMissionProofOverride
+          ? selectedMissionProofOverride.receiptLine
+          : changedFiles.length > 0
+          ? `${changedFiles.length} changed file${changedFiles.length === 1 ? "" : "s"} reported`
+          : artifactPassed
+            ? "Artifact gate passed"
+            : "Waiting for changed-file or artifact proof",
+    },
+    {
+      id: "verify",
+      label: "User-like verification",
+      status:
+        selectedMissionProofOverride || hardBlocked
+          ? "blocked"
+          : artifactPassed || passedCheckCount > 0
+            ? "done"
+            : agentLiveThreadProof.runtimeReportCount > 0
+              ? "running"
+              : "pending",
+      detail:
+        selectedMissionProofOverride
+          ? selectedMissionProofOverride.title
+          : failedCheckCount > 0
+          ? `${failedCheckCount} failed check${failedCheckCount === 1 ? "" : "s"}`
+          : passedCheckCount > 0
+            ? `${passedCheckCount} passed check${passedCheckCount === 1 ? "" : "s"}`
+            : `${agentLiveThreadProof.runtimeReportCount || 0} runtime reports attached`,
+    },
+    {
+      id: "handback",
+      label: "Operator handback",
+      status: completed ? "done" : hardBlocked ? "blocked" : "pending",
+      detail: completed ? "Ready for summary and proof review" : agentLiveThreadProof.nextAction || liveProgress?.nextAction || "Waiting for the next concrete handback cue",
+    },
+  ];
+  const currentIndex = (() => {
+    const liveIndex = steps.findIndex(item => item.status === "blocked" || item.status === "running");
+    if (liveIndex >= 0) {
+      return liveIndex;
+    }
+    const pendingIndex = steps.findIndex(item => item.status === "pending");
+    return pendingIndex >= 0 ? pendingIndex : steps.length - 1;
+  })();
+  const currentStep = steps[currentIndex] || steps[0];
+  return {
+    schema: "fluxio.agent_goal_progress.v1",
+    goalLabel,
+    statusLabel: titleizeToken(missionState || "mission"),
+    progressValue: clampPercent(liveProgress?.value ?? agentLiveThreadProof?.progressValue),
+    progressLabel: liveProgress?.label || agentLiveThreadProof?.progressLabel || "Live mission progress",
+    durationSeconds: derivedDurationSeconds,
+    durationLabel: formatGoalDuration(derivedDurationSeconds),
+    changedFileCount: changedFiles.length,
+    changedFileLabel: changedFiles.length > 0 ? `${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"}` : proofFileLabel,
+    proofCount: displayedProofCount,
+    proofFileLabel,
+    currentStep: currentIndex + 1,
+    currentStepTitle: currentStep?.label || "Mission step",
+    currentStepDetail: currentStep?.detail || "",
+    currentTone: currentStep?.status || "pending",
+    pendingApprovalCount: pendingApprovals.length,
+    steps,
   };
 }
 
@@ -2298,6 +2756,53 @@ function asList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function missionStatusValue(mission) {
+  return String(
+    mission?.state?.status ||
+      mission?.status ||
+      mission?.missionStatus ||
+      "",
+  ).trim().toLowerCase();
+}
+
+function isStaleVerifierBlockedMission(mission) {
+  if (missionStatusValue(mission) !== "blocked") {
+    return false;
+  }
+  const haystack = [
+    mission?.mission_id,
+    mission?.workspace_id,
+    mission?.title,
+    mission?.objective,
+    mission?.proof?.summary,
+    mission?.state?.last_error,
+    mission?.state?.last_runtime_event,
+    mission?.state?.queue_reason,
+    mission?.execution_scope?.workspace_root,
+    mission?.execution_scope?.execution_root,
+  ].join(" ").toLowerCase();
+  return (
+    haystack.includes("fluxio completion verifier") ||
+    haystack.includes("ui_bridge_verifier_runtime") ||
+    haystack.includes("quality-preview-runtime-flow")
+  );
+}
+
+function missionBlockerLine(mission) {
+  const staleVerifier = isStaleVerifierBlockedMission(mission);
+  if (staleVerifier) {
+    return "Old verifier run exhausted its runtime budget after the delegated executor disappeared.";
+  }
+  const blockedBy = asList(mission?.proof?.blocked_by || mission?.blockedBy).filter(Boolean);
+  return (
+    blockedBy[0] ||
+    mission?.state?.last_error ||
+    mission?.state?.last_runtime_event ||
+    mission?.proof?.summary ||
+    "Open the mission to inspect the blocking proof."
+  );
+}
+
 function cleanRuntimeReplyText(value) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -2469,14 +2974,10 @@ function isNasStorageBlockedFromDigest(systemAuditDigest) {
   const measuredUsageAvailable = Boolean(pressure.measuredUsageAvailable ?? !probeFailed);
   const hasStorageEvidence = Boolean(pressure.schema || pressure.checkedAt || pressure.source || status);
   const measuredStoragePressure =
+    hasStorageEvidence &&
     measuredUsageAvailable &&
     (status === "critical" || status === "full" || availableBytes <= 0 || usedPercent >= 99);
-  return (
-    !hasStorageEvidence ||
-    probeFailed ||
-    !measuredUsageAvailable ||
-    measuredStoragePressure
-  );
+  return measuredStoragePressure;
 }
 
 function workspaceUsesNasStorage(workspace) {
@@ -2517,10 +3018,10 @@ function missionLaunchStorageBlockReason(systemAuditDigest, workspace) {
     pressure.schema || pressure.checkedAt || pressure.source || String(pressure.status || "").trim(),
   );
   const availableBytes = Number(pressure.availableBytes || 0);
-  if (!hasStorageEvidence) {
-    return `${mount} mission writes need a live NAS storage check because no current evidence is loaded. Run the bounded storage probe before launching NAS work.`;
-  }
-  if (!measuredUsageAvailable) {
+  if (!hasStorageEvidence || !measuredUsageAvailable) {
+    if (!isNasStorageBlockedFromDigest(systemAuditDigest)) {
+      return "";
+    }
     const reason = pressure.probeConnectFailed
       ? "the bounded SSH probe could not connect"
       : pressure.probeTimedOut
@@ -3052,7 +3553,12 @@ function isHermesDialogueReplyTurn(item) {
   if (!text || text.length < 24 || isVerificationProbeDialogueTurnText(text)) {
     return false;
   }
-  if (!(label.includes("hermes runtime output") || label.includes("hermes reply"))) {
+  if (!(
+    label.includes("hermes runtime output") ||
+    label.includes("hermes reply") ||
+    label.includes("openclaw runtime output") ||
+    label.includes("openclaw reply")
+  )) {
     return false;
   }
   if (label.includes("lane_control") || label.includes("lane control")) {
@@ -3175,7 +3681,10 @@ function shouldStartNotificationStackCollapsed() {
   }
   const searchParams = new URLSearchParams(window.location.search || "");
   const surface = String(searchParams.get("surface") || searchParams.get("mode") || "").toLowerCase();
-  return surface === "builder" || surface === "workbench" || window.matchMedia("(max-width: 760px)").matches;
+  return surface === "builder"
+    || surface === "browser"
+    || surface === "settings"
+    || window.matchMedia("(max-width: 760px)").matches;
 }
 
 function ToastHost({ items }) {
@@ -3398,7 +3907,7 @@ function NotificationStack({
             onClick={onRestoreDismissed}
             type="button"
           >
-            Restore {dismissedCount > 0 ? dismissedCount : ""}
+            {dismissedCount > 0 ? `Restore dismissed ${dismissedCount}` : "Nothing dismissed"}
           </button>
           <button
             data-notification-clear-all="true"
@@ -3406,7 +3915,7 @@ function NotificationStack({
             onClick={onClearAll}
             type="button"
           >
-            Mark visible read
+            Mark as read
           </button>
         </div>
       </div> : null}
@@ -3550,7 +4059,7 @@ function NotificationStack({
           ) : null}
           <p>{notificationBody(item)}</p>
           {notificationTimestamp(item) ? (
-            <small className="notification-card-time">{timestampLabel(notificationTimestamp(item))}</small>
+            <small className="notification-card-time">{notificationTimestampDisplayLabel(notificationTimestamp(item))}</small>
           ) : null}
           {item.detail && notificationBody(item) !== sanitizeVisibleModelText(item.detail) ? (
             <small className="notification-card-context">{sanitizeVisibleModelText(item.detail)}</small>
@@ -3756,9 +4265,33 @@ function TranscriptMessage({
 }
 
 function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }) {
-  const isUser = item.role === "operator";
+  const role = String(item.role || "").trim().toLowerCase();
+  const isUser = role === "operator" || role === "user";
   const speakerLabel = isUser ? "You" : item.roleLabel || "Syntelos";
   const speakerIcon = isUser ? "◉" : item.roleIcon || "◇";
+  const messageKind = String(item.messageKind || "").trim().toLowerCase();
+  const conversationTurn = Boolean(item.conversationTurn) || ["dialogue", "chat"].includes(messageKind);
+  const source = String(item.source || item.sourceType || "").trim();
+  const chips = asList(item.chips).map(chip => String(chip || "").trim()).filter(Boolean);
+  const turnReceipt = item.turnReceipt && typeof item.turnReceipt === "object" ? item.turnReceipt : {};
+  const captureMode = String(turnReceipt.captureMode || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+  const captureLabel = String(turnReceipt.captureLabel || "").trim() ||
+    (["recovered-persisted-session", "persisted-session", "recovered-session"].includes(captureMode)
+      ? "recovered persisted session"
+      : ["fresh-runtime-command", "fresh-command", "runtime-command"].includes(captureMode)
+        ? "fresh runtime command"
+        : ["mission-runtime-output-file", "runtime-output-file", "proof-file"].includes(captureMode)
+          ? "runtime output proof file"
+          : chips.find(chip => /^(recovered persisted session|fresh runtime command|runtime output proof file)$/i.test(chip)) || "");
+  const realRuntimeOutput = !isUser && (
+    source === "backend-runtime-reply" ||
+    chips.some(chip => /real (runtime|model|transcript) output|real transcript/i.test(chip))
+  );
+  const provenanceLabel = realRuntimeOutput
+    ? [`${runtimeLabel(item.runtimeId)} real runtime output`, captureLabel].filter(Boolean).join(" · ")
+    : source
+      ? titleizeToken(source)
+      : "";
   const secondaryText =
     !isUser && item.detail && item.detail !== item.title && item.detail !== item.meta
       ? item.detail
@@ -3768,6 +4301,11 @@ function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }
   return (
     <article
       className={`agent-chat-message ${isUser ? "user" : "assistant"} ${toneClass(item.tone || "neutral")} ${highlighted ? "highlighted" : ""}`.trim()}
+      data-agent-dialogue-turn={conversationTurn ? "true" : "false"}
+      data-agent-message-key={item.id || ""}
+      data-agent-runtime-provenance={realRuntimeOutput ? "real-runtime-output" : source ? "recorded-source" : ""}
+      data-agent-runtime-source={source}
+      data-message-zone="thread"
       data-mission-id={item.missionId || ""}
       data-runtime-id={item.runtimeId || ""}
       data-turn-id={item.id || ""}
@@ -3782,6 +4320,11 @@ function AgentChatMessage({ item, highlighted = false, onFocusTrace = () => {} }
       </div>
       <div className="agent-chat-bubble">
         {item.label && !isUser ? <span className="agent-chat-label">{item.label}</span> : null}
+        {provenanceLabel ? (
+          <span className="agent-chat-provenance" data-agent-message-provenance={realRuntimeOutput ? "real-runtime-output" : "recorded-source"}>
+            {provenanceLabel}
+          </span>
+        ) : null}
         {item.title ? <p className="agent-chat-primary">{item.title}</p> : null}
         {secondaryText ? <p className="agent-chat-secondary">{secondaryText}</p> : null}
         {item.chips?.length ? (
@@ -3932,7 +4475,11 @@ function TurnReceiptStrip({ receipt, compact = false }) {
   const changedFiles = asList(normalized.changedFiles);
   const timeline = asList(normalized.toolTimeline);
   const duration = Number(normalized.durationMs);
-  const durationLabel = Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)}ms` : "Not reported";
+  const hasDuration = Number.isFinite(duration) && duration > 0;
+  const durationLabel = hasDuration ? `${Math.round(duration)}ms` : "Duration not captured";
+  const providerLabel = turnReceiptProviderLabel(normalized.provider);
+  const modelLabel = turnReceiptModelLabel(normalized.model);
+  const effortLabel = titleizeToken(normalized.effort) || "Not captured";
   const modelSourceParts = [
     normalized.modelMessageSourceLabel,
     normalized.modelMessageSourceTitle,
@@ -3949,12 +4496,14 @@ function TurnReceiptStrip({ receipt, compact = false }) {
         <span>Run receipt</span>
         <strong>{titleizeToken(normalized.status || "recorded")}</strong>
       </div>
-      <div className="agent-turn-receipt-grid">
+      <div className="agent-turn-receipt-grid" data-agent-turn-receipt-route-row="true">
         <span>Runtime: {titleizeToken(normalized.runtime)}</span>
-        <span>Provider: {titleizeToken(normalized.provider)}</span>
-        <span>Model: {normalized.model}</span>
-        <span>Thinking: {titleizeToken(normalized.effort)}</span>
-        <span>Duration: {durationLabel}</span>
+        <span data-agent-turn-provider-label={providerLabel}>Provider: {providerLabel}</span>
+        <span data-agent-turn-model-label={modelLabel}>Model: {modelLabel}</span>
+        <span data-agent-turn-effort-label={effortLabel}>Reasoning: {effortLabel}</span>
+        <span data-agent-turn-duration-label={durationLabel}>
+          {hasDuration ? `Duration: ${durationLabel}` : durationLabel}
+        </span>
       </div>
       <div className={`agent-turn-agent-message ${normalized.assistantMessage ? "" : "empty"}`.trim()} data-final-model-message="true">
         <span>Model / OpenRuntime message</span>
@@ -3975,12 +4524,12 @@ function TurnReceiptStrip({ receipt, compact = false }) {
             {changedFiles.slice(0, 4).map(file => <code key={`receipt-file-${file}`}>{file}</code>)}
           </div>
         ) : (
-          <span>Run completed without a changed-file receipt.</span>
+          <span data-agent-turn-file-change-label="No file changes recorded">Ready for proof review.</span>
         )}
       </div>
       {(normalized.command || changedFiles.length > 4 || timeline.length || normalized.runSummary || normalized.assistantMessage) ? (
         <details className="agent-turn-receipt-details">
-          <summary>Trace available</summary>
+          <summary data-agent-turn-trace-label="Run details">Run details</summary>
           <p className="agent-turn-command">Command: {normalized.command || "Not reported"}</p>
           {changedFiles.length > 4 ? (
             <pre>{changedFiles.join("\n")}</pre>
@@ -4330,8 +4879,8 @@ function routeProviderModelLabel(route = {}, fallback = "Not resolved") {
   if (!provider && !model) {
     return fallback;
   }
-  const providerLabel = provider ? titleizeToken(provider) : "Provider not reported";
-  const modelLabel = model && model.toLowerCase() !== "default" ? model : "model not reported";
+  const providerLabel = routeProviderDisplayLabel(provider, "Provider not reported");
+  const modelLabel = model && model.toLowerCase() !== "default" ? routeModelDisplayLabel(model) : "model not reported";
   return `${providerLabel} · ${modelLabel}`;
 }
 
@@ -4460,7 +5009,7 @@ function isRouteMetadataText(value) {
     return false;
   }
   return (
-    /^(Codex|OpenClaw|Hermes|Syntelos)\s*[·•]\s*[^·•]+[·•]\s*(default|low|medium|high)$/i.test(text) ||
+    /^(Codex|OpenClaw|Hermes|Syntelos)\s*[·•]\s*[^·•]+[·•]\s*(default|low|medium|high)(?:\s*[·•]\s*.*)?$/i.test(text) ||
     /^(Codex|OpenClaw|Hermes|Syntelos)\s+chat$/i.test(text) ||
     /^chat:(openclaw|codex|hermes):/i.test(text)
   );
@@ -4555,7 +5104,7 @@ function isRealAgentDialogueTranscriptTurn(item) {
     .map(value => String(value || "").trim())
     .filter(Boolean)
     .join("\n");
-  if (!text || isGeneratedContextFollowUpTurnText(text) || isVerificationProbeDialogueTurnText(text)) {
+  if (!text || isRouteMetadataText(text) || isGeneratedContextFollowUpTurnText(text) || isVerificationProbeDialogueTurnText(text)) {
     return false;
   }
   const source = String(item?.source || "").trim().toLowerCase();
@@ -4572,7 +5121,15 @@ function transcriptHasRealRuntimeReply(turns) {
   return asList(turns).some(item => {
     const role = String(item?.role || "").toLowerCase();
     const source = String(item?.source || "").trim().toLowerCase();
-    return role === "assistant" && ["backend-model-message", "backend-runtime-reply", "runtime-compartment", "runtime_compartment"].includes(source);
+    const text = [item?.title, item?.detail, item?.text, item?.message, item?.content]
+      .map(value => String(value || "").trim())
+      .filter(Boolean)
+      .join("\n");
+    return (
+      role === "assistant" &&
+      !isRouteMetadataText(text) &&
+      ["backend-model-message", "backend-runtime-reply", "runtime-compartment", "runtime_compartment"].includes(source)
+    );
   });
 }
 
@@ -4628,14 +5185,16 @@ function normalizeChatSessionTranscripts(payload, legacyNotes = []) {
   for (const [sessionId, turns] of Object.entries(next)) {
     const seen = new Set();
     const normalizedTurns = turns
+      .map((turn, index) => ({ turn, index }))
       .sort((left, right) => {
-        const leftTime = timeValue(left.createdAt);
-        const rightTime = timeValue(right.createdAt);
+        const leftTime = timeValue(left.turn.createdAt);
+        const rightTime = timeValue(right.turn.createdAt);
         if (leftTime !== rightTime) {
           return leftTime - rightTime;
         }
-        return String(left.id).localeCompare(String(right.id));
+        return left.index - right.index;
       })
+      .map(item => item.turn)
       .filter(turn => {
         const dedupeKey = String(turn.id || `${turn.role}:${turn.title}:${turn.createdAt}`);
         if (seen.has(dedupeKey)) {
@@ -4652,6 +5211,36 @@ function normalizeChatSessionTranscripts(payload, legacyNotes = []) {
   return normalizedMap;
 }
 
+const AGENT_TURN_MODE_SEQUENCE = ["standard", "plan", "fast", "max-context"];
+
+const AGENT_TURN_MODE_LABELS = {
+  standard: "Standard",
+  plan: "Plan",
+  fast: "Fast",
+  "max-context": "1M context",
+};
+
+function normalizeAgentTurnMode(value) {
+  const normalized = String(value || "standard").trim().toLowerCase().replace(/[_\s]+/g, "-");
+  if (["1m", "1m-context", "max", "maxcontext", "million-context"].includes(normalized)) {
+    return "max-context";
+  }
+  if (normalized === "planning") return "plan";
+  if (normalized === "speed") return "fast";
+  return AGENT_TURN_MODE_SEQUENCE.includes(normalized) ? normalized : "standard";
+}
+
+function normalizeConversationStorageMode(value) {
+  const normalized = String(value || "auto").trim().toLowerCase().replace(/[_\s]+/g, "-");
+  if (["local", "this-device", "device"].includes(normalized)) {
+    return "local";
+  }
+  if (["nas", "web", "shared", "remote"].includes(normalized)) {
+    return "nas";
+  }
+  return "auto";
+}
+
 function transcriptTurnsFromRuntimeCompartment(compartment, sessionId = "") {
   const normalizedSessionId = String(sessionId || compartment?.sessionId || compartment?.id || "").trim();
   if (!normalizedSessionId) {
@@ -4665,7 +5254,7 @@ function transcriptTurnsFromRuntimeCompartment(compartment, sessionId = "") {
       continue;
     }
     const text = String(item?.text || item?.message || "").trim();
-    if (!text) {
+    if (!text || isRouteMetadataText(text)) {
       continue;
     }
     const createdAt = String(item?.at || item?.createdAt || compartment?.updatedAt || new Date().toISOString());
@@ -5028,6 +5617,77 @@ function inferSurfaceFromAction(action) {
   return "setup";
 }
 
+const FLUXIO_TUTORIAL_STEPS = [
+  {
+    id: "welcome",
+    title: "Welcome to Syntelos",
+    body: "One agent workspace that follows you across the desktop app, the NAS web app, and your phone. This short tour shows the controls that matter.",
+  },
+  {
+    id: "composer",
+    title: "Start from a prompt",
+    body: "Describe what you want to build and press Run. Model, Reasoning, Mode, and Storage sit right beside the composer, so there are no setup screens.",
+  },
+  {
+    id: "modes",
+    title: "Agent modes",
+    body: "The Mode button cycles Standard, Plan (a written plan before any edits), Fast (low effort with a one-hour cap), and 1M context (a deep run with high effort).",
+  },
+  {
+    id: "storage",
+    title: "Conversations that follow you",
+    body: "Storage on Auto or NAS syncs sessions and transcripts through the backend so you can continue on web or phone. Local keeps them on this device only.",
+  },
+  {
+    id: "preview",
+    title: "Preview is the proof",
+    body: "Preview renders the real program your missions build, including clickable local pages, and attaches screenshots and receipts to the run.",
+  },
+];
+
+function FluxioTutorialOverlay({ open, step, onNext, onBack, onClose }) {
+  if (!open) return null;
+  const total = FLUXIO_TUTORIAL_STEPS.length;
+  const boundedStep = Math.max(0, Math.min(step, total - 1));
+  const current = FLUXIO_TUTORIAL_STEPS[boundedStep];
+  const last = boundedStep >= total - 1;
+  return (
+    <div
+      aria-label="Feature tour"
+      aria-modal="true"
+      className="fluxio-tutorial-overlay"
+      data-fluxio-tutorial="true"
+      role="dialog"
+    >
+      <div className="fluxio-tutorial-panel" data-tutorial-step={current.id} key={current.id}>
+        <span className="fluxio-tutorial-progress">{boundedStep + 1} / {total}</span>
+        <h2>{current.title}</h2>
+        <p>{current.body}</p>
+        <div className="fluxio-tutorial-actions">
+          <button data-tutorial-skip="true" onClick={onClose} type="button">
+            Skip tour
+          </button>
+          <div>
+            {boundedStep > 0 ? (
+              <button data-tutorial-back="true" onClick={onBack} type="button">
+                Back
+              </button>
+            ) : null}
+            <button
+              className="primary"
+              data-tutorial-next="true"
+              onClick={last ? onClose : onNext}
+              type="button"
+            >
+              {last ? "Start building" : "Next"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const searchParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const storedUiMode = searchParams.get("mode") || localStorage.getItem(STORAGE_KEYS.uiMode) || "agent";
@@ -5074,6 +5734,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
   const storedActiveChatSessionId =
     localStorage.getItem(STORAGE_KEYS.activeChatSessionId) || "";
+  const storedConversationStorageMode = normalizeConversationStorageMode(
+    searchParams.get("conversationStorage") ||
+      searchParams.get("storageMode") ||
+      localStorage.getItem(STORAGE_KEYS.conversationStorageMode) ||
+      "auto",
+  );
+  const storedAgentTurnMode = normalizeAgentTurnMode(
+    searchParams.get("turnMode") ||
+      localStorage.getItem(STORAGE_KEYS.agentTurnMode) ||
+      "standard",
+  );
   const storedOpenAICodexOAuthFlow = {
     ...DEFAULT_OPENAI_CODEX_OAUTH_FLOW,
     ...loadStoredJson(STORAGE_KEYS.openAICodexOAuthFlow, {}),
@@ -5087,14 +5758,24 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const requestedBuilderDetail =
     searchParams.get("builderDetail") === "1" || searchParams.get("builderDetail") === "true";
   const requestedMissionId = searchParams.get("missionId") || searchParams.get("mission") || "";
+  const requestedChatSessionId =
+    searchParams.get("chatSessionId") ||
+    searchParams.get("chatSession") ||
+    searchParams.get("conversationId") ||
+    "";
   const explicitSurface = searchParams.get("surface");
-  const persistedSurface = localStorage.getItem(STORAGE_KEYS.surface) || "";
   const storedSurface =
     explicitSurface ||
-    (persistedSurface && persistedSurface !== "home" ? persistedSurface : "") ||
-    "builder";
+    "agent";
   const requestedAgentScene = searchParams.get("agentScene") || "";
-  const initialSurface = storedSurface === "general" ? "skills" : storedSurface;
+  const initialSurface =
+    storedSurface === "general"
+      ? "skills"
+      : storedSurface === "workbench"
+        ? "browser"
+        : storedSurface === "home"
+          ? "agent"
+        : storedSurface;
 
   const requestedUiMode = searchParams.get("mode");
   const [uiMode, setUiMode] = useState(
@@ -5107,7 +5788,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [surface, setSurface] = useState(
     WORKSPACE_SURFACE_IDS.includes(initialSurface)
       ? initialSurface
-      : "home",
+      : "agent",
   );
   const [agentScene, setAgentScene] = useState(
     ["run", "live"].includes(requestedAgentScene) ? requestedAgentScene : "run",
@@ -5115,10 +5796,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [builderDetailOpen, setBuilderDetailOpen] = useState(
     requestedBuilderDetail || Boolean(storedUiState.builderDetailOpen),
   );
-  const [referenceAppearance, setReferenceAppearance] = useState({
-    ...DEFAULT_REFERENCE_APPEARANCE,
-    ...(storedUiState.referenceAppearance || {}),
-  });
+  const [referenceAppearance, setReferenceAppearance] = useState(() =>
+    normalizeReferenceAppearance(storedUiState.referenceAppearance),
+  );
   const requestedSettingsTab = searchParams.get("settingsTab");
   const [referenceSettingsTab, setReferenceSettingsTab] = useState(
     requestedSettingsTab || storedUiState.referenceSettingsTab || "general",
@@ -5159,9 +5839,44 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     storedChatSessionTranscripts,
   );
   const [chatRequestsInFlight, setChatRequestsInFlight] = useState(0);
+  const baseAgentStartRequested =
+    initialSurface === "agent" &&
+    !requestedMissionId &&
+    !requestedChatSessionId &&
+    !requestedAgentScene;
   const [activeChatSessionId, setActiveChatSessionId] = useState(
-    requestedMissionId ? "" : storedActiveChatSessionId || storedChatSessions[0]?.id || "",
+    requestedMissionId
+      ? ""
+      : requestedChatSessionId || (baseAgentStartRequested ? "" : storedActiveChatSessionId || storedChatSessions[0]?.id || ""),
   );
+  const [conversationStorageMode, setConversationStorageMode] = useState(
+    storedConversationStorageMode,
+  );
+  const [agentTurnMode, setAgentTurnMode] = useState(storedAgentTurnMode);
+  const [tutorialOpen, setTutorialOpen] = useState(() => {
+    if (searchParams.get("tour") === "1") return true;
+    // Never auto-open for automated verifiers and smoke runs.
+    if (typeof navigator !== "undefined" && navigator.webdriver) return false;
+    if (searchParams.get("preview-control") === "1") return false;
+    // Deep links with explicit mode/surface/mission/fixture params skip the
+    // tour; it only greets a clean first landing on the app.
+    if (
+      searchParams.get("mode") ||
+      searchParams.get("surface") ||
+      searchParams.get("missionId") ||
+      searchParams.get("mission") ||
+      searchParams.get("fixture")
+    ) {
+      return false;
+    }
+    return localStorage.getItem(STORAGE_KEYS.tutorialSeen) !== "true";
+  });
+  const [tutorialStep, setTutorialStep] = useState(0);
+  const closeTutorial = useCallback(() => {
+    localStorage.setItem(STORAGE_KEYS.tutorialSeen, "true");
+    setTutorialOpen(false);
+    setTutorialStep(0);
+  }, []);
   const [showWorkspaceDialog, setShowWorkspaceDialog] = useState(false);
   const [showMissionDialog, setShowMissionDialog] = useState(false);
   const [showEscalationDialog, setShowEscalationDialog] = useState(false);
@@ -5182,6 +5897,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     Object.fromEntries(PROVIDER_SECRET_OPTIONS.map(item => [item.id, ""])),
   );
   const [providerSecretSaving, setProviderSecretSaving] = useState({});
+  const [runtimeProofStatus, setRuntimeProofStatus] = useState(null);
+  const [runtimeProofRunning, setRuntimeProofRunning] = useState("");
+  const [runtimeProofUpdatedAt, setRuntimeProofUpdatedAt] = useState("");
   const [openAICodexOAuthFlow, setOpenAICodexOAuthFlow] = useState(storedOpenAICodexOAuthFlow);
   const [miniMaxOAuthFlow, setMiniMaxOAuthFlow] = useState(DEFAULT_MINIMAX_OAUTH_FLOW);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(storedCodeExecutionEnabled);
@@ -5266,6 +5984,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     configured: false,
     message: webPushSupported() ? "Web Push status has not been checked yet." : "Web Push is not supported in this browser.",
   });
+  const [pwaStatus, setPwaStatus] = useState(initialFluxioPwaStatus);
+  const [pwaUpdateChecking, setPwaUpdateChecking] = useState(false);
   useEffect(() => {
     if (typeof window !== "undefined") {
       window.__fluxioWebPushState = webPushState;
@@ -5301,6 +6021,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const currentMissionRef = useRef(null);
   const currentDelegatedSessionsRef = useRef([]);
   const transcriptCacheRef = useRef({});
+  const conversationStateLoadedRef = useRef(false);
+  const conversationStateHydratingRef = useRef(false);
+  const conversationStorageUserSelectedRef = useRef(false);
   const browserNotificationSeenIdsRef = useRef(
     new Set(normalizeStoredIdList(loadStoredJson(STORAGE_KEYS.browserNotificationSeenIds, []))),
   );
@@ -5322,6 +6045,113 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     },
     [reportUiAction],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const handlePwaStatus = event => {
+      const detail = event?.detail && typeof event.detail === "object" ? event.detail : {};
+      setPwaStatus({
+        status: detail.status || document.documentElement.dataset.fluxioPwa || "checking",
+        detail: detail.detail || "Fluxio app shell status changed.",
+        checkedAt: new Date().toISOString(),
+      });
+    };
+    window.addEventListener("fluxio:pwa-status", handlePwaStatus);
+    return () => {
+      window.removeEventListener("fluxio:pwa-status", handlePwaStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const normalized = String(pwaStatus.status || "").toLowerCase();
+    if (!["checking", "registering"].includes(normalized) || pwaUpdateChecking) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setPwaStatus(current => {
+        const currentStatus = String(current.status || "").toLowerCase();
+        if (!["checking", "registering"].includes(currentStatus)) {
+          return current;
+        }
+        return {
+          status: "ready",
+          detail: "No pending app update was reported. Use Check to query the app shell again.",
+          checkedAt: new Date().toISOString(),
+        };
+      });
+    }, FLUXIO_PWA_STATUS_FALLBACK_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [pwaStatus.status, pwaUpdateChecking]);
+
+  const handleAppUpdateCheck = useCallback(async () => {
+    markAction("app:update-check");
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      const next = {
+        status: "unsupported",
+        detail: "This browser does not expose service-worker updates.",
+        checkedAt: new Date().toISOString(),
+      };
+      setPwaStatus(next);
+      pushToast(next.detail, "warn");
+      return next.status;
+    }
+    setPwaUpdateChecking(true);
+    setPwaStatus(current => ({
+      ...current,
+      status: current.status === "updated" ? "updated" : "checking",
+      detail: current.status === "updated" ? current.detail : "Checking Fluxio app shell update status.",
+      checkedAt: new Date().toISOString(),
+    }));
+    try {
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, reject) => {
+          window.setTimeout(
+            () => reject(new Error("Service worker did not become ready before the update check timeout.")),
+            FLUXIO_PWA_READY_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      await registration.update();
+      const waiting = registration.waiting || registration.installing;
+      const next = waiting
+        ? {
+            status: "updated",
+            detail: "Fluxio app shell update is ready; activating it now.",
+            checkedAt: new Date().toISOString(),
+          }
+        : {
+            status: "ready",
+            detail: "Fluxio app shell is current for this browser.",
+            checkedAt: new Date().toISOString(),
+          };
+      setPwaStatus(next);
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: "SKIP_WAITING" });
+      }
+      pushToast(next.detail, next.status === "updated" ? "info" : "info");
+      return next.status;
+    } catch (error) {
+      const summary = browserErrorSummary(error);
+      const next = {
+        status: "failed",
+        detail: `Fluxio app update check failed: ${summary.label}`,
+        checkedAt: new Date().toISOString(),
+      };
+      setPwaStatus(next);
+      pushToast(next.detail, "error");
+      return next.status;
+    } finally {
+      setPwaUpdateChecking(false);
+    }
+  }, [markAction, pushToast]);
 
   const selectLiveMission = useCallback(
     (missionId, options = {}) => {
@@ -5449,7 +6279,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [surface, uiMode]);
 
   useEffect(() => {
-    if (surface !== "workbench") {
+    if (surface !== "browser") {
       return;
     }
     setNotificationStackCollapsed(true);
@@ -5590,6 +6420,106 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     }
     localStorage.setItem(STORAGE_KEYS.activeChatSessionId, activeChatSessionId);
   }, [activeChatSessionId]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.conversationStorageMode, conversationStorageMode);
+  }, [conversationStorageMode]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.agentTurnMode, agentTurnMode);
+  }, [agentTurnMode]);
+
+  useEffect(() => {
+    conversationStateLoadedRef.current = false;
+    if (conversationStorageUserSelectedRef.current) {
+      conversationStateLoadedRef.current = true;
+      return undefined;
+    }
+    if (previewMode !== "live" || conversationStorageMode === "local" || !hasCommandBackend()) {
+      conversationStateLoadedRef.current = true;
+      return undefined;
+    }
+    let cancelled = false;
+    conversationStateHydratingRef.current = true;
+    callBackendWithTimeout(
+      "get_conversation_state_command",
+      { root: null },
+      4500,
+    ).then(remoteState => {
+      if (cancelled || !remoteState || typeof remoteState !== "object") {
+        return;
+      }
+      const remoteMode = normalizeConversationStorageMode(remoteState.storageMode);
+      if (remoteMode && remoteMode !== conversationStorageMode) {
+        setConversationStorageMode(remoteMode);
+      }
+      const remoteSessions = normalizeChatSessions(remoteState.chatSessions || []);
+      const remoteTranscripts = normalizeChatSessionTranscripts(remoteState.chatSessionTranscripts || {});
+      if (remoteSessions.length > 0) {
+        setChatSessions(current => normalizeChatSessions([...remoteSessions, ...current]));
+      }
+      if (Object.keys(remoteTranscripts).length > 0) {
+        setChatSessionTranscripts(current =>
+          normalizeChatSessionTranscripts({
+            ...remoteTranscripts,
+            ...current,
+            ...Object.fromEntries(
+              Object.entries(remoteTranscripts).map(([sessionId, turns]) => [
+                sessionId,
+                [...asList(current?.[sessionId]), ...asList(turns)],
+              ]),
+            ),
+          }),
+        );
+      }
+      const remoteActiveId = String(remoteState.activeChatSessionId || "").trim();
+      if (remoteActiveId && !activeChatSessionId && !baseAgentStartRequested) {
+        setActiveChatSessionId(remoteActiveId);
+      }
+    }).catch(error => {
+      console.warn("conversation state hydrate failed", error);
+    }).finally(() => {
+      if (!cancelled) {
+        conversationStateLoadedRef.current = true;
+        conversationStateHydratingRef.current = false;
+      }
+    });
+    return () => {
+      cancelled = true;
+      conversationStateHydratingRef.current = false;
+    };
+  }, [activeChatSessionId, baseAgentStartRequested, conversationStorageMode, previewMode]);
+
+  useEffect(() => {
+    if (
+      previewMode !== "live" ||
+      conversationStorageMode === "local" ||
+      !hasCommandBackend() ||
+      !conversationStateLoadedRef.current ||
+      conversationStateHydratingRef.current
+    ) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      void callBackend(
+        "save_conversation_state_command",
+        {
+          root: null,
+          storageMode: conversationStorageMode,
+          activeChatSessionId,
+          chatSessions: normalizeChatSessions(chatSessions),
+          chatSessionTranscripts: normalizeChatSessionTranscripts(chatSessionTranscripts),
+        },
+      ).catch(() => undefined);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeChatSessionId,
+    chatSessions,
+    chatSessionTranscripts,
+    conversationStorageMode,
+    previewMode,
+  ]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.localTasks, JSON.stringify(localTasks));
@@ -5950,7 +6880,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ? current.summary || null
                 : null,
         }));
-        pushToast(`Refresh failed: ${error}`, "error");
+        const recoveredWithLiveSummary = Boolean(
+          liveSummaryAfterSnapshotError &&
+            typeof liveSummaryAfterSnapshotError === "object" &&
+            (liveSummaryAfterSnapshotError.schema || liveSummaryAfterSnapshotError.missions || liveSummaryAfterSnapshotError.runtimeCompartments),
+        );
+        if (!recoveredWithLiveSummary && reason !== "initialize") {
+          pushToast(`Refresh failed: ${error}`, "error");
+        }
       } finally {
         if (mountedRef.current) {
           setIsRefreshing(false);
@@ -5987,9 +6924,139 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [performRefresh],
   );
 
+  const refreshRuntimeProofStatus = useCallback(
+    async ({ silent = true } = {}) => {
+      if (previewMode !== "live" || !hasCommandBackend()) {
+        setRuntimeProofStatus(null);
+        return null;
+      }
+      try {
+        const status = await callBackendWithTimeout(
+          "get_real_agent_runtime_proof_status_command",
+          { payload: { root: null } },
+          RUNTIME_PROOF_STATUS_TIMEOUT_MS,
+        );
+        if (mountedRef.current && status && typeof status === "object") {
+          setRuntimeProofStatus(status);
+          setRuntimeProofUpdatedAt(new Date().toISOString());
+        }
+        return status || null;
+      } catch (error) {
+        if (!silent) {
+          pushToast(`Runtime proof status failed: ${error}`, "error");
+        }
+        return null;
+      }
+    },
+    [previewMode, pushToast],
+  );
+
+  const runRuntimeProof = useCallback(
+    async (runtime, runtimeProofOptions = {}) => {
+      const commandPayload =
+        runtimeProofOptions?.backendPayload && typeof runtimeProofOptions.backendPayload === "object"
+          ? runtimeProofOptions.backendPayload
+          : runtimeProofOptions && typeof runtimeProofOptions === "object"
+            ? runtimeProofOptions
+            : {};
+      const normalizedRuntime = String(commandPayload.runtime || runtime || "hermes").toLowerCase();
+      const backendCommand = String(commandPayload.backendCommand || runtimeProofOptions?.backendCommand || "run_real_agent_runtime_proof_command");
+      const requestedRuntimeTimeout = Number(commandPayload.runtimeTimeout || 0);
+      const requestedTimeoutMs = Number(commandPayload.timeoutMs || commandPayload.timeout_ms || 0);
+      const withBrowser = Boolean(commandPayload.withBrowser);
+      markAction(`runtime-proof:${normalizedRuntime}${withBrowser ? ":browser" : ""}`);
+      if (previewMode !== "live" || !hasCommandBackend()) {
+        pushToast("Switch to Live backend mode before running runtime proof.", "warn");
+        return;
+      }
+      setRuntimeProofRunning(normalizedRuntime);
+      try {
+        const runtimeTimeout =
+          Number.isFinite(requestedRuntimeTimeout) && requestedRuntimeTimeout > 0
+            ? requestedRuntimeTimeout
+            : normalizedRuntime === "hermes"
+              ? 180
+              : 90;
+        const backendPayload =
+          backendCommand === "run_real_agent_runtime_proof_command"
+            ? {
+                root: null,
+                runtime: normalizedRuntime,
+                runtimeTimeout,
+                withBrowser,
+              }
+            : {
+                ...commandPayload,
+                root: null,
+              };
+        const backendTimeout =
+          Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+            ? Math.min(RUNTIME_PROOF_RUN_TIMEOUT_MS, requestedTimeoutMs + 60000)
+            : backendCommand === "run_authenticated_live_agent_proof_command"
+              ? Math.min(RUNTIME_PROOF_RUN_TIMEOUT_MS, 180000)
+              : normalizedRuntime === "mixed"
+                ? RUNTIME_PROOF_RUN_TIMEOUT_MS
+                : Math.min(RUNTIME_PROOF_RUN_TIMEOUT_MS, (runtimeTimeout + 210) * 1000);
+        const result = await callBackendWithTimeout(
+          backendCommand,
+          {
+            payload: backendPayload,
+          },
+          backendTimeout,
+        );
+        const nextStatus =
+          result?.proofStatus && typeof result.proofStatus === "object"
+            ? result.proofStatus
+            : await refreshRuntimeProofStatus({ silent: true });
+        if (mountedRef.current && nextStatus && typeof nextStatus === "object") {
+          setRuntimeProofStatus(nextStatus);
+          setRuntimeProofUpdatedAt(new Date().toISOString());
+        }
+        const summary = result?.summary && typeof result.summary === "object" ? result.summary : {};
+        const label =
+          normalizedRuntime === "agent-ui"
+            ? "Agent UI"
+            : normalizedRuntime === "mixed"
+              ? "Mixed"
+              : normalizedRuntime === "openclaw"
+                ? "OpenClaw"
+                : "Hermes";
+        const statusLabel = titleizeToken(summary.status || result?.status || "recorded");
+        const tone = summary.status === "blocked" ? "error" : summary.status === "partial" ? "warn" : "info";
+        pushToast(`${label} proof ${statusLabel}.`, tone);
+      } catch (error) {
+        pushToast(`Runtime proof failed: ${error}`, "error");
+      } finally {
+        if (mountedRef.current) {
+          setRuntimeProofRunning("");
+        }
+      }
+    },
+    [markAction, previewMode, pushToast, refreshRuntimeProofStatus],
+  );
+
   useEffect(() => {
     void refreshAll("initialize");
   }, [refreshAll]);
+
+  useEffect(() => {
+    if (previewMode !== "live" || !hasCommandBackend()) {
+      setRuntimeProofStatus(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const tick = () => {
+      if (!cancelled) {
+        void refreshRuntimeProofStatus({ silent: true });
+      }
+    };
+    tick();
+    const intervalId = window.setInterval(tick, RUNTIME_PROOF_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [previewMode, refreshRuntimeProofStatus]);
 
   useEffect(() => {
     const workspaces =
@@ -6045,6 +7112,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       if (activeChatSessionId) {
         return null;
       }
+      if (baseAgentStartRequested) {
+        return null;
+      }
       const routedMission = routeMissionId
         ? missions.find(item => item.mission_id === routeMissionId)
         : null;
@@ -6071,7 +7141,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
       return current;
     });
-  }, [activeChatSessionId, data.snapshot, data.summary, previewMode, routeMissionId]);
+  }, [activeChatSessionId, baseAgentStartRequested, data.snapshot, data.summary, previewMode, routeMissionId]);
 
   useEffect(() => {
     if (previewMode !== "live" || !hasCommandBackend() || !selectedMissionId) {
@@ -6127,7 +7197,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     if (previewMode !== "live" || surface !== "skills" || !hasCommandBackend()) {
       return undefined;
     }
-    if (data.summary?.skillLibrary || data.snapshot?.skillLibrary) {
+    const currentSkillLibrary = data.summary?.skillLibrary || data.snapshot?.skillLibrary || null;
+    if (referenceSkillRowsFromCatalog(currentSkillLibrary).length > 0) {
       return undefined;
     }
     const refreshKey = `${surface}:${data.summary?.generatedAt || data.summary?.summaryMode || "bootstrap"}`;
@@ -6138,7 +7209,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     let cancelled = false;
     callBackendWithTimeout(
       "get_control_room_summary_command",
-      { payload: { root: null, reason: "skills_surface_full_summary" } },
+      { root: null, reason: "skills_surface_full_summary" },
       CONTROL_ROOM_SUMMARY_TIMEOUT_MS * 2,
     ).then(summary => {
       if (cancelled || !summary || typeof summary !== "object") {
@@ -7078,6 +8149,45 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
 
   const missionOptions = workspaceMissions.length > 0 ? workspaceMissions : missions;
+  const selectedMissionRow = useMemo(() => {
+    const selectedId = String(mission?.mission_id || selectedMissionId || "").trim();
+    if (!selectedId) {
+      return mission || null;
+    }
+    return missionOptions.find(item => String(item?.mission_id || "").trim() === selectedId) || mission || null;
+  }, [mission, missionOptions, selectedMissionId]);
+  const launchBlockedMissions = useMemo(
+    () =>
+      missions.filter(item =>
+        missionStatusValue(item) === "blocked" &&
+        !["archived", "dismissed"].includes(String(item?.state?.archive_state || item?.archiveState || "").toLowerCase()),
+      ),
+    [missions],
+  );
+  const launchWorkspaceBlockedMissions = useMemo(
+    () =>
+      launchBlockedMissions.filter(item =>
+        missionForm.workspaceId ? item?.workspace_id === missionForm.workspaceId : true,
+      ),
+    [launchBlockedMissions, missionForm.workspaceId],
+  );
+  const launchPrimaryBlockedMission =
+    launchWorkspaceBlockedMissions[0] ||
+    launchBlockedMissions.find(item => isStaleVerifierBlockedMission(item)) ||
+    launchBlockedMissions[0] ||
+    null;
+  const launchPrimaryBlockedMissionIsStaleVerifier =
+    isStaleVerifierBlockedMission(launchPrimaryBlockedMission);
+  const launchBlockedMissionCount = launchBlockedMissions.length;
+  const launchBlockedMissionTitle = sanitizeVisibleModelText(
+    launchPrimaryBlockedMission?.title ||
+      launchPrimaryBlockedMission?.objective ||
+      launchPrimaryBlockedMission?.mission_id ||
+      "Blocked mission",
+  );
+  const launchBlockedMissionDetail = launchPrimaryBlockedMission
+    ? missionBlockerLine(launchPrimaryBlockedMission)
+    : "New Hermes missions can launch asynchronously from this screen.";
   const quickSetupActions = useMemo(
     () => [...(setupHealth.repairActions || []), ...(setupHealth.globalActions || [])].slice(0, 3),
     [setupHealth.globalActions, setupHealth.repairActions],
@@ -7238,6 +8348,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       setSelectedMissionId(routeMissionId);
       return;
     }
+    if (baseAgentStartRequested) {
+      if (selectedMissionId !== null) {
+        setSelectedMissionId(null);
+      }
+      return;
+    }
     const hasActiveChat =
       Boolean(activeChatSessionId) &&
       chatSessions.some(item => item.id === activeChatSessionId);
@@ -7269,7 +8385,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     ) {
       setSelectedMissionId(preferred.mission_id);
     }
-  }, [activeChatSessionId, chatSessions, missionOptions, missions, routeMissionId, selectedMissionId]);
+  }, [activeChatSessionId, baseAgentStartRequested, chatSessions, missionOptions, missions, routeMissionId, selectedMissionId]);
 
   useEffect(() => {
     const liveIds = workspaces.map(item => item.workspace_id);
@@ -7351,7 +8467,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     [],
   );
   const showPersistentDrawer =
-    Boolean(activeDrawer) && (uiMode === "builder" || agentBlockedState.isBlocked);
+    Boolean(activeDrawer) && (uiMode === "builder" || surface === "browser" || agentBlockedState.isBlocked);
   const focusedRuntimeServices = useMemo(() => {
     const services = viewModel.drawers.builder.serviceStudio.services || [];
     const byNeedle = needle =>
@@ -7410,10 +8526,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [data.openClawStatus?.gatewayUrl]);
 
   useEffect(() => {
-    if (!mission && uiMode === "agent") {
+    if (!mission && uiMode === "agent" && surface !== "browser") {
       setActiveDrawer(null);
     }
-  }, [mission, uiMode]);
+  }, [mission, surface, uiMode]);
 
   useEffect(() => {
     if (uiMode === "agent" && AGENT_BUILDER_ONLY_DRAWERS.includes(activeDrawer)) {
@@ -7517,6 +8633,70 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
     },
     [callBackend, markAction, mission, missionCloseoutDraft, previewMode, pushToast, refreshAll],
+  );
+
+  const openLaunchBlockedMission = useCallback(() => {
+    const missionId = String(launchPrimaryBlockedMission?.mission_id || launchPrimaryBlockedMission?.missionId || "").trim();
+    if (!missionId) {
+      pushToast("No blocked mission is attached to the launch lane.", "warn");
+      return;
+    }
+    setShowMissionDialog(false);
+    setSurface("agent");
+    selectLiveMission(missionId, {
+      nextSurface: "agent",
+      nextAgentScene: "run",
+      actionLabel: "launch-blocker",
+    });
+  }, [launchPrimaryBlockedMission, pushToast, selectLiveMission]);
+
+  const handleLaunchStaleVerifierCloseout = useCallback(
+    async () => {
+      const missionId = String(launchPrimaryBlockedMission?.mission_id || launchPrimaryBlockedMission?.missionId || "").trim();
+      markAction(`mission:${missionId || "none"}:close-stale-verifier-blocker`);
+      if (!missionId) {
+        pushToast("No stale verifier mission is attached to the launch lane.", "warn");
+        return;
+      }
+      if (!launchPrimaryBlockedMissionIsStaleVerifier) {
+        pushToast("This blocked mission is not a stale verifier run; open it before closing it.", "warn");
+        return;
+      }
+      if (previewMode !== "live" || !hasCommandBackend()) {
+        pushToast("Preview mode is read-only for stale mission closeout.", "warn");
+        return;
+      }
+      try {
+        await callBackend(
+          "apply_control_room_mission_action_command",
+          {
+            payload: {
+              missionId,
+              action: "complete",
+              operatorValueScore: 0,
+              operatorOutcome: "not_useful",
+              operatorCloseoutNote:
+                "Closed as stale verifier launch-blocker evidence: runtime budget exhausted and delegated executor process disappeared.",
+              root: null,
+            },
+          },
+          { throwOnError: true },
+        );
+        pushToast("Stale verifier blocker closed out.", "info");
+        await refreshAll("launch-stale-verifier-closeout");
+      } catch (error) {
+        pushToast(`Stale verifier closeout failed: ${error}`, "error");
+      }
+    },
+    [
+      callBackend,
+      launchPrimaryBlockedMission,
+      launchPrimaryBlockedMissionIsStaleVerifier,
+      markAction,
+      previewMode,
+      pushToast,
+      refreshAll,
+    ],
   );
 
   const handleWatchdogParallelize = useCallback(
@@ -7865,7 +9045,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   );
 
   const saveWorkspacePolicy = useCallback(async (formOverride, options = {}) => {
-    const { suppressSuccessToast = false, retryAttempts = 3 } = options || {};
+    const { retryAttempts = 3 } = options || {};
     markAction("submit:workspace-policy");
     if (!workspace) {
       pushToast("Select a workspace first.", "warn");
@@ -7912,9 +9092,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         { attempts: Math.max(1, Number(retryAttempts) || 1) },
       );
       setWorkspaceProfileForm(normalizedProfile);
-      if (!suppressSuccessToast) {
-        pushToast("Workspace policy saved.", "info");
-      }
+      pushToast("Workspace policy saved.", "info");
       await refreshAll("workspace-policy-save");
       return true;
     } catch (error) {
@@ -8635,7 +9813,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         let workspacePolicySaved = true;
         if (workspace && missionTargetsSelectedWorkspace) {
           workspacePolicySaved = await saveWorkspacePolicy(nextProfile, {
-            suppressSuccessToast: true,
             retryAttempts: 3,
           });
           if (!workspacePolicySaved) {
@@ -8770,6 +9947,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               null,
             runtime: "auto",
             mode: missionForm.mode || "Autopilot",
+            turnMode: agentTurnMode,
             budgetHours: Number(missionForm.budgetHours || 4),
             successChecks: missionForm.successChecks
               .split("\n")
@@ -8807,6 +9985,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       pushToast(`Quick mission failed: ${error}`, "error");
     }
   }, [
+    agentTurnMode,
     liveSystemAuditDigest,
     markAction,
     missionForm,
@@ -9645,6 +10824,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       );
       const reply = cleanRuntimeReplyText(result?.reply || result?.finalMessage || result?.message);
       const compartment = result?.compartment && typeof result.compartment === "object" ? result.compartment : {};
+      const resultStatus = String(result?.status || compartment.state || "").toLowerCase();
+      const resultFailed = ["failed", "error", "timeout"].includes(resultStatus);
+      const runtimeErrorDetail = String(
+        result?.error ||
+          result?.errorMessage ||
+          result?.messageError ||
+          asList(compartment.errors)[0] ||
+          asList(compartment.blockers)[0] ||
+          "",
+      ).trim();
+      const runtimeResultTitle = reply || (resultFailed ? "The runtime failed before a readable reply." : "The runtime finished without a readable reply.");
       const compartmentChips = [
         compartment.runtime ? `runtime ${titleizeToken(compartment.runtime)}` : `runtime ${titleizeToken(result?.runtime || runtime)}`,
         compartment.route?.model || result?.route?.model_id || result?.route?.model || route.model || "",
@@ -10617,6 +11807,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       liveReviewStudio.plannerProof,
       markAction,
       mission,
+      openWorkspaceBrowser,
       operatorDraft,
       previewMode,
       pushToast,
@@ -11622,6 +12813,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const agentHasTurns = agentConversationTurns.length > 0;
   const agentIdleState = !mission ? "no-mission" : agentHasTurns ? "active" : "no-turns";
   const chatConversationActive = Boolean(activeChatSessionId);
+  const conversationStorageLabel =
+    conversationStorageMode === "nas"
+      ? "NAS"
+      : conversationStorageMode === "local"
+        ? "Local"
+        : "Auto";
+  const agentTurnModeLabel = AGENT_TURN_MODE_LABELS[agentTurnMode] || "Standard";
   const agentCenterTitle = mission?.title || mission?.objective || workspace?.name || "Syntelos workspace";
   const agentComposerLabel = !mission
     ? chatConversationActive
@@ -11824,6 +13022,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       );
       const reply = cleanRuntimeReplyText(result?.reply || result?.finalMessage || result?.message);
       const compartment = result?.compartment && typeof result.compartment === "object" ? result.compartment : {};
+      const resultStatus = String(result?.status || compartment.state || "").toLowerCase();
+      const resultFailed = ["failed", "error", "timeout"].includes(resultStatus);
+      const runtimeErrorDetail = String(
+        result?.error ||
+          result?.errorMessage ||
+          result?.messageError ||
+          asList(compartment.errors)[0] ||
+          asList(compartment.blockers)[0] ||
+          "",
+      ).trim();
+      const runtimeResultTitle = reply || (resultFailed ? "The runtime failed before a readable reply." : "The runtime finished without a readable reply.");
       const compartmentChips = [
         compartment.sessionId ? `session ${compartment.sessionId}` : "",
         compartment.runtime ? `runtime ${titleizeToken(compartment.runtime)}` : "",
@@ -11844,6 +13053,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               restartControls: compartment.restartControls,
               toolTimeline: compartment.toolTimeline,
               filesChanged: compartment.filesChanged,
+              blockers: compartment.blockers,
+              errors: compartment.errors,
               lastRoundtripMs: compartment.lastRoundtripMs ?? roundtripMs,
             },
             null,
@@ -11854,16 +13065,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       if (pendingChatTurn?.id) {
         updateChatSessionTurn(activeSessionId, pendingChatTurn.id, current => ({
           ...current,
-          title: reply || "The runtime finished without a readable reply.",
-          detail: result?.route
-            ? `${titleizeToken(result.runtime || runtime)} · ${routeModelReceiptLabel(result.route)} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
-            : "",
+          title: runtimeResultTitle,
+          detail: resultFailed && runtimeErrorDetail
+            ? runtimeErrorDetail
+            : result?.route
+              ? `${titleizeToken(result.runtime || runtime)} · ${routeModelReceiptLabel(result.route)} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
+              : "",
           meta: timestampLabel(new Date().toISOString()) || "Now",
-          tone: reply ? "neutral" : "warn",
+          tone: resultFailed ? "bad" : reply ? "neutral" : "warn",
           pending: false,
           conversationTurn: true,
           messageKind: "dialogue",
-          source: reply ? "backend-runtime-reply" : "backend-runtime-empty",
+          source: resultFailed ? "backend-runtime-error" : reply ? "backend-runtime-reply" : "backend-runtime-empty",
           chips: compartmentChips,
           technicalDetail: compartmentTrace,
           turnReceipt: normalizeTurnReceipt(compartment.turnReceipt || result?.turnReceipt, {
@@ -11882,12 +13095,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
       updateOperatorEntry(pendingReply.id, current => ({
         ...current,
-        title: reply || "The runtime finished without a readable reply.",
-        detail: result?.route
-          ? `${titleizeToken(result.runtime || runtime)} · ${routeModelReceiptLabel(result.route)} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
-          : "",
+        title: runtimeResultTitle,
+        detail: resultFailed && runtimeErrorDetail
+          ? runtimeErrorDetail
+          : result?.route
+            ? `${titleizeToken(result.runtime || runtime)} · ${routeModelReceiptLabel(result.route)} · ${routeEffortLabel(result.route.effort, "medium")}${compartment.cwd ? ` · ${compartment.cwd}` : ""}${roundtripMs > 0 ? ` · ${roundtripMs}ms` : ""}`
+            : "",
         meta: timestampLabel(new Date().toISOString()),
-        tone: reply ? "neutral" : "warn",
+        tone: resultFailed ? "bad" : reply ? "neutral" : "warn",
         pending: false,
         conversationTurn: true,
         messageKind: "dialogue",
@@ -12024,8 +13239,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   });
   const agentRouteProviderModel =
     frontendExecutorRoute && String(mission?.runtime_id || mission?.runtime || "").toLowerCase().includes("hermes")
-      ? `Hermes · ${frontendExecutorRoute.model || "MiniMax-M3"}`
-      : `${titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${activeEffectiveRoute.model || selectedAgentRoute.model || "gpt-5.5"}`;
+      ? `Hermes · ${routeModelDisplayLabel(frontendExecutorRoute.model || "MiniMax-M3")}`
+      : `${routeProviderDisplayLabel(activeEffectiveRoute.provider || selectedAgentRoute.provider)} · ${
+          routeModelDisplayLabel(activeEffectiveRoute.model || selectedAgentRoute.model || "gpt-5.5")
+        }`;
   const agentRouteStatus = `${agentRouteProviderModel} · ${
     routeEffortLabel(frontendExecutorRoute?.effort || activeEffectiveRoute.effort || selectedAgentRoute.effort, "high")
   }`;
@@ -12182,20 +13399,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       launchNasStorageStatusKey === "full" ||
       launchNasStorageAvailableBytes <= 0 ||
       launchNasStorageUsedPercent >= 99);
-  const launchNasStorageBlocked =
+  const launchNasStorageBlocked = launchNasStorageMeasuredPressure;
+  const launchNasStorageUnverified =
     !launchNasStorageHasEvidence ||
     launchNasStorageProbeFailed ||
-    !launchNasStorageMeasuredUsageAvailable ||
-    launchNasStorageMeasuredPressure;
+    !launchNasStorageMeasuredUsageAvailable;
   const launchNasStorageStatus = launchNasStorageBlocked
-    ? launchNasStorageMeasuredPressure
-      ? "NAS measured storage pressure"
-      : "NAS write check required"
+    ? "NAS measured storage pressure"
+    : launchNasStorageUnverified
+      ? "NAS write check unverified"
     : "NAS write headroom ready";
   const launchNasStorageDetail = launchNasStorageBlocked
-    ? launchNasStorageMeasuredPressure
-      ? `${launchNasStoragePressure.mount || "/volume1/Saclay"} reports ${launchNasStorageUsedPercent}% used with ${launchNasStorageAvailableBytes} available bytes. Free volume/snapshot space or use a local workspace before unattended NAS work.`
-      : `${launchNasStoragePressure.mount || "/volume1/Saclay"} usage is unverified because the bounded storage probe did not return current df data. This is not a measured full disk; use a local workspace or restore NAS reachability before unattended NAS work.`
+    ? `${launchNasStoragePressure.mount || "/volume1/Saclay"} reports ${launchNasStorageUsedPercent}% used with ${launchNasStorageAvailableBytes} available bytes. Free volume/snapshot space or use a local workspace before unattended NAS work.`
+    : launchNasStorageUnverified
+      ? `${launchNasStoragePressure.mount || "/volume1/Saclay"} usage is unverified because the bounded storage probe did not return current df data. This is not a measured full disk, so launch is not blocked by a false full-disk state.`
     : `${launchNasStoragePressure.mount || "NAS workspace"} has live storage headroom for mission writes.`;
   const launchTargetWorkspace =
     workspaces.find(item => item?.workspace_id === missionForm.workspaceId) ||
@@ -12267,11 +13484,18 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       mission?.state?.execution_scope ||
       mission?.execution_scope ||
       {};
-    const activeRoute =
+    const activeRouteBase =
       missionProviderTruth?.activeRoute ||
       asList(mission?.effectiveRouteContract?.roles).find(item => item.role === agentCycleRole) ||
       activeEffectiveRoute ||
       {};
+    const activeRoute = {
+      ...activeRouteBase,
+      provider: activeDelegated?.target_provider || activeRouteBase.provider,
+      model: activeDelegated?.target_model || activeRouteBase.model || activeRouteBase.model_id,
+      model_id: activeDelegated?.target_model || activeRouteBase.model_id || activeRouteBase.model,
+      effort: activeDelegated?.target_effort || activeRouteBase.effort,
+    };
     const latestEvents = asList(activeDelegated?.latest_events).slice(-8).map(event => ({
       kind: event.kind || "runtime.event",
       at: event.created_at || event.at || activeDelegated?.updated_at || mission.updated_at,
@@ -12457,10 +13681,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       ? `http://127.0.0.1:${localhostPort}`
       : "";
   const latestThinkingTurn = agentThinkingTurns[agentThinkingTurns.length - 1] || null;
-  const selectedRouteProviderLabel = titleizeToken(activeEffectiveRoute.provider || selectedAgentRoute.provider || "");
+  const selectedRouteProviderLabel = routeProviderDisplayLabel(
+    activeEffectiveRoute.provider || selectedAgentRoute.provider || "",
+    "",
+  );
+  const selectedRouteModelRaw = activeEffectiveRoute.model || selectedAgentRoute.model || "";
   const selectedModelLabel =
-    activeEffectiveRoute.model || selectedAgentRoute.model
-      ? `${activeEffectiveRoute.model || selectedAgentRoute.model}`
+    selectedRouteModelRaw
+      ? routeModelDisplayLabel(selectedRouteModelRaw)
       : selectedRouteProviderLabel && !/^default$/i.test(selectedRouteProviderLabel)
         ? `${selectedRouteProviderLabel} route`
         : "Profile default";
@@ -12476,6 +13704,255 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         workspace?.name ||
         "Conversation",
     );
+  const runtimeProofRows = useMemo(
+    () => asList(runtimeProofStatus?.runtimeRows),
+    [runtimeProofStatus?.runtimeRows],
+  );
+  const runtimeProofById = useMemo(
+    () => new Map(runtimeProofRows.map(item => [String(item.runtime || ""), item])),
+    [runtimeProofRows],
+  );
+  const runtimeProofLatest =
+    runtimeProofStatus?.latest && typeof runtimeProofStatus.latest === "object"
+      ? runtimeProofStatus.latest
+      : runtimeProofRows.find(item => item?.runtime === "hermes") || null;
+  const runtimeProofOpenClaw = runtimeProofById.get("openclaw") || null;
+  const runtimeProofOpenClawDetail =
+    runtimeProofOpenClaw?.diagnosticSummary ||
+    runtimeProofOpenClaw?.blocker ||
+    runtimeProofOpenClaw?.nextAction ||
+    "";
+  const runtimeProofLastChecked = runtimeProofStatus?.checkedAt || runtimeProofUpdatedAt || "";
+  const runtimeProofStatusLoaded = Boolean(
+    runtimeProofStatus?.schema ||
+      runtimeProofLastChecked ||
+      runtimeProofRows.length ||
+      runtimeProofStatus?.proofEvidenceChecklist ||
+      runtimeProofStatus?.latestCompleteProof ||
+      runtimeProofStatus?.nextProofCommand,
+  );
+  const runtimeProofHeadline =
+    runtimeProofLatest?.headline ||
+    (previewMode === "live"
+      ? runtimeProofStatusLoaded
+        ? "Runtime proof status loaded; evidence missing."
+        : "Waiting for real runtime proof status."
+      : "Live backend required for real runtime proof.");
+  const runtimeProofBundleStatus =
+    runtimeProofStatus?.proofBundleStatus && typeof runtimeProofStatus.proofBundleStatus === "object"
+      ? runtimeProofStatus.proofBundleStatus
+      : null;
+  const runtimeProofBundleStatusValue = String(runtimeProofBundleStatus?.status || "");
+  const runtimeProofOverallStatus =
+    runtimeProofBundleStatusValue ||
+    runtimeProofLatest?.status ||
+    (runtimeProofRows.some(item => item?.status && item.status !== "missing") ? "recorded" : "missing");
+  const runtimeProofRunLock =
+    runtimeProofStatus?.proofRunLock && typeof runtimeProofStatus.proofRunLock === "object"
+      ? runtimeProofStatus.proofRunLock
+      : null;
+  const runtimeProofBackendRunInProgress = Boolean(
+    runtimeProofStatus?.proofRunInProgress || runtimeProofRunLock?.running,
+  );
+  const runtimeProofBusy = Boolean(runtimeProofRunning) || runtimeProofBackendRunInProgress;
+  const runtimeProofLockRuntime = String(runtimeProofRunLock?.runtime || runtimeProofRunLock?.requestedRuntime || "");
+  const runtimeProofLockAgeSeconds = Number(runtimeProofRunLock?.ageSeconds || 0);
+  const runtimeProofLockLine = runtimeProofBackendRunInProgress
+    ? [
+        "Proof run active",
+        runtimeProofLockRuntime ? titleizeToken(runtimeProofLockRuntime) : "",
+        runtimeProofLockAgeSeconds > 0 ? `${Math.max(1, Math.round(runtimeProofLockAgeSeconds / 60))}m` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const runtimeProofEvidenceHealth =
+    runtimeProofLatest?.proofEvidenceHealth && typeof runtimeProofLatest.proofEvidenceHealth === "object"
+      ? runtimeProofLatest.proofEvidenceHealth
+      : null;
+  const runtimeProofEvidenceStatus = runtimeProofEvidenceHealth?.status || "";
+  const runtimeProofEvidenceReportCount = runtimeProofEvidenceHealth?.reportAttachedCount || 0;
+  const runtimeProofEvidenceScreenshotCount = runtimeProofEvidenceHealth?.screenshotAttachedCount || 0;
+  const runtimeProofEvidenceBundleLabel =
+    runtimeProofEvidenceStatus === "complete" ? "Bundle ready" : "Bundle";
+  const runtimeProofEvidenceStatusLabel =
+    runtimeProofEvidenceStatus && runtimeProofEvidenceStatus !== "complete"
+      ? titleizeToken(runtimeProofEvidenceStatus)
+      : "";
+  const runtimeProofEvidenceLine = runtimeProofEvidenceHealth
+    ? [
+        runtimeProofEvidenceBundleLabel,
+        runtimeProofEvidenceStatusLabel,
+        `${runtimeProofEvidenceReportCount} report${runtimeProofEvidenceReportCount === 1 ? "" : "s"}`,
+        `${runtimeProofEvidenceScreenshotCount} screenshot${runtimeProofEvidenceScreenshotCount === 1 ? "" : "s"}`,
+      ].filter(Boolean).join(" · ")
+    : "";
+  const runtimeProofEvidenceChecklist =
+    runtimeProofLatest?.proofEvidenceChecklist && typeof runtimeProofLatest.proofEvidenceChecklist === "object"
+      ? runtimeProofLatest.proofEvidenceChecklist
+      : runtimeProofStatus?.proofEvidenceChecklist && typeof runtimeProofStatus.proofEvidenceChecklist === "object"
+        ? runtimeProofStatus.proofEvidenceChecklist
+        : null;
+  const runtimeProofChecklistItems = asList(runtimeProofEvidenceChecklist?.items).slice(0, 3);
+  const runtimeProofChecklistNextMissing =
+    runtimeProofEvidenceChecklist?.nextMissing && typeof runtimeProofEvidenceChecklist.nextMissing === "object"
+      ? runtimeProofEvidenceChecklist.nextMissing
+      : runtimeProofChecklistItems.find(item => item?.required && !item?.passed) || null;
+  const runtimeProofChecklistIncludedCount = Math.max(0, Number(runtimeProofEvidenceChecklist?.attachedCount || 0) || 0);
+  const runtimeProofChecklistRequiredCount = Math.max(
+    0,
+    Number(runtimeProofEvidenceChecklist?.requiredCount || runtimeProofEvidenceChecklist?.total || 0) || 0,
+  );
+  const runtimeProofChecklistSummary = runtimeProofEvidenceChecklist
+    ? `${runtimeProofChecklistIncludedCount} of ${runtimeProofChecklistRequiredCount} included`
+    : "";
+  const runtimeProofChecklistDisplay = runtimeProofEvidenceChecklist
+    ? runtimeProofChecklistRequiredCount > 0 && runtimeProofChecklistIncludedCount >= runtimeProofChecklistRequiredCount
+      ? `Files ready · ${runtimeProofChecklistIncludedCount} included`
+      : `Proof files: ${runtimeProofChecklistSummary}`
+    : "";
+  const runtimeProofChecklistNextMissingLabel = String(runtimeProofChecklistNextMissing?.label || "");
+  const runtimeProofTranscriptReceipt =
+    runtimeProofLatest?.proofTranscriptReceipt && typeof runtimeProofLatest.proofTranscriptReceipt === "object"
+      ? runtimeProofLatest.proofTranscriptReceipt
+      : null;
+  const runtimeProofTranscriptLine = String(runtimeProofTranscriptReceipt?.summaryLine || "");
+  const runtimeProofTranscriptDisplay = runtimeProofTranscriptDisplayLine(runtimeProofTranscriptLine);
+  const runtimeProofTranscriptSource = String(runtimeProofTranscriptReceipt?.source || "");
+  const runtimeProofMixed = runtimeProofById.get("mixed") || null;
+  const runtimeProofLatestTranscript =
+    runtimeProofStatus?.latestTranscriptProof && typeof runtimeProofStatus.latestTranscriptProof === "object"
+      ? runtimeProofStatus.latestTranscriptProof
+      : null;
+  const runtimeProofTranscriptCoverage =
+    runtimeProofLatest?.transcriptRuntimeCoverage && typeof runtimeProofLatest.transcriptRuntimeCoverage === "object"
+      ? runtimeProofLatest.transcriptRuntimeCoverage
+      : runtimeProofTranscriptReceipt?.runtimeCoverage && typeof runtimeProofTranscriptReceipt.runtimeCoverage === "object"
+        ? runtimeProofTranscriptReceipt.runtimeCoverage
+        : runtimeProofMixed?.transcriptRuntimeCoverage && typeof runtimeProofMixed.transcriptRuntimeCoverage === "object"
+          ? runtimeProofMixed.transcriptRuntimeCoverage
+          : runtimeProofLatestTranscript?.transcriptRuntimeCoverage && typeof runtimeProofLatestTranscript.transcriptRuntimeCoverage === "object"
+            ? runtimeProofLatestTranscript.transcriptRuntimeCoverage
+            : null;
+  const runtimeProofTranscriptCoverageRows = asList(runtimeProofTranscriptCoverage?.rows).slice(0, 4);
+  const runtimeProofTranscriptCoverageLine = String(runtimeProofTranscriptCoverage?.summaryLine || "");
+  const runtimeProofTranscriptCoverageStatus = runtimeProofTranscriptCoverage
+    ? runtimeProofTranscriptCoverage.allRuntimeTranscriptsFresh
+      ? "fresh"
+      : runtimeProofTranscriptCoverage.allRuntimeTranscriptsReal
+        ? "covered"
+        : runtimeProofTranscriptCoverage.anyRuntimeTranscriptOutput
+          ? "partial"
+          : "missing"
+    : "";
+  const runtimeProofCompleteBundle =
+    runtimeProofStatus?.latestCompleteProof && typeof runtimeProofStatus.latestCompleteProof === "object"
+      ? runtimeProofStatus.latestCompleteProof
+      : null;
+  const runtimeProofCompleteBundleLabel = runtimeProofCompleteBundle
+    ? [
+        titleizeToken(runtimeProofCompleteBundle.runtime || runtimeProofCompleteBundle.label || "Runtime"),
+        "complete",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : "";
+  const runtimeProofLatestReportPath = String(runtimeProofLatest?.reportPath || "");
+  const runtimeProofCompleteBundleReportPath = String(runtimeProofCompleteBundle?.reportPath || "");
+  const runtimeProofCompleteBundleDiffers =
+    Boolean(runtimeProofCompleteBundleReportPath) &&
+    runtimeProofCompleteBundleReportPath !== runtimeProofLatestReportPath;
+  const runtimeProofCompleteBundleLine = runtimeProofCompleteBundleDiffers
+    ? [
+        "Complete bundle available",
+        runtimeProofCompleteBundle.label || titleizeToken(runtimeProofCompleteBundle.runtime || ""),
+        runtimeProofCompleteBundle.createdAt ? timestampLabel(runtimeProofCompleteBundle.createdAt) : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const runtimeProofCompleteBundleMissionId = String(
+    runtimeProofCompleteBundle?.missionId ||
+      runtimeProofCompleteBundle?.mission_id ||
+      runtimeProofCompleteBundle?.mission?.missionId ||
+      runtimeProofCompleteBundle?.mission?.mission_id ||
+      "",
+  ).trim();
+  const runtimeProofCompleteBundleCurrentMissionId = String(mission?.mission_id || selectedMissionId || "").trim();
+  const runtimeProofCompleteBundleCanOpen = Boolean(
+    runtimeProofCompleteBundleMissionId &&
+      runtimeProofCompleteBundleMissionId !== runtimeProofCompleteBundleCurrentMissionId,
+  );
+  const runtimeProofCompleteBundleActionLabel = runtimeProofCompleteBundleCanOpen
+    ? runtimeProofCompleteBundleLabel || "Complete proof"
+    : "";
+  const runtimeProofCompleteBundleButtonStatusLabel = runtimeProofCompleteBundleCanOpen ? "Ready" : "";
+  const runtimeProofCompleteBundleRefreshLabel = runtimeProofCompleteBundleLabel
+    ? runtimeProofCompleteBundleLabel.replace(/ complete$/i, " ready")
+    : "Ready";
+  const runtimeProofNextCommand =
+    runtimeProofStatus?.nextProofCommand && typeof runtimeProofStatus.nextProofCommand === "object"
+      ? runtimeProofStatus.nextProofCommand
+      : runtimeProofLatest?.nextProofCommand && typeof runtimeProofLatest.nextProofCommand === "object"
+        ? runtimeProofLatest.nextProofCommand
+        : null;
+  const runtimeProofNextCommandPayload =
+    runtimeProofNextCommand?.backendPayload && typeof runtimeProofNextCommand.backendPayload === "object"
+      ? runtimeProofNextCommand.backendPayload
+      : {};
+  const runtimeProofNextCommandRuntime = String(
+    runtimeProofNextCommandPayload.runtime || runtimeProofNextCommand?.runtime || "",
+  ).toLowerCase();
+  const runtimeProofNextCommandAvailable = Boolean(
+    runtimeProofNextCommand?.available && runtimeProofNextCommandRuntime,
+  );
+  const runtimeProofNextCommandWithBrowser = Boolean(
+    runtimeProofNextCommandPayload.withBrowser || runtimeProofNextCommand?.withBrowser,
+  );
+  const runtimeProofNextCommandLine = String(runtimeProofNextCommand?.commandLine || "");
+  const runtimeProofNextCommandReason = String(runtimeProofNextCommand?.reason || "");
+  const runtimeProofNextCommandLabel = runtimeProofNextCommandAvailable
+    ? [
+        titleizeToken(runtimeProofNextCommandRuntime),
+        runtimeProofNextCommandWithBrowser ? "browser evidence" : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const runtimeProofRefreshReceiptState = runtimeProofBackendRunInProgress
+    ? "running"
+    : runtimeProofCompleteBundle
+      ? "complete"
+      : runtimeProofChecklistNextMissingLabel
+        ? "missing"
+        : runtimeProofEvidenceLine
+          ? "recorded"
+          : runtimeProofLastChecked
+            ? "waiting"
+            : "waiting";
+  const runtimeProofRefreshReceiptLine =
+    runtimeProofRefreshReceiptState === "running"
+      ? runtimeProofLockLine || "Proof run active."
+      : runtimeProofRefreshReceiptState === "complete"
+        ? [
+            runtimeProofCompleteBundleRefreshLabel,
+            runtimeProofCompleteBundle?.createdAt ? timestampLabel(runtimeProofCompleteBundle.createdAt) : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : runtimeProofRefreshReceiptState === "missing"
+          ? `Still missing ${runtimeProofChecklistNextMissingLabel}`
+          : runtimeProofRefreshReceiptState === "recorded"
+            ? runtimeProofEvidenceLine
+            : runtimeProofRefreshReceiptState === "waiting"
+              ? runtimeProofLastChecked
+                ? "Verifier status loaded; no complete proof yet."
+                : "Waiting for verifier status."
+              : "";
+  const runtimeProofRefreshReceiptTitle = [
+    runtimeProofLastChecked ? `Checked ${timestampLabel(runtimeProofLastChecked)}` : "",
+    runtimeProofCompleteBundleReportPath || runtimeProofLatestReportPath,
+  ].filter(Boolean).join(" · ");
   const referenceRuntimeStatus =
     runtimeStatusById.get(agentRuntimeSelectValue) ||
     runtimeStatusById.get(mission?.runtime_id) ||
@@ -12646,6 +14123,22 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       const scopedChatSessionId = scopedMissionChatKey
         ? missionChatSessionIdFor(scopedMissionChatKey)
         : activeChatSession?.id || "";
+      const selectedMissionKey = String(mission?.mission_id || "").trim();
+      const detailMissionKey = String(
+        missionDetailSnapshot?.missionId || missionDetailSnapshot?.mission_id || "",
+      ).trim();
+      const missionDetailApplies = Boolean(
+        selectedMissionKey &&
+          detailMissionKey &&
+          detailMissionKey === selectedMissionKey &&
+          missionDetailSnapshot?.schema !== "fluxio.control_room.mission_detail_loading.v1",
+      );
+      const liveMissionDetailCanSupplyThread = Boolean(
+        previewMode === "live" &&
+          selectedMissionKey &&
+          missionDetailApplies &&
+          asList(missionDetailSnapshot?.agentMessages).length > 0,
+      );
       const normalizeRow = item => {
         const rawDetail = item.detail && item.detail !== item.title ? item.detail : "";
         const routeDetail = isRouteMetadataText(rawDetail) || isRouteMetadataText(item.meta);
@@ -12671,7 +14164,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               : asList(item.chips).slice(0, 3),
         };
       };
-      if (scopedChatSessionId) {
+      if (scopedChatSessionId && !liveMissionDetailCanSupplyThread) {
         const directTranscriptRows = asList(chatSessionTranscripts?.[scopedChatSessionId]);
         const scopedTranscriptRows = transcriptHasRealRuntimeReply(directTranscriptRows)
           ? directTranscriptRows.filter(isRealAgentDialogueTranscriptTurn)
@@ -12688,7 +14181,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         if (compartmentRows.length > 0) {
           return compartmentRows.slice(-12).map(sanitizeAgentMessageRow);
         }
-        if (scopedMissionChatKey) {
+        if (scopedMissionChatKey && !liveMissionDetailCanSupplyThread) {
           return [];
         }
         const fallbackChatMessages = operatorNotes
@@ -12698,16 +14191,6 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           .map(normalizeRow);
         return fallbackChatMessages.slice(-12).map(sanitizeAgentMessageRow);
       }
-      const selectedMissionKey = String(mission?.mission_id || "").trim();
-      const detailMissionKey = String(
-        missionDetailSnapshot?.missionId || missionDetailSnapshot?.mission_id || "",
-      ).trim();
-      const missionDetailApplies = Boolean(
-        selectedMissionKey &&
-          detailMissionKey &&
-          detailMissionKey === selectedMissionKey &&
-          missionDetailSnapshot?.schema !== "fluxio.control_room.mission_detail_loading.v1",
-      );
       const liveCommentMessages = operatorNotes
         .filter(item => {
           if (item.channel !== "comment") {
@@ -12750,12 +14233,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 messageKind,
                 runtimeId: item.runtimeId || item.runtime_id || mission?.runtime_id || "",
               });
+              const itemRuntimeLabel = runtimeLabel(item.runtimeId || item.runtime_id || mission?.runtime_id || "");
               const generatedContextTurn = isGeneratedContextFollowUpTurnText(
                 `${item.title || ""} ${item.detail || ""} ${item.message || ""} ${item.content || ""}`,
               );
               return {
                 id: `detail-live-${item.id || item.createdAt || item.timestamp || index}`,
                 missionId: selectedMissionKey,
+                source: item.source || "",
                 runtimeId: item.runtimeId || item.runtime_id || mission?.runtime_id || "",
                 role: !generatedContextTurn && (followUpTurn || item.role === "operator" || item.role === "user") ? "user" : "assistant",
                 label,
@@ -12783,8 +14268,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 traceOnly: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? false : Boolean(item.traceOnly),
                 chatPreferred: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? true : item.chatPreferred !== false,
                 technicalDetail: !generatedContextTurn && (followUpTurn || hermesReplyTurn) ? "" : item.technicalDetail || "",
+                turnReceipt: item.turnReceipt && typeof item.turnReceipt === "object" ? item.turnReceipt : null,
                 chips: uniq([
-                  !generatedContextTurn && followUpTurn ? "Operator follow-up" : !generatedContextTurn && hermesReplyTurn ? "Hermes reply" : label || "",
+                  !generatedContextTurn && followUpTurn ? "Operator follow-up" : !generatedContextTurn && hermesReplyTurn ? `${itemRuntimeLabel} reply` : label || "",
                   ...asList(item.chips),
                 ]).slice(0, 4),
               };
@@ -12934,6 +14420,10 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         processMessage: Boolean(item.processMessage),
         emphasis: Boolean(item.emphasis),
         technicalDetail: item.technicalDetail || "",
+        source: item.source || "",
+        messageKind: item.messageKind || (item.conversationTurn ? "dialogue" : ""),
+        conversationTurn: Boolean(item.conversationTurn) || String(item.messageKind || "").toLowerCase() === "dialogue",
+        turnReceipt: item.turnReceipt && typeof item.turnReceipt === "object" ? item.turnReceipt : null,
         chips: uniq([
           item.label || item.roleLabel || "",
           ...asList(item.chips),
@@ -12985,14 +14475,22 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       Boolean(item?.technicalDetail) ||
       /hermes|runtime|delegate|report/i.test(`${item?.label || ""} ${item?.title || ""} ${item?.detail || ""}`)
     ));
+    const runtimeTranscriptMessageCount = Number(runtimeTranscript?.messageCount || asList(runtimeTranscript?.messages).length || 0);
+    const runtimeTranscriptAttached =
+      runtimeTranscript?.status === "attached" ||
+      runtimeTranscriptMessageCount > 0;
+    const liveThreadMessageCount = referenceAgentMessages.filter(item => !item?.traceOnly).length;
+    const liveThreadActivityAttached = liveThreadMessageCount > 0;
     const liveProgress = deriveLiveMissionProgress(mission, missionDetailSnapshot);
     const progressValue = clampPercent(liveProgress?.value);
     const status = detailError
       ? "error"
       : missionDetailApplies
-        ? runtimeTranscript?.status === "attached" || runtimeReportRows.length > 0
+        ? runtimeTranscriptAttached
           ? "live_detail_attached"
-          : "live_detail_without_transcript"
+          : liveThreadActivityAttached
+            ? "live_detail_activity_attached"
+            : "live_detail_without_transcript"
         : detailLoading
           ? "loading"
           : selectedMissionKey
@@ -13001,6 +14499,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     const statusLabel = {
       error: "Detail endpoint error",
       live_detail_attached: "Live detail attached",
+      live_detail_activity_attached: "Live activity attached",
       live_detail_without_transcript: "Live detail attached, transcript pending",
       loading: "Loading mission detail",
       waiting_for_detail: "Waiting for selected mission detail",
@@ -13016,9 +14515,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       runtime: mission?.runtime_id || mission?.runtimeId || runtimeTranscript?.runtimeId || "",
       transcriptStatus: runtimeTranscript?.status || "pending",
       transcriptSessionId: runtimeTranscript?.sessionId || "",
-      transcriptMessageCount: Number(runtimeTranscript?.messageCount || asList(runtimeTranscript?.messages).length || 0),
+      transcriptMessageCount: runtimeTranscriptMessageCount,
       agentMessageCount: referenceAgentMessages.length,
-      realMessageCount: nonTraceRows.length,
+      realMessageCount: liveThreadMessageCount,
       runtimeReportCount: runtimeReportRows.length,
       traceOnlyCount: Math.max(0, referenceAgentMessages.length - nonTraceRows.length),
       payloadBytes: Number(performance?.payloadBytes || 0),
@@ -13028,6 +14527,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       cacheFreshness: detailCache?.freshness || "",
       generatedAt: missionDetailSnapshot?.generatedAt || "",
       artifactGateStatus: artifactGate?.status || (artifactGate?.passed ? "passed" : ""),
+      artifactGatePassed: artifactGate?.passed === true,
+      artifactGateFailure: artifactGate?.failure || "",
+      artifactGateNextAction: artifactGate?.nextAction || "",
+      runtimeOutputCount: Number(artifactGate?.runtimeOutputCount || 0),
+      artifactCount: Number(artifactGate?.artifactCount || 0),
+      proofDigestScore: Number(proofDigest?.proofScore || 0),
       progressLabel: liveProgress?.label || "",
       progressValue,
       nextAction:
@@ -13036,6 +14541,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         "The live thread below is the current evidence source.",
     };
   }, [mission, missionDetailSnapshot, referenceAgentMessages]);
+  const agentGoalProgress = useMemo(
+    () => deriveAgentGoalProgress(mission, missionDetailSnapshot, agentLiveThreadProof, latestAgentCompartment),
+    [agentLiveThreadProof, latestAgentCompartment, mission, missionDetailSnapshot],
+  );
+  const selectedMissionProofOverride = useMemo(
+    () => deriveSelectedMissionProofOverride(agentLiveThreadProof),
+    [agentLiveThreadProof],
+  );
   const referenceFeedbackItems = useMemo(() => {
     const seededMessages = referenceAgentMessages.slice(-3).map(item => ({
       id: `feedback-${item.id}`,
@@ -13580,19 +15093,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
 
   const handleReferenceSurfaceChange = useCallback(
     nextSurface => {
-      markAction(`reference:surface:${nextSurface}`);
-      setSurface(nextSurface);
-      if (nextSurface !== "builder") {
+      const normalizedSurface = nextSurface === "home" ? "agent" : nextSurface;
+      markAction(`reference:surface:${normalizedSurface}`);
+      setSurface(normalizedSurface);
+      if (normalizedSurface !== "builder") {
         setBuilderDetailOpen(false);
       }
-      if (nextSurface === "agent") {
+      if (normalizedSurface === "agent") {
         setActiveDrawer(null);
         if (!requestedAgentScene) {
           setAgentScene("run");
         }
         return;
       }
-      if (nextSurface === "builder") {
+      if (normalizedSurface === "builder") {
         setActiveDrawer(null);
         return;
       }
@@ -14031,6 +15545,23 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "run:proof") {
+        const proofMissionId = String(
+          payload?.missionId ||
+          mission?.mission_id ||
+          mission?.id ||
+          selectedMissionRow?.mission_id ||
+          selectedMissionRow?.id ||
+          selectedMissionId ||
+          "",
+        ).trim();
+        if (proofMissionId) {
+          handleReferenceMissionSelect({
+            missionId: proofMissionId,
+            nextSurface: "agent",
+            nextAgentScene: "run",
+            openBuilderDetail: false,
+          });
+        }
         setActiveDrawer("proof");
         setSurface("agent");
         setAgentScene("run");
@@ -14049,6 +15580,20 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           `Continue ${missionTitle}:\n- Use the current thread context.\n- Next step:\n- Proof I should verify:\n`,
         );
         pushToast("Continuation draft opened in the Agent thread.", "info");
+        return;
+      }
+
+      if (normalizedAction === "agent:goal-progress-follow-up") {
+        const missionTitle = sanitizeVisibleModelText(
+          mission?.title || mission?.name || selectedMissionRow?.title || selectedMissionRow?.name || "current mission",
+        );
+        const prompt = sanitizeVisibleModelText(payload?.prompt || "")
+          || `Follow up on ${missionTitle}:\n- Continue from the current visible goal step.\n- Keep proof attached.\n- Report blockers plainly.\n`;
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        prefillAgentInstruction(prompt, "agent:goal-progress-follow-up");
+        pushToast("Goal follow-up draft opened in Agent.", "info");
         return;
       }
 
@@ -14142,6 +15687,39 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         }
         setSurface("agent");
         setAgentScene("run");
+        return;
+      }
+
+      if (normalizedAction === "agent:start-slash-goal") {
+        setSurface("agent");
+        setAgentScene("run");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        setOperatorDraft(current => current || "/goal ");
+        pushToast("Slash goal ready in Agent Live.", "info");
+        return;
+      }
+
+      if (normalizedAction === "agent:launch-model-collection") {
+        const template = MISSION_STARTER_TEMPLATES.find(item => item.id === "model-collection-harness");
+        setMissionForm(current => ({
+          ...current,
+          workspaceId: current.workspaceId || selectedWorkspaceId || workspace?.workspace_id || "",
+          runtime: template?.runtime || current.runtime || "hermes",
+          modelProvider: template?.modelProvider || current.modelProvider || "openai-codex",
+          model: template?.model || current.model || "gpt-5.5",
+          modelEffort: template?.modelEffort || current.modelEffort || "high",
+          budgetHours: template?.budgetHours || current.budgetHours || 6,
+          mode: current.mode || "Autopilot",
+          profile: current.profile || workspace?.user_profile || profileId || "builder",
+          objective: template?.objective || current.objective,
+          successChecks: template?.successChecks || current.successChecks,
+        }));
+        setSurface("agent");
+        setAgentScene("run");
+        setBuilderDetailOpen(false);
+        setShowMissionDialog(true);
+        pushToast("Model collection harness loaded from Agent Live.", "info");
         return;
       }
 
@@ -14553,6 +16131,56 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         return;
       }
 
+      if (normalizedAction === "composer:plus:tour" || normalizedAction === "tutorial:open") {
+        setTutorialStep(0);
+        setTutorialOpen(true);
+        return;
+      }
+
+      if (normalizedAction === "agent:toggle-turn-mode") {
+        setAgentTurnMode(current => {
+          const index = AGENT_TURN_MODE_SEQUENCE.indexOf(normalizeAgentTurnMode(current));
+          const next = AGENT_TURN_MODE_SEQUENCE[(index + 1) % AGENT_TURN_MODE_SEQUENCE.length];
+          pushToast(
+            next === "plan"
+              ? "Plan mode: the agent records a step-by-step plan before editing files."
+              : next === "fast"
+                ? "Fast mode: low reasoning effort with a one-hour budget cap."
+                : next === "max-context"
+                  ? "1M context mode: deep run with high effort and an extended budget."
+                  : "Standard mode: balanced effort and default budget.",
+            "info",
+          );
+          return next;
+        });
+        return;
+      }
+
+      if (normalizedAction === "conversation:toggle-storage") {
+        conversationStorageUserSelectedRef.current = true;
+        setConversationStorageMode(current => {
+          const next = current === "auto" ? "nas" : current === "nas" ? "local" : "auto";
+          pushToast(
+            next === "local"
+              ? "Conversation storage set to local only for this device."
+              : next === "nas"
+                ? "Conversation storage set to NAS shared state."
+                : "Conversation storage set to automatic shared state.",
+            "info",
+          );
+          return next;
+        });
+        return;
+      }
+
+      if (normalizedAction === "browser:browse-folder") {
+        setSurface("browser");
+        setBuilderDetailOpen(false);
+        setActiveDrawer(null);
+        await openWorkspaceBrowser(workspaceForm.path);
+        return;
+      }
+
       if (normalizedAction === "approval:review") {
         setActiveDrawer("queue");
         setSurface("agent");
@@ -14592,7 +16220,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "agent:open-preview" || normalizedAction === "composer:plus:preview") {
-        setSurface("workbench");
+        setSurface("browser");
         setBuilderDetailOpen(false);
         setActiveDrawer(null);
         setAgentScene("run");
@@ -14609,11 +16237,61 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "agent:open-browser" || normalizedAction === "composer:plus:browser") {
-        setSurface("workbench");
+        setSurface("browser");
         setBuilderDetailOpen(false);
         setActiveDrawer(null);
         setAgentScene("run");
-        pushToast("Browser proof surface opened.", "info");
+        pushToast("Preview opened as a full work surface.", "info");
+        await refreshAll("legacy-browser-open-preview");
+        return;
+      }
+
+      if (normalizedAction === "browser:send-annotation-to-agent") {
+        const targetUrl = String(payload?.targetUrl || "Browser target").trim();
+        const selector = String(payload?.selector || "browser selected region").trim();
+        const rectangle = payload?.rectangle && typeof payload.rectangle === "object" ? payload.rectangle : {};
+        const viewport = payload?.viewport && typeof payload.viewport === "object" ? payload.viewport : {};
+        const latestProbeEvent = payload?.latestProbeEvent && typeof payload.latestProbeEvent === "object"
+          ? payload.latestProbeEvent
+          : {};
+        const regionLine = [
+          Number.isFinite(Number(rectangle.x)) ? `x=${rectangle.x}%` : "",
+          Number.isFinite(Number(rectangle.y)) ? `y=${rectangle.y}%` : "",
+          Number.isFinite(Number(rectangle.width)) ? `w=${rectangle.width}%` : "",
+          Number.isFinite(Number(rectangle.height)) ? `h=${rectangle.height}%` : "",
+        ].filter(Boolean).join(", ");
+        const viewportLine = [
+          Number.isFinite(Number(viewport.width)) ? `${viewport.width}px` : "",
+          Number.isFinite(Number(viewport.height)) ? `${viewport.height}px` : "",
+        ].filter(Boolean).join(" x ");
+        const probeLine = latestProbeEvent.detail
+          ? `${latestProbeEvent.action || "event"}: ${latestProbeEvent.detail}`
+          : "";
+        setActiveCommentTarget({
+          id: `browser-region-${Date.now()}`,
+          kind: "browser region",
+          title: targetUrl,
+          zone: "browser-preview",
+          selector,
+          targetUrl,
+          rectangle,
+          viewport,
+          latestProbeEvent,
+        });
+        setOperatorDraft([
+          "Act on this selected browser UI region:",
+          `Target: ${targetUrl}`,
+          `Selector: ${selector}`,
+          regionLine ? `Region: ${regionLine}` : "",
+          viewportLine ? `Viewport: ${viewportLine}` : "",
+          probeLine ? `Latest interaction: ${probeLine}` : "",
+          "",
+          "Requested change:",
+        ].filter(Boolean).join("\n"));
+        setSurface("agent");
+        setAgentScene("run");
+        setActiveDrawer("context");
+        pushToast("Browser selection sent to Agent.", "info");
         return;
       }
 
@@ -14883,9 +16561,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           workspaceId: workspace?.workspace_id || current.workspaceId || "",
           runtime: workspace?.default_runtime || current.runtime || "hermes",
           profile: workspace?.user_profile || profileId || current.profile,
-          objective: current.objective.trim() || operatorDraft.trim() || "Promote the selected workbench idea into a mission.",
+          objective: current.objective.trim() || operatorDraft.trim() || "Promote the selected browser proof idea into a mission.",
         }));
-        setSurface("workbench");
+        setSurface("browser");
         setShowMissionDialog(true);
         return;
       }
@@ -14899,13 +16577,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction === "workbench:tutorial-help") {
-        setSurface("workbench");
+        setSurface("browser");
         setActiveDrawer("context");
         return;
       }
 
       if (normalizedAction === "workbench:computer-use") {
-        setSurface("workbench");
+        setSurface("browser");
         setActiveDrawer("runtime");
         return;
       }
@@ -14970,7 +16648,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction.startsWith("workbench:event:")) {
-        setSurface("workbench");
+        setSurface("browser");
+        return;
+      }
+
+      if (normalizedAction === "browser:proof-panel-opened") {
+        setSurface("browser");
         return;
       }
 
@@ -14979,9 +16662,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         normalizedAction === "workbench:run-artifact-check" ||
         normalizedAction === "workbench:open-execution-receipt"
       ) {
-        setSurface("workbench");
+        setSurface("browser");
         setActiveDrawer("proof");
-        pushToast("Workbench proof view opened.", "info");
+        pushToast("Browser proof view opened.", "info");
         return;
       }
 
@@ -15119,7 +16802,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           );
           const removedMissionCount = Number(response?.removedMissionCount || 0);
           setBuilderDetailOpen(false);
-          setSurface("home");
+          setSurface("agent");
           setSelectedWorkspaceId(null);
           setSelectedMissionId(null);
           await refreshAll("workspace-delete");
@@ -15168,7 +16851,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       }
 
       if (normalizedAction.startsWith("workbench:")) {
-        setSurface("workbench");
+        setSurface("browser");
         setActiveDrawer(
           normalizedAction.includes("notification")
             ? "context"
@@ -15198,6 +16881,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       markAction,
       mission,
       operatorDraft,
+      prefillAgentInstruction,
       previewMode,
       profileId,
       pushToast,
@@ -15209,10 +16893,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       runWorkspaceActionSpec,
       selectLiveMission,
       selectedMissionId,
+      selectedMissionRow,
       workspace?.default_runtime,
       workspace?.name,
       workspace?.workspace_id,
       workspace?.user_profile,
+      workspaceForm.path,
       workspaceProfileForm.routeOverrides,
       workspaces,
       selectedWorkspaceId,
@@ -18902,15 +20588,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const livePublicLaunchRepairPacket = livePublicLaunchReadiness?.repairPacket || {};
   const livePublicLaunchSteps = publicLaunchProofSteps(livePublicLaunchReadiness);
   const liveSkillRows = referenceSkillRowsFromCatalog(liveSkillLibrary);
-  const connectedAppDraftSkills = asList(referenceStudio.skills).filter(
-    item => String(item?.sourceType || "").toLowerCase() === "connected_app",
-  );
-  const mergedLiveSkillRows = [
-    ...connectedAppDraftSkills,
-    ...liveSkillRows.filter(
-      item => !connectedAppDraftSkills.some(draft => draft.id === item.id),
-    ),
-  ];
+  const connectedAppDraftSkills = [];
+  const mergedLiveSkillRows = liveSkillRows;
   const liveSkillIds = liveSkillRows
     .filter(item => ["active", "reviewed", "installed", "curated"].includes(String(item?.status || item?.sourceType || "").toLowerCase()))
     .map(item => item.id);
@@ -18932,6 +20611,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     activeRuleSetId: referenceStudio.activeRuleSetId,
     feedbackLoop: liveSkillLibrary?.feedbackLoop || viewModel.drawers.builder.skillStudio.feedbackLoop,
     liveReady: liveSkillLibraryReady,
+    skillLibrary: liveSkillLibrary,
     liveSource: liveSkillLibrary ? (snapshot?.skillLibrary ? "control-room snapshot" : "control-room summary") : "",
     managementSummary: liveSkillLibrary?.managementSummary || viewModel.drawers.builder.skillStudio.summary,
     runtimeRouteProof: summarySnapshot.runtimeRouteProof || snapshot.runtimeRouteProof || null,
@@ -19010,6 +20690,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     ],
     beginnerSetupCards: asList(setupHealth?.beginnerSetupCards),
     safeUpdateAction: setupHealth?.safeUpdateAction || null,
+    appUpdate: {
+      ...pwaStatus,
+      checking: pwaUpdateChecking,
+      onCheck: handleAppUpdateCheck,
+    },
     providers: PROVIDER_SECRET_OPTIONS.map(item => {
       const providerHasSecret =
         item.id === "opencode-go"
@@ -19194,7 +20879,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           builderDetailOpen={builderDetailOpen}
           builderRows={referenceBuilderRows}
           changedItems={referenceChangedItems}
-          conversationMode={activeChatSessionId ? "chat" : mission ? "mission" : "chat"}
+          conversationMode={activeChatSessionId ? "chat" : routeMissionId && mission ? "mission" : "chat"}
+          conversationStorageLabel={conversationStorageLabel}
+          agentTurnModeLabel={agentTurnModeLabel}
           currentProjectLabel={currentProjectLabel}
           draft={operatorDraft}
           activeCommentTarget={activeCommentTarget}
@@ -19203,10 +20890,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           flowProjects={referenceProjectGroups}
           generatedImageArtifacts={generatedImageArtifacts}
           agentLiveThreadProof={agentLiveThreadProof}
+          appUpdateChecking={pwaUpdateChecking}
+          appUpdateStatus={pwaStatus}
           hermesEvidenceItems={hermesEvidenceItems}
           messages={referenceAgentMessages}
           missionWatchdog={missionWatchdog}
           nasDeployChecks={nasDeployChecks}
+          onCheckAppUpdate={handleAppUpdateCheck}
           onAttach={handleReferenceAttach}
           onBackFromBuilder={handleReferenceBuilderBack}
           onChangeDraft={setOperatorDraft}
@@ -19252,6 +20942,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           runtimeOptions={runtimeOptions}
           runtimeStatus={referenceRuntimeStatus}
           runtimeCompartment={latestAgentCompartment}
+          runtimeProofStatus={runtimeProofStatus}
+          runtimeProofRows={runtimeProofRows}
+          runtimeProofRunning={runtimeProofRunning}
+          runtimeProofLastChecked={runtimeProofLastChecked}
+          onRuntimeProofRun={runRuntimeProof}
+          onRuntimeProofRefresh={() => {
+            markAction("runtime-proof:refresh");
+            void refreshRuntimeProofStatus({ silent: false });
+          }}
           routeControls={referenceRouteControls}
           selectedEffortLabel={selectedEffortLabel}
           selectedHarnessMeta={selectedHarnessMeta}
@@ -19307,6 +21006,14 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           workbenchState={referenceWorkbenchState}
         />
       </Suspense>
+
+      <FluxioTutorialOverlay
+        onBack={() => setTutorialStep(current => Math.max(0, current - 1))}
+        onClose={closeTutorial}
+        onNext={() => setTutorialStep(current => current + 1)}
+        open={tutorialOpen}
+        step={tutorialStep}
+      />
 
       <Modal
         actions={
@@ -19455,12 +21162,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             Save project
           </ActionButton>
         }
+        closeTitle="Close project dialog"
         onClose={() => setShowWorkspaceDialog(false)}
         open={showWorkspaceDialog}
         summary="Choose the project folder Syntelos should work on. If NAS mirroring is enabled, missions run on the NAS working copy."
         title="Add project"
       >
-        <form className="dialog-form project-dialog-form" onSubmit={handleWorkspaceSubmit}>
+        <form className="dialog-form project-dialog-form" data-workspace-project-dialog="true" onSubmit={handleWorkspaceSubmit}>
           <Field label="Project name">
             <input
               onChange={event =>
@@ -19472,6 +21180,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           </Field>
           <Field label="Project folder">
             <input
+              data-workspace-project-folder-input="true"
               onChange={event => {
                 const nextPath = event.target.value;
                 setWorkspaceForm(current => ({
@@ -19541,36 +21250,46 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               onClick={() => void handleWorkspaceBrowserNavigate(workspaceBrowser.parentPath)}
               type="button"
             >
-              Up one level
+              <ArrowUp aria-hidden="true" size={15} strokeWidth={2} />
+              <span>Up one level</span>
             </ActionButton>
-            <ActionButton
-              disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
-              onClick={handleWorkspaceBrowserUseCurrent}
-              type="button"
-              variant="primary"
-            >
-              Use this folder
-            </ActionButton>
+            <span data-workspace-browser-use-folder-action="true">
+              <ActionButton
+                disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
+                onClick={handleWorkspaceBrowserUseCurrent}
+                type="button"
+                variant="primary"
+              >
+                Use this folder
+              </ActionButton>
+            </span>
           </>
         }
+        closeLabel={<X aria-hidden="true" size={18} strokeWidth={2} />}
+        closeTitle="Close folder browser"
         onClose={closeWorkspaceBrowser}
         open={workspaceBrowser.open}
         summary="Browse directories available to the web backend and choose a project folder."
         title="Browse server folders"
       >
-        <div className="dialog-form workspace-browser-dialog">
-          <Field label="Current folder">
-            <input
-              onChange={event =>
-                setWorkspaceBrowser(current => ({
-                  ...current,
-                  currentPath: event.target.value,
-                }))
-              }
-              value={workspaceBrowser.currentPath}
-            />
-          </Field>
-          <div className="inline-actions">
+        <div className="dialog-form workspace-browser-dialog" data-workspace-browser-dialog="true">
+          <div className="workspace-browser-path-shell">
+            <div className="workspace-browser-path-icon" aria-hidden="true">
+              <FolderOpen size={26} strokeWidth={1.8} />
+            </div>
+            <Field label="Current folder">
+              <input
+                data-workspace-browser-current-folder="true"
+                onChange={event =>
+                  setWorkspaceBrowser(current => ({
+                    ...current,
+                    currentPath: event.target.value,
+                  }))
+                }
+                spellCheck="false"
+                value={workspaceBrowser.currentPath}
+              />
+            </Field>
             <ActionButton
               disabled={!workspaceBrowser.currentPath || workspaceBrowser.loading}
               onClick={() => void handleWorkspaceBrowserNavigate(workspaceBrowser.currentPath)}
@@ -19580,39 +21299,64 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </ActionButton>
           </div>
           {workspaceBrowser.roots.length ? (
-            <div className="workspace-browser-roots">
-              {workspaceBrowser.roots.map(rootPath => (
-                <button
-                  className="workspace-browser-root-button"
-                  disabled={workspaceBrowser.loading}
-                  key={rootPath}
-                  onClick={() => void handleWorkspaceBrowserNavigate(rootPath)}
-                  type="button"
-                >
-                  {rootPath}
-                </button>
-              ))}
+            <div className="workspace-browser-roots" aria-label="Available root folders" data-workspace-browser-roots="true">
+              {workspaceBrowser.roots.map((rootPath, rootIndex) => {
+                const RootIcon = rootIndex === 0 ? Home : rootIndex === 1 ? Star : Folder;
+
+                return (
+                  <button
+                    className="workspace-browser-root-button"
+                    data-workspace-browser-root-action="true"
+                    disabled={workspaceBrowser.loading}
+                    key={rootPath}
+                    onClick={() => void handleWorkspaceBrowserNavigate(rootPath)}
+                    type="button"
+                  >
+                    <RootIcon aria-hidden="true" size={15} strokeWidth={1.9} />
+                    <span>{rootPath}</span>
+                  </button>
+                );
+              })}
             </div>
           ) : null}
           {workspaceBrowser.error ? (
             <p className="project-dialog-note is-warn">{workspaceBrowser.error}</p>
           ) : null}
-          <div className="workspace-browser-list" role="list">
+          <div className="workspace-browser-list-head" aria-hidden="true">
+            <span>Name</span>
+            <span>Type</span>
+          </div>
+          <div className="workspace-browser-list" data-workspace-browser-list="true" role="list">
             {workspaceBrowser.entries.length ? (
-              workspaceBrowser.entries.map(item => (
-                <button
-                  className={`workspace-browser-entry ${item.isDirectory ? "" : "is-file"}`.trim()}
-                  disabled={!item.isDirectory || workspaceBrowser.loading}
-                  key={item.path}
-                  onClick={() => void handleWorkspaceBrowserNavigate(item.path)}
-                  type="button"
-                >
-                  <span className="workspace-browser-entry-name">{item.name}</span>
-                  <span className="workspace-browser-entry-kind">
-                    {item.isDirectory ? "Folder" : "File"}
-                  </span>
-                </button>
-              ))
+              workspaceBrowser.entries.map(item => {
+                const isParent = item.name === "..";
+                const EntryIcon = isParent ? ArrowUp : item.isDirectory ? Folder : FileText;
+
+                return (
+                  <button
+                    className={`workspace-browser-entry ${item.isDirectory ? "" : "is-file"}`.trim()}
+                    data-workspace-browser-entry="true"
+                    disabled={!item.isDirectory || workspaceBrowser.loading}
+                    key={item.path}
+                    onClick={() => void handleWorkspaceBrowserNavigate(item.path)}
+                    type="button"
+                  >
+                    <span className="workspace-browser-entry-name">
+                      <span
+                        className="workspace-browser-entry-icon"
+                        data-entry-icon={isParent ? "parent" : item.isDirectory ? "folder" : "file"}
+                        aria-hidden="true"
+                      >
+                        <EntryIcon size={18} strokeWidth={1.9} />
+                      </span>
+                      {item.name}
+                    </span>
+                    <span className="workspace-browser-entry-kind">
+                      {item.isDirectory ? "Folder" : "File"}
+                    </span>
+                  </button>
+                );
+              })
             ) : (
               <p className="workspace-browser-empty">
                 {workspaceBrowser.loading ? "Loading folders..." : "No folders found here."}
@@ -19635,11 +21379,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         }
         onClose={() => setShowMissionDialog(false)}
         open={showMissionDialog}
-        summary="Mission launch remains available, but operational clutter is removed from the top bar."
-        title="Start mission"
+        summary="Write one goal, pick an active skill starter, and launch a proof-ready Hermes run."
+        title="Agent Live start"
       >
         <form className="dialog-form" onSubmit={handleMissionSubmit}>
-          <div className="mission-quickstart-panel">
+          <div className="mission-quickstart-panel" data-agent-live-start="true">
             <div className="mission-guided-launch-path" data-beginner-guided-launch="true">
               <article>
                 <span>01</span>
@@ -19669,7 +21413,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </Field>
             <div className="mission-quickstart-actions">
               <span>
-                Quick start uses Hermes supervision by default: pick the task-fit model, launch asynchronously, then show live Agent thread output, artifact proof, and notification receipts before claiming completion.
+                Agent Live starts here: Hermes launches the thread, selected skills stay attached, and proof is captured after the run produces real output.
               </span>
               <ActionButton
                 disabled={launchMissionBlockedByStorage}
@@ -19679,6 +21423,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               >
                 {launchMissionBlockedByStorage ? "NAS launch blocked" : "Quick start"}
               </ActionButton>
+            </div>
+            <div
+              className={`mission-launch-lane-status ${launchBlockedMissionCount > 0 ? (launchPrimaryBlockedMissionIsStaleVerifier ? "is-stale" : "is-blocked") : "is-clear"}`}
+              data-launch-mission-lane-status="true"
+              data-launch-blocked-mission-count={launchBlockedMissionCount}
+              data-launch-stale-verifier-blocker={launchPrimaryBlockedMissionIsStaleVerifier ? "true" : "false"}
+            >
+              <div>
+                <span>Mission lane</span>
+                <strong>
+                  {launchBlockedMissionCount > 0
+                    ? launchPrimaryBlockedMissionIsStaleVerifier
+                      ? `${launchBlockedMissionCount} stale verifier blocker${launchBlockedMissionCount === 1 ? "" : "s"}`
+                      : `${launchBlockedMissionCount} blocked mission${launchBlockedMissionCount === 1 ? "" : "s"}`
+                    : "Clear for new Hermes launches"}
+                </strong>
+                <p>
+                  {launchPrimaryBlockedMission
+                    ? `${launchBlockedMissionTitle}: ${launchBlockedMissionDetail}`
+                    : launchBlockedMissionDetail}
+                </p>
+              </div>
+              <div className="mission-launch-lane-actions">
+                {launchPrimaryBlockedMission ? (
+                  <ActionButton onClick={openLaunchBlockedMission} type="button">
+                    Open blocker
+                  </ActionButton>
+                ) : null}
+                {launchPrimaryBlockedMissionIsStaleVerifier ? (
+                  <ActionButton onClick={handleLaunchStaleVerifierCloseout} type="button" variant="primary">
+                    Close stale verifier
+                  </ActionButton>
+                ) : null}
+              </div>
             </div>
             <div className="mission-route-selector-row" data-mission-route-selector-row="true">
               <Field label="Runtime">
@@ -19821,8 +21599,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ) : null}
               </article>
               <article
-                className={launchNasStorageBlocked ? "is-blocked" : "is-ready"}
+                className={launchNasStorageBlocked ? "is-blocked" : launchNasStorageUnverified ? "is-warn" : "is-ready"}
                 data-launch-nas-storage-pressure="true"
+                data-launch-nas-storage-unverified={launchNasStorageUnverified ? "true" : "false"}
               >
                 <span>NAS storage</span>
                 <strong>{launchNasStorageStatus}</strong>
@@ -19839,7 +21618,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </article>
             </div>
             <div className="mission-starter-templates" data-mission-starter-templates="true">
-              <span>Starter missions</span>
+              <span>Skill starters</span>
               {MISSION_STARTER_TEMPLATES.map(template => (
                 <button
                   data-mission-template-id={template.id}
@@ -20169,7 +21948,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         </form>
       </Modal>
 
-      {surface !== "phone" && surface !== "agent" ? (
+      {surface !== "phone" && surface !== "agent" && surface !== "skills" && surface !== "browser" ? (
         <NotificationStack
           browserEnabled={browserNotifications.enabled}
           browserPermission={browserNotifications.permission}
@@ -23294,6 +25073,119 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                       {agentLiveThreadProof.progressValue != null ? ` · ${agentLiveThreadProof.progressValue}%` : ""}
                     </p>
                   </div>
+                  {agentGoalProgress ? (
+                    <details
+                      className={`agent-goal-progress tone-${agentGoalProgress.currentTone || "pending"}`.trim()}
+                      data-agent-goal-progress="true"
+                      data-agent-goal-schema={agentGoalProgress.schema}
+                      data-agent-goal-current-step={agentGoalProgress.currentStep}
+                      data-agent-goal-step-count={agentGoalProgress.steps.length}
+                      data-agent-goal-duration-seconds={agentGoalProgress.durationSeconds}
+                      data-agent-goal-changed-files={agentGoalProgress.changedFileCount}
+                      data-agent-goal-proof-count={agentGoalProgress.proofCount}
+                      data-agent-goal-proof-label={agentGoalProgress.proofFileLabel}
+                      data-agent-goal-state-label={
+                        agentGoalProgress.currentTone === "done"
+                          ? "Completed slash goal"
+                          : agentGoalProgress.currentTone === "blocked"
+                            ? "Blocked slash goal"
+                            : agentGoalProgress.currentTone === "running"
+                              ? "Running slash goal"
+                              : "Slash goal"
+                      }
+                    >
+                      <summary aria-label={`Inspect ${agentGoalProgress.goalLabel}`}>
+                        <span className="agent-goal-progress-title">
+                          <span>
+                            {agentGoalProgress.currentTone === "done"
+                              ? "Completed slash goal"
+                              : agentGoalProgress.currentTone === "blocked"
+                                ? "Blocked slash goal"
+                                : agentGoalProgress.currentTone === "running"
+                                  ? "Running slash goal"
+                                  : "Slash goal"}
+                          </span>
+                          <strong>{agentGoalProgress.goalLabel}</strong>
+                        </span>
+                        <span className="agent-goal-progress-metrics">
+                          <em>Step {agentGoalProgress.currentStep}/{agentGoalProgress.steps.length}</em>
+                          <em>{agentGoalProgress.durationLabel}</em>
+                          <em>{agentGoalProgress.changedFileLabel}</em>
+                        </span>
+                        <small>{agentGoalProgress.currentStepTitle}: {agentGoalProgress.currentStepDetail}</small>
+                      </summary>
+                      <div className="agent-goal-progress-panel">
+                        <div className="agent-goal-progress-steps" role="list">
+                          {agentGoalProgress.steps.map((step, index) => (
+                            <article
+                              className="agent-goal-progress-step"
+                              data-goal-step-id={step.id}
+                              data-goal-step-status={step.status}
+                              key={step.id}
+                              role="listitem"
+                            >
+                              <span aria-hidden="true">{index + 1}</span>
+                              <div>
+                                <strong>{step.label}</strong>
+                                <p>{step.detail}</p>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                        <div className="agent-goal-progress-skill-layer" data-agent-skill-autonomy-layer="true">
+                          <span>
+                            Agent autonomy layer
+                            <strong>Skills and self-goals stay attached to this mission thread.</strong>
+                          </span>
+                          <div>
+                            <ActionButton onClick={() => setActiveDrawer("skills")} type="button">
+                              Use skill
+                            </ActionButton>
+                            <ActionButton
+                              onClick={() =>
+                                prefillAgentInstruction(
+                                  `Create and execute the next small slash goal for ${agentGoalProgress.goalLabel}. Keep it real-project only, attach proof, and avoid repeating completed skill work.`,
+                                  "agent:own-goal",
+                                )
+                              }
+                              type="button"
+                            >
+                              Own goal
+                            </ActionButton>
+                            <ActionButton onClick={() => prefillAgentInstruction("Review the active skill, fix what is weak, and keep the skill reusable.", "skills:modify-with-agent")} type="button">
+                              Improve skill
+                            </ActionButton>
+                          </div>
+                        </div>
+                        <div className="agent-goal-progress-cues" data-agent-goal-full-cues="true">
+                          <span>
+                            {agentGoalProgress.progressLabel}
+                            {agentGoalProgress.progressValue != null ? ` · ${agentGoalProgress.progressValue}%` : ""}
+                            {agentGoalProgress.pendingApprovalCount > 0 ? ` · ${agentGoalProgress.pendingApprovalCount} approvals` : ""}
+                          </span>
+                          <div>
+                            <ActionButton onClick={() => setActiveDrawer("context")} type="button">
+                              Open context
+                            </ActionButton>
+                            <ActionButton onClick={() => setActiveDrawer("proof")} type="button">
+                              Open proof
+                            </ActionButton>
+                            <ActionButton
+                              onClick={() =>
+                                prefillAgentInstruction(
+                                  `Follow up on ${agentGoalProgress.goalLabel}:\n- Continue from step ${agentGoalProgress.currentStep}/${agentGoalProgress.steps.length}: ${agentGoalProgress.currentStepTitle}\n- Keep the proof attached\n- Report blockers plainly`,
+                                  "agent:goal-progress-follow-up",
+                                )
+                              }
+                              type="button"
+                            >
+                              Follow up
+                            </ActionButton>
+                          </div>
+                        </div>
+                      </div>
+                    </details>
+                  ) : null}
                   <div className="agent-run-proof-strip" aria-label="Mission proof and transcript status">
                     <span>
                       Transcript
@@ -23312,17 +25204,297 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                     </span>
                     <span className="agent-run-next-step">
                       Next
-                      <strong>{agentLiveThreadProof.nextAction}</strong>
+                      <strong>{firstViewNextActionDisplayLine(agentLiveThreadProof.nextAction)}</strong>
                     </span>
+                  </div>
+                  <div
+                    className={`agent-runtime-proof-actions tone-${selectedMissionProofOverride?.tone || runtimeProofLatest?.tone || "neutral"}`.trim()}
+                    data-runtime-proof-actions="true"
+                    data-runtime-proof-status={selectedMissionProofOverride?.status || runtimeProofOverallStatus}
+                    data-selected-mission-proof-override={selectedMissionProofOverride ? "true" : "false"}
+                    data-runtime-proof-updated-at={runtimeProofLastChecked}
+                    data-runtime-proof-run-in-progress={runtimeProofBackendRunInProgress ? "true" : "false"}
+                    data-runtime-proof-lock-runtime={runtimeProofLockRuntime}
+                  >
+                    <div className="agent-runtime-proof-copy">
+                      <span>Run output</span>
+                      <strong
+                        data-runtime-proof-headline="true"
+                        data-runtime-proof-raw-headline={selectedMissionProofOverride?.headline || runtimeProofHeadline}
+                      >
+                        {runtimeProofHeadlineDisplayLine(selectedMissionProofOverride?.headline || runtimeProofHeadline)}
+                      </strong>
+                      <em>
+                        {runtimeProofLastChecked
+                          ? `Updated · ${timestampLabel(runtimeProofLastChecked)}`
+                          : "No verifier report loaded yet"}
+                      </em>
+                      {selectedMissionProofOverride?.receiptLine || runtimeProofRefreshReceiptLine ? (
+                        <em
+                          className="agent-runtime-proof-refresh-receipt"
+                          data-runtime-proof-refresh-receipt="true"
+                          data-runtime-proof-refresh-state={selectedMissionProofOverride?.receiptState || runtimeProofRefreshReceiptState}
+                          title={selectedMissionProofOverride?.title || runtimeProofRefreshReceiptTitle || runtimeProofRefreshReceiptLine}
+                        >
+                          Refreshed · {selectedMissionProofOverride?.receiptLine || runtimeProofRefreshReceiptLine}
+                        </em>
+                      ) : null}
+                      {runtimeProofLockLine ? (
+                        <em
+                          data-runtime-proof-lock="true"
+                          data-runtime-proof-lock-status={runtimeProofRunLock?.status || "running"}
+                          title={runtimeProofRunLock?.lockPath || runtimeProofLockLine}
+                        >
+                          {runtimeProofLockLine}
+                        </em>
+                      ) : null}
+                      {selectedMissionProofOverride?.evidenceLine || runtimeProofEvidenceLine ? (
+                        <em data-runtime-proof-evidence-status={selectedMissionProofOverride?.evidenceStatus || runtimeProofEvidenceStatus}>
+                          {selectedMissionProofOverride?.evidenceLine || runtimeProofEvidenceLine}
+                        </em>
+                      ) : null}
+                      {!selectedMissionProofOverride && runtimeProofChecklistDisplay ? (
+                        <em
+                          data-runtime-proof-checklist-summary="true"
+                          data-runtime-proof-checklist-missing={String(runtimeProofEvidenceChecklist?.missingCount || 0)}
+                          data-runtime-proof-checklist-raw-summary={runtimeProofChecklistSummary}
+                          title={runtimeProofChecklistSummary}
+                        >
+                          {runtimeProofChecklistDisplay}
+                        </em>
+                      ) : null}
+                      {!selectedMissionProofOverride && runtimeProofChecklistNextMissingLabel ? (
+                        <em
+                          data-runtime-proof-checklist-next={String(runtimeProofChecklistNextMissing?.id || "")}
+                          title={runtimeProofChecklistNextMissing?.nextAction || runtimeProofChecklistNextMissingLabel}
+                        >
+                          Next missing: {runtimeProofChecklistNextMissingLabel}
+                        </em>
+                      ) : null}
+                      {!selectedMissionProofOverride && runtimeProofTranscriptLine ? (
+                        <em
+                          data-runtime-proof-transcript-raw-line={runtimeProofTranscriptLine}
+                          data-runtime-proof-transcript-source={runtimeProofTranscriptSource}
+                          title={runtimeProofTranscriptReceipt?.sourceDetail || runtimeProofTranscriptDisplay}
+                        >
+                          {runtimeProofTranscriptDisplay}
+                        </em>
+                      ) : null}
+                      {!selectedMissionProofOverride && runtimeProofTranscriptCoverageLine ? (
+                        <em
+                          data-runtime-proof-transcript-coverage="true"
+                          data-runtime-proof-transcript-coverage-status={runtimeProofTranscriptCoverageStatus}
+                          title={runtimeProofTranscriptCoverageLine}
+                        >
+                          Transcript coverage: {runtimeProofTranscriptCoverageLine}
+                        </em>
+                      ) : null}
+                      {runtimeProofCompleteBundleLine ? (
+                        <em
+                          data-runtime-proof-complete-bundle="true"
+                          title={runtimeProofCompleteBundleReportPath}
+                        >
+                          {runtimeProofCompleteBundleLine}
+                        </em>
+                      ) : null}
+                      {runtimeProofNextCommandAvailable ? (
+                        <em
+                          data-runtime-proof-next-command="true"
+                          data-runtime-proof-next-runtime={runtimeProofNextCommandRuntime}
+                          data-runtime-proof-next-with-browser={runtimeProofNextCommandWithBrowser ? "true" : "false"}
+                          title={runtimeProofNextCommandLine || runtimeProofNextCommandReason}
+                        >
+                          Next run · {runtimeProofNextCommandLabel}
+                        </em>
+                      ) : null}
+                      {runtimeProofOpenClawDetail ? (
+                        <em data-runtime-proof-openclaw-detail="true" title={runtimeProofOpenClawDetail}>
+                          OpenClaw: {runtimeProofOpenClawDetail}
+                        </em>
+                      ) : null}
+                      {!selectedMissionProofOverride && runtimeProofChecklistItems.length > 0 ? (
+                        <div
+                          aria-label="Runtime proof evidence checklist"
+                          className="agent-runtime-proof-checklist"
+                          data-runtime-proof-checklist="true"
+                          data-runtime-proof-checklist-status={runtimeProofEvidenceChecklist?.status || runtimeProofEvidenceStatus}
+                        >
+                          {runtimeProofChecklistItems.map(item => {
+                            const itemId = String(item?.id || item?.label || "proof-item");
+                            const checklistItemLabel = runtimeProofChecklistItemLabel(item, itemId);
+                            const passed = Boolean(item?.passed);
+                            const bridgeProofSource = String(item?.source || "") === "preview-bridge-proof";
+                            const bridgeProofStatus = String(item?.bridgeProofStatus || "");
+                            const bridgeProofTitle = [
+                              bridgeProofStatus ? `Preview bridge ${bridgeProofStatus}` : "Preview bridge proof",
+                              item?.originalScreenshotKey ? `screenshot ${item.originalScreenshotKey}` : "",
+                              item?.bridgeProofPath || "",
+                            ].filter(Boolean).join(" · ");
+                            return (
+                              <article
+                                className={passed ? "passed" : "missing"}
+                                data-runtime-proof-bridge-proof={bridgeProofSource ? "true" : "false"}
+                                data-runtime-proof-bridge-status={bridgeProofStatus}
+                                data-runtime-proof-checklist-item={itemId}
+                                data-runtime-proof-checklist-item-source={String(item?.source || "")}
+                                data-runtime-proof-checklist-item-status={item?.status || (passed ? "attached" : "missing")}
+                                key={itemId}
+                                title={item?.nextAction || checklistItemLabel}
+                              >
+                                <em>{checklistItemLabel}</em>
+                                <span aria-hidden="true" className="agent-runtime-proof-checklist-separator">
+                                  ·
+                                </span>
+                                <b>{passed ? "Included" : "Missing"}</b>
+                                {bridgeProofSource ? (
+                                  <small data-runtime-proof-bridge-proof-source="true" title={bridgeProofTitle}>
+                                    via Preview bridge
+                                  </small>
+                                ) : null}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {!selectedMissionProofOverride && runtimeProofTranscriptCoverageRows.length > 0 ? (
+                        <div
+                          aria-label="Runtime transcript coverage"
+                          className="agent-runtime-proof-coverage"
+                          data-runtime-proof-transcript-coverage-rows="true"
+                          data-runtime-proof-transcript-real-count={String(runtimeProofTranscriptCoverage?.realRuntimeCount || 0)}
+                          data-runtime-proof-transcript-required-count={String(runtimeProofTranscriptCoverage?.requiredRuntimeCount || 0)}
+                        >
+                          {runtimeProofTranscriptCoverageRows.map(row => {
+                            const runtimeId = String(row?.runtime || row?.label || "runtime");
+                            const covered = Boolean(row?.realRuntimeOutput);
+                            const fresh = Boolean(row?.freshRuntimeOutput);
+                            const blocked = Boolean(row?.blocked);
+                            const state = fresh ? "fresh" : covered ? "covered" : blocked ? "blocked" : "missing";
+                            return (
+                              <article
+                                className={state}
+                                data-runtime-proof-transcript-coverage-runtime={runtimeId}
+                                data-runtime-proof-transcript-coverage-status={row?.status || state}
+                                key={`runtime-proof-coverage-${runtimeId}`}
+                                title={row?.summaryLine || row?.blocker || row?.status || runtimeId}
+                              >
+                                <b>{row?.label || titleizeToken(runtimeId)}</b>
+                                <em>{fresh ? "Fresh transcript" : covered ? "Real transcript" : blocked ? "Blocked" : "Missing"}</em>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="agent-runtime-proof-buttons">
+                      {[
+                        { id: "hermes", label: "Hermes", Icon: Terminal },
+                        { id: "openclaw", label: "OpenClaw", Icon: Terminal },
+                        { id: "opencode", label: "OpenCode", Icon: Terminal },
+                        { id: "mixed", label: "Mixed", Icon: GitBranch },
+                      ].map(({ id, label, Icon }) => {
+                        const proof = runtimeProofById.get(id) || {};
+                        const running = runtimeProofRunning === id;
+                        const proofDetail = proof.diagnosticSummary || proof.blocker || proof.headline || "";
+                        const proofEvidenceComplete = Boolean(
+                          proof?.proofEvidenceHealth?.allEvidenceAttached || proof?.evidenceStatus === "complete",
+                        );
+                        const proofButtonStatusLabel = selectedMissionProofOverride && proofEvidenceComplete
+                          ? "Other proof"
+                          : proofEvidenceComplete
+                          ? "Ready"
+                          : runtimeProofActionStatusLabel(proof.status || "missing");
+                        return (
+                          <button
+                            aria-label={`Run ${label} real runtime proof${proofDetail ? `: ${proofDetail}` : ""}`}
+                            className={`agent-runtime-proof-button tone-${proof.tone || "neutral"} ${running ? "running" : ""}`.trim()}
+                            data-runtime-proof-action={id}
+                            data-runtime-proof-diagnostic={proof.diagnosticSummary || proof.blocker || ""}
+                            data-runtime-proof-fresh={proof.freshRuntimeOutput ? "true" : "false"}
+                            data-runtime-proof-recovered={proof.recoveredRuntimeOutput ? "true" : "false"}
+                            data-runtime-proof-runtime={id}
+                            data-runtime-proof-runtime-status={proof.status || "missing"}
+                            data-runtime-proof-evidence-complete={proofEvidenceComplete ? "true" : "false"}
+                            data-runtime-proof-disabled-by-lock={runtimeProofBackendRunInProgress ? "true" : "false"}
+                            disabled={runtimeProofBusy}
+                            key={id}
+                            onClick={() => void runRuntimeProof(id)}
+                            title={proofDetail || `Run ${label} real runtime proof`}
+                            type="button"
+                          >
+                            <Icon aria-hidden="true" size={14} />
+                            <span>{label}</span>
+                            <small>{running ? "Running" : proofButtonStatusLabel}</small>
+                          </button>
+                        );
+                      })}
+                      {runtimeProofNextCommandAvailable ? (
+                        <button
+                          aria-label={`Run next real runtime proof target: ${runtimeProofNextCommandLabel}${runtimeProofNextCommandReason ? `. ${runtimeProofNextCommandReason}` : ""}`}
+                          className="agent-runtime-proof-button next-target"
+                          data-runtime-proof-action="next-command"
+                          data-runtime-proof-next-command-button="true"
+                          data-runtime-proof-next-command-line={runtimeProofNextCommandLine}
+                          data-runtime-proof-next-runtime={runtimeProofNextCommandRuntime}
+                          data-runtime-proof-next-with-browser={runtimeProofNextCommandWithBrowser ? "true" : "false"}
+                          data-runtime-proof-disabled-by-lock={runtimeProofBackendRunInProgress ? "true" : "false"}
+                          disabled={runtimeProofBusy}
+                          onClick={() => void runRuntimeProof(runtimeProofNextCommandRuntime, runtimeProofNextCommandPayload)}
+                          title={runtimeProofNextCommandLine || runtimeProofNextCommandReason}
+                          type="button"
+                        >
+                          <Terminal aria-hidden="true" size={14} />
+                          <span>Run next</span>
+                          <small>{runtimeProofNextCommandWithBrowser ? "Browser proof" : titleizeToken(runtimeProofNextCommandRuntime)}</small>
+                        </button>
+                      ) : null}
+                      {runtimeProofCompleteBundleCanOpen ? (
+                        <button
+                          aria-label={`Open ready runtime proof bundle: ${runtimeProofCompleteBundleActionLabel}`}
+                          className="agent-runtime-proof-button complete-proof"
+                          data-runtime-proof-action="open-complete-proof"
+                          data-runtime-proof-complete-mission-id={runtimeProofCompleteBundleMissionId}
+                          onClick={() =>
+                            selectLiveMission(runtimeProofCompleteBundleMissionId, {
+                              nextSurface: "agent",
+                              nextAgentScene: "run",
+                              openBuilderDetail: false,
+                              actionLabel: "runtime-proof-complete",
+                            })
+                          }
+                          title={runtimeProofCompleteBundleReportPath || runtimeProofCompleteBundleActionLabel}
+                          type="button"
+                        >
+                          <CheckCircle2 aria-hidden="true" size={14} />
+                          <span>Open proof</span>
+                          <small>{runtimeProofCompleteBundleButtonStatusLabel}</small>
+                        </button>
+                      ) : null}
+                      <button
+                        aria-label="Refresh real runtime proof status"
+                        className="agent-runtime-proof-button refresh"
+                        data-runtime-proof-action="refresh"
+                        disabled={Boolean(runtimeProofRunning)}
+                        onClick={() => {
+                          markAction("runtime-proof:refresh");
+                          void refreshRuntimeProofStatus({ silent: false });
+                        }}
+                        type="button"
+                      >
+                        <RefreshCw aria-hidden="true" size={14} />
+                        <span>Refresh</span>
+                      </button>
+                    </div>
                   </div>
                   <div className="agent-run-topbar-actions">
                     <ActionButton
+                      data-agent-proof-repair-action={selectedMissionProofOverride ? "true" : "false"}
                       disabled={!missionActionAvailable(mission, "resume")}
                       onClick={() => void runMissionAction("resume", "Mission resume requested.")}
                       type="button"
                       variant="primary"
                     >
-                      Continue run
+                      {selectedMissionProofOverride ? "Repair proof" : "Continue run"}
                     </ActionButton>
                     <ActionButton
                       onClick={() =>
@@ -24089,11 +26261,11 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         }
         onClose={() => setShowMissionDialog(false)}
         open={showMissionDialog}
-        summary="Mission launch remains available, but operational clutter is removed from the top bar."
-        title="Start mission"
+        summary="Write one goal, pick an active skill starter, and launch a proof-ready Hermes run."
+        title="Agent Live start"
       >
         <form className="dialog-form" onSubmit={handleMissionSubmit}>
-          <div className="mission-quickstart-panel">
+          <div className="mission-quickstart-panel" data-agent-live-start="true">
             <div className="mission-guided-launch-path" data-beginner-guided-launch="true">
               <article>
                 <span>01</span>
@@ -24123,7 +26295,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
             </Field>
             <div className="mission-quickstart-actions">
               <span>
-                Quick start uses Hermes supervision by default: pick the task-fit model, launch asynchronously, then show live Agent thread output, artifact proof, and notification receipts before claiming completion.
+                Agent Live starts here: Hermes launches the thread, selected skills stay attached, and proof is captured after the run produces real output.
               </span>
               <ActionButton
                 disabled={launchMissionBlockedByStorage}
@@ -24133,6 +26305,40 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               >
                 {launchMissionBlockedByStorage ? "NAS launch blocked" : "Quick start"}
               </ActionButton>
+            </div>
+            <div
+              className={`mission-launch-lane-status ${launchBlockedMissionCount > 0 ? (launchPrimaryBlockedMissionIsStaleVerifier ? "is-stale" : "is-blocked") : "is-clear"}`}
+              data-launch-mission-lane-status="true"
+              data-launch-blocked-mission-count={launchBlockedMissionCount}
+              data-launch-stale-verifier-blocker={launchPrimaryBlockedMissionIsStaleVerifier ? "true" : "false"}
+            >
+              <div>
+                <span>Mission lane</span>
+                <strong>
+                  {launchBlockedMissionCount > 0
+                    ? launchPrimaryBlockedMissionIsStaleVerifier
+                      ? `${launchBlockedMissionCount} stale verifier blocker${launchBlockedMissionCount === 1 ? "" : "s"}`
+                      : `${launchBlockedMissionCount} blocked mission${launchBlockedMissionCount === 1 ? "" : "s"}`
+                    : "Clear for new Hermes launches"}
+                </strong>
+                <p>
+                  {launchPrimaryBlockedMission
+                    ? `${launchBlockedMissionTitle}: ${launchBlockedMissionDetail}`
+                    : launchBlockedMissionDetail}
+                </p>
+              </div>
+              <div className="mission-launch-lane-actions">
+                {launchPrimaryBlockedMission ? (
+                  <ActionButton onClick={openLaunchBlockedMission} type="button">
+                    Open blocker
+                  </ActionButton>
+                ) : null}
+                {launchPrimaryBlockedMissionIsStaleVerifier ? (
+                  <ActionButton onClick={handleLaunchStaleVerifierCloseout} type="button" variant="primary">
+                    Close stale verifier
+                  </ActionButton>
+                ) : null}
+              </div>
             </div>
             <div className="mission-launch-route-decision" data-task-fit-route-decision="true">
               <div>
@@ -24176,8 +26382,9 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
                 ) : null}
               </article>
               <article
-                className={launchNasStorageBlocked ? "is-blocked" : "is-ready"}
+                className={launchNasStorageBlocked ? "is-blocked" : launchNasStorageUnverified ? "is-warn" : "is-ready"}
                 data-launch-nas-storage-pressure="true"
+                data-launch-nas-storage-unverified={launchNasStorageUnverified ? "true" : "false"}
               >
                 <span>NAS storage</span>
                 <strong>{launchNasStorageStatus}</strong>
@@ -24194,7 +26401,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
               </article>
             </div>
             <div className="mission-starter-templates" data-mission-starter-templates="true">
-              <span>Starter missions</span>
+              <span>Skill starters</span>
               {MISSION_STARTER_TEMPLATES.map(template => (
                 <button
                   data-mission-template-id={template.id}
@@ -24494,7 +26701,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         </form>
       </Modal>
 
-      {surface !== "phone" && surface !== "agent" ? (
+      {surface !== "phone" && surface !== "agent" && surface !== "skills" && surface !== "browser" ? (
         <NotificationStack
           browserEnabled={browserNotifications.enabled}
           browserPermission={browserNotifications.permission}
