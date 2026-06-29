@@ -5420,6 +5420,55 @@ function FluxioAgentSurface(props) {
     .slice(0, 4)
     .map(titleizeToken)
     .join(" / ");
+  const selectedRoute = routeControls?.selectedRoute || {};
+  const isDefaultRouteAlias = value =>
+    /^(default|workspace default|profile default|route default|model default|provider default|not reported)$/i.test(
+      String(value || "").trim(),
+    );
+  const runtimeCompartmentRoute =
+    runtimeCompartment?.route && typeof runtimeCompartment.route === "object"
+      ? runtimeCompartment.route
+      : runtimeCompartment?.turnReceipt?.route && typeof runtimeCompartment.turnReceipt.route === "object"
+        ? runtimeCompartment.turnReceipt.route
+        : {};
+  const activeAgentRoute = {
+    ...selectedRoute,
+    ...runtimeCompartmentRoute,
+    provider:
+      runtimeCompartmentRoute.provider ||
+      runtimeCompartment?.turnReceipt?.provider ||
+      selectedRoute.provider ||
+      "",
+    model:
+      runtimeCompartmentRoute.model_id ||
+      runtimeCompartmentRoute.model ||
+      runtimeCompartment?.turnReceipt?.model ||
+      selectedRoute.model ||
+      selectedModelLabel ||
+      "",
+    effort:
+      runtimeCompartmentRoute.effort ||
+      runtimeCompartment?.turnReceipt?.effort ||
+      selectedRoute.effort ||
+      "",
+  };
+  const activeAgentRouteProvider = isDefaultRouteAlias(activeAgentRoute.provider) ? "" : String(activeAgentRoute.provider || "").trim();
+  const activeAgentRouteModel = isDefaultRouteAlias(activeAgentRoute.model) ? "" : String(activeAgentRoute.model || "").trim();
+  const activeAgentRouteEffort = isDefaultRouteAlias(activeAgentRoute.effort) ? "" : String(activeAgentRoute.effort || "").trim();
+  const hasActiveAgentRouteSignal = Boolean(activeAgentRouteProvider || activeAgentRouteModel || activeAgentRouteEffort);
+  const runtimeRoutePill = hasActiveAgentRouteSignal
+    ? {
+        role: activeAgentRoute.role || "executor",
+        provider: activeAgentRouteProvider,
+        model: activeAgentRouteModel,
+        effort: activeAgentRouteEffort,
+        label: `${titleizeToken(activeAgentRoute.role || "executor")} · ${
+          activeAgentRouteProvider ? titleizeToken(activeAgentRouteProvider) : "provider not reported"
+        } · ${activeAgentRouteModel ? activeAgentRouteModel : "model not reported"}${
+          activeAgentRouteEffort ? ` · ${titleizeToken(activeAgentRouteEffort)}` : ""
+        }`,
+      }
+    : null;
   const agentMissionRouteRows = ["planner", "executor", "verifier"]
     .map(role => {
       const lane = liveLaneRows.find(item => String(item.role || item.label || "").trim().toLowerCase() === role);
@@ -5429,10 +5478,9 @@ function FluxioAgentSurface(props) {
       const providerRaw = String(lane.provider || lane.providerId || lane.provider_id || "").trim();
       const modelRaw = String(lane.model || lane.modelId || lane.model_id || "").trim();
       const effortRaw = String(lane.effort || "").trim();
-      const isDefaultAlias = value => /^(default|workspace default|profile default|route default|model default|provider default)$/i.test(String(value || "").trim());
-      const provider = isDefaultAlias(providerRaw) ? "" : providerRaw;
-      const model = isDefaultAlias(modelRaw) ? "" : modelRaw;
-      const effort = isDefaultAlias(effortRaw) ? "" : effortRaw;
+      const provider = isDefaultRouteAlias(providerRaw) ? "" : providerRaw;
+      const model = isDefaultRouteAlias(modelRaw) ? "" : modelRaw;
+      const effort = isDefaultRouteAlias(effortRaw) ? "" : effortRaw;
       return {
         role,
         provider,
@@ -5442,8 +5490,13 @@ function FluxioAgentSurface(props) {
       };
     })
     .filter(Boolean);
+  const agentVisibleRouteRows = agentMissionRouteRows.length
+    ? agentMissionRouteRows
+    : runtimeRoutePill
+      ? [runtimeRoutePill]
+      : [];
   const agentBottomRouteRows = [
-    ...agentMissionRouteRows,
+    ...agentVisibleRouteRows,
     {
       role: "done",
       provider: "",
@@ -5925,11 +5978,10 @@ function FluxioAgentSurface(props) {
     workbenchState?.previewSourceLabel ||
     workbenchState?.previewLabel ||
     (isLiveBackend ? "No live preview frame attached" : "Local layout preview");
-  const selectedRoute = routeControls?.selectedRoute || {};
   const agentLiveRouteStatus = [
-    titleizeToken(selectedRoute.provider || "openai-codex"),
-    selectedRoute.model || selectedModelLabel || "gpt-5.5",
-    titleizeToken(selectedRoute.effort || "high"),
+    titleizeToken(activeAgentRouteProvider || "openai-codex"),
+    activeAgentRouteModel || selectedModelLabel || "gpt-5.5",
+    titleizeToken(activeAgentRouteEffort || "high"),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -6102,8 +6154,8 @@ function FluxioAgentSurface(props) {
           <strong>{isLiveBackend ? workbenchState?.missionTitle || "Live NAS run state" : "Reproduce Fluxio UI and prepare merge"}</strong>
           {isLiveBackend ? (
             <div className="fluxos-agent-route-pills" aria-label="Agent route" aria-hidden={agentFocusMode ? "true" : "false"}>
-              {agentMissionRouteRows.length ? (
-                agentMissionRouteRows.map(route => (
+              {agentVisibleRouteRows.length ? (
+                agentVisibleRouteRows.map(route => (
                   <span
                     className={`mini-pill muted ${route.role === "executor" ? "agent-route-executor" : ""}`.trim()}
                     data-agent-mission-route-role={route.role}
@@ -6115,7 +6167,7 @@ function FluxioAgentSurface(props) {
               ) : (
                 <>
                   <span className="mini-pill muted">{agentLiveRouteStatus}</span>
-                  <span className="mini-pill muted">Route not reported</span>
+                  <span className="mini-pill muted">Route pending</span>
                 </>
               )}
             </div>
