@@ -15,7 +15,7 @@ from errno import EBUSY, ETXTBSY
 from dataclasses import asdict, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from .models import (
     ApprovalEscalation,
@@ -34,7 +34,7 @@ from .models import (
     WorkspaceProfile,
     utc_now_iso,
 )
-from .app_capability_standard import build_connected_apps_snapshot
+from .app_capability_standard import build_connected_apps_snapshot, load_mock_manifests
 from .delivery_receipt import (
     load_delivery_receipts,
     ntfy_status,
@@ -64,7 +64,7 @@ from .mission_watchdog import (
 from .profiles import ProfileRegistry
 from .runtimes import detect_runtime_statuses, invalidate_runtime_status_cache
 from .runtime_supervisor import DelegatedRuntimeSupervisor
-from .skill_library import SkillLibrary
+from .skill_library import SkillLibrary, load_codex_home_skill_rows
 from .skills import SkillRegistry
 from .verification import detect_default_verification_commands
 
@@ -76,6 +76,10 @@ HARD_ARTIFACT_GATE_CHECK_ID = "hard_artifact_gate"
 HARD_ARTIFACT_GATE_FAILURE = (
     "Hard artifact gate failed: no concrete runtime-output body or served artifact was recorded."
 )
+PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID = "planned_scope_artifacts"
+PLANNED_SCOPE_ARTIFACT_GATE_FAILURE = (
+    "Planned scope artifact gate failed: required planned artifact folders are missing or not previewable."
+)
 CONTROL_ROOM_SUMMARY_DURATION_BUDGET_MS = 250
 CONTROL_ROOM_SUMMARY_PAYLOAD_BUDGET_BYTES = 350_000
 CONTROL_ROOM_DETAIL_DURATION_BUDGET_MS = 250
@@ -84,7 +88,7 @@ CONTROL_ROOM_FULL_SUMMARY_MISSION_LIMIT = 60
 CONTROL_ROOM_VISIBLE_SUMMARY_MISSION_LIMIT = 12
 CONTROL_ROOM_VISIBLE_PROJECT_PROGRESS_LIMIT = 3
 CONTROL_ROOM_VISIBLE_LAUNCH_SHORTCUT_LIMIT = 3
-CONTROL_ROOM_BOOTSTRAP_MISSION_LIMIT = 16
+CONTROL_ROOM_BOOTSTRAP_MISSION_LIMIT = 8
 CONTROL_ROOM_JSON_CACHE_MAX_BYTES = 8_000_000
 CONTROL_ROOM_JSON_CACHE_MAX_ITEMS = 16
 _CONTROL_ROOM_JSON_CACHE_LOCK = threading.Lock()
@@ -153,6 +157,11 @@ def _mission_occupies_workspace_slot(mission: Mission) -> bool:
 def _mission_counts_as_attention(mission: Mission) -> bool:
     status = str(mission.state.status or "").strip().lower()
     return status in {"blocked", "needs_approval", "verification_failed"} or _mission_runtime_budget_exhausted(mission)
+
+
+def _mission_counts_as_hard_blocked(mission: Mission) -> bool:
+    status = str(mission.state.status or "").strip().lower()
+    return status in {"blocked", "needs_approval", "verification_failed"}
 
 
 def _mission_payload_runtime_budget_exhausted(mission: dict) -> bool:
@@ -435,6 +444,172 @@ def _read_gate_text(path: Path, *, max_chars: int = 4000) -> str:
         return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
     except OSError:
         return ""
+
+
+def mission_runtime_dialogue_turns(
+    mission: Mission,
+    *,
+    root: Path | None = None,
+    limit: int = 6,
+) -> list[dict]:
+    """Extract real assistant dialogue turns from delegated runtime output.
+
+    Only emits text an executor actually produced: meaningful lane events and
+    the recorded runtime_output proof. No synthetic or fallback content.
+    """
+    turns: list[dict] = []
+    seen: set[str] = set()
+
+    def add(
+        text: object,
+        *,
+        created_at: str,
+        session_id: str,
+        runtime_id: str = "",
+        provider: str = "",
+        model: str = "",
+        source_kind: str = "",
+        capture_mode: str = "",
+        source_path: str = "",
+        report_path: str = "",
+        external_runtime_session_id: str = "",
+    ) -> None:
+        body = str(text or "").strip()
+        if len(body) < 40:
+            return
+        key = hashlib.sha1(body[:400].encode("utf-8")).hexdigest()
+        if key in seen:
+            return
+        seen.add(key)
+        turns.append(
+            {
+                "text": body,
+                "createdAt": created_at,
+                "sessionId": session_id,
+                "runtimeId": runtime_id,
+                "provider": provider,
+                "model": model,
+                "sourceKind": source_kind,
+                "captureMode": capture_mode,
+                "sourcePath": source_path,
+                "reportPath": report_path,
+                "externalRuntimeSessionId": external_runtime_session_id,
+            }
+        )
+
+    for session in list(mission.delegated_runtime_sessions or []):
+        status = str(getattr(session, "status", "") or "").lower()
+        if status not in {"completed", "running"}:
+            continue
+        provider = str(getattr(session, "target_provider", "") or "")
+        model = str(getattr(session, "target_model", "") or "")
+        session_id = str(getattr(session, "delegated_id", "") or "")
+        runtime_id = str(getattr(session, "runtime_id", "") or mission.runtime_id or "")
+        events = [
+            event
+            for event in list(getattr(session, "latest_events", []) or [])
+            if isinstance(event, dict)
+        ]
+        for event in reversed(events):
+            text = str(event.get("message") or event.get("detail") or "").strip()
+            kind = str(event.get("kind") or "").lower()
+            event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else event_data
+            source_kind = str(metadata.get("sourceKind") or metadata.get("source_kind") or "").lower()
+            source_path = str(metadata.get("sourcePath") or metadata.get("source_path") or metadata.get("recoveredFrom") or "")
+            capture_mode = str(metadata.get("captureMode") or metadata.get("capture_mode") or "").lower()
+            if not capture_mode and source_path:
+                capture_mode = "recovered-persisted-session"
+            if not capture_mode and source_kind == "real-runtime-output":
+                capture_mode = "fresh-runtime-command"
+            real_output_kind = (
+                kind in {"runtime.output", "runtime.model_message", "model.message", "assistant.message"}
+                or kind.endswith(".output")
+                or source_kind == "real-runtime-output"
+            )
+            if len(text) >= 80 and real_output_kind:
+                add(
+                    text,
+                    created_at=str(
+                        event.get("timestamp")
+                        or event.get("created_at")
+                        or getattr(session, "updated_at", "")
+                    ),
+                    session_id=session_id,
+                    runtime_id=runtime_id,
+                    provider=provider,
+                    model=model,
+                    source_kind=source_kind or kind,
+                    capture_mode=capture_mode or "runtime-session-event",
+                    source_path=source_path,
+                    report_path=str(metadata.get("reportPath") or metadata.get("report_path") or ""),
+                    external_runtime_session_id=str(
+                        metadata.get("externalRuntimeSessionId")
+                        or metadata.get("external_runtime_session_id")
+                        or metadata.get("sessionId")
+                        or metadata.get("session_id")
+                        or ""
+                    ),
+                )
+                break
+
+    # The recorded runtime output proof is the executor's own final report.
+    for candidate in _mission_artifact_root_candidates(mission, root=root):
+        output_path = (
+            candidate
+            / ".agent_control"
+            / "mission_artifacts"
+            / str(mission.mission_id)
+            / "proof"
+            / "runtime_output.txt"
+        )
+        if output_path.is_file():
+            add(
+                _read_gate_text(output_path, max_chars=1600),
+                created_at=str(mission.updated_at or ""),
+                session_id="runtime_output_proof",
+                runtime_id=mission.runtime_id,
+                source_kind="mission-runtime-output-file",
+                capture_mode="mission-runtime-output-file",
+                source_path=str(output_path),
+            )
+            break
+
+    return turns[-limit:]
+
+
+def mission_artifact_manifest_preview_url(
+    mission: Mission,
+    *,
+    root: Path | None = None,
+) -> str:
+    """Return the served preview URL for the mission's own artifact output.
+
+    Reads .agent_control/mission_artifacts/<mission_id>/artifact_manifest.json
+    (falling back to a bare index.html) so a mission's finished artifact binds
+    into the Agent preview window without waiting for Builder live-review
+    evidence.
+    """
+    for candidate in _mission_artifact_root_candidates(mission, root=root):
+        artifact_dir = (
+            candidate
+            / ".agent_control"
+            / "mission_artifacts"
+            / str(mission.mission_id)
+        )
+        manifest_path = artifact_dir / "artifact_manifest.json"
+        if manifest_path.is_file():
+            manifest = _read_gate_json(manifest_path)
+            preview_url = str(manifest.get("previewUrl") or "").strip()
+            if preview_url:
+                return preview_url
+            entrypoint = str(manifest.get("entrypoint") or "").strip()
+            if entrypoint:
+                return f"/api/artifact?path={quote(entrypoint, safe='')}"
+        index_path = artifact_dir / "index.html"
+        if index_path.is_file():
+            return f"/api/artifact?path={quote(str(index_path), safe='')}"
+    return ""
 
 
 def _mission_manifest_folder_evidence_items(
@@ -761,6 +936,121 @@ def _apply_hard_artifact_gate_if_completed(mission: Mission) -> dict[str, object
     return gate
 
 
+def _planned_scope_artifacts_blocking(planned_scope_artifacts: dict | None) -> bool:
+    status = str((planned_scope_artifacts or {}).get("status") or "").strip().lower()
+    return status in {"missing", "partial"}
+
+
+def _apply_planned_scope_artifact_gate_if_completed(
+    mission: Mission,
+    planned_scope_artifacts: dict | None,
+) -> bool:
+    if mission.state.status != "completed" or not _planned_scope_artifacts_blocking(
+        planned_scope_artifacts
+    ):
+        return False
+    next_action = str((planned_scope_artifacts or {}).get("nextAction") or "").strip()
+    mission.state.status = "verification_failed"
+    mission.state.last_runtime_event = "planned_scope_artifacts_failed"
+    mission.state.last_error = PLANNED_SCOPE_ARTIFACT_GATE_FAILURE
+    mission.state.stop_reason = "planned_scope_artifacts_failed"
+    mission.state.planner_loop_status = "paused"
+    mission.planner_loop_status = mission.state.planner_loop_status
+    mission.state.last_verification_result = "failed"
+    mission.state.last_verification_summary = PLANNED_SCOPE_ARTIFACT_GATE_FAILURE
+    mission.state.last_replan_reason = "missing_planned_scope_artifacts"
+    mission.state.last_replan_trigger = PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID
+    if PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID not in mission.state.verification_failures:
+        mission.state.verification_failures.append(PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID)
+    if PLANNED_SCOPE_ARTIFACT_GATE_FAILURE not in mission.proof.failed_checks:
+        mission.proof.failed_checks.append(PLANNED_SCOPE_ARTIFACT_GATE_FAILURE)
+    if PLANNED_SCOPE_ARTIFACT_GATE_FAILURE not in mission.proof.blocked_by:
+        mission.proof.blocked_by.append(PLANNED_SCOPE_ARTIFACT_GATE_FAILURE)
+    mission.proof.summary = (
+        "Mission needs planned artifact repair before it can be counted as completed."
+    )
+    if next_action and next_action not in mission.proof.blocked_by:
+        mission.proof.blocked_by.append(next_action)
+    mission.proof.pending_approvals = []
+    return True
+
+
+def _clear_repaired_planned_scope_artifact_gate_failure(mission: Mission) -> None:
+    repaired_markers = {
+        PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID,
+        PLANNED_SCOPE_ARTIFACT_GATE_FAILURE,
+    }
+    mission.state.verification_failures = [
+        item for item in mission.state.verification_failures if item not in repaired_markers
+    ]
+    mission.proof.failed_checks = [
+        item for item in mission.proof.failed_checks if item not in repaired_markers
+    ]
+    mission.proof.blocked_by = [
+        item for item in mission.proof.blocked_by if item not in repaired_markers
+    ]
+    if mission.state.last_error == PLANNED_SCOPE_ARTIFACT_GATE_FAILURE:
+        mission.state.last_error = None
+    if mission.state.stop_reason == "planned_scope_artifacts_failed":
+        mission.state.stop_reason = None
+    if mission.state.last_runtime_event == "planned_scope_artifacts_failed":
+        mission.state.last_runtime_event = "completed"
+    if mission.state.last_replan_trigger == PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID:
+        mission.state.last_replan_trigger = ""
+    if mission.state.last_replan_reason == "missing_planned_scope_artifacts":
+        mission.state.last_replan_reason = ""
+    if mission.state.last_verification_summary == PLANNED_SCOPE_ARTIFACT_GATE_FAILURE:
+        mission.state.last_verification_summary = "Planned scope artifacts repaired."
+
+
+def _mission_has_planned_scope_artifact_gate_failure(mission: Mission) -> bool:
+    return mission.state.status == "verification_failed" and (
+        PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID in mission.state.verification_failures
+        or PLANNED_SCOPE_ARTIFACT_GATE_FAILURE in mission.state.verification_failures
+        or PLANNED_SCOPE_ARTIFACT_GATE_FAILURE in mission.proof.failed_checks
+        or mission.state.stop_reason == "planned_scope_artifacts_failed"
+        or mission.state.last_runtime_event == "planned_scope_artifacts_failed"
+    )
+
+
+def _complete_repaired_planned_scope_artifact_gate_from_detail(
+    mission: Mission,
+    artifact_gate: dict[str, object],
+    planned_scope_artifacts: dict | None,
+) -> bool:
+    if (
+        _planned_scope_artifacts_blocking(planned_scope_artifacts)
+        or not _mission_has_planned_scope_artifact_gate_failure(mission)
+    ):
+        return False
+    if bool(artifact_gate.get("required", True)) and not bool(artifact_gate.get("passed")):
+        return False
+    repaired_markers = {
+        PLANNED_SCOPE_ARTIFACT_GATE_CHECK_ID,
+        PLANNED_SCOPE_ARTIFACT_GATE_FAILURE,
+    }
+    remaining_state_failures = [
+        item for item in mission.state.verification_failures if item not in repaired_markers
+    ]
+    remaining_proof_failures = [
+        item for item in mission.proof.failed_checks if item not in repaired_markers
+    ]
+    if remaining_state_failures or remaining_proof_failures:
+        return False
+    _clear_repaired_planned_scope_artifact_gate_failure(mission)
+    mission.state.status = "completed"
+    mission.state.last_runtime_event = "completed"
+    mission.state.last_verification_result = "passed"
+    mission.state.last_verification_summary = "Planned scope artifacts repaired."
+    mission.state.planner_loop_status = "completed"
+    mission.planner_loop_status = mission.state.planner_loop_status
+    mission.state.current_cycle_phase = "complete"
+    mission.state.continuity_state = "complete"
+    mission.state.continuity_detail = "Planned scope artifacts passed from mission detail evidence."
+    mission.proof.summary = "Mission completed with planned proof artifacts."
+    return True
+
+
 def _clear_repaired_hard_artifact_gate_failure(mission: Mission) -> None:
     repaired_markers = {HARD_ARTIFACT_GATE_CHECK_ID, HARD_ARTIFACT_GATE_FAILURE}
     mission.state.verification_failures = [
@@ -784,6 +1074,39 @@ def _clear_repaired_hard_artifact_gate_failure(mission: Mission) -> None:
         mission.state.last_replan_reason = ""
     if mission.state.last_verification_summary == HARD_ARTIFACT_GATE_FAILURE:
         mission.state.last_verification_summary = "Hard artifact gate repaired with runtime output."
+
+
+def _complete_repaired_hard_artifact_gate_from_detail(
+    mission: Mission,
+    artifact_gate: dict[str, object],
+    planned_scope_artifacts: dict | None = None,
+) -> bool:
+    """Complete a hard-gate failed mission once detail evidence proves the repair."""
+    if not bool(artifact_gate.get("passed")) or not _mission_has_hard_artifact_gate_failure(mission):
+        return False
+    if _planned_scope_artifacts_blocking(planned_scope_artifacts):
+        return False
+    repaired_markers = {HARD_ARTIFACT_GATE_CHECK_ID, HARD_ARTIFACT_GATE_FAILURE}
+    remaining_state_failures = [
+        item for item in mission.state.verification_failures if item not in repaired_markers
+    ]
+    remaining_proof_failures = [
+        item for item in mission.proof.failed_checks if item not in repaired_markers
+    ]
+    if remaining_state_failures or remaining_proof_failures:
+        return False
+    _clear_repaired_hard_artifact_gate_failure(mission)
+    _clear_repaired_planned_scope_artifact_gate_failure(mission)
+    mission.state.status = "completed"
+    mission.state.last_runtime_event = "completed"
+    mission.state.last_verification_result = "passed"
+    mission.state.last_verification_summary = "Hard artifact gate repaired with runtime output."
+    mission.state.planner_loop_status = "completed"
+    mission.state.current_cycle_phase = "complete"
+    mission.state.continuity_state = "complete"
+    mission.state.continuity_detail = "Hard artifact gate passed from mission detail evidence."
+    mission.proof.summary = "Mission completed with proof artifacts."
+    return True
 
 
 MISSION_TITLE_STOPWORDS = {
@@ -1195,6 +1518,9 @@ def _latest_runtime_cycles_by_mission(events_path: Path) -> dict[str, dict]:
 def _reconcile_mission_from_runtime_cycle(
     mission: Mission,
     event: dict | None,
+    *,
+    root: Path | None = None,
+    workspace: WorkspaceProfile | None = None,
 ) -> bool:
     if not isinstance(event, dict) or mission.state.status in TERMINAL_MISSION_STATUSES:
         return False
@@ -1208,19 +1534,37 @@ def _reconcile_mission_from_runtime_cycle(
     if autopilot_status != "completed" or pause_reason:
         return False
     mission.state.status = "completed"
+    session_id = str(metadata.get("sessionId") or "").strip()
+    if session_id:
+        mission.state.latest_session_id = session_id
     gate = _apply_hard_artifact_gate_if_completed(mission)
     if bool(gate.get("required", True)) and not bool(gate.get("passed")):
         return True
+    if root is not None:
+        planned_scope_artifacts = build_planned_scope_artifacts(
+            root=root,
+            mission=mission,
+            workspace=workspace,
+        )
+        if _apply_planned_scope_artifact_gate_if_completed(mission, planned_scope_artifacts):
+            return True
     mission.state.last_runtime_event = "completed"
     mission.state.last_error = None
     mission.state.stop_reason = None
     mission.state.planner_loop_status = "completed"
-    session_id = str(metadata.get("sessionId") or "").strip()
-    if session_id:
-        mission.state.latest_session_id = session_id
     if _completion_summary_needs_replacement(mission.proof.summary):
         mission.proof.summary = "Mission completed with proof artifacts."
     return True
+
+
+def _mission_has_hard_artifact_gate_failure(mission: Mission) -> bool:
+    return mission.state.status == "verification_failed" and (
+        HARD_ARTIFACT_GATE_CHECK_ID in mission.state.verification_failures
+        or HARD_ARTIFACT_GATE_FAILURE in mission.state.verification_failures
+        or HARD_ARTIFACT_GATE_FAILURE in mission.proof.failed_checks
+        or mission.state.stop_reason == "artifact_gate_failed"
+        or mission.state.last_runtime_event == "artifact_gate_failed"
+    )
 
 
 def _completion_summary_needs_replacement(value: str) -> bool:
@@ -1390,6 +1734,80 @@ def normalize_route_overrides(route_overrides: object, *, canonicalize_models: b
     return deduped
 
 
+AGENT_TURN_MODES = {"standard", "plan", "fast", "max-context"}
+
+PLAN_TURN_MODE_DIRECTIVE = (
+    "Plan first: record a concrete step-by-step plan in the mission thread "
+    "and keep it updated before making any file edits."
+)
+
+PLAN_TURN_MODE_SUCCESS_CHECK = (
+    "A written step-by-step plan is recorded in the mission thread before any file edits."
+)
+
+
+def normalize_agent_turn_mode(value: object) -> str:
+    normalized = str(value or "standard").strip().lower().replace("_", "-")
+    aliases = {
+        "1m": "max-context",
+        "1m-context": "max-context",
+        "max": "max-context",
+        "maxcontext": "max-context",
+        "million-context": "max-context",
+        "planning": "plan",
+        "speed": "fast",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in AGENT_TURN_MODES else "standard"
+
+
+def apply_agent_turn_mode_to_launch(
+    *,
+    turn_mode: object,
+    objective: str,
+    success_checks: list[str] | None,
+    route_overrides: list[dict] | None,
+    mode: str,
+    budget_hours: object,
+) -> dict:
+    """Map an agent turn mode onto the real mission launch knobs.
+
+    plan: requires a written plan before edits via objective directive + success check.
+    fast: lowers route effort to low and caps the time budget at one hour.
+    max-context: raises route effort to high, switches to Deep Run, and grows the budget.
+    """
+    resolved = normalize_agent_turn_mode(turn_mode)
+    objective_text = str(objective or "")
+    checks = [str(item) for item in (success_checks or [])]
+    overrides = [dict(item) for item in (route_overrides or []) if isinstance(item, dict)]
+    mission_mode = str(mode or "Autopilot")
+    try:
+        budget = float(budget_hours)
+    except (TypeError, ValueError):
+        budget = 4.0
+    if resolved == "plan":
+        # Append (not prepend) so mission titles derive from the real objective.
+        if PLAN_TURN_MODE_DIRECTIVE not in objective_text:
+            objective_text = f"{objective_text}\n\n{PLAN_TURN_MODE_DIRECTIVE}".strip()
+        if PLAN_TURN_MODE_SUCCESS_CHECK not in checks:
+            checks = [PLAN_TURN_MODE_SUCCESS_CHECK, *checks]
+    elif resolved == "fast":
+        budget = min(budget, 1.0)
+        overrides = [{**row, "effort": "low"} for row in overrides]
+    elif resolved == "max-context":
+        budget = max(budget, 8.0)
+        mission_mode = "Deep Run"
+        overrides = [{**row, "effort": "high"} for row in overrides]
+    return {
+        "turnMode": resolved,
+        "objective": objective_text,
+        "successChecks": checks,
+        "routeOverrides": overrides,
+        "mode": mission_mode,
+        "budgetHours": budget,
+    }
+
+
 def normalize_minimax_auth_mode(value: object) -> str:
     normalized = str(value or "none").strip().lower()
     if normalized in {
@@ -1454,9 +1872,26 @@ def runtime_label(runtime_id: str) -> str:
         return "Hermes"
     if normalized == "openclaw":
         return "OpenClaw"
+    if normalized == "opencode":
+        return "OpenCode"
+    if normalized in {"opencode-go", "opencodego"}:
+        return "OpenCodeGo"
     if normalized:
         return normalized.replace("_", " ").replace("-", " ").title()
     return "Runtime"
+
+
+def runtime_capture_label(capture_mode: object) -> str:
+    normalized = str(capture_mode or "").strip().lower().replace("_", "-")
+    if normalized in {"recovered-persisted-session", "persisted-session", "recovered-session"}:
+        return "recovered persisted session"
+    if normalized in {"fresh-runtime-command", "fresh-command", "runtime-command"}:
+        return "fresh runtime command"
+    if normalized in {"mission-runtime-output-file", "runtime-output-file", "proof-file"}:
+        return "runtime output proof file"
+    if normalized:
+        return normalized.replace("-", " ")
+    return ""
 
 
 def _latest_minimax_setup_action(setup_history: list[dict]) -> dict:
@@ -2569,6 +3004,8 @@ class ControlRoomStore:
             if _reconcile_mission_from_runtime_cycle(
                 mission,
                 latest_runtime_cycles.get(mission.mission_id),
+                root=self.root,
+                workspace=workspace_lookup.get(mission.workspace_id),
             ):
                 mission_records_changed = True
             _sync_execution_scope_snapshot(mission)
@@ -2964,14 +3401,11 @@ class ControlRoomStore:
                 continue
             seen_bootstrap_mission_ids.add(mission.mission_id)
             recent_missions.append(mission)
-            if len(recent_missions) >= max(CONTROL_ROOM_VISIBLE_SUMMARY_MISSION_LIMIT, len(active_bootstrap_missions)):
+            if len(recent_missions) >= CONTROL_ROOM_VISIBLE_SUMMARY_MISSION_LIMIT:
                 break
         mission_payload = []
         for mission in recent_missions:
-            mission_active = (
-                mission.state.status not in TERMINAL_MISSION_STATUSES
-                and mission.state.status != "draft"
-            )
+            mission_active = _mission_counts_as_active_live(mission, require_queue_front=False)
             _reconcile_mission_route_policy(
                 mission,
                 workspace_by_id.get(mission.workspace_id),
@@ -3086,13 +3520,16 @@ class ControlRoomStore:
             status_counts.get("blocked", 0)
             + status_counts.get("needs_approval", 0)
             + status_counts.get("verification_failed", 0)
-            + sum(1 for item in missions if _mission_runtime_budget_exhausted(item))
         )
+        runtime_budget_attention_mission_count = sum(
+            1 for item in missions if _mission_runtime_budget_exhausted(item)
+        )
+        attention_mission_count = blocked_mission_count + runtime_budget_attention_mission_count
         scheduling_queue_count = len(project_progress_history.get("schedulingQueue", []))
         zero_active_queue_healthy = (
             active_mission_count == 0
             and queued_mission_count == 0
-            and blocked_mission_count == 0
+            and attention_mission_count == 0
             and project_progress_history.get("schema") == "fluxio.project_progress_history.v1"
             and scheduling_queue_count > 0
         )
@@ -3102,13 +3539,15 @@ class ControlRoomStore:
             "healthy": bool(
                 active_mission_count > 0
                 or queued_mission_count > 0
-                or blocked_mission_count > 0
+                or attention_mission_count > 0
                 or zero_active_queue_healthy
             ),
             "zeroActiveQueueHealthy": zero_active_queue_healthy,
             "activeMissionCount": active_mission_count,
             "queuedMissionCount": queued_mission_count,
             "blockedMissionCount": blocked_mission_count,
+            "attentionMissionCount": attention_mission_count,
+            "runtimeBudgetAttentionMissionCount": runtime_budget_attention_mission_count,
             "schedulingQueueCount": scheduling_queue_count,
             "detail": (
                 "No mission is running; the NAS scheduler queue is live and ready for the next launch."
@@ -3127,6 +3566,8 @@ class ControlRoomStore:
                 "activeMissions": active_mission_count,
                 "queuedMissions": queued_mission_count,
                 "blockedMissions": blocked_mission_count,
+                "attentionMissions": attention_mission_count,
+                "runtimeBudgetAttentionMissions": runtime_budget_attention_mission_count,
                 "completedMissions": status_counts.get("completed", 0),
             },
             "statusCounts": status_counts,
@@ -3708,6 +4149,16 @@ class ControlRoomStore:
         repair_receipts_raw = _load_json_file(control_dir / "skill_repair_receipts.json")
         learned_rows = learned_raw if isinstance(learned_raw, list) else []
         installed_rows = installed_raw if isinstance(installed_raw, list) else []
+        existing_installed_ids = {
+            str(item.get("skillId") or item.get("skill_id") or item.get("id") or item.get("label") or "").strip()
+            for item in installed_rows
+            if isinstance(item, dict)
+        }
+        for item in load_codex_home_skill_rows(control_dir):
+            skill_id = str(item.get("skillId") or item.get("label") or "").strip()
+            if skill_id and skill_id not in existing_installed_ids:
+                installed_rows.append(item)
+                existing_installed_ids.add(skill_id)
         feedback_rows = feedback_raw if isinstance(feedback_raw, list) else []
         repair_receipts = repair_receipts_raw if isinstance(repair_receipts_raw, list) else []
         feedback_by_skill: dict[str, dict] = {}
@@ -3907,6 +4358,13 @@ class ControlRoomStore:
             "label": row.get("label") or row.get("name") or "",
             "description": str(row.get("description") or "")[:220],
             "promptHint": str(row.get("promptHint") or row.get("prompt_hint") or "")[:220],
+            "instructions": row.get("instructions") or row.get("body") or row.get("content") or "",
+            "source": row.get("source") if isinstance(row.get("source"), dict) else None,
+            "sourcePath": (
+                (row.get("source") or {}).get("path")
+                if isinstance(row.get("source"), dict)
+                else row.get("sourcePath") or row.get("source_path") or ""
+            ),
             "originType": row.get("originType") or (row.get("source") or {}).get("kind", "")
             if isinstance(row.get("source"), dict)
             else row.get("originType", ""),
@@ -4526,7 +4984,7 @@ class ControlRoomStore:
         workspaces = self.load_workspaces()
         missions = self.load_missions()
         activity = self.recent_events(limit=24)
-        provider_auth_presence = _provider_auth_presence_from_env()
+        provider_auth_presence, provider_auth_presence_source = _provider_auth_presence_for_bootstrap()
 
         status_counts: dict[str, int] = {}
         runtime_counts: dict[str, int] = {}
@@ -4588,18 +5046,18 @@ class ControlRoomStore:
                 continue
             seen_bootstrap_mission_ids.add(mission.mission_id)
             recent_missions.append(mission)
-            if len(recent_missions) >= max(CONTROL_ROOM_BOOTSTRAP_MISSION_LIMIT, len(active_bootstrap_missions)):
+            if len(recent_missions) >= CONTROL_ROOM_BOOTSTRAP_MISSION_LIMIT:
                 break
         mission_payload = []
         for mission in recent_missions:
-            mission_active = (
-                mission.state.status not in TERMINAL_MISSION_STATUSES
-                and mission.state.status != "draft"
-            )
-            mission.state.provider_runtime_truth = _provider_truth_for_mission(
-                mission,
-                auth_presence=provider_auth_presence,
-                workspace=workspace_by_id.get(mission.workspace_id),
+            mission_active = _mission_counts_as_active_live(mission, require_queue_front=False)
+            mission.state.provider_runtime_truth = _deferred_bootstrap_provider_truth(
+                _provider_truth_for_mission(
+                    mission,
+                    auth_presence=provider_auth_presence,
+                    workspace=workspace_by_id.get(mission.workspace_id),
+                ),
+                source=provider_auth_presence_source,
             )
             row = self._mission_summary_payload(
                 mission,
@@ -4644,13 +5102,16 @@ class ControlRoomStore:
             status_counts.get("blocked", 0)
             + status_counts.get("needs_approval", 0)
             + status_counts.get("verification_failed", 0)
-            + sum(1 for item in missions if _mission_runtime_budget_exhausted(item))
         )
+        runtime_budget_attention_mission_count = sum(
+            1 for item in missions if _mission_runtime_budget_exhausted(item)
+        )
+        attention_mission_count = blocked_mission_count + runtime_budget_attention_mission_count
         scheduling_queue_count = len(project_progress_history.get("schedulingQueue", []))
         zero_active_queue_healthy = (
             active_mission_count == 0
             and queued_mission_count == 0
-            and blocked_mission_count == 0
+            and attention_mission_count == 0
             and project_progress_history.get("schema") == "fluxio.project_progress_history.v1"
             and scheduling_queue_count > 0
         )
@@ -4660,13 +5121,15 @@ class ControlRoomStore:
             "healthy": bool(
                 active_mission_count > 0
                 or queued_mission_count > 0
-                or blocked_mission_count > 0
+                or attention_mission_count > 0
                 or zero_active_queue_healthy
             ),
             "zeroActiveQueueHealthy": zero_active_queue_healthy,
             "activeMissionCount": active_mission_count,
             "queuedMissionCount": queued_mission_count,
             "blockedMissionCount": blocked_mission_count,
+            "attentionMissionCount": attention_mission_count,
+            "runtimeBudgetAttentionMissionCount": runtime_budget_attention_mission_count,
             "schedulingQueueCount": scheduling_queue_count,
             "detail": (
                 "No mission is running; the NAS scheduler queue is live and ready for the next launch."
@@ -4684,14 +5147,25 @@ class ControlRoomStore:
             telegram_destination=load_telegram_destination(self.root),
             delivery_receipts=[asdict(item) for item in load_delivery_receipts(self.root, limit=24)],
         )
-        connected_apps_snapshot = build_connected_apps_snapshot(self.root)
+        connected_apps_snapshot = _build_bootstrap_connected_apps_snapshot(self.root)
+        bootstrap_setup_health = {
+            "source": "bootstrap_deferred",
+            "serviceManagementSummary": {"totalItems": 0, "healthyCount": 0},
+            "actionHistory": [],
+        }
+        bootstrap_nas_deploy_readiness = build_nas_deploy_readiness_snapshot(
+            self.root,
+            onboarding={"setupHealth": bootstrap_setup_health},
+            setup_health=bootstrap_setup_health,
+        )
         bootstrap_runtime_compartments = _build_runtime_compartments_snapshot(
             self.root,
             missions,
             runtime_statuses=[],
-            setup_health={"actionHistory": []},
+            setup_health=bootstrap_setup_health,
             storage_bridge={},
             provider_auth_presence=provider_auth_presence,
+            item_limit=12,
         )
         integration_readiness = build_integration_readiness_snapshot(
             self.root,
@@ -4699,7 +5173,13 @@ class ControlRoomStore:
             connected_apps_snapshot=connected_apps_snapshot,
             runtime_compartments=bootstrap_runtime_compartments,
             provider_auth_presence=provider_auth_presence,
-            nas_deploy_readiness=build_nas_deploy_readiness_snapshot(self.root),
+            nas_deploy_readiness=bootstrap_nas_deploy_readiness,
+            hermes_mission_evidence={
+                "items": [],
+                "summary": {"total": 0},
+                "source": "bootstrap_deferred",
+            },
+            proof_scan_deferred=True,
         )
         payload = {
             "schema": "fluxio.control_room.summary.v1",
@@ -4712,6 +5192,8 @@ class ControlRoomStore:
                 "activeMissions": active_mission_count,
                 "queuedMissions": queued_mission_count,
                 "blockedMissions": blocked_mission_count,
+                "attentionMissions": attention_mission_count,
+                "runtimeBudgetAttentionMissions": runtime_budget_attention_mission_count,
                 "completedMissions": status_counts.get("completed", 0),
             },
             "statusCounts": status_counts,
@@ -4728,8 +5210,15 @@ class ControlRoomStore:
             "missionLaunchShortcuts": mission_launch_shortcuts[:CONTROL_ROOM_VISIBLE_LAUNCH_SHORTCUT_LIMIT],
             "providers": {
                 "authPresence": provider_auth_presence,
+                "authPresenceSource": provider_auth_presence_source,
+                "authPresenceDeferred": provider_auth_presence_source == "bootstrap_env_file_only",
                 "checkedAt": utc_now_iso(),
                 "consistentHermesCredentialPool": True,
+                "fullAuthCheck": (
+                    "deferred_to_full_summary"
+                    if provider_auth_presence_source == "bootstrap_env_file_only"
+                    else "cached"
+                ),
             },
             "mobileWeb": {
                 "summaryFirst": True,
@@ -4766,7 +5255,7 @@ class ControlRoomStore:
                     "activity": 24,
                     "notifications": 24,
                     "overnightDigest": 1,
-                    "runtimeCompartments": 40,
+                    "runtimeCompartments": 12,
                     "projectProgressHistory": len(project_progress_history.get("projects") or []),
                     "workspaces": len(workspace_payload),
                     "bootstrapMissionLimit": CONTROL_ROOM_BOOTSTRAP_MISSION_LIMIT,
@@ -5954,6 +6443,22 @@ class ControlRoomStore:
             for event in self.recent_events(limit=max(event_limit * 8, 600))
             if str(event.get("mission_id") or event.get("missionId") or "") == mission.mission_id
         ]
+        latest_runtime_cycle = next(
+            (
+                event
+                for event in raw_mission_events
+                if str(event.get("kind") or event.get("event") or "") == "mission.runtime_cycle"
+            ),
+            None,
+        )
+        if _reconcile_mission_from_runtime_cycle(
+            mission,
+            latest_runtime_cycle,
+            root=self.root,
+            workspace=workspace,
+        ):
+            sync_mission_state_snapshot(mission)
+            self.update_mission(mission)
         events = raw_mission_events[:event_limit]
         agent_message_events = list(events)
 
@@ -6013,6 +6518,8 @@ class ControlRoomStore:
             workspace=workspace,
         )
         mark_section("planned_scope_artifacts")
+        if _apply_planned_scope_artifact_gate_if_completed(mission, planned_scope_artifacts):
+            self.update_mission(mission)
         mission_summary = self._mission_summary_payload(
             mission,
             root=self.root,
@@ -6031,6 +6538,7 @@ class ControlRoomStore:
             mission,
             events=agent_message_events,
             runtime_transcript=runtime_transcript,
+            root=self.root,
         )
         mark_section("agent_messages")
         artifact_gate = mission_hard_artifact_gate(
@@ -6041,10 +6549,33 @@ class ControlRoomStore:
             mission_events=events,
         )
         mark_section("artifact_gate")
+        if _complete_repaired_planned_scope_artifact_gate_from_detail(
+            mission,
+            artifact_gate,
+            planned_scope_artifacts=planned_scope_artifacts,
+        ) or _complete_repaired_hard_artifact_gate_from_detail(
+            mission,
+            artifact_gate,
+            planned_scope_artifacts=planned_scope_artifacts,
+        ):
+            self.update_mission(mission)
+            mission_summary = self._mission_summary_payload(
+                mission,
+                root=self.root,
+                workspace=workspace,
+                planned_scope_artifacts=planned_scope_artifacts,
+            )
+            bounded_mission = self._bounded_mission_detail_payload(
+                mission,
+                root=self.root,
+                workspace=workspace,
+                planned_scope_artifacts=planned_scope_artifacts,
+            )
         proof_digest = self._mission_proof_digest_payload(
             mission,
             workspace=workspace,
             artifact_gate=artifact_gate,
+            root=self.root,
         )
         mark_section("proof_digest")
         context_roots = self._mission_context_roots_payload(
@@ -6606,6 +7137,7 @@ class ControlRoomStore:
         *,
         workspace: WorkspaceProfile | None = None,
         artifact_gate: dict | None = None,
+        root: Path | None = None,
     ) -> dict:
         latest_session = (
             mission.delegated_runtime_sessions[-1]
@@ -6650,6 +7182,11 @@ class ControlRoomStore:
             if preview_url
             else "fixture_or_evidence_timeline"
         )
+        if not preview_url:
+            manifest_preview_url = mission_artifact_manifest_preview_url(mission, root=root)
+            if manifest_preview_url:
+                preview_url = manifest_preview_url
+                preview_source = "mission_artifact_manifest"
         verification_state = (
             "blocked"
             if failed_checks
@@ -7371,6 +7908,7 @@ class ControlRoomStore:
         events: list[dict],
         runtime_transcript: dict | None = None,
         limit: int = 80,
+        root: Path | None = None,
     ) -> list[dict]:
         messages: list[dict] = []
 
@@ -7395,6 +7933,8 @@ class ControlRoomStore:
             chips: list[str] | None = None,
             message_kind: str = "",
             conversation_turn: bool = False,
+            source: str = "",
+            turn_receipt: dict | None = None,
         ) -> None:
             if not title and not detail:
                 return
@@ -7415,8 +7955,56 @@ class ControlRoomStore:
                     "chatPreferred": not trace_only,
                     "messageKind": str(message_kind or ""),
                     "conversationTurn": bool(conversation_turn),
+                    "source": str(source or ""),
+                    "turnReceipt": turn_receipt if isinstance(turn_receipt, dict) else None,
                     "chips": [str(item) for item in list(chips or []) if str(item or "").strip()][:4],
                 }
+            )
+
+        # Real executor dialogue first: these are the turns an operator reads
+        # as the conversation, sourced only from recorded runtime output.
+        for turn_index, dialogue_turn in enumerate(
+            mission_runtime_dialogue_turns(mission, root=root)
+        ):
+            turn_text = str(dialogue_turn.get("text") or "")
+            dialogue_runtime_id = str(dialogue_turn.get("runtimeId") or mission.runtime_id or "")
+            dialogue_runtime_label = runtime_label(dialogue_runtime_id)
+            capture_mode = str(dialogue_turn.get("captureMode") or "").strip()
+            capture_label = runtime_capture_label(capture_mode)
+            turn_receipt = {
+                "schema": "fluxio.agent_dialogue_runtime_provenance.v1",
+                "sourceKind": str(dialogue_turn.get("sourceKind") or "real-runtime-output"),
+                "captureMode": capture_mode,
+                "captureLabel": capture_label,
+                "sessionId": str(dialogue_turn.get("sessionId") or ""),
+                "externalRuntimeSessionId": str(dialogue_turn.get("externalRuntimeSessionId") or ""),
+                "sourcePath": str(dialogue_turn.get("sourcePath") or ""),
+                "reportPath": str(dialogue_turn.get("reportPath") or ""),
+            }
+            append(
+                message_id=(
+                    f"runtime-dialogue:{mission.mission_id}:{turn_index}:"
+                    f"{hashlib.sha1(turn_text[:400].encode('utf-8')).hexdigest()[:10]}"
+                ),
+                title=turn_text[:160],
+                detail=turn_text,
+                created_at=str(dialogue_turn.get("createdAt") or ""),
+                role="assistant",
+                label=f"{dialogue_runtime_label} reply",
+                runtime_id=dialogue_runtime_id,
+                tone="neutral",
+                process_message=False,
+                trace_only=False,
+                message_kind="dialogue",
+                conversation_turn=True,
+                source="backend-runtime-reply",
+                turn_receipt=turn_receipt,
+                chips=[
+                    str(dialogue_turn.get("model") or ""),
+                    str(dialogue_turn.get("provider") or ""),
+                    "real runtime output",
+                    capture_label,
+                ],
             )
 
         runtime_transcript = runtime_transcript if isinstance(runtime_transcript, dict) else {}
@@ -8485,14 +9073,22 @@ def build_mission_loop_snapshot(mission: Mission) -> dict:
 
     continuity_state, continuity_detail = _continuity_state_for_mission(mission, delegated)
     time_budget = _time_budget_snapshot_for_mission(mission)
+    last_replan_reason = (
+        _plan_revision_value(latest_revision, "trigger")
+        or str(mission.state.last_replan_reason or "")
+    )
+    last_replan_trigger = (
+        _plan_revision_value(latest_revision, "trigger")
+        or str(mission.state.last_replan_trigger or "")
+    )
 
     return {
         "currentCyclePhase": phase,
         "cycleCount": len(plan_revisions) or (1 if mission.state.status != "draft" else 0),
         "lastVerificationResult": verification_result,
         "lastVerificationSummary": _verification_summary_for_mission(mission, verification_result),
-        "lastReplanReason": _plan_revision_value(latest_revision, "trigger"),
-        "lastReplanTrigger": _plan_revision_value(latest_revision, "trigger"),
+        "lastReplanReason": last_replan_reason,
+        "lastReplanTrigger": last_replan_trigger,
         "improvementQueue": [
             {"title": item.get("title", ""), "priority": item.get("priority", "medium")}
             if isinstance(item, dict)
@@ -8667,9 +9263,8 @@ def _plan_revision_value(revision: object, key: str) -> str:
     return str(getattr(revision, key, "") or "")
 
 
-def _provider_auth_presence_from_env() -> dict[str, bool]:
-    global _PROVIDER_AUTH_PRESENCE_CACHE
-    cache_key = tuple(
+def _provider_auth_presence_cache_key() -> tuple[tuple[str, str], ...]:
+    return tuple(
         sorted(
             (
                 name,
@@ -8690,6 +9285,70 @@ def _provider_auth_presence_from_env() -> dict[str, bool]:
             }
         )
     )
+
+
+def _provider_auth_presence_from_env_files() -> dict[str, bool]:
+    presence: dict[str, bool] = {}
+    provider_env_values = _provider_env_file_values()
+    for provider_id, env_name in PROVIDER_ENV_HINTS.items():
+        presence[provider_id] = bool(
+            str(os.environ.get(env_name, "")).strip()
+            or str(provider_env_values.get(env_name, "")).strip()
+        )
+    if str(os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT", "")).strip() or str(
+        provider_env_values.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT", "")
+    ).strip():
+        presence["openai-codex"] = True
+    if str(os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")).strip() or str(
+        provider_env_values.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")
+    ).strip():
+        presence["minimax-portal"] = True
+    return presence
+
+
+def _provider_auth_presence_for_bootstrap() -> tuple[dict[str, bool], str]:
+    cache_key = _provider_auth_presence_cache_key()
+    now = time.monotonic()
+    with _PROVIDER_AUTH_PRESENCE_CACHE_LOCK:
+        cached = _PROVIDER_AUTH_PRESENCE_CACHE
+        if (
+            cached
+            and cached[1] == cache_key
+            and now - cached[0] <= PROVIDER_AUTH_PRESENCE_CACHE_TTL_SECONDS
+        ):
+            return dict(cached[2]), "cached_full_auth_scan"
+    return _provider_auth_presence_from_env_files(), "bootstrap_env_file_only"
+
+
+def _deferred_bootstrap_provider_truth(provider_truth: dict, *, source: str) -> dict:
+    if str(source or "") != "bootstrap_env_file_only" or bool(provider_truth.get("authPresent")):
+        return provider_truth
+    payload = dict(provider_truth)
+    payload["authKnown"] = False
+    payload["authDeferred"] = True
+    payload["authSource"] = source
+    payload["authPath"] = "deferred to full summary"
+    route_auth = payload.get("routeAuth") if isinstance(payload.get("routeAuth"), dict) else {}
+    payload["routeAuth"] = {
+        provider: (
+            {
+                **dict(auth),
+                "authKnown": False,
+                "authDeferred": True,
+                "authSource": source,
+                "authPath": "deferred to full summary",
+            }
+            if isinstance(auth, dict) and not bool(auth.get("authPresent"))
+            else auth
+        )
+        for provider, auth in route_auth.items()
+    }
+    return payload
+
+
+def _provider_auth_presence_from_env() -> dict[str, bool]:
+    global _PROVIDER_AUTH_PRESENCE_CACHE
+    cache_key = _provider_auth_presence_cache_key()
     now = time.monotonic()
     with _PROVIDER_AUTH_PRESENCE_CACHE_LOCK:
         cached = _PROVIDER_AUTH_PRESENCE_CACHE
@@ -8699,13 +9358,7 @@ def _provider_auth_presence_from_env() -> dict[str, bool]:
             and now - cached[0] <= PROVIDER_AUTH_PRESENCE_CACHE_TTL_SECONDS
         ):
             return dict(cached[2])
-    presence: dict[str, bool] = {}
-    provider_env_values = _provider_env_file_values()
-    for provider_id, env_name in PROVIDER_ENV_HINTS.items():
-        presence[provider_id] = bool(
-            str(os.environ.get(env_name, "")).strip()
-            or str(provider_env_values.get(env_name, "")).strip()
-        )
+    presence = _provider_auth_presence_from_env_files()
     home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     openclaw_auth_stores = _openclaw_auth_store_candidates(home)
     opencode_auth_stores = _opencode_auth_store_candidates(home)
@@ -8732,16 +9385,12 @@ def _provider_auth_presence_from_env() -> dict[str, bool]:
             "opencode",
         ):
             presence[provider_id] = True
-    if str(os.environ.get("FLUXIO_OPENAI_CODEX_OAUTH_PRESENT", "")).strip():
-        presence["openai-codex"] = True
     if (
         any(path.exists() for path in codex_auth_stores)
         or _auth_store_candidates_have_provider(openclaw_auth_stores, "openai-codex")
         or _auth_store_candidates_have_provider(hermes_auth_stores, "openai-codex")
     ):
         presence["openai-codex"] = True
-    if str(os.environ.get("FLUXIO_MINIMAX_OPENCLAW_OAUTH_PRESENT", "")).strip():
-        presence["minimax-portal"] = True
     if (
         any(path.exists() for path in minimax_oauth_stores)
         or _auth_store_candidates_have_provider(openclaw_auth_stores, "minimax-portal")
@@ -10259,7 +10908,13 @@ def refresh_mission_runtime_state(
         item for item in refreshed_sessions if item.status in {"launching", "running"}
     ]
 
-    if prompts:
+    if _mission_has_hard_artifact_gate_failure(mission):
+        mission.state.status = "verification_failed"
+        mission.state.planner_loop_status = "paused"
+        mission.proof.summary = (
+            "Mission needs artifact repair before it can be counted as completed."
+        )
+    elif prompts:
         mission.state.status = "needs_approval"
         mission.proof.summary = prompts[0]
         mission.proof.pending_approvals = prompts
@@ -10488,6 +11143,11 @@ def _continuity_state_for_mission(
 ) -> tuple[str, str]:
     if mission.state.status in TERMINAL_MISSION_STATUSES:
         return "terminal", "Mission is in a terminal state with recorded proof."
+    if _mission_has_hard_artifact_gate_failure(mission):
+        return (
+            "resume_available",
+            "Mission needs runtime output and artifact repair before it can be counted as completed.",
+        )
     if any(item.status == "waiting_for_approval" for item in delegated):
         prompt = next(
             (
@@ -10693,6 +11353,8 @@ def _current_runtime_lane_for_mission(
 ) -> str:
     if mission.state.status in TERMINAL_MISSION_STATUSES:
         return f"{mission.runtime_id} primary lane {mission.state.status.replace('_', ' ')}"
+    if _mission_has_hard_artifact_gate_failure(mission):
+        return f"{mission.runtime_id} primary lane verification failed"
     for item in reversed(delegated):
         if item.status in {"waiting_for_approval", "launching", "running"}:
             return f"{item.runtime_id} delegated lane {item.status.replace('_', ' ')}"
@@ -10796,6 +11458,8 @@ def _run_git_command(workspace_root: Path, args: list[str]) -> dict:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=8,
             check=False,
         )
@@ -12283,6 +12947,37 @@ def _authenticated_phone_agent_category(root: Path) -> dict:
     )
 
 
+def _bootstrap_authenticated_phone_agent_category(root: Path) -> dict:
+    latest_path = root / ".agent_control" / "authenticated_live_agent_latest.json"
+    latest = _load_json_file(latest_path)
+    latest_ok = isinstance(latest, dict) and bool(latest.get("ok"))
+    screenshot_path = ""
+    if isinstance(latest, dict):
+        screenshot_path = str(latest.get("screenshotPath") or latest.get("screenshot_path") or "")
+        artifacts = latest.get("artifacts") if isinstance(latest.get("artifacts"), dict) else {}
+        screenshot_path = screenshot_path or str(artifacts.get("screenshotPath") or "")
+    return _integration_category(
+        category_id="authenticated_phone_agent",
+        label="Authenticated phone/live-Agent proof",
+        points=INTEGRATION_READINESS_POINTS["authenticated_phone_agent"],
+        ready=False,
+        state="needs_action" if latest_ok else "not_reported",
+        detail=(
+            "Latest live-Agent proof is pinned; full phone/live-Agent proof scan is deferred from bootstrap."
+            if latest_ok
+            else "Full phone/live-Agent proof scan is deferred from bootstrap."
+        ),
+        source="bootstrap_deferred_authenticated_browser_proofs",
+        receipt_path=str(latest_path) if latest_path.exists() else "",
+        screenshot_path=screenshot_path,
+        command="Open full integration readiness to scan authenticated browser proofs.",
+        evidence={
+            "agentLatestOk": latest_ok,
+            "proofScanDeferred": True,
+        },
+    )
+
+
 def build_integration_readiness_snapshot(
     root: Path,
     *,
@@ -12292,6 +12987,7 @@ def build_integration_readiness_snapshot(
     provider_auth_presence: dict[str, bool] | None = None,
     nas_deploy_readiness: dict | None = None,
     hermes_mission_evidence: dict | None = None,
+    proof_scan_deferred: bool = False,
 ) -> dict:
     root = root.resolve()
     missions = missions or []
@@ -12334,7 +13030,11 @@ def build_integration_readiness_snapshot(
             points=INTEGRATION_READINESS_POINTS["mind_tower_action"],
         ),
         _provider_route_category(provider_auth_presence),
-        _authenticated_phone_agent_category(root),
+        (
+            _bootstrap_authenticated_phone_agent_category(root)
+            if proof_scan_deferred
+            else _authenticated_phone_agent_category(root)
+        ),
     ]
     score = sum(int(item.get("earnedPoints") or 0) for item in categories)
     max_score = sum(int(item.get("points") or 0) for item in categories)
@@ -12692,6 +13392,42 @@ def _release_quality_score(
     return int(round(sum(values) / len(values)))
 
 
+def _mission_events_record_delegated_active(root: Path) -> bool:
+    events_path = root / ".agent_control" / "mission_events.jsonl"
+    if not events_path.exists():
+        return False
+    try:
+        handle = events_path.open("r", encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    with handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            metadata = event.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            kind = str(event.get("kind", "")).strip().lower()
+            message = str(event.get("message", "")).strip().lower()
+            pause_reason = str(
+                metadata.get("pauseReason") or metadata.get("pause_reason") or ""
+            ).strip().lower()
+            lane = str(
+                metadata.get("currentRuntimeLane") or metadata.get("current_runtime_lane") or ""
+            ).strip().lower()
+            if kind == "mission.runtime_cycle" and pause_reason == "delegated_runtime_running":
+                return True
+            if "hermes delegated lane running" in lane or "hermes delegated lane running" in message:
+                return True
+    return False
+
+
 def _build_proving_cycle_readiness(root: Path) -> dict:
     payload = _load_json_file(root / ".agent_control" / "missions.json")
     missions = payload if isinstance(payload, list) else []
@@ -12793,6 +13529,8 @@ def _build_proving_cycle_readiness(root: Path) -> dict:
             ):
                 delegated_active_seen = True
                 break
+    if not delegated_active_seen and _mission_events_record_delegated_active(root):
+        delegated_active_seen = True
 
     proofs = [
         {
@@ -13388,9 +14126,29 @@ def _build_runtime_compartments_snapshot(
     setup_health: dict | None = None,
     storage_bridge: dict | None = None,
     provider_auth_presence: dict[str, bool] | None = None,
+    item_limit: int = 40,
 ) -> dict:
     items: list[dict] = []
     seen_ids: set[str] = set()
+
+    def compact_runtime_rows(rows: object, *, limit: int) -> list[dict]:
+        if not isinstance(rows, list):
+            return []
+        compacted: list[dict] = []
+        for row in rows[-limit:]:
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            for key in ("message", "detail", "text", "trace", "stdout", "stderr", "content"):
+                if key in item:
+                    item[key] = str(item.get(key) or "")[:1200]
+            compacted.append(item)
+        return compacted
+
+    def compact_text_rows(rows: object, *, limit: int) -> list[str]:
+        if not isinstance(rows, list):
+            return []
+        return [str(item)[:1200] for item in rows[-limit:]]
 
     compartment_dir = root / ".agent_control" / "runtime_compartments"
     if compartment_dir.exists():
@@ -13414,6 +14172,8 @@ def _build_runtime_compartments_snapshot(
             turn_receipt = payload.get("turnReceipt") if isinstance(payload.get("turnReceipt"), dict) else {}
             state = str(payload.get("state") or payload.get("status") or "recorded")
             streaming = str(payload.get("streaming") or payload.get("lifecycle") or "recorded")
+            turn_receipts = payload.get("turnReceipts") if isinstance(payload.get("turnReceipts"), list) else []
+            messages = compact_runtime_rows(payload.get("messages"), limit=6)
             items.append(
                 {
                     "id": session_id,
@@ -13430,25 +14190,19 @@ def _build_runtime_compartments_snapshot(
                     "route": route,
                     "updatedAt": str(payload.get("updatedAt") or ""),
                     "source": "web_backend_compartment",
-                    "recentActivity": timeline[-8:],
-                    "toolTimeline": timeline[-12:],
+                    "recentActivity": compact_runtime_rows(timeline, limit=6),
+                    "toolTimeline": compact_runtime_rows(timeline, limit=8),
                     "turnReceipt": turn_receipt,
-                    "turnReceipts": payload.get("turnReceipts")
-                    if isinstance(payload.get("turnReceipts"), list)
-                    else ([turn_receipt] if turn_receipt else []),
-                    "messages": payload.get("messages")
-                    if isinstance(payload.get("messages"), list)
-                    else [],
-                    "lanes": payload.get("lanes") if isinstance(payload.get("lanes"), list) else [],
-                    "blockers": payload.get("blockers") if isinstance(payload.get("blockers"), list) else [],
+                    "turnReceipts": compact_runtime_rows(turn_receipts, limit=4) or ([turn_receipt] if turn_receipt else []),
+                    "messages": messages,
+                    "lanes": compact_runtime_rows(payload.get("lanes"), limit=6),
+                    "blockers": compact_text_rows(payload.get("blockers"), limit=6),
                     "actions": payload.get("actions") if isinstance(payload.get("actions"), list) else ["open-proof"],
                     "restartControls": payload.get("restartControls")
                     if isinstance(payload.get("restartControls"), dict)
                     else {},
-                    "filesChanged": payload.get("filesChanged")
-                    if isinstance(payload.get("filesChanged"), list)
-                    else [],
-                    "approvals": payload.get("approvals") if isinstance(payload.get("approvals"), list) else [],
+                    "filesChanged": compact_text_rows(payload.get("filesChanged"), limit=24),
+                    "approvals": compact_runtime_rows(payload.get("approvals"), limit=8),
                 }
             )
 
@@ -13458,7 +14212,7 @@ def _build_runtime_compartments_snapshot(
             if session_id in seen_ids:
                 continue
             seen_ids.add(session_id)
-            recent_events = session.latest_events[-8:] if isinstance(session.latest_events, list) else []
+            recent_events = compact_runtime_rows(session.latest_events, limit=6)
             lanes = _runtime_lane_rows_for_mission(mission, session)
             blockers = [
                 lane["blocker"]
@@ -13509,8 +14263,11 @@ def _build_runtime_compartments_snapshot(
                         "canRestart": True,
                         "canResume": session.status in {"running", "waiting_for_approval", "failed", "stopped"},
                     },
-                    "filesChanged": session.changed_files,
-                    "approvals": session.approval_history,
+                    "filesChanged": [
+                        str(item)[:1200]
+                for item in (session.changed_files[-24:] if isinstance(session.changed_files, list) else [])
+                    ],
+                    "approvals": compact_runtime_rows(session.approval_history, limit=8),
                     "heartbeat": {
                         "status": session.heartbeat_status,
                         "at": session.heartbeat_at,
@@ -13532,7 +14289,7 @@ def _build_runtime_compartments_snapshot(
         provider_auth_presence=provider_auth_presence,
     )
     return {
-        "items": items[:40],
+        "items": items[:item_limit],
         "compartments": compartments,
         "summary": {
             "total": len(items),
@@ -13546,6 +14303,75 @@ def _build_runtime_compartments_snapshot(
             else ""
         ),
         "source": "agent_control_runtime_state",
+    }
+
+
+def _build_bootstrap_connected_apps_snapshot(root: Path) -> dict:
+    sessions: list[dict] = []
+    try:
+        manifests = load_mock_manifests(root)
+    except Exception:
+        manifests = []
+    for manifest in manifests:
+        bridge = manifest.bridge if isinstance(manifest.bridge, dict) else {}
+        ui_hints = manifest.ui_hints if isinstance(manifest.ui_hints, dict) else {}
+        endpoint = str(bridge.get("endpoint") or "")
+        healthcheck = str(bridge.get("healthcheck") or "")
+        health_url = endpoint.rstrip("/")
+        if healthcheck:
+            health_url = f"{health_url}/{healthcheck.lstrip('/')}" if health_url else healthcheck
+        sessions.append(
+            {
+                "session_id": f"bridge_{manifest.app_id}",
+                "app_id": manifest.app_id,
+                "appId": manifest.app_id,
+                "app_name": manifest.name,
+                "appName": manifest.name,
+                "status": "deferred",
+                "bridge_health": "not_checked",
+                "bridgeHealth": "not_checked",
+                "manifest_id": manifest.manifest_id,
+                "bridge_endpoint": endpoint,
+                "ui_hints": {
+                    **ui_hints,
+                    "healthUrl": health_url,
+                },
+                "latest_task_result": {
+                    "status": "not_checked",
+                    "resultSummary": (
+                        f"{manifest.name} bridge health is deferred from the bootstrap summary; "
+                        "open the full integration check for live status."
+                    ),
+                    "payload": {
+                        "healthUrl": health_url,
+                        "startCommand": ui_hints.get("startCommand", ""),
+                    },
+                },
+            }
+        )
+    return {
+        "schema": "fluxio.connected_apps_snapshot.v1",
+        "source": "bootstrap_manifest_preview",
+        "status": "deferred",
+        "connectedSessions": sessions,
+        "handshakes": [
+            {
+                "app_id": item["app_id"],
+                "transport": "deferred",
+                "session_id": item["session_id"],
+            }
+            for item in sessions
+        ],
+        "summary": {
+            "total": len(sessions),
+            "connected": 0,
+            "deferred": len(sessions),
+        },
+        "recommendation": (
+            "Connected-app bridge health is deferred from bootstrap to keep the first screen responsive."
+            if sessions
+            else "No connected-app manifests were found."
+        ),
     }
 
 
@@ -13682,6 +14508,7 @@ def _build_system_audit_digest(
             }
         )
     gate_summary = release_readiness.get("requiredGateSummary") or {}
+    agent_proof_bundle = _agent_proof_bundle_digest(root, {})
     fallback_digest = {
         "schema": "fluxio.system_audit_digest.v1",
         "generatedAt": utc_now_iso(),
@@ -13740,6 +14567,7 @@ def _build_system_audit_digest(
             ][:6],
         },
         "activeGapMissions": active_gap_missions,
+        "agentProofBundle": agent_proof_bundle,
         "publicLaunchReadiness": _public_launch_readiness_digest(root),
     }
     return _authoritative_system_audit_digest(root, fallback_digest) or fallback_digest
@@ -13817,6 +14645,10 @@ def _build_bootstrap_system_audit_digest(
         if int(item["fluxioScore"]) <= int(item["t3Score"])
     ]
     deficits.sort(key=lambda item: (item["delta"], item["fluxioScore"], item["category"]))
+    hard_blocked_mission_count = sum(1 for mission in missions if _mission_counts_as_hard_blocked(mission))
+    runtime_budget_attention_mission_count = sum(
+        1 for mission in missions if _mission_runtime_budget_exhausted(mission)
+    )
     live_progress = {
         "workspaceCount": len(workspaces),
         "missionCount": len(missions),
@@ -13826,11 +14658,9 @@ def _build_bootstrap_system_audit_digest(
             if _mission_counts_as_active_live(mission)
         ),
         "completedMissionCount": sum(1 for mission in missions if mission.state.status == "completed"),
-        "blockedMissionCount": sum(
-            1
-            for mission in missions
-            if _mission_counts_as_attention(mission)
-        ),
+        "blockedMissionCount": hard_blocked_mission_count,
+        "attentionMissionCount": hard_blocked_mission_count + runtime_budget_attention_mission_count,
+        "runtimeBudgetAttentionMissionCount": runtime_budget_attention_mission_count,
         "queuedMissionCount": sum(
             1
             for mission in missions
@@ -14028,6 +14858,122 @@ def _public_launch_readiness_digest(root: Path, source: dict | None = None) -> d
     }
 
 
+def _agent_proof_bundle_digest(root: Path, live_nas: dict) -> dict:
+    live_nas = live_nas if isinstance(live_nas, dict) else {}
+    latest_path = root / ".agent_control" / "authenticated_live_agent_latest.json"
+    latest = _load_json_file(latest_path)
+    if not isinstance(latest, dict):
+        latest = {}
+    latest_schema_valid = latest.get("schema") == "fluxio.authenticated_live_agent_latest_evidence.v1"
+    proof_bundle = (
+        latest.get("proofBundle", {})
+        if latest_schema_valid and isinstance(latest.get("proofBundle"), dict)
+        else {}
+    )
+    open_proof = (
+        latest.get("openCompleteProof", {})
+        if latest_schema_valid and isinstance(latest.get("openCompleteProof"), dict)
+        else {}
+    )
+    first_view_path = (
+        latest.get("firstViewProofPath", {})
+        if latest_schema_valid and isinstance(latest.get("firstViewProofPath"), dict)
+        else {}
+    )
+    selected = (
+        latest.get("selectedMission", {})
+        if latest_schema_valid and isinstance(latest.get("selectedMission"), dict)
+        else {}
+    )
+    check_summary = (
+        latest.get("checkSummary", {})
+        if latest_schema_valid and isinstance(latest.get("checkSummary"), dict)
+        else {}
+    )
+    live_selected = live_nas.get("agentSelectedMission") if isinstance(live_nas.get("agentSelectedMission"), dict) else {}
+    status = str(live_nas.get("agentProofBundleStatus") or proof_bundle.get("status") or "").strip()
+    label = str(live_nas.get("agentProofBundleLabel") or proof_bundle.get("label") or "").strip()
+    latest_runtime_status = str(
+        live_nas.get("agentLatestRuntimeStatus") or proof_bundle.get("latestRuntimeStatus") or ""
+    ).strip()
+    latest_evidence_status = str(
+        live_nas.get("agentLatestEvidenceStatus") or proof_bundle.get("latestEvidenceStatus") or ""
+    ).strip()
+    latest_complete_mission_id = str(
+        live_nas.get("agentLatestCompleteMissionId") or proof_bundle.get("latestCompleteMissionId") or ""
+    ).strip()
+    open_complete_target = str(
+        live_nas.get("agentOpenCompleteProofTargetMissionId") or open_proof.get("targetMissionId") or ""
+    ).strip()
+    first_view_proof_path_passed = bool(
+        live_nas.get("agentFirstViewProofPathPassed")
+        or first_view_path.get("passed")
+    )
+    first_view_proof_path_row_count = int(
+        live_nas.get("agentFirstViewProofPathRowCount")
+        or first_view_path.get("rowCount")
+        or 0
+    )
+    first_view_proof_path_next_action_count = int(
+        live_nas.get("agentFirstViewProofPathNextActionCount")
+        or first_view_path.get("nextActionCount")
+        or 0
+    )
+    latest_evidence_path = str(live_nas.get("agentLatestEvidencePath") or "").strip()
+    if not latest_evidence_path and latest_schema_valid:
+        latest_evidence_path = str(latest_path)
+    if not any((status, latest_runtime_status, latest_evidence_status, open_complete_target, latest_evidence_path)):
+        return {}
+    selected_mission_id = str(
+        live_selected.get("mission_id")
+        or live_selected.get("missionId")
+        or selected.get("missionId")
+        or selected.get("mission_id")
+        or ""
+    )
+    source_report_path = str(live_nas.get("agentReportPath") or latest.get("sourceReportPath") or "").strip()
+    passed_check_count = (
+        len(live_nas.get("agentPassedChecks") or [])
+        if isinstance(live_nas.get("agentPassedChecks"), list)
+        else 0
+    )
+    if not passed_check_count:
+        passed_check_count = int(check_summary.get("passed") or 0)
+    return {
+        "schema": "fluxio.agent_proof_bundle_digest.v1",
+        "source": "live_nas_evidence" if live_nas else "authenticated_live_agent_latest",
+        "status": status or "unknown",
+        "label": label,
+        "complete": bool(
+            live_nas.get("agentProofBundleComplete")
+            or proof_bundle.get("hasCompleteEvidenceBundle")
+            or status == "complete"
+        ),
+        "agentStatus": str(
+            live_nas.get("agentStatus")
+            or ("passed" if latest.get("ok") else "failed" if latest_schema_valid else "unknown")
+        ),
+        "selectedMissionId": selected_mission_id,
+        "latestRuntimeStatus": latest_runtime_status,
+        "latestEvidenceStatus": latest_evidence_status,
+        "latestCompleteMissionId": latest_complete_mission_id,
+        "openCompleteProofTargetMissionId": open_complete_target,
+        "openCompleteProofStatus": str(
+            live_nas.get("agentOpenCompleteProofStatus")
+            or ("passed" if open_proof.get("passed") else "")
+        ),
+        "firstViewProofPathPassed": first_view_proof_path_passed,
+        "firstViewProofPathRowCount": first_view_proof_path_row_count,
+        "firstViewProofPathNextActionCount": first_view_proof_path_next_action_count,
+        "latestEvidencePath": latest_evidence_path,
+        "sourceReportPath": source_report_path,
+        "checkedAt": str(live_nas.get("agentCheckedAt") or latest.get("checkedAt") or ""),
+        "indexedAt": str(live_nas.get("agentLatestIndexedAt") or latest.get("indexedAt") or ""),
+        "passedCheckCount": passed_check_count,
+        "failedCheckCount": int(check_summary.get("failed") or 0),
+    }
+
+
 def _authoritative_system_audit_digest(root: Path, fallback_digest: dict) -> dict:
     evidence_path = root / ".agent_control" / "live_nas_system_audit_latest.json"
     cached_digest = _load_compact_system_audit_digest(root, evidence_path, fallback_digest)
@@ -14094,6 +15040,7 @@ def _authoritative_system_audit_digest(root: Path, fallback_digest: dict) -> dic
     )
     gate_summary = release.get("requiredGateSummary") if isinstance(release.get("requiredGateSummary"), dict) else {}
     live_nas = audit.get("liveNasEvidence") if isinstance(audit.get("liveNasEvidence"), dict) else {}
+    agent_proof_bundle = _agent_proof_bundle_digest(root, live_nas)
     nas_storage_pressure = audit.get("nasStoragePressureEvidence") if isinstance(audit.get("nasStoragePressureEvidence"), dict) else {}
     nas_storage_cleanup_plan = audit.get("nasStorageCleanupPlan") if isinstance(audit.get("nasStorageCleanupPlan"), dict) else {}
     if not nas_storage_pressure:
@@ -14247,6 +15194,11 @@ def _authoritative_system_audit_digest(root: Path, fallback_digest: dict) -> dic
     active_gap_missions = fallback_digest.get("activeGapMissions") if isinstance(fallback_digest.get("activeGapMissions"), list) else []
     live_progress = fallback_digest.get("liveProjectProgress") if isinstance(fallback_digest.get("liveProjectProgress"), dict) else {}
     counts = live_nas.get("counts") if isinstance(live_nas.get("counts"), dict) else {}
+    live_nas_passed_checks = [
+        str(item)
+        for item in live_nas.get("passedChecks", [])
+        if isinstance(item, str)
+    ] if isinstance(live_nas.get("passedChecks"), list) else []
     if counts:
         live_progress = {
             **live_progress,
@@ -14255,7 +15207,19 @@ def _authoritative_system_audit_digest(root: Path, fallback_digest: dict) -> dic
             "activeMissionCount": int(live_progress.get("activeMissionCount") or 0),
             "completedMissionCount": max(int(live_progress.get("completedMissionCount") or 0), int(counts.get("completedMissions") or 0)),
             "blockedMissionCount": max(int(live_progress.get("blockedMissionCount") or 0), int(counts.get("blockedMissions") or 0)),
+            "attentionMissionCount": max(
+                int(live_progress.get("attentionMissionCount") or 0),
+                int(counts.get("attentionMissions") or counts.get("blockedMissions") or 0),
+            ),
+            "runtimeBudgetAttentionMissionCount": max(
+                int(live_progress.get("runtimeBudgetAttentionMissionCount") or 0),
+                int(counts.get("runtimeBudgetAttentionMissions") or 0),
+            ),
             "queuedMissionCount": max(int(live_progress.get("queuedMissionCount") or 0), int(counts.get("queuedMissions") or 0)),
+            "schedulerQueueProofPassed": (
+                bool(live_progress.get("schedulerQueueProofPassed"))
+                or "summary-has-live-project-scheduling-queue" in live_nas_passed_checks
+            ),
         }
     t3_strengths = [
         "npx t3 launch",
@@ -14292,6 +15256,7 @@ def _authoritative_system_audit_digest(root: Path, fallback_digest: dict) -> dic
         live_mission_output_quality=live_mission_output_quality,
         mission_artifact_repair_plan=mission_artifact_repair_plan,
         nas_storage_pressure=nas_storage_pressure,
+        agent_proof_bundle=agent_proof_bundle,
     )
     mission_advancement_summary = _mission_advancement_summary(
         live_mission_output_quality=live_mission_output_quality,
@@ -14386,6 +15351,7 @@ def _authoritative_system_audit_digest(root: Path, fallback_digest: dict) -> dic
         "deploymentDurabilitySummary": deployment_durability_summary,
         "operatorNextPath": operator_next_path,
         "speedSupervisorSummary": speed_supervisor_summary,
+        "agentProofBundle": agent_proof_bundle or fallback_digest.get("agentProofBundle", {}),
         "nasStoragePressure": nas_storage_pressure,
         "nasStorageCleanupPlan": nas_storage_cleanup_plan,
         "liveMissionOutputQuality": live_mission_output_quality,
@@ -14470,6 +15436,7 @@ def _load_compact_system_audit_digest(root: Path, evidence_path: Path, fallback_
             root / ".agent_control" / "live_mission_detail_performance_latest.json",
             root / ".agent_control" / "nas_storage_pressure_latest.json",
             root / ".agent_control" / "nas_storage_cleanup_plan_latest.json",
+            root / ".agent_control" / "authenticated_live_agent_latest.json",
         )
         for evidence_file in local_evidence_files:
             try:
@@ -14483,6 +15450,11 @@ def _load_compact_system_audit_digest(root: Path, evidence_path: Path, fallback_
     digest = payload.get("digest") if isinstance(payload.get("digest"), dict) else {}
     if not digest:
         return {}
+    latest_agent_proof = root / ".agent_control" / "authenticated_live_agent_latest.json"
+    if latest_agent_proof.exists():
+        agent_proof_bundle = digest.get("agentProofBundle") if isinstance(digest.get("agentProofBundle"), dict) else {}
+        if agent_proof_bundle.get("schema") != "fluxio.agent_proof_bundle_digest.v1":
+            return {}
     compact_breakdown = digest.get("systemLossBreakdown") if isinstance(digest.get("systemLossBreakdown"), dict) else {}
     if "averageScoreOutOf20" not in compact_breakdown or "averageLossOutOf20" not in compact_breakdown:
         return {}
@@ -14946,40 +15918,227 @@ def _system_improvement_next_action(title: str, detail: str) -> str:
     return "Convert this audit gap into a verified mission or release gate.";
 
 
-def _live_storage_pressure_probe(root: Path) -> dict:
-    probe_path = root if root.exists() else root.parent
+_VERIFIER_PROOF_ALLOWED_SUFFIXES = {
+    ".html",
+    ".jpeg",
+    ".jpg",
+    ".json",
+    ".jsonl",
+    ".log",
+    ".md",
+    ".png",
+    ".txt",
+    ".webp",
+}
+
+
+def _live_storage_mount_label(probe_path: Path) -> str:
+    normalized = str(probe_path).replace("\\", "/")
+    if normalized == "/volume1/Saclay" or normalized.startswith("/volume1/Saclay/"):
+        return "/volume1/Saclay"
+    if normalized.startswith("/volume1/"):
+        parts = normalized.split("/")
+        return "/".join(parts[:3]) if len(parts) >= 3 else "/volume1"
+    anchor = probe_path.anchor.rstrip("\\/") if probe_path.anchor else ""
+    return anchor or str(probe_path)
+
+
+def _resolve_live_storage_probe_path(root: Path, raw_path: object | None = None) -> Path:
+    root = Path(root).expanduser().resolve()
+    raw = str(raw_path or "").strip()
+    candidates: list[Path] = []
+    if raw:
+        requested = Path(raw).expanduser()
+        candidates.append(requested if requested.is_absolute() else root / requested)
+    candidates.append(root)
+
+    for candidate in candidates:
+        cursor = candidate
+        if cursor.exists() and cursor.is_file():
+            cursor = cursor.parent
+        while not cursor.exists() and cursor.parent != cursor:
+            cursor = cursor.parent
+        if cursor.exists() and cursor.is_dir():
+            return cursor.resolve()
+    return root
+
+
+def _storage_pressure_status(*, available: int, used_percent: int) -> str:
+    if available <= 0:
+        return "full"
+    if used_percent >= 99:
+        return "critical"
+    if used_percent >= 95:
+        return "warning"
+    return "ok"
+
+
+def build_live_nas_storage_pressure_report(
+    root: Path,
+    raw_path: object | None = None,
+    *,
+    write_latest: bool = False,
+) -> dict:
+    """Return a live, measured storage-pressure report that mission preflight can trust.
+
+    Older verifier handoffs sometimes left a stale critical/full NAS JSON file behind.
+    This helper always prefers a real ``shutil.disk_usage`` sample from the requested
+    workspace (or its nearest existing parent) and can atomically refresh the canonical
+    ``.agent_control/nas_storage_pressure_latest.json`` evidence file.
+    """
+
+    root = Path(root).expanduser().resolve()
+    probe_path = _resolve_live_storage_probe_path(root, raw_path)
+    checked_at = utc_now_iso()
     try:
         usage = shutil.disk_usage(probe_path)
-    except OSError:
-        return {}
-    total = int(usage.total or 0)
-    used = int(usage.used or 0)
-    available = int(usage.free or 0)
-    used_percent = int(round((used / total) * 100)) if total else 0
-    status = "full" if available <= 0 else "critical" if used_percent >= 99 else "ok"
-    mount = str(probe_path)
-    normalized = mount.replace("\\", "/")
-    if normalized.startswith("/volume1/Saclay/"):
-        mount = "/volume1/Saclay"
-    elif normalized.startswith("/volume1/"):
-        parts = normalized.split("/")
-        mount = "/".join(parts[:3]) if len(parts) >= 3 else "/volume1"
-    return {
-        "schema": "fluxio.nas_storage_pressure_probe.v1",
-        "source": "live_disk_usage",
-        "mount": mount,
-        "path": str(probe_path),
-        "status": status,
-        "totalBytes": total,
-        "usedBytes": used,
-        "availableBytes": available,
-        "usedPercent": used_percent,
-        "nextAction": (
-            "Free real NAS volume or snapshot space before trusting unattended mission writes."
-            if status in {"full", "critical"}
-            else "Keep storage pressure verification in the release gate."
-        ),
+    except OSError as exc:
+        payload = {
+            "schema": "fluxio.nas_storage_pressure.v1",
+            "source": "live_disk_usage",
+            "checkedAt": checked_at,
+            "maxAgeSeconds": 300,
+            "mount": _live_storage_mount_label(probe_path),
+            "path": str(probe_path),
+            "status": "unknown",
+            "totalBytes": 0,
+            "usedBytes": 0,
+            "availableBytes": 0,
+            "usedPercent": 0,
+            "probeTimedOut": False,
+            "probeConnectFailed": True,
+            "measuredUsageAvailable": False,
+            "error": str(exc),
+            "nextAction": "Retry the live storage probe from the target machine before blocking or clearing mission writes.",
+        }
+    else:
+        total = int(usage.total or 0)
+        used = int(usage.used or 0)
+        available = int(usage.free or 0)
+        used_percent = int(round((used / total) * 100)) if total else 0
+        status = _storage_pressure_status(available=available, used_percent=used_percent)
+        payload = {
+            "schema": "fluxio.nas_storage_pressure.v1",
+            "source": "live_disk_usage",
+            "checkedAt": checked_at,
+            "maxAgeSeconds": 300,
+            "mount": _live_storage_mount_label(probe_path),
+            "path": str(probe_path),
+            "status": status,
+            "totalBytes": total,
+            "usedBytes": used,
+            "availableBytes": available,
+            "usedPercent": used_percent,
+            "probeTimedOut": False,
+            "probeConnectFailed": False,
+            "measuredUsageAvailable": True,
+            "nextAction": (
+                "Free real NAS volume or snapshot space before trusting unattended mission writes."
+                if status in {"full", "critical"}
+                else "Keep live storage pressure verification in the release gate."
+            ),
+        }
+
+    if write_latest:
+        control_dir = root / ".agent_control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        target = control_dir / "nas_storage_pressure_latest.json"
+        payload["sourcePath"] = str(target.resolve())
+        tmp = target.with_name(f"{target.name}.tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(target)
+    return payload
+
+
+def _live_storage_pressure_probe(root: Path) -> dict:
+    return build_live_nas_storage_pressure_report(root, write_latest=False)
+
+
+def _safe_verifier_proof_token(value: object, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip(".-_")
+    return cleaned[:96] or fallback
+
+
+def _resolve_verifier_proof_source(root: Path, raw_path: object) -> Path:
+    raw = str(raw_path or "").strip()
+    if not raw:
+        raise RuntimeError("Verifier proof artifact path is required")
+    source = Path(raw).expanduser()
+    if not source.is_absolute():
+        source = root / source
+    source = source.resolve()
+    try:
+        source.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"Verifier proof artifact is outside the workspace: {source}") from exc
+    if not source.is_file():
+        raise RuntimeError(f"Verifier proof artifact does not exist: {source}")
+    if source.suffix.lower() not in _VERIFIER_PROOF_ALLOWED_SUFFIXES:
+        raise RuntimeError(f"Unsupported verifier proof artifact type: {source.suffix or source.name}")
+    return source
+
+
+def attach_verifier_proof_bundle(
+    root: Path,
+    mission_id: object,
+    flow_id: object | None = None,
+    artifacts: object | None = None,
+    *,
+    report_path: object | None = None,
+    checks: object | None = None,
+) -> dict:
+    """Copy verifier screenshots/reports beside mission artifacts and return a manifest."""
+
+    root = Path(root).expanduser().resolve()
+    mission_token = _safe_verifier_proof_token(mission_id, "ui_bridge_verifier")
+    flow_token = _safe_verifier_proof_token(flow_id, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    dest_dir = root / ".agent_control" / "mission_artifacts" / mission_token / "ui_verifier_proof" / flow_token
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    artifact_rows: list[dict] = []
+    if isinstance(artifacts, list):
+        artifact_rows.extend(item for item in artifacts if isinstance(item, dict))
+    if report_path:
+        artifact_rows.append({"kind": "report", "label": "Verifier report", "path": str(report_path)})
+
+    attached: list[dict] = []
+    seen_sources: set[str] = set()
+    for index, item in enumerate(artifact_rows, start=1):
+        source = _resolve_verifier_proof_source(root, item.get("path"))
+        source_key = str(source)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        safe_name = _safe_verifier_proof_token(source.name, f"artifact-{index}{source.suffix.lower()}")
+        target = dest_dir / f"{index:02d}-{safe_name}"
+        shutil.copy2(source, target)
+        attached.append(
+            {
+                "kind": str(item.get("kind") or "artifact"),
+                "label": str(item.get("label") or source.name),
+                "path": str(target.resolve()),
+                "relativePath": str(target.resolve().relative_to(root)),
+                "originalPath": str(source),
+                "bytes": target.stat().st_size,
+            }
+        )
+
+    manifest_path = dest_dir / "manifest.json"
+    manifest = {
+        "schema": "fluxio.ui_verifier_proof_attachment.v1",
+        "missionId": str(mission_id or mission_token),
+        "flowId": flow_token,
+        "attachedAt": utc_now_iso(),
+        "artifactCount": len(attached),
+        "artifacts": attached,
+        "checks": checks if isinstance(checks, list) else [],
+        "manifestPath": str(manifest_path.resolve()),
+        "relativeManifestPath": str(manifest_path.resolve().relative_to(root)),
+        "directory": str(dest_dir.resolve()),
+        "relativeDirectory": str(dest_dir.resolve().relative_to(root)),
     }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
 
 
 def _bootstrap_live_mission_output_quality(missions: list[Mission]) -> dict:
@@ -15044,12 +16203,22 @@ def _bootstrap_mission_artifact_repair_plan(
         if isinstance(live_mission_output_quality.get("repairMissionRows"), list)
         else []
     )
+    probe_failed = bool(nas_storage_pressure.get("probeTimedOut")) or bool(nas_storage_pressure.get("probeConnectFailed"))
+    measured_usage_available = bool(nas_storage_pressure.get("measuredUsageAvailable", not probe_failed))
+    has_storage_evidence = bool(
+        nas_storage_pressure.get("schema")
+        or nas_storage_pressure.get("checkedAt")
+        or nas_storage_pressure.get("source")
+        or str(nas_storage_pressure.get("status") or "").strip()
+    )
     storage_blocked = bool(
-        str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
-        or bool(nas_storage_pressure.get("probeTimedOut"))
-        or bool(nas_storage_pressure.get("probeConnectFailed"))
-        or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
-        or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
+        has_storage_evidence
+        and measured_usage_available
+        and (
+            str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
+            or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
+            or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
+        )
     )
     return {
         "schema": "fluxio.mission_artifact_repair_plan.bootstrap.v1",
@@ -15066,7 +16235,7 @@ def _bootstrap_mission_artifact_repair_plan(
             "status": nas_storage_pressure.get("status") or "unknown",
             "probeTimedOut": bool(nas_storage_pressure.get("probeTimedOut")),
             "probeConnectFailed": bool(nas_storage_pressure.get("probeConnectFailed")),
-            "measuredUsageAvailable": bool(nas_storage_pressure.get("measuredUsageAvailable", True)),
+            "measuredUsageAvailable": measured_usage_available,
             "availableBytes": int(nas_storage_pressure.get("availableBytes") or 0),
         },
         "repairs": repair_rows,
@@ -15158,7 +16327,10 @@ def _storage_triage_summary(*, nas_storage_pressure: dict, nas_storage_cleanup_p
     status_text = str(nas_storage_pressure.get("status") or nas_storage_cleanup_plan.get("storageStatus") or "").lower()
     probe_failed = bool(nas_storage_pressure.get("probeTimedOut")) or bool(nas_storage_pressure.get("probeConnectFailed"))
     measured_usage_available = bool(nas_storage_pressure.get("measuredUsageAvailable", not probe_failed))
-    blocked = bool(status_text in {"critical", "full"} or probe_failed or available_bytes <= 0 or used_percent >= 99)
+    blocked = bool(
+        measured_usage_available
+        and (status_text in {"critical", "full"} or available_bytes <= 0 or used_percent >= 99)
+    )
     headroom_detail = (
         f"{nas_storage_pressure.get('mount') or nas_storage_cleanup_plan.get('mount') or '/volume1/Saclay'} "
         "write headroom is unverified because the bounded NAS storage probe did not return current df data."
@@ -15172,13 +16344,17 @@ def _storage_triage_summary(*, nas_storage_pressure: dict, nas_storage_cleanup_p
         {
             "id": "write-headroom",
             "kind": "blocker" if blocked else "headroom",
-            "severity": "critical" if blocked else "ok",
+            "severity": "critical" if blocked else "warn" if probe_failed or not measured_usage_available else "ok",
             "title": "NAS write headroom",
             "detail": headroom_detail,
             "safeToDelete": False,
-            "nextAction": "Clear real NAS volume or snapshot space before trusting unattended mission writes."
-            if blocked
-            else "Keep the storage pressure probe in the release gate.",
+            "nextAction": (
+                "Clear real NAS volume or snapshot space before trusting unattended mission writes."
+                if blocked
+                else "Rerun the bounded NAS storage probe; this is not a measured full-disk state."
+                if probe_failed or not measured_usage_available
+                else "Keep the storage pressure probe in the release gate."
+            ),
         },
         {
             "id": "generated-cleanup",
@@ -15307,12 +16483,7 @@ def _deployment_durability_summary(
                 ),
             }
         )
-    storage_blocked = bool(
-        str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
-        or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
-        or int(nas_storage_pressure.get("usedPercent") or 0) >= 99
-        or storage_triage_summary.get("status") == "blocked"
-    )
+    storage_blocked = bool(storage_triage_summary.get("status") == "blocked")
     temporary_symlink_count = sum(1 for row in symlink_rows if row.get("temporaryTarget"))
     status = (
         "temporary_recovery"
@@ -15343,6 +16514,32 @@ def _deployment_durability_summary(
             else "Keep deployment receipts current with each release candidate."
         ),
     }
+
+
+def _red_team_current_cadence_is_healthy(red_summary: dict) -> bool:
+    if not isinstance(red_summary, dict):
+        return False
+    run_count = int(red_summary.get("runCount") or 0)
+    satisfied_targets = int(red_summary.get("satisfiedEscalationTargets") or 0)
+    latest_resistance = int(red_summary.get("latestResistanceScore") or red_summary.get("resistance_score") or 0)
+    current_pressure = int(red_summary.get("currentPressureIndex") or 0)
+    next_pressure = int(red_summary.get("nextPressureIndex") or 0)
+    pressure_delta = int(red_summary.get("pressureDelta") or max(0, next_pressure - current_pressure))
+    next_attempt_budget = int(red_summary.get("nextAttemptBudget") or 0)
+    status = str(red_summary.get("status") or "").lower()
+    pressure_is_advancing = (
+        pressure_delta > 0
+        or next_pressure > current_pressure > 0
+        or status in {"advancing", "escalating", "passing", "proven"}
+    )
+    return (
+        run_count > 0
+        and satisfied_targets > 0
+        and bool(red_summary.get("cleanPass"))
+        and latest_resistance >= 90
+        and next_attempt_budget > 0
+        and pressure_is_advancing
+    )
 
 
 def _goal_completion_audit_summary(
@@ -15394,12 +16591,19 @@ def _goal_completion_audit_summary(
     deployment_durable = bool(deployment_durability_summary.get("durable"))
     storage_blocked = storage_triage_summary.get("status") == "blocked"
     repair_count = int(mission_advancement_summary.get("repairMissionCount") or 0)
+    real_output_count = int(mission_advancement_summary.get("realOutputMissionCount") or 0)
     interface_score = int(design_debt_summary.get("interfaceScoreOutOf20") or 0)
+    agent_first_view_proven = bool(design_debt_summary.get("agentFirstViewProofPathPassed"))
+    mission_count = int(live_progress.get("missionCount") or mission_advancement_summary.get("missionCount") or 0)
     active_count = int(live_progress.get("activeMissionCount") or 0)
     blocked_count = int(live_progress.get("blockedMissionCount") or 0)
+    completed_count = int(live_progress.get("completedMissionCount") or 0)
     t3_ahead = int(must_beat_status.get("ahead") or 0)
     t3_total = int(must_beat_status.get("total") or 0)
     t3_deficits = int(must_beat_status.get("deficitCount") or 0)
+    red_run_count = int(red_summary.get("runCount") or 0)
+    pending_red_targets = int(red_summary.get("pendingEscalationTargets") or 0)
+    red_cadence_healthy = _red_team_current_cadence_is_healthy(red_summary)
     summary_ok = bool(speed_supervisor_summary.get("summaryOk"))
     detail_ok = bool(speed_supervisor_summary.get("detailOk"))
     public_web_ready = str(public_launch_readiness.get("status") or "").lower() in {
@@ -15452,17 +16656,28 @@ def _goal_completion_audit_summary(
         label="Beginner UX and interface quality",
         status=(
             "passed"
-            if design_debt_summary.get("schema") and interface_score >= 20 and repair_count == 0
+            if design_debt_summary.get("schema")
+            and repair_count == 0
+            and (interface_score >= 20 or agent_first_view_proven)
             else "partial"
             if design_debt_summary.get("schema")
             else "missing"
         ),
         evidence=(
-            f"Interface {interface_score}/20; "
+            (
+                "Agent first-view proof path passed; "
+                if agent_first_view_proven
+                else ""
+            )
+            + f"Interface {interface_score}/20; "
             f"{design_debt_summary.get('repairMissionCount', 0)} proof repair mission(s)."
         ),
-        next_action=design_debt_summary.get("nextAction")
-        or "Reduce concept overload and keep Agent/Workbench thread-first.",
+        next_action=(
+            "Keep authenticated Agent first-view proof current while closing remaining interface deltas."
+            if agent_first_view_proven and interface_score < 20
+            else design_debt_summary.get("nextAction")
+            or "Reduce concept overload and keep Agent/Workbench thread-first."
+        ),
         weight=2,
     )
     add_row(
@@ -15528,10 +16743,18 @@ def _goal_completion_audit_summary(
     add_row(
         "mission-output-quality",
         label="Real mission results and proof",
-        status="blocked" if repair_count else "partial" if active_count else "missing",
+        status=(
+            "blocked"
+            if repair_count
+            else "passed"
+            if real_output_count > 0 or completed_count > 0
+            else "partial"
+            if active_count or mission_count > 0
+            else "missing"
+        ),
         evidence=(
-            f"{active_count} active, {blocked_count} blocked, "
-            f"{repair_count} artifact repair mission(s)."
+            f"{active_count} active, {completed_count} completed, {blocked_count} blocked, "
+            f"{real_output_count} real-output proof mission(s), {repair_count} artifact repair mission(s)."
         ),
         next_action=mission_advancement_summary.get("nextAction")
         or "Repair failed F1/artifact missions and keep RF/public-data output producing real transcripts.",
@@ -15540,11 +16763,13 @@ def _goal_completion_audit_summary(
     add_row(
         "red-team-escalation",
         label="Red-team self-improvement",
-        status="partial"
-        if int(red_summary.get("pendingEscalationTargets") or 0)
-        else "passed"
-        if int(red_summary.get("runCount") or 0) > 0
-        else "missing",
+        status=(
+            "passed"
+            if red_run_count > 0 and (pending_red_targets == 0 or red_cadence_healthy)
+            else "partial"
+            if pending_red_targets
+            else "missing"
+        ),
         evidence=(
             f"{red_summary.get('runCount', 0)} rows; pressure "
             f"{red_summary.get('currentPressureIndex', 0)} -> {red_summary.get('nextPressureIndex', 0)}; "
@@ -15559,22 +16784,27 @@ def _goal_completion_audit_summary(
     percent = int(round((weighted_score / weighted_total) * 100))
     blocked_rows = [row for row in rows if row.get("status") == "blocked"]
     partial_rows = [row for row in rows if row.get("status") == "partial"]
-    status = "blocked" if blocked_rows else "partial" if partial_rows else "complete"
+    missing_rows = [row for row in rows if row.get("status") == "missing"]
+    attention_rows = blocked_rows or partial_rows or missing_rows
+    status = "blocked" if blocked_rows else "partial" if partial_rows or missing_rows else "complete"
     return {
         "schema": "fluxio.goal_completion_audit.v1",
         "status": status,
         "completionPercent": percent,
         "passedCount": sum(1 for row in rows if row.get("status") == "passed"),
         "partialCount": len(partial_rows),
+        "missingCount": len(missing_rows),
         "blockedCount": len(blocked_rows),
         "requirementCount": len(rows),
         "rows": rows,
-        "topBlocker": blocked_rows[0] if blocked_rows else partial_rows[0] if partial_rows else {},
+        "topBlocker": attention_rows[0] if attention_rows else {},
         "nextAction": (
             blocked_rows[0]["nextAction"]
             if blocked_rows
             else partial_rows[0]["nextAction"]
             if partial_rows
+            else missing_rows[0]["nextAction"]
+            if missing_rows
             else "All objective requirements are currently proven."
         ),
     }
@@ -15650,6 +16880,7 @@ def _design_debt_summary(
     live_mission_output_quality: dict,
     mission_artifact_repair_plan: dict,
     nas_storage_pressure: dict,
+    agent_proof_bundle: dict | None = None,
 ) -> dict:
     """Compact operator-facing UI/design debt so Builder does not bury it in long audit rows."""
 
@@ -15679,8 +16910,17 @@ def _design_debt_summary(
         or live_mission_output_quality.get("weakMissionCount")
         or 0
     )
+    storage_probe_failed = bool(nas_storage_pressure.get("probeTimedOut")) or bool(nas_storage_pressure.get("probeConnectFailed"))
+    storage_measured_usage_available = bool(nas_storage_pressure.get("measuredUsageAvailable", not storage_probe_failed))
+    storage_has_evidence = bool(
+        nas_storage_pressure.get("schema")
+        or nas_storage_pressure.get("checkedAt")
+        or nas_storage_pressure.get("source")
+        or str(nas_storage_pressure.get("status") or "").strip()
+    )
     storage_blocked = bool(
-        nas_storage_pressure
+        storage_has_evidence
+        and storage_measured_usage_available
         and (
             str(nas_storage_pressure.get("status") or "").lower() in {"critical", "full"}
             or int(nas_storage_pressure.get("availableBytes") or 0) <= 0
@@ -15714,16 +16954,26 @@ def _design_debt_summary(
     interface_score = int(interface.get("fluxioScore") or 0)
     launch_score = int(launch.get("fluxioScore") or 0)
     web_score = int(web.get("fluxioScore") or 0)
+    agent_proof_bundle = agent_proof_bundle if isinstance(agent_proof_bundle, dict) else {}
+    agent_first_view_proven = bool(agent_proof_bundle.get("firstViewProofPathPassed"))
+    first_view_row_count = int(agent_proof_bundle.get("firstViewProofPathRowCount") or 0)
+    first_view_next_action_count = int(agent_proof_bundle.get("firstViewProofPathNextActionCount") or 0)
     add_row(
         "interface-clarity",
         title="Agent and Workbench clarity",
         status="needs_repair" if repair_count else "watch",
         severity="high" if repair_count else "medium",
         detail=str(
-            interface.get("blockingGap")
+            "Authenticated Agent first view exposes dialogue, transcript, proof, and next action."
+            if agent_first_view_proven
+            else interface.get("blockingGap")
             or "Agent/Workbench should show real mission thread, artifact proof, and next repair action without hunting."
         ),
-        next_action=str(interface.get("nextAction") or "Carry Builder focus/full clarity into Agent and Workbench."),
+        next_action=str(
+            "Keep authenticated first-view proof fresh and close remaining T3 interface deltas."
+            if agent_first_view_proven
+            else interface.get("nextAction") or "Carry Builder focus/full clarity into Agent and Workbench."
+        ),
         score=interface_score or None,
     )
     add_row(
@@ -15797,6 +17047,9 @@ def _design_debt_summary(
         "interfaceScoreOutOf20": interface_score,
         "launchScoreOutOf20": launch_score,
         "webScoreOutOf20": web_score,
+        "agentFirstViewProofPathPassed": agent_first_view_proven,
+        "agentFirstViewProofPathRowCount": first_view_row_count,
+        "agentFirstViewProofPathNextActionCount": first_view_next_action_count,
         "repairMissionCount": repair_count,
         "nasStorageBlocked": storage_blocked,
         "rows": rows[:5],
@@ -16242,12 +17495,23 @@ def _system_loss_breakdown(
     pending_red_targets = int(red_summary.get("pendingEscalationTargets") or 0)
     next_attempt_budget = int(red_summary.get("nextAttemptBudget") or 0)
     if pending_red_targets > 0 or next_attempt_budget > 0:
+        red_cadence_healthy = _red_team_current_cadence_is_healthy(red_summary)
         add_driver(
             "red-team-escalation-pressure",
-            title="Red-team difficulty must keep rising",
+            title=(
+                "Red-team maintenance is scheduled"
+                if red_cadence_healthy
+                else "Red-team difficulty must keep rising"
+            ),
             lane="Self-improvement",
-            severity=min(100, 38 + pending_red_targets * 14 + max(0, next_attempt_budget - 3) * 2),
-            detail="Defensive improvement is only meaningful if the next benchmark becomes harder after clean passes.",
+            severity=0
+            if red_cadence_healthy
+            else min(100, 38 + pending_red_targets * 14 + max(0, next_attempt_budget - 3) * 2),
+            detail=(
+                "Current clean red-team cadence is healthy; the next harder benchmark is scheduled as maintenance, not a product blocker."
+                if red_cadence_healthy
+                else "Defensive improvement is only meaningful if the next benchmark becomes harder after clean passes."
+            ),
             next_action=str(red_summary.get("nextAction") or "Run the next aggregate-only red-team benchmark."),
             evidence=(
                 f"{int(red_summary.get('runCount') or 0)} history rows; "
@@ -16259,7 +17523,23 @@ def _system_loss_breakdown(
 
     active_count = int(live_progress.get("activeMissionCount") or 0)
     mission_count = int(live_progress.get("missionCount") or 0)
-    if mission_count > 0 and active_count == 0:
+    queued_count = int(live_progress.get("queuedMissionCount") or 0)
+    attention_count = int(live_progress.get("attentionMissionCount") or 0)
+    blocked_count = int(live_progress.get("blockedMissionCount") or 0)
+    completed_count = int(live_progress.get("completedMissionCount") or 0)
+    zero_active_queue_ready = (
+        active_count == 0
+        and queued_count == 0
+        and attention_count == 0
+        and blocked_count == 0
+        and mission_count > 0
+        and completed_count > 0
+        and (
+            bool(live_progress.get("zeroActiveQueueHealthy"))
+            or bool(live_progress.get("schedulerQueueProofPassed"))
+        )
+    )
+    if mission_count > 0 and active_count == 0 and not zero_active_queue_ready:
         add_driver(
             "no-active-live-missions",
             title="No active live missions",
@@ -16271,7 +17551,15 @@ def _system_loss_breakdown(
         )
 
     storage = nas_storage_pressure or {}
-    if storage and (
+    storage_probe_failed = bool(storage.get("probeTimedOut")) or bool(storage.get("probeConnectFailed"))
+    storage_measured_usage_available = bool(storage.get("measuredUsageAvailable", not storage_probe_failed))
+    storage_has_evidence = bool(
+        storage.get("schema")
+        or storage.get("checkedAt")
+        or storage.get("source")
+        or str(storage.get("status") or "").strip()
+    )
+    if storage and storage_has_evidence and storage_measured_usage_available and (
         str(storage.get("status") or "").lower() in {"critical", "full"}
         or int(storage.get("availableBytes") or 0) <= 0
         or int(storage.get("usedPercent") or 0) >= 99

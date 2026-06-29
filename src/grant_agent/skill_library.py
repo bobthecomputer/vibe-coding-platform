@@ -17,6 +17,15 @@ from .models import (
 from .skills import Skill, SkillRegistry
 
 
+DEFAULT_SKILL_HARNESS_COMPATIBILITY = [
+    "fluxio_hybrid",
+    "codex",
+    "openclaw",
+    "hermes",
+    "legacy_autonomous_engine",
+]
+
+
 def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
 
@@ -24,6 +33,90 @@ def _tokenize(text: str) -> set[str]:
 def _safe_skill_id(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value.strip()).strip(".-")
     return cleaned[:96] or "skill"
+
+
+def _skill_frontmatter_value(text: str, key: str) -> str:
+    if not text.startswith("---"):
+        return ""
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return ""
+    prefix = f"{key}:"
+    for line in parts[1].splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith(prefix):
+            return stripped[len(prefix):].strip().strip("\"'")
+    return ""
+
+
+def _skill_description_from_markdown(text: str) -> str:
+    frontmatter_description = _skill_frontmatter_value(text, "description")
+    if frontmatter_description:
+        return frontmatter_description
+    body = text.split("---", 2)[-1] if text.startswith("---") else text
+    for block in re.split(r"\n\s*\n", body):
+        cleaned = " ".join(line.strip() for line in block.splitlines() if line.strip())
+        if cleaned and not cleaned.startswith("#"):
+            return cleaned[:420]
+    return ""
+
+
+def load_codex_home_skill_rows(control_dir: Path | None = None) -> list[dict]:
+    if control_dir is not None and not (control_dir / "workspaces.json").exists():
+        return []
+    skills_root = Path.home() / ".codex" / "skills"
+    if not skills_root.exists():
+        return []
+    rows: list[dict] = []
+    for skill_dir in sorted(path for path in skills_root.iterdir() if path.is_dir()):
+        if skill_dir.name.startswith("."):
+            continue
+        skill_path = skill_dir / "SKILL.md"
+        if not skill_path.exists():
+            continue
+        try:
+            text = skill_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        name = _skill_frontmatter_value(text, "name") or skill_dir.name
+        description = _skill_description_from_markdown(text)
+        rows.append(
+            {
+                "skillId": skill_dir.name,
+                "label": name.replace("-", " ").title() if name == skill_dir.name else name,
+                "description": description,
+                "promptHint": description,
+                "instructions": text,
+                "originType": "user_authored",
+                "editableStatus": "active",
+                "testStatus": "untested",
+                "promotionState": "reviewed",
+                "source": {
+                    "kind": "codex_home_skill",
+                    "label": "Local Codex skill",
+                    "path": str(skill_path),
+                },
+                "usableByHarnesses": list(DEFAULT_SKILL_HARNESS_COMPATIBILITY),
+                "compatibleHarnesses": list(DEFAULT_SKILL_HARNESS_COMPATIBILITY),
+                "harnessCompatibility": {
+                    "schema": "fluxio.skill_harness_compatibility.v1",
+                    "source": "local-skill-md",
+                    "originType": "user_authored",
+                    "usableByHarnesses": list(DEFAULT_SKILL_HARNESS_COMPATIBILITY),
+                    "crossHarness": True,
+                    "adapterRequired": False,
+                    "notes": "Local SKILL.md instructions are loaded as shared runtime context for Fluxio, Codex, OpenClaw, Hermes, and the legacy autonomous engine.",
+                },
+                "runtimeHints": {
+                    "compatibleHarnesses": list(DEFAULT_SKILL_HARNESS_COMPATIBILITY),
+                    "skillFile": str(skill_path),
+                    "loadMode": "local-skill-md",
+                    "skillContract": "SKILL.md instructions are passed as runtime context, not assumed as a Codex-only feature.",
+                },
+                "tags": ["user-authored", "codex-skill", "multi-harness"],
+            }
+        )
+    return rows
 
 
 class SkillLibrary:
@@ -39,6 +132,16 @@ class SkillLibrary:
         self.repair_receipts_path = self.control_dir / "skill_repair_receipts.json"
         self.learned_skills = self._load_learned_skills()
         self.user_installed_skills = self._load_skill_rows(self.user_installed_path)
+        existing_ids = {
+            str(item.get("skillId") or item.get("skill_id") or item.get("id") or item.get("label") or "").strip()
+            for item in self.user_installed_skills
+            if isinstance(item, dict)
+        }
+        for item in load_codex_home_skill_rows(self.control_dir):
+            skill_id = str(item.get("skillId") or item.get("label") or "").strip()
+            if skill_id and skill_id not in existing_ids:
+                self.user_installed_skills.append(item)
+                existing_ids.add(skill_id)
         self.usage_records = self._load_usage_records()
         self.feedback_records = self._load_skill_rows(self.feedback_path)
         self.repair_receipts = self._load_skill_rows(self.repair_receipts_path)
@@ -559,6 +662,50 @@ class SkillLibrary:
             "nextAction": "repair_before_reuse",
         }
 
+    @staticmethod
+    def _normalize_harness_compatibility(item: dict, *, origin_type: str) -> dict:
+        existing_contract = item.get("harnessCompatibility") if isinstance(item.get("harnessCompatibility"), dict) else {}
+        raw = (
+            item.get("usableByHarnesses")
+            or item.get("usable_by_harnesses")
+            or item.get("compatibleHarnesses")
+            or item.get("compatible_harnesses")
+            or item.get("harnesses")
+            or (existing_contract.get("usableByHarnesses") if isinstance(existing_contract, dict) else None)
+            or (item.get("harnessCompatibility") if isinstance(item.get("harnessCompatibility"), list) else None)
+        )
+        if isinstance(raw, str):
+            harnesses = [part.strip() for part in re.split(r"[,;\s]+", raw) if part.strip()]
+        elif isinstance(raw, list):
+            harnesses = [str(part).strip() for part in raw if str(part).strip()]
+        else:
+            harnesses = []
+        if not harnesses:
+            harnesses = list(DEFAULT_SKILL_HARNESS_COMPATIBILITY)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for harness in harnesses:
+            normalized = harness.lower().replace("-", "_")
+            if normalized not in seen:
+                seen.add(normalized)
+                deduped.append(normalized)
+        return {
+            "schema": "fluxio.skill_harness_compatibility.v1",
+            "source": str(existing_contract.get("source") or "shared_skill_library"),
+            "originType": origin_type,
+            "usableByHarnesses": deduped,
+            "crossHarness": len(deduped) >= 2,
+            "adapterRequired": bool(item.get("adapterRequired") or item.get("adapter_required") or existing_contract.get("adapterRequired")),
+            "notes": str(
+                existing_contract.get("notes")
+                or (
+                    "Explicit harness compatibility supplied by the skill row."
+                    if raw
+                    else "Default shared-library contract: expose the skill to Fluxio hybrid, Codex, OpenClaw, Hermes, and the legacy autonomous engine until a row opts out."
+                )
+            ),
+        }
+
     def _enrich_catalog_row(
         self,
         row: dict,
@@ -617,6 +764,18 @@ class SkillLibrary:
         if "prompt_hint" in item and "promptHint" not in item:
             item["promptHint"] = item["prompt_hint"]
 
+        harness_contract = self._normalize_harness_compatibility(item, origin_type=str(origin_type))
+        usable_harnesses = list(harness_contract.get("usableByHarnesses") or DEFAULT_SKILL_HARNESS_COMPATIBILITY)
+        runtime_hints = item.get("runtimeHints") if isinstance(item.get("runtimeHints"), dict) else {}
+        runtime_hints = {
+            **runtime_hints,
+            "compatibleHarnesses": runtime_hints.get("compatibleHarnesses")
+            if isinstance(runtime_hints.get("compatibleHarnesses"), list) and runtime_hints.get("compatibleHarnesses")
+            else usable_harnesses,
+            "harnessCompatibility": harness_contract,
+            "skillContract": runtime_hints.get("skillContract") or "SKILL.md instructions are passed as runtime context, not assumed as a Codex-only feature.",
+        }
+
         item.update(
             {
                 "editableStatus": editable_status,
@@ -625,6 +784,10 @@ class SkillLibrary:
                 "lastUsedAt": item.get("lastUsedAt") or item.get("last_used_at") or usage["lastUsedAt"],
                 "lastHelpedAt": item.get("lastHelpedAt") or item.get("last_helped_at") or usage["lastHelpedAt"],
                 "originType": origin_type,
+                "usableByHarnesses": usable_harnesses,
+                "compatibleHarnesses": usable_harnesses,
+                "harnessCompatibility": harness_contract,
+                "runtimeHints": runtime_hints,
                 "usageCount": item.get("usageCount", usage["usageCount"]),
                 "helpedCount": item.get("helpedCount", usage["helpedCount"]),
             }

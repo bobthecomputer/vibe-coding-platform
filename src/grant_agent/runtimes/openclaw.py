@@ -31,6 +31,9 @@ OPENCLAW_PROVIDER_MAP = {
     "openai": "openai-codex",
     "openai-codex": "openai-codex",
     "openrouter": "openrouter",
+    "opencon": "openrouter",
+    "opencon-pro": "openrouter",
+    "openconpro": "openrouter",
     "anthropic": "anthropic",
     "gemini": "gemini",
     "minimax": "minimax",
@@ -46,6 +49,16 @@ OPENCLAW_PROVIDER_MAP = {
     "xiaomi": "xiaomi",
     "arcee": "arcee",
 }
+
+OPENROUTER_NESTED_MODEL_PREFIXES = (
+    "z-ai/",
+    "deepseek/",
+    "qwen/",
+    "google/",
+    "anthropic/",
+    "meta-llama/",
+    "moonshotai/",
+)
 
 
 def _runtime_which(command_name: str, workspace_root: Path) -> str | None:
@@ -128,6 +141,8 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
                     cwd=str(workspace_root),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=8,
                     check=False,
                     env=runtime_subprocess_env(workspace_root),
@@ -138,7 +153,7 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 issues.append(f"Unable to read OpenClaw version: {exc}")
-        else:
+        elif not command:
             issues.append("OpenClaw CLI was not found on PATH.")
 
         latest_release = latest_openclaw_release()
@@ -322,27 +337,50 @@ class OpenClawRuntimeAdapter(AgentRuntimeAdapter):
     def _route_contract(self, mission: Mission) -> dict[str, str]:
         route = mission_phase_route(mission)
         provider = self._normalize_provider(route.get("provider", ""))
-        model = str(route.get("model", "")).strip()
+        model = self._normalize_model(provider, route.get("model", ""))
         return {
             "phase": str(route.get("phase", "")).strip().lower(),
             "role": str(route.get("role", "")).strip().lower(),
             "provider": provider,
             "model": model,
-            "canonical_model_id": (
-                f"{provider}/{model}" if provider and model and "/" not in model else model
-            ),
+            "canonical_model_id": self._normalize_model_id(provider, model),
             "effort": str(route.get("effort", "")).strip().lower(),
         }
 
     def _normalize_provider(self, provider: str) -> str:
         return OPENCLAW_PROVIDER_MAP.get(str(provider or "").strip().lower(), "")
 
+    def _normalize_model(self, provider: str, model: object) -> str:
+        value = str(model or "").strip()
+        normalized = value.lower()
+        if provider == "openrouter":
+            if normalized in {"glm-5.2", "glm5.2", "glm_5.2"}:
+                return "z-ai/glm-5.2"
+            if normalized in {"glm-5", "glm5", "glm_5"}:
+                return "z-ai/glm-5"
+            if normalized.startswith("openrouter/"):
+                return value.split("/", 1)[1]
+        return value
+
+    def _normalize_model_id(self, provider: str, model: str) -> str:
+        value = str(model or "").strip()
+        if not value:
+            return ""
+        if provider and value.startswith(f"{provider}/"):
+            return value
+        if provider == "openrouter" and value.startswith(OPENROUTER_NESTED_MODEL_PREFIXES):
+            return f"openrouter/{value}"
+        if "/" in value:
+            return value
+        return f"{provider}/{value}" if provider else value
+
     def _canonical_model_id(self, route_contract: dict[str, str]) -> str:
-        model = str(route_contract.get("model", "")).strip()
-        if "/" in model:
-            return model
+        canonical = str(route_contract.get("canonical_model_id") or "").strip()
+        if canonical:
+            return canonical
         provider = str(route_contract.get("provider", "")).strip()
-        return f"{provider}/{model}" if provider and model else model
+        model = self._normalize_model(provider, route_contract.get("model", ""))
+        return self._normalize_model_id(provider, model)
 
     def _thinking_level(self, effort: str) -> str:
         normalized = str(effort or "").strip().lower()

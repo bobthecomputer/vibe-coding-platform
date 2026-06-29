@@ -15,6 +15,7 @@ from ..snapshot_cache import (
 from .base import AgentRuntimeAdapter
 from .hermes import HermesRuntimeAdapter
 from .openclaw import OpenClawRuntimeAdapter
+from .opencode import OpenCodeRuntimeAdapter
 
 _RUNTIME_STATUS_CACHE_TTL_SECONDS = max(
     float(os.environ.get("FLUXIO_RUNTIME_STATUS_CACHE_TTL_SECONDS", "300")),
@@ -24,7 +25,7 @@ _RUNTIME_STATUS_CACHE: dict[str, tuple[float, list[RuntimeInstallStatus]]] = {}
 
 
 def runtime_adapters() -> list[AgentRuntimeAdapter]:
-    return [OpenClawRuntimeAdapter(), HermesRuntimeAdapter()]
+    return [OpenClawRuntimeAdapter(), HermesRuntimeAdapter(), OpenCodeRuntimeAdapter()]
 
 
 def runtime_adapter_map() -> dict[str, AgentRuntimeAdapter]:

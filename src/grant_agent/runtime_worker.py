@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -12,6 +14,7 @@ import time
 import uuid
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 try:
     from .subprocess_utils import background_creationflags
@@ -22,6 +25,7 @@ except ImportError:  # pragma: no cover - direct script fallback
     from grant_agent.runtimes.base import _apply_runtime_home_env
 
 STRUCTURED_EVENT_PREFIX = "FLUXIO_EVENT:"
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 HEARTBEAT_INTERVAL_SECONDS = max(
     float(os.environ.get("FLUXIO_HEARTBEAT_INTERVAL_SECONDS", "10")),
     0.05,
@@ -194,19 +198,200 @@ def _runtime_path_entries(cwd: Path) -> list[str]:
     return entries
 
 
-def _parse_structured_event(line: str) -> dict | None:
+def _clean_runtime_text(value: object) -> str:
+    cleaned = ANSI_ESCAPE_PATTERN.sub("", str(value or ""))
+    return cleaned.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _json_dict_from_line(line: str) -> dict[str, Any] | None:
     candidate = line.strip()
-    if candidate.startswith(STRUCTURED_EVENT_PREFIX):
-        candidate = candidate[len(STRUCTURED_EVENT_PREFIX) :].strip()
-    else:
+    if not candidate.startswith("{"):
         return None
     try:
         payload = json.loads(candidate)
     except json.JSONDecodeError:
+        match = re.search(r"(\{.*\})", candidate)
+        if not match:
+            return None
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _text_from_content(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            extracted = _text_from_content(item)
+            if extracted:
+                parts.append(extracted)
+        return "\n".join(parts).strip()
+    if isinstance(value, dict):
+        for key in (
+            "text",
+            "output_text",
+            "outputText",
+            "content",
+            "message",
+            "summary",
+            "delta",
+            "reply",
+            "response",
+            "assistant",
+            "completion",
+            "result",
+            "value",
+        ):
+            if key in value:
+                extracted = _text_from_content(value.get(key))
+                if extracted:
+                    return extracted
+        if value.get("type") in {"text", "output_text"}:
+            extracted = _text_from_content(value.get("text") or value.get("content"))
+            if extracted:
+                return extracted
+    return ""
+
+
+def _first_runtime_text(payload: dict[str, Any]) -> str:
+    for key in (
+        "reply",
+        "text",
+        "outputText",
+        "output_text",
+        "content",
+        "message",
+        "response",
+        "assistant",
+        "completion",
+        "summary",
+        "delta",
+        "result",
+        "value",
+    ):
+        if key in payload:
+            extracted = _text_from_content(payload.get(key))
+            if extracted:
+                return extracted
+    for nested_key in ("item", "delta", "part", "message"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            extracted = _text_from_content(nested)
+            if extracted:
+                return extracted
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if isinstance(choice, dict):
+                extracted = _text_from_content(choice)
+                if extracted:
+                    return extracted
+    return ""
+
+
+def _coerce_json_runtime_event(payload: dict[str, Any]) -> dict[str, Any] | None:
+    explicit_kind = str(payload.get("kind") or "").strip()
+    explicit_message = _first_runtime_text(payload)
+    status = str(payload.get("status") or payload.get("state") or "running").strip() or "running"
+    if explicit_kind and explicit_message:
+        event = dict(payload)
+        event["kind"] = explicit_kind
+        event["message"] = explicit_message
+        event["status"] = status
+        event.setdefault("data", {})
+        return event
+
+    event_type = str(payload.get("type") or payload.get("event") or "").strip().lower()
+    item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+    delta = payload.get("delta") if isinstance(payload.get("delta"), dict) else {}
+    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    item_type = str(item.get("item_type") or item.get("type") or "").strip().lower()
+    role = str(message.get("role") or payload.get("role") or item.get("role") or "").strip().lower()
+    command = str(
+        item.get("command")
+        or payload.get("command")
+        or delta.get("command")
+        or ""
+    ).strip()
+    data = {"raw": payload, "eventType": event_type or explicit_kind}
+
+    if command:
+        semantic = "runtime.tool_result" if "completed" in event_type else "runtime.tool_call"
+        return {
+            "kind": "runtime.output",
+            "message": f"Tool command: {command}",
+            "status": status,
+            "data": {**data, "semanticKind": semantic, "command": command, "itemType": item_type},
+        }
+
+    text = _first_runtime_text(payload)
+    if text:
+        semantic = "runtime.model_message"
+        model_event_types = {
+            "message",
+            "message.delta",
+            "message.completed",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "part.delta",
+            "part.updated",
+            "part.done",
+            "part.completed",
+        }
+        kind = "runtime.model_message" if role == "assistant" or event_type in model_event_types else "runtime.output"
+        if item_type in {"command_execution", "tool", "tool_call"} or "tool" in event_type:
+            semantic = "runtime.tool_result"
+            kind = "runtime.output"
+        elif event_type in {"turn.started", "turn.completed", "item.started", "item.completed"}:
+            semantic = event_type
+            kind = "runtime.output"
+        return {
+            "kind": kind,
+            "message": text,
+            "status": status,
+            "data": {**data, "semanticKind": semantic, "itemType": item_type},
+        }
+
+    if event_type in {"turn.started", "turn.completed", "item.started", "item.completed"}:
+        return {
+            "kind": "runtime.output",
+            "message": event_type.replace(".", " "),
+            "status": status,
+            "data": {**data, "semanticKind": event_type, "itemType": item_type},
+        }
+    return None
+
+
+def _parse_structured_event(line: str) -> dict[str, Any] | None:
+    cleaned = _clean_runtime_text(line)
+    if not cleaned:
         return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
+    segments = [segment.strip() for segment in cleaned.splitlines() if segment.strip()] or [cleaned]
+    for segment in segments:
+        if segment.startswith(STRUCTURED_EVENT_PREFIX):
+            raw = segment[len(STRUCTURED_EVENT_PREFIX) :].strip()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(payload, dict):
+                return None
+            payload.setdefault("data", {})
+            return payload
+        payload = _json_dict_from_line(segment)
+        if payload is not None:
+            event = _coerce_json_runtime_event(payload)
+            if event is not None:
+                return event
+    return None
 
 
 def _wait_for_approval(session_path: Path, child: subprocess.Popen, request: dict) -> str:
@@ -341,6 +526,8 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             creationflags=_creationflags(),
             env=_runtime_env(session_path, cwd),
@@ -485,6 +672,11 @@ def run(session_path: Path, cwd: Path, command: str) -> int:
 
 
 def _popen_command(command: str) -> list[str]:
+    if os.name == "nt":
+        args = _windows_command_line_to_argv(str(command or ""))
+        if not args:
+            raise ValueError("Delegated runtime command is empty or malformed.")
+        return args
     try:
         args = shlex.split(str(command or ""), posix=True)
     except ValueError:
@@ -492,6 +684,25 @@ def _popen_command(command: str) -> list[str]:
     if not args:
         raise ValueError("Delegated runtime command is empty or malformed.")
     return args
+
+
+def _windows_command_line_to_argv(command: str) -> list[str]:
+    if not command.strip():
+        return []
+    argc = ctypes.c_int()
+    command_line_to_argv = ctypes.windll.shell32.CommandLineToArgvW
+    command_line_to_argv.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    command_line_to_argv.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    local_free = ctypes.windll.kernel32.LocalFree
+    local_free.argtypes = [ctypes.c_void_p]
+    local_free.restype = ctypes.c_void_p
+    argv = command_line_to_argv(command, ctypes.byref(argc))
+    if not argv:
+        return []
+    try:
+        return [argv[index] for index in range(argc.value)]
+    finally:
+        local_free(argv)
 
 
 def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:
@@ -539,6 +750,8 @@ def _terminate_child(child: subprocess.Popen) -> None:
             ["taskkill", "/PID", str(child.pid), "/T", "/F"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             check=False,
         )

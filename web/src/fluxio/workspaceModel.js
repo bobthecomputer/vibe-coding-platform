@@ -1,12 +1,11 @@
 export const WORKSPACE_SURFACES = Object.freeze([
-  { id: "home", label: "Home", section: "global" },
   { id: "agent", label: "Agent", section: "workspace" },
   { id: "builder", label: "Builder", section: "workspace" },
   { id: "phone", label: "Phone", section: "workspace" },
   { id: "skills", label: "Skills", section: "workspace" },
   { id: "rule-sets", label: "Rule Sets", section: "workspace" },
   { id: "images", label: "Images", section: "workspace" },
-  { id: "workbench", label: "Workbench", section: "workspace" },
+  { id: "browser", label: "Browser", section: "workspace" },
   { id: "settings", label: "Settings", section: "global" },
 ]);
 
@@ -28,6 +27,7 @@ export const AGENT_STATUS_DEFINITIONS = Object.freeze({
 export const ROUTE_ROLE_OPTIONS = Object.freeze(["planner", "executor", "verifier"]);
 
 export const MODEL_PROVIDER_OPTIONS = Object.freeze([
+  { value: "openai-codex", label: "OpenAI Codex" },
   { value: "openai", label: "OpenAI" },
   { value: "anthropic", label: "Anthropic" },
   { value: "minimax", label: "MiniMax" },

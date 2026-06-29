@@ -35,3 +35,10 @@ def test_workspace_model_defines_shared_route_model_controls() -> None:
     ]:
         assert f"export const {token}" in source
 
+
+def test_workspace_model_exposes_exact_runtime_provider_values() -> None:
+    source = WORKSPACE_MODEL.read_text(encoding="utf-8")
+
+    assert '{ value: "openai-codex", label: "OpenAI Codex" }' in source
+    assert '{ value: "openrouter", label: "OpenRouter" }' in source
+
