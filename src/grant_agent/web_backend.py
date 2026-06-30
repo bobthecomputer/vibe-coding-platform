@@ -8309,6 +8309,43 @@ class FluxioWebBackend:
         hermes_provider = str(route.get("provider") or "").strip()
         if hermes_provider == "minimax-portal":
             hermes_provider = "minimax-oauth"
+        if hermes_provider == "opencode-go":
+            bridged_route = {
+                **route,
+                "provider": "openrouter"
+                if str(route.get("model") or "").startswith("openrouter/")
+                else "openrouter",
+                "model": str(route.get("model") or "").removeprefix("openrouter/"),
+            }
+            bridged_result = self._run_opencode_chat(
+                {
+                    **payload,
+                    "runtime": "opencode",
+                    "route": bridged_route,
+                    "systemContext": (
+                        str(payload.get("systemContext") or "")
+                        + "\nHermes selected the OpenCodeGo lane; Fluxio is executing the native OpenCode bridge because Hermes currently normalizes this provider to an invalid model id on the NAS."
+                    ).strip(),
+                }
+            )
+            bridged_result["requestedRuntime"] = "hermes"
+            bridged_result["runtime"] = "opencode"
+            bridged_result["route"] = {
+                **bridged_result.get("route", {}),
+                "requestedRuntime": "hermes",
+                "requestedProvider": "opencode-go",
+            }
+            bridged_result["toolTimeline"] = [
+                {
+                    "kind": "runtime.bridge",
+                    "at": _utc_now(),
+                    "summary": "Hermes/OpenCodeGo chat turn executed through the native OpenCode bridge.",
+                    "status": "completed",
+                },
+                *(bridged_result.get("toolTimeline") if isinstance(bridged_result.get("toolTimeline"), list) else []),
+            ][-24:]
+            self._record_runtime_route_proof(payload, bridged_result, root=self.root)
+            return bridged_result
         native_args = ["hermes", "chat", "-q", prompt, "-Q"]
         if hermes_model:
             native_args.extend(["--model", hermes_model])

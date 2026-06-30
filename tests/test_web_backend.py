@@ -2029,7 +2029,7 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(route["model"], "openrouter/z-ai/glm-5.2")
             self.assertEqual(route["model_id"], "openrouter/z-ai/glm-5.2")
 
-    def test_hermes_chat_uses_opencode_go_alias_and_requested_timeout(self) -> None:
+    def test_hermes_chat_uses_requested_timeout_for_native_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
             workspace = root / "workspace"
@@ -2041,7 +2041,7 @@ class FluxioWebBackendTests(unittest.TestCase):
             def fake_capture(args, **kwargs):
                 calls.append(list(args))
                 timeouts.append(int(kwargs["timeout"]))
-                payload = {"reply": "GLM answered through Hermes and OpenCodeGo."}
+                payload = {"reply": "Hermes answered through the selected native provider."}
                 return payload, json.dumps(payload), "", 44
 
             with mock.patch("grant_agent.web_backend.shutil.which", return_value="hermes"):
@@ -2057,6 +2057,55 @@ class FluxioWebBackendTests(unittest.TestCase):
                                 "timeoutSeconds": 300,
                                 "route": {
                                     "role": "executor",
+                                    "provider": "anthropic",
+                                    "model": "claude-sonnet-4.5",
+                                    "effort": "low",
+                                },
+                            }
+                        },
+                    )
+
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertEqual(result["reply"], "Hermes answered through the selected native provider.")
+            self.assertEqual(result["route"]["provider"], "anthropic")
+            self.assertEqual(result["route"]["model"], "claude-sonnet-4.5")
+            self.assertIn("--provider", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--provider") + 1], "anthropic")
+            self.assertIn("--model", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--model") + 1], "claude-sonnet-4.5")
+            self.assertEqual(timeouts[-1], 300)
+
+    def test_hermes_opencode_go_chat_uses_native_opencode_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            backend = FluxioWebBackend(root, root)
+            calls: list[list[str]] = []
+
+            def fake_capture(args, **kwargs):
+                calls.append(list(args))
+                stdout = "FLUXIO_EVENT:" + json.dumps(
+                    {
+                        "kind": "runtime.model_message",
+                        "message": "REAL_OPENCODE_HERMES_OK",
+                        "status": "running",
+                    }
+                )
+                return {"output": stdout}, stdout, "", 55
+
+            with mock.patch("grant_agent.web_backend.shutil.which", return_value="opencode"):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
+                    result = backend.dispatch(
+                        "send_agent_chat_command",
+                        {
+                            "payload": {
+                                "runtime": "hermes",
+                                "message": "hello",
+                                "workspaceId": "workspace_primary",
+                                "workspacePath": str(workspace),
+                                "route": {
+                                    "role": "executor",
                                     "provider": "opencode-go",
                                     "model": "opencode-go/glm-5.2",
                                     "effort": "low",
@@ -2065,15 +2114,13 @@ class FluxioWebBackendTests(unittest.TestCase):
                         },
                     )
 
-            self.assertEqual(result["runtime"], "hermes")
-            self.assertEqual(result["reply"], "GLM answered through Hermes and OpenCodeGo.")
-            self.assertEqual(result["route"]["provider"], "opencode-go")
-            self.assertEqual(result["route"]["model"], "openrouter/z-ai/glm-5.2")
-            self.assertIn("--provider", calls[-1])
-            self.assertEqual(calls[-1][calls[-1].index("--provider") + 1], "opencode-go")
-            self.assertIn("--model", calls[-1])
-            self.assertEqual(calls[-1][calls[-1].index("--model") + 1], "openrouter/z-ai/glm-5.2")
-            self.assertEqual(timeouts[-1], 300)
+            self.assertEqual(result["runtime"], "opencode")
+            self.assertEqual(result["requestedRuntime"], "hermes")
+            self.assertEqual(result["reply"], "REAL_OPENCODE_HERMES_OK")
+            self.assertEqual(result["route"]["requestedProvider"], "opencode-go")
+            self.assertEqual(result["route"]["model_id"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(calls[-1][1:3], ["-m", "grant_agent.opencode_bridge"])
+            self.assertIn("openrouter/z-ai/glm-5.2", calls[-1])
 
     def test_agent_chat_command_runs_native_opencode_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
