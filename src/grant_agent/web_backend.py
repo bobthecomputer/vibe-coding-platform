@@ -8310,12 +8310,15 @@ class FluxioWebBackend:
         if hermes_provider == "minimax-portal":
             hermes_provider = "minimax-oauth"
         if hermes_provider == "opencode-go":
+            route_model_for_bridge = str(route.get("model") or "")
+            if route_model_for_bridge.startswith("openrouter/"):
+                route_model_for_bridge = route_model_for_bridge[len("openrouter/") :]
             bridged_route = {
                 **route,
                 "provider": "openrouter"
                 if str(route.get("model") or "").startswith("openrouter/")
                 else "openrouter",
-                "model": str(route.get("model") or "").removeprefix("openrouter/"),
+                "model": route_model_for_bridge,
             }
             bridged_result = self._run_opencode_chat(
                 {
