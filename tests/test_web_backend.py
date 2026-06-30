@@ -2018,6 +2018,63 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(route["model"], "z-ai/glm-5.2")
             self.assertEqual(route["model_id"], "openrouter/z-ai/glm-5.2")
 
+    def test_chat_route_opencode_go_glm52_normalizes_to_installed_model_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            backend = FluxioWebBackend(root, root)
+
+            route = backend._chat_route({"route": {"provider": "opencode-go", "model": "opencode-go/glm-5.2"}})
+
+            self.assertEqual(route["provider"], "opencode-go")
+            self.assertEqual(route["model"], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(route["model_id"], "openrouter/z-ai/glm-5.2")
+
+    def test_hermes_chat_uses_opencode_go_alias_and_requested_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            backend = FluxioWebBackend(root, root)
+            calls: list[list[str]] = []
+            timeouts: list[int] = []
+
+            def fake_capture(args, **kwargs):
+                calls.append(list(args))
+                timeouts.append(int(kwargs["timeout"]))
+                payload = {"reply": "GLM answered through Hermes and OpenCodeGo."}
+                return payload, json.dumps(payload), "", 44
+
+            with mock.patch("grant_agent.web_backend.shutil.which", return_value="hermes"):
+                with mock.patch("grant_agent.web_backend._run_process_capture", side_effect=fake_capture):
+                    result = backend.dispatch(
+                        "send_agent_chat_command",
+                        {
+                            "payload": {
+                                "runtime": "hermes",
+                                "message": "answer visibly",
+                                "workspaceId": "workspace_primary",
+                                "workspacePath": str(workspace),
+                                "timeoutSeconds": 300,
+                                "route": {
+                                    "role": "executor",
+                                    "provider": "opencode-go",
+                                    "model": "opencode-go/glm-5.2",
+                                    "effort": "low",
+                                },
+                            }
+                        },
+                    )
+
+            self.assertEqual(result["runtime"], "hermes")
+            self.assertEqual(result["reply"], "GLM answered through Hermes and OpenCodeGo.")
+            self.assertEqual(result["route"]["provider"], "opencode-go")
+            self.assertEqual(result["route"]["model"], "openrouter/z-ai/glm-5.2")
+            self.assertIn("--provider", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--provider") + 1], "opencode-go")
+            self.assertIn("--model", calls[-1])
+            self.assertEqual(calls[-1][calls[-1].index("--model") + 1], "openrouter/z-ai/glm-5.2")
+            self.assertEqual(timeouts[-1], 300)
+
     def test_agent_chat_command_runs_native_opencode_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

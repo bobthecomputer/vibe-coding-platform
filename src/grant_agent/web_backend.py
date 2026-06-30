@@ -1079,6 +1079,22 @@ def _chat_model_id(provider: str, model: str) -> str:
 def _normalize_chat_model(provider: str, model: str) -> str:
     value = str(model or "").strip()
     normalized = value.lower()
+    if provider == "opencode-go":
+        if normalized.startswith(("opencode-go/", "opencodego/", "opencode/")):
+            value = value.split("/", 1)[1]
+            normalized = value.lower()
+        aliases = {
+            "glm-5.2": "openrouter/z-ai/glm-5.2",
+            "glm5.2": "openrouter/z-ai/glm-5.2",
+            "glm_5.2": "openrouter/z-ai/glm-5.2",
+            "glm-5": "openrouter/z-ai/glm-5",
+            "glm5": "openrouter/z-ai/glm-5",
+            "glm_5": "openrouter/z-ai/glm-5",
+            "kimi-k2.5": "openrouter/moonshotai/kimi-k2.5",
+            "kimi-k2": "openrouter/moonshotai/kimi-k2",
+            "minimax-m2.5": "minimax-coding-plan/MiniMax-M2.5",
+        }
+        return aliases.get(normalized, value)
     if provider == "openrouter":
         if normalized in {"glm-5.2", "glm5.2", "glm_5.2"}:
             return "z-ai/glm-5.2"
@@ -8314,7 +8330,7 @@ class FluxioWebBackend:
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
-            timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             extra_env=env,
         )
         reply = _extract_model_reply(result)
@@ -8377,10 +8393,15 @@ class FluxioWebBackend:
         if variant in {"minimal", "low", "medium", "high", "max"}:
             args.extend(["--variant", variant])
         display_command = self._display_command(args)
+        try:
+            timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS)
+        except (TypeError, ValueError):
+            timeout_seconds = AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS
+        timeout_seconds = max(5, min(timeout_seconds, 720))
         result, stdout, _stderr, elapsed_ms = _run_process_capture(
             args,
             cwd=workspace_path,
-            timeout=AGENT_CHAT_RUNTIME_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             extra_env=env,
         )
         reply = _extract_model_reply(result)
