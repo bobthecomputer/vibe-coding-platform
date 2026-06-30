@@ -1414,7 +1414,72 @@ def _camel_to_snake(value: str) -> str:
     return re.sub(r"(?<!^)([A-Z])", r"_\1", value).lower()
 
 
-def _chat_prompt(payload: dict[str, Any]) -> str:
+def _chat_runtime_identity_lines(payload: dict[str, Any], route: dict[str, str] | None = None) -> list[str]:
+    identity = payload.get("runtimeIdentity") if isinstance(payload.get("runtimeIdentity"), dict) else {}
+    route = route if isinstance(route, dict) else payload.get("route") if isinstance(payload.get("route"), dict) else {}
+    runtime = str(
+        identity.get("runtime")
+        or identity.get("harness")
+        or payload.get("requestedRuntime")
+        or payload.get("runtime")
+        or payload.get("runtimeId")
+        or ""
+    ).strip()
+    requested_provider = str(
+        identity.get("requestedProvider")
+        or identity.get("provider")
+        or route.get("requestedProvider")
+        or route.get("provider")
+        or payload.get("provider")
+        or ""
+    ).strip()
+    requested_model = str(
+        identity.get("requestedModel")
+        or identity.get("model")
+        or route.get("requestedModel")
+        or route.get("model")
+        or route.get("model_id")
+        or payload.get("model")
+        or ""
+    ).strip()
+    effective_provider = str(identity.get("effectiveProvider") or route.get("provider") or "").strip()
+    effective_model = str(
+        identity.get("effectiveModel")
+        or route.get("model_id")
+        or route.get("model")
+        or ""
+    ).strip()
+    bridge = str(identity.get("bridge") or identity.get("executionBridge") or "").strip()
+
+    lines: list[str] = []
+    if runtime or requested_provider or requested_model:
+        parts = []
+        if runtime:
+            parts.append(f"harness/runtime={runtime}")
+        if requested_provider:
+            parts.append(f"requested provider lane={requested_provider}")
+        if requested_model:
+            parts.append(f"requested model={requested_model}")
+        lines.append("; ".join(parts))
+    if bridge or effective_provider or effective_model:
+        parts = []
+        if bridge:
+            parts.append(f"execution bridge={bridge}")
+        if effective_provider:
+            parts.append(f"effective provider={effective_provider}")
+        if effective_model:
+            parts.append(f"effective model id={effective_model}")
+        lines.append("; ".join(parts))
+    if runtime or requested_provider or requested_model or effective_model:
+        lines.append(
+            "If the user asks what model, provider, harness, or runtime you are using, "
+            "answer from these route facts only. Do not identify as OpenAI Codex or gpt-5.5 "
+            "unless the selected provider lane/model above is OpenAI Codex/gpt-5.5."
+        )
+    return lines
+
+
+def _chat_prompt(payload: dict[str, Any], route: dict[str, str] | None = None) -> str:
     message = str(payload.get("message") or "").strip()
     if not message:
         raise RuntimeError("Chat message is required.")
@@ -1436,6 +1501,9 @@ def _chat_prompt(payload: dict[str, Any]) -> str:
         "Answer the latest user message directly and naturally. "
         "Do not expose routing or runtime metadata unless the user asks."
     )
+    identity_lines = _chat_runtime_identity_lines(payload, route)
+    if identity_lines:
+        system_prefix += "\n\nCurrent runtime identity:\n" + "\n".join(identity_lines)
     if system_context:
         system_prefix += f"\n\nCurrent workspace context:\n{system_context[:4000]}"
     if not turns:
@@ -8192,12 +8260,12 @@ class FluxioWebBackend:
         }
 
     def _run_openclaw_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = _chat_prompt(payload)
         env = self._provider_env()
         command = shutil.which("openclaw", path=env.get("PATH") or os.environ.get("PATH"))
         if not command:
             raise RuntimeError("OpenClaw CLI was not found on PATH.")
         route = self._chat_route(payload)
+        prompt = _chat_prompt(payload, route)
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
@@ -8228,7 +8296,6 @@ class FluxioWebBackend:
         )
 
     def _run_codex_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = _chat_prompt(payload)
         env = self._provider_env()
         command = shutil.which("codex", path=env.get("PATH") or os.environ.get("PATH"))
         if not command:
@@ -8236,6 +8303,7 @@ class FluxioWebBackend:
         codex_home = _codex_home_path()
         env["CODEX_HOME"] = str(codex_home)
         route = self._chat_route(payload)
+        prompt = _chat_prompt(payload, route)
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
@@ -8298,9 +8366,9 @@ class FluxioWebBackend:
                 pass
 
     def _run_hermes_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = _chat_prompt(payload)
         env = self._provider_env()
         route = self._chat_route(payload)
+        prompt = _chat_prompt(payload, route)
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
@@ -8332,6 +8400,18 @@ class FluxioWebBackend:
                     **payload,
                     "runtime": "opencode",
                     "route": bridged_route,
+                    "requestedRuntime": "hermes",
+                    "runtimeIdentity": {
+                        "runtime": "Hermes",
+                        "requestedProvider": "OpenCode Go",
+                        "requestedModel": explicit_model or str(raw_route.get("model") or route.get("model_id") or ""),
+                        "executionBridge": "native OpenCode bridge",
+                        "effectiveProvider": bridged_route.get("provider") or "openrouter",
+                        "effectiveModel": bridged_route.get("model_id") or _chat_model_id(
+                            bridged_route.get("provider") or "",
+                            bridged_route.get("model") or "",
+                        ),
+                    },
                     "systemContext": (
                         str(payload.get("systemContext") or "")
                         + "\nHermes selected the OpenCodeGo lane; Fluxio is executing the native OpenCode bridge because Hermes currently normalizes this provider to an invalid model id on the NAS."
@@ -8415,9 +8495,9 @@ class FluxioWebBackend:
         return result_payload
 
     def _run_opencode_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = _chat_prompt(payload)
         env = self._provider_env()
         route = self._chat_route(payload)
+        prompt = _chat_prompt(payload, route)
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root

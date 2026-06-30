@@ -521,6 +521,37 @@ function optionValueFromLaunchParam(searchParams, names, allowedValues, fallback
     fallback
   );
 }
+
+function routeOverridesFromSearchParams(searchParams) {
+  const rawProvider = firstLaunchParam(searchParams, ["modelProvider", "model_provider", "provider"]);
+  const rawModel = firstLaunchParam(searchParams, ["model", "modelId", "model_id"]);
+  const rawEffort = firstLaunchParam(searchParams, ["modelEffort", "model_effort", "effort", "thinking"]);
+  if (!rawProvider && !rawModel && !rawEffort) {
+    return [];
+  }
+  const inferredProvider =
+    rawProvider ||
+    (rawModel.toLowerCase().startsWith("opencode-go/") ? "opencode-go" : "");
+  const provider = optionValueFromLaunchParam(
+    searchParams,
+    ["modelProvider", "model_provider", "provider"],
+    MODEL_PROVIDER_OPTIONS.map(option => option.value),
+    inferredProvider || "openai-codex",
+    { opencode: "opencode-go", opencodego: "opencode-go" },
+  );
+  const model =
+    ROUTE_MODEL_OPTIONS.find(option => option === rawModel) ||
+    ROUTE_MODEL_OPTIONS.find(option => option.toLowerCase() === rawModel.toLowerCase()) ||
+    rawModel;
+  const effort = optionValueFromLaunchParam(
+    searchParams,
+    ["modelEffort", "model_effort", "effort", "thinking"],
+    MODEL_EFFORT_OPTIONS.map(option => option.value),
+    rawEffort || "high",
+  );
+  return buildMissionRouteOverrides(provider, model, effort);
+}
+
 const DEFAULT_OPENAI_CODEX_OAUTH_FLOW = {
   open: false,
   sessionId: "",
@@ -6072,6 +6103,7 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const queuedRefreshReasonRef = useRef("");
   const codexImportPromiseRef = useRef(null);
   const launchPrefillAppliedRef = useRef(false);
+  const routePrefillAppliedRef = useRef(false);
   const authPromptedRef = useRef(false);
   const oauthSessionCheckedRef = useRef(false);
   const skillsSummaryRefreshRef = useRef("");
@@ -8386,6 +8418,21 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
     setShowMissionDialog(true);
   }, [searchParams, workspaces]);
 
+  useEffect(() => {
+    if (routePrefillAppliedRef.current) {
+      return;
+    }
+    const routeOverrides = routeOverridesFromSearchParams(searchParams);
+    if (routeOverrides.length === 0) {
+      return;
+    }
+    routePrefillAppliedRef.current = true;
+    setWorkspaceProfileForm(current => ({
+      ...current,
+      routeOverrides,
+    }));
+  }, [searchParams]);
+
   const activeChatSession = useMemo(
     () =>
       chatSessions.find(item => item.id === activeChatSessionId) || null,
@@ -8618,9 +8665,15 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   }, [viewModel.drawers.builder.serviceStudio.services]);
 
   useEffect(() => {
-    setWorkspaceProfileForm(profileFormFromWorkspace(workspace, profileId));
+    const nextProfile = profileFormFromWorkspace(workspace, profileId);
+    const routeOverrides = routeOverridesFromSearchParams(searchParams);
+    setWorkspaceProfileForm({
+      ...nextProfile,
+      routeOverrides: routeOverrides.length > 0 ? routeOverrides : nextProfile.routeOverrides,
+    });
   }, [
     profileId,
+    searchParams,
     workspace?.auto_optimize_routing,
     workspace?.commit_message_style,
     workspace?.execution_target_preference,

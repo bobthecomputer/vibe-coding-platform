@@ -2121,6 +2121,12 @@ class FluxioWebBackendTests(unittest.TestCase):
             self.assertEqual(result["route"]["model_id"], "openrouter/z-ai/glm-5.2")
             self.assertEqual(calls[-1][1:3], ["-m", "grant_agent.opencode_bridge"])
             self.assertIn("openrouter/z-ai/glm-5.2", calls[-1])
+            prompt = calls[-1][calls[-1].index("--prompt") + 1]
+            self.assertIn("harness/runtime=Hermes", prompt)
+            self.assertIn("requested provider lane=OpenCode Go", prompt)
+            self.assertIn("requested model=opencode-go/glm-5.2", prompt)
+            self.assertIn("effective model id=openrouter/z-ai/glm-5.2", prompt)
+            self.assertIn("Do not identify as OpenAI Codex or gpt-5.5", prompt)
 
     def test_agent_chat_command_runs_native_opencode_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
