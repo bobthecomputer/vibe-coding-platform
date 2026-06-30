@@ -303,6 +303,21 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
 
     def _normalize_model(self, provider: str, model: object) -> str:
         value = str(model or "").strip()
+        if provider == "opencode-go" and value.lower().startswith(("opencode-go/", "opencodego/", "opencode/")):
+            value = value.split("/", 1)[1]
+        if provider == "opencode-go":
+            opencode_go_aliases = {
+                "glm-5.2": "openrouter/z-ai/glm-5.2",
+                "glm5.2": "openrouter/z-ai/glm-5.2",
+                "glm_5.2": "openrouter/z-ai/glm-5.2",
+                "glm-5": "openrouter/z-ai/glm-5",
+                "glm5": "openrouter/z-ai/glm-5",
+                "glm_5": "openrouter/z-ai/glm-5",
+                "kimi-k2.5": "openrouter/moonshotai/kimi-k2.5",
+                "kimi-k2": "openrouter/moonshotai/kimi-k2",
+                "minimax-m2.5": "minimax-coding-plan/MiniMax-M2.5",
+            }
+            return opencode_go_aliases.get(value.lower(), value)
         if provider == "openrouter":
             normalized = value.lower()
             if normalized in {"glm-5.2", "glm5.2", "glm_5.2", "openrouter/z-ai/glm-5.2"}:

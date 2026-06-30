@@ -360,6 +360,35 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("--variant high", command)
         self.assertIn("Make the real OpenCode reply show in Agent Live", command)
 
+    @mock.patch("grant_agent.runtimes.opencode.runtime_which", return_value="opencode")
+    def test_opencode_launch_strips_opencodego_model_prefix(
+        self, which_mock: mock.Mock
+    ) -> None:
+        adapter = OpenCodeRuntimeAdapter()
+        mission = mock.Mock(
+            mission_id="mission_opencodego",
+            title="OpenCodeGo visibility",
+            objective="Make the OpenCodeGo reply show in Agent Live.",
+            route_configs=[
+                {
+                    "role": "executor",
+                    "provider": "opencode-go",
+                    "model": "opencode-go/glm-5.2",
+                    "effort": "low",
+                }
+            ],
+        )
+        workspace = mock.Mock(root_path=r"C:\repo")
+
+        launch = adapter.start_mission(mission, workspace)
+
+        command = str(launch["launch_command"])
+        self.assertEqual(launch["route_contract"]["provider"], "opencode-go")
+        self.assertEqual(launch["route_contract"]["model"], "opencode-go/glm-5.2")
+        self.assertEqual(launch["route_contract"]["canonical_model_id"], "openrouter/z-ai/glm-5.2")
+        self.assertIn("--model openrouter/z-ai/glm-5.2", command)
+        self.assertNotIn("--model opencode-go/glm-5.2", command)
+
     def test_runtime_adapter_map_includes_native_opencode(self) -> None:
         self.assertIn("opencode", runtime_adapter_map())
 
@@ -372,7 +401,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                 {
                     "role": "executor",
                     "provider": "opencode-go",
-                    "model": "opencode-go/kimi-k2.5",
+                    "model": "opencode-go/glm-5.2",
                     "effort": "high",
                 }
             ],
@@ -384,7 +413,8 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(launch["route_contract"]["provider"], "opencode-go")
         self.assertIn("--provider opencode-go", str(launch["launch_command"]))
-        self.assertIn("--model opencode-go/kimi-k2.5", str(launch["launch_command"]))
+        self.assertIn("--model openrouter/z-ai/glm-5.2", str(launch["launch_command"]))
+        self.assertNotIn("--model opencode-go/glm-5.2", str(launch["launch_command"]))
 
     def test_hermes_launch_uses_wsl_bash_lc_when_hermes_only_in_wsl(self) -> None:
         adapter = HermesRuntimeAdapter()
