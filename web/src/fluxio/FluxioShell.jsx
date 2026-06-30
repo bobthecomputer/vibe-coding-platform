@@ -5991,6 +5991,8 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   });
   const [pwaStatus, setPwaStatus] = useState(initialFluxioPwaStatus);
   const [pwaUpdateChecking, setPwaUpdateChecking] = useState(false);
+  const [appUpdateState, setAppUpdateState] = useState(initialFluxioPwaStatus);
+  const [appUpdateDismissed, setAppUpdateDismissed] = useState(false);
   useEffect(() => {
     if (typeof window !== "undefined") {
       window.__fluxioWebPushState = webPushState;
