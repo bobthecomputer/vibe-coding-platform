@@ -3538,6 +3538,13 @@ class FluxioWebBackend:
         ]
         if path_entries:
             env["PATH"] = os.pathsep.join([*path_entries, existing_path])
+        src_path = str(self.root / "src")
+        existing_pythonpath = str(env.get("PYTHONPATH") or os.environ.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = (
+            os.pathsep.join([src_path, existing_pythonpath])
+            if existing_pythonpath
+            else src_path
+        )
         env["SYNTELOS_OPENCLAW_AGENT_MODE"] = "local"
         if self.provider_secrets.get("openai"):
             env["OPENAI_API_KEY"] = self.provider_secrets["openai"]
