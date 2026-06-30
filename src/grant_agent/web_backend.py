@@ -58,6 +58,8 @@ from .models import MissionEvent, utc_now_iso
 from .mission_watchdog import ensure_watchdog_supervisor_loop
 from .port_safety import tcp_port_accepts_connection
 from .real_agent_proof import build_real_agent_proof_status, run_real_agent_proof
+from .runtimes.base import runtime_subprocess_env, runtime_which
+from .runtimes.hermes import _runtime_which as _hermes_runtime_which
 from .skill_library import SkillLibrary
 from .skills import SkillRegistry
 from .subprocess_utils import hidden_windows_subprocess_kwargs
@@ -3517,7 +3519,7 @@ class FluxioWebBackend:
         )
 
     def _provider_env(self) -> dict[str, str]:
-        env: dict[str, str] = {}
+        env: dict[str, str] = runtime_subprocess_env(self.root)
         runtime_bin_dirs = [
             value
             for value in (
@@ -3528,7 +3530,7 @@ class FluxioWebBackend:
             )
             if value
         ]
-        existing_path = os.environ.get("PATH", "")
+        existing_path = env.get("PATH") or os.environ.get("PATH", "")
         path_entries = [
             str(Path(value))
             for value in runtime_bin_dirs
@@ -8291,8 +8293,14 @@ class FluxioWebBackend:
     def _run_hermes_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         prompt = _chat_prompt(payload)
         env = self._provider_env()
-        command = shutil.which("hermes", path=env.get("PATH") or os.environ.get("PATH"))
         route = self._chat_route(payload)
+        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
+        if not workspace_path.exists():
+            workspace_path = self.root
+        command = _hermes_runtime_which("hermes", workspace_path) or shutil.which(
+            "hermes",
+            path=env.get("PATH") or os.environ.get("PATH"),
+        )
         raw_route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
         routed_model = str(route.get("model") or "").strip()
         explicit_model = str(raw_route.get("model") or payload.get("model") or "").strip()
@@ -8319,9 +8327,6 @@ class FluxioWebBackend:
         else:
             raise RuntimeError("Hermes CLI was not found on PATH (native or WSL).")
         display_command = self._display_command(args)
-        workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
-        if not workspace_path.exists():
-            workspace_path = self.root
         try:
             timeout_seconds = int(payload.get("timeoutSeconds") or payload.get("timeout_seconds") or 720)
         except (TypeError, ValueError):
@@ -8365,13 +8370,16 @@ class FluxioWebBackend:
     def _run_opencode_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         prompt = _chat_prompt(payload)
         env = self._provider_env()
-        command = shutil.which("opencode", path=env.get("PATH") or os.environ.get("PATH"))
-        if not command:
-            raise RuntimeError("OpenCode CLI was not found on PATH.")
         route = self._chat_route(payload)
         workspace_path = Path(str(payload.get("workspacePath") or self.root)).expanduser()
         if not workspace_path.exists():
             workspace_path = self.root
+        command = runtime_which("opencode", workspace_path) or shutil.which(
+            "opencode",
+            path=env.get("PATH") or os.environ.get("PATH"),
+        )
+        if not command:
+            raise RuntimeError("OpenCode CLI was not found on PATH.")
         workspace_id = _safe_identifier(payload.get("workspaceId") or workspace_path.name, "workspace")
         session_id = _safe_identifier(payload.get("sessionId") or f"syntelos_chat_{workspace_id}", "syntelos_chat")
         args = [
