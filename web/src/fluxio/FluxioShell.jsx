@@ -8287,8 +8287,13 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
       return;
     }
     const requestedWorkspaceId = searchParams.get("workspaceId") || searchParams.get("workspace") || "";
-    const resolvedWorkspace =
-      workspaces.find(item => item.workspace_id === requestedWorkspaceId) || workspaces[0];
+    const requestedWorkspace = requestedWorkspaceId
+      ? workspaces.find(item => item.workspace_id === requestedWorkspaceId)
+      : null;
+    if (requestedWorkspaceId && !requestedWorkspace) {
+      return;
+    }
+    const resolvedWorkspace = requestedWorkspace || workspaces[0];
     if (!resolvedWorkspace) {
       return;
     }
