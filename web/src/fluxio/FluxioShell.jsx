@@ -219,6 +219,8 @@ const MESSAGE_CHANNEL_OPTIONS = [
   { value: "web_push", label: "Closed-tab push" },
   { value: "none", label: "None" },
 ];
+const MISSION_MODE_VALUES = ["Focus", "Autopilot", "Deep Run", "Research"];
+const MISSION_RUN_UNTIL_VALUES = ["pause_on_failure", "continue_until_blocked"];
 
 const MISSION_STARTER_TEMPLATES = [
   {
@@ -494,6 +496,30 @@ function buildMissionRouteOverrides(provider, model, effort) {
     model: selectedModel,
     effort: selectedEffort,
   }));
+}
+
+function firstLaunchParam(searchParams, names) {
+  for (const name of names) {
+    const value = String(searchParams.get(name) || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function optionValueFromLaunchParam(searchParams, names, allowedValues, fallback, aliases = {}) {
+  const requested = firstLaunchParam(searchParams, names);
+  if (!requested) {
+    return fallback;
+  }
+  const normalized = requested.toLowerCase();
+  const aliased = aliases[normalized] || requested;
+  return (
+    allowedValues.find(value => value === aliased) ||
+    allowedValues.find(value => value.toLowerCase() === normalized) ||
+    fallback
+  );
 }
 const DEFAULT_OPENAI_CODEX_OAUTH_FLOW = {
   open: false,
@@ -8275,6 +8301,58 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
         .map(item => item.trim())
         .filter(Boolean),
     ].filter(Boolean);
+    const requestedMissionMode = optionValueFromLaunchParam(
+      searchParams,
+      ["missionMode", "mission_mode", "runMode", "run_mode", "mode"],
+      MISSION_MODE_VALUES,
+      DEFAULT_MISSION_FORM.mode,
+    );
+    const requestedProvider = optionValueFromLaunchParam(
+      searchParams,
+      ["modelProvider", "model_provider", "provider"],
+      MODEL_PROVIDER_OPTIONS.map(option => option.value),
+      DEFAULT_MISSION_FORM.modelProvider,
+      { opencode: "opencode-go", opencodego: "opencode-go" },
+    );
+    const requestedModel = optionValueFromLaunchParam(
+      searchParams,
+      ["model", "modelId", "model_id"],
+      ROUTE_MODEL_OPTIONS,
+      DEFAULT_MISSION_FORM.model,
+    );
+    const requestedEffort = optionValueFromLaunchParam(
+      searchParams,
+      ["modelEffort", "model_effort", "effort", "thinking"],
+      MODEL_EFFORT_OPTIONS.map(option => option.value),
+      DEFAULT_MISSION_FORM.modelEffort,
+    );
+    const requestedSkill = optionValueFromLaunchParam(
+      searchParams,
+      ["selectedSkill", "selected_skill", "skill"],
+      MISSION_SKILL_OPTIONS.map(option => option.value),
+      DEFAULT_MISSION_FORM.selectedSkill,
+      { opencode: "hermes:opencode", hermes_opencode: "hermes:opencode" },
+    );
+    const requestedChannel = optionValueFromLaunchParam(
+      searchParams,
+      ["messageChannel", "message_channel", "channel"],
+      MESSAGE_CHANNEL_OPTIONS.map(option => option.value),
+      DEFAULT_MISSION_FORM.messageChannel,
+      { browser: "browser_notification", notifications: "browser_notification" },
+    );
+    const requestedRunUntil = optionValueFromLaunchParam(
+      searchParams,
+      ["runUntil", "run_until"],
+      MISSION_RUN_UNTIL_VALUES,
+      DEFAULT_MISSION_FORM.runUntil,
+    );
+    const requestedBudgetHours = Number.parseFloat(
+      firstLaunchParam(searchParams, ["budgetHours", "budget_hours", "budget"]) || "",
+    );
+    const requestedStopMinutes = firstLaunchParam(
+      searchParams,
+      ["relativeStopMinutes", "relative_stop_minutes", "stopMinutes", "stop_minutes"],
+    ).replace(/[^\d]/g, "");
     setMissionForm(current => ({
       ...current,
       workspaceId: resolvedWorkspace.workspace_id,
@@ -8283,7 +8361,17 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
           ? resolvedWorkspace.default_runtime || current.runtime
           : searchParams.get("runtime") || resolvedWorkspace.default_runtime || current.runtime,
       profile: searchParams.get("profile") || resolvedWorkspace.user_profile || current.profile,
-      mode: searchParams.get("mode") || current.mode,
+      mode: requestedMissionMode,
+      budgetHours: Number.isFinite(requestedBudgetHours) && requestedBudgetHours > 0
+        ? requestedBudgetHours
+        : current.budgetHours,
+      relativeStopMinutes: requestedStopMinutes || current.relativeStopMinutes,
+      runUntil: requestedRunUntil,
+      modelProvider: requestedProvider,
+      model: requestedModel,
+      modelEffort: requestedEffort,
+      selectedSkill: requestedSkill,
+      messageChannel: requestedChannel,
       objective: searchParams.get("objective") || current.objective,
       successChecks:
         requestedSuccessChecks.length > 0
