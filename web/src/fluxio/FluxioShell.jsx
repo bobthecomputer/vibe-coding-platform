@@ -6002,6 +6002,12 @@ export function FluxioShellApp({ reportUiAction = noopReportUiAction }) {
   const [notificationStackCollapsed, setNotificationStackCollapsed] = useState(() => shouldStartNotificationStackCollapsed());
   const [notificationStackExpanded, setNotificationStackExpanded] = useState(false);
   const [browserNotificationTestStatus, setBrowserNotificationTestStatus] = useState(null);
+  const [previewAnnotationReadinessContract, setPreviewAnnotationReadinessContract] = useState(null);
+  const [providerOrchestrationContract, setProviderOrchestrationContract] = useState(null);
+  const [updateManagementReadinessContract, setUpdateManagementReadinessContract] = useState(null);
+  const [prStackLandingReadinessContract, setPrStackLandingReadinessContract] = useState(null);
+  const [fusionReadinessContract, setFusionReadinessContract] = useState(null);
+  const [jbhEavenReadinessContract, setJbhEavenReadinessContract] = useState(null);
   const [data, setData] = useState({
     snapshot: initialPreviewMode !== "live" && storedControlRoomSnapshot && typeof storedControlRoomSnapshot === "object"
       ? storedControlRoomSnapshot
